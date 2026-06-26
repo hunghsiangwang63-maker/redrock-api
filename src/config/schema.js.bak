@@ -1,0 +1,253 @@
+/**
+ * 紅石攀岩館 Firestore Schema
+ * Phase 1：會員管理、入場登記、定期票
+ *
+ * 所有文件都有 createdAt / updatedAt (Firestore Timestamp)
+ */
+
+// ─────────────────────────────────────────────────────────────────
+// /gyms/{gymId}
+// ─────────────────────────────────────────────────────────────────
+const gymSchema = {
+  id: 'string',             // 自動產生
+  name: 'string',           // 紅石攀岩館 新竹館
+  shortName: 'string',      // 新竹館
+  address: 'string',
+  phone: 'string',
+  status: 'active|inactive',
+  paymentSettings: {
+    ecpayMerchantId: 'string',
+    ecpayHashKey: 'string',
+    ecpayHashIv: 'string',
+    bankName: 'string',
+    bankCode: 'string',
+    bankAccount: 'string',
+    bankAccountName: 'string',
+    jkoPayEnabled: 'boolean',
+    linePayChannelId: 'string',
+    linePayChannelSecret: 'string',
+    paymentDeadlineHours: 'number',   // 課程付款期限
+    refundRules: {
+      fullRefundDays: 'number',       // 幾天前全額退
+      partialRefundDays: 'number',    // 幾天前部分退
+      partialRefundPct: 'number',     // 部分退款比例 0-100
+      noRefundDays: 'number',         // 幾天內不退
+    },
+  },
+  createdAt: 'Timestamp',
+  updatedAt: 'Timestamp',
+};
+
+// ─────────────────────────────────────────────────────────────────
+// /members/{memberId}
+// ─────────────────────────────────────────────────────────────────
+const memberSchema = {
+  id: 'string',             // 自動產生
+  name: 'string',
+  phone: 'string',          // 唯一識別，格式 09XX-XXX-XXX
+  email: 'string',
+  birthday: 'string',       // YYYY-MM-DD
+  gender: 'male|female|other',
+  emergencyContact: {
+    name: 'string',
+    phone: 'string',
+    relation: 'string',
+  },
+  qrCode: 'string',         // base64 或 Storage URL
+  qrCodeId: 'string',       // 唯一識別碼（掃碼用）
+
+  // 身份狀態
+  isMinor: 'boolean',       // 系統自動判斷（< 18歲）
+  isChildAccount: 'boolean',// 子會員
+  parentMemberId: 'string', // 家長 memberId（子會員才有）
+
+  // 帳號狀態
+  registeredBy: 'self|staff|migration',
+  emailVerified: 'boolean',
+  emailVerifyToken: 'string',
+  emailVerifyExpiry: 'Timestamp',
+
+  // 封鎖狀態
+  isBlocked: 'boolean',
+  blockReasons: 'string[]', // ['waiver_unsigned', 'parent_waiver_pending', 'email_unverified', 'fall_test_required']
+
+  // 遷移資料
+  migratedFrom: 'string',   // climbio_crm
+  legacyBarcode: 'string',  // 舊系統條碼
+
+  notes: 'string',
+  createdAt: 'Timestamp',
+  updatedAt: 'Timestamp',
+};
+
+// ─────────────────────────────────────────────────────────────────
+// /waivers/{memberId}  (memberId 即 document ID，一人一份)
+// ─────────────────────────────────────────────────────────────────
+const waiverSchema = {
+  memberId: 'string',
+  memberName: 'string',
+
+  // 本人簽名
+  memberSignatureUrl: 'string',  // Firebase Storage URL
+  memberSignedAt: 'Timestamp',
+  memberSignedIp: 'string',
+  memberSignedBy: 'string',      // staffId 或 'self'
+
+  // 家長簽名（未成年才有）
+  parentRequired: 'boolean',
+  parentName: 'string',
+  parentEmail: 'string',
+  parentPhone: 'string',
+  parentRelation: 'string',      // 父/母/監護人
+  parentSignatureUrl: 'string',
+  parentSignedAt: 'Timestamp',
+  parentSignedIp: 'string',
+  parentSignToken: 'string',     // 遠端簽名 token
+  parentSignTokenExpiry: 'Timestamp',
+
+  // 狀態
+  isComplete: 'boolean',         // 兩份皆簽才 true
+  source: 'new|migrated',        // 是否從舊系統遷移
+  lockedAt: 'Timestamp',         // 簽署鎖定時間
+
+  createdAt: 'Timestamp',
+};
+
+// ─────────────────────────────────────────────────────────────────
+// /fallTests/{fallTestId}
+// ─────────────────────────────────────────────────────────────────
+const fallTestSchema = {
+  id: 'string',
+  memberId: 'string',
+  gymId: 'string',
+  result: 'pass|fail',
+  testedAt: 'Timestamp',
+  confirmedBy: 'string',   // staffId 或 'migration'
+  notes: 'string',
+  createdAt: 'Timestamp',
+};
+
+// ─────────────────────────────────────────────────────────────────
+// /passTypes/{passTypeId}
+// ─────────────────────────────────────────────────────────────────
+const passTypeSchema = {
+  id: 'string',
+  gymId: 'string',         // null = 全系統通用
+  name: 'string',          // 月票（共用）
+  scope: 'single|shared',  // 單館 or 跨館
+  targetGymId: 'string',   // scope=single 時指定場館
+  price: 'number',
+  durationDays: 'number',  // 效期天數（月票=30）
+  credits: 'number|null',  // 次票才有（null = 無限）
+  isActive: 'boolean',
+  createdAt: 'Timestamp',
+  updatedAt: 'Timestamp',
+};
+
+// ─────────────────────────────────────────────────────────────────
+// /memberPasses/{passId}
+// ─────────────────────────────────────────────────────────────────
+const memberPassSchema = {
+  id: 'string',
+  memberId: 'string',
+  gymId: 'string',         // 販售場館（收入歸屬）
+  passTypeId: 'string',
+  passTypeName: 'string',  // 快照
+  scope: 'single|shared',
+  targetGymId: 'string',   // scope=single 時有效場館
+
+  startDate: 'string',     // YYYY-MM-DD
+  endDate: 'string',       // YYYY-MM-DD
+  credits: 'number|null',  // 次票剩餘次數
+  originalCredits: 'number|null',
+
+  status: 'active|expired|cancelled',
+  paymentId: 'string',     // 關聯付款紀錄
+  soldByStaffId: 'string',
+  notes: 'string',
+
+  createdAt: 'Timestamp',
+  updatedAt: 'Timestamp',
+};
+
+// ─────────────────────────────────────────────────────────────────
+// /checkIns/{checkInId}
+// ─────────────────────────────────────────────────────────────────
+const checkInSchema = {
+  id: 'string',
+  memberId: 'string',
+  memberName: 'string',    // 快照
+  gymId: 'string',         // 實際入場場館
+
+  entryType: 'pass|course_access|single_ticket|staff_override',
+  passId: 'string|null',          // 定期票
+  courseEnrollmentId: 'string|null', // 課程入館
+  transactionId: 'string|null',   // 單次票
+
+  checkedInAt: 'Timestamp',
+  checkedInBy: 'string',   // staffId
+
+  notes: 'string',
+  createdAt: 'Timestamp',
+};
+
+// ─────────────────────────────────────────────────────────────────
+// /staff/{staffId}
+// ─────────────────────────────────────────────────────────────────
+const staffSchema = {
+  id: 'string',
+  gymId: 'string',         // null = 總管理員
+  name: 'string',
+  email: 'string',
+  phone: 'string',
+  role: 'super_admin|gym_manager|full_time|part_time',
+  isActive: 'boolean',
+  lastLoginAt: 'Timestamp',
+  createdAt: 'Timestamp',
+  updatedAt: 'Timestamp',
+};
+
+// ─────────────────────────────────────────────────────────────────
+// /transactions/{transactionId}
+// ─────────────────────────────────────────────────────────────────
+const transactionSchema = {
+  id: 'string',
+  receiptNo: 'string',     // TXN-YYYYMMDD-XXXX
+  gymId: 'string',
+  memberId: 'string|null',
+  staffId: 'string',
+
+  type: 'pass|checkin|course|product|competition',
+  referenceId: 'string',   // 對應票/課程/商品 ID
+
+  items: [{
+    productId: 'string',
+    productName: 'string', // 快照
+    quantity: 'number',
+    unitPrice: 'number',
+    subtotal: 'number',
+  }],
+  totalAmount: 'number',
+
+  paymentMethod: 'cash|credit_card|jkopay|linepay|transfer|ecpay_atm',
+  paymentStatus: 'pending|completed|failed|refunded',
+  ecpayTradeNo: 'string',  // 綠界交易編號
+
+  paidAt: 'Timestamp',
+  confirmedBy: 'string',   // staffId（手動確認）
+
+  createdAt: 'Timestamp',
+  updatedAt: 'Timestamp',
+};
+
+module.exports = {
+  gymSchema,
+  memberSchema,
+  waiverSchema,
+  fallTestSchema,
+  passTypeSchema,
+  memberPassSchema,
+  checkInSchema,
+  staffSchema,
+  transactionSchema,
+};

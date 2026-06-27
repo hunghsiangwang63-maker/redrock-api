@@ -321,6 +321,12 @@ router.post('/registrations/:regId/cancel',
         updatedAt: new Date(),
       });
 
+      // 若釋出的是正取名額，遞補下一位候補（並對已完成簽署的遞補者推送 webhook）
+      if (reg.status === 'confirmed') {
+        try { await competitionService.promoteNextWaitlist(reg.competitionId, reg.divisionId); }
+        catch (e) { console.error('比賽候補遞補失敗:', e.message); }
+      }
+
       res.json({ success: true, message: '報名已取消，名額已釋出。退費將於比賽結束後一週內統一處理。' });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }

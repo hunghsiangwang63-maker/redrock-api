@@ -284,6 +284,12 @@ const sendWebhook = async (registrationId) => {
   if (!doc.exists) return;
   const registration = doc.data();
 
+  // 候補/未確認名額不推送計分系統（遞補為正取時才會推送），一次涵蓋報名/家長簽署/retry
+  if (registration.status !== 'confirmed') {
+    await ref.update({ webhookStatus: 'skipped', webhookError: '候補或未確認名額，暫不推送計分系統' });
+    return;
+  }
+
   const competition = await getCompetition(registration.competitionId);
 
   if (!competition.webhookUrl) {
@@ -298,6 +304,7 @@ const sendWebhook = async (registrationId) => {
     divisionId: registration.divisionId,
     divisionName: competition.divisions.find(d => d.id === registration.divisionId)?.name || '',
     customFieldValues: registration.customFieldValues,
+    status: registration.status,
     registeredAt: registration.registeredAt,
   };
 
@@ -325,6 +332,37 @@ const retryWebhook = async (registrationId) => {
   return { id: registrationId, ...updated.data() };
 };
 
+// ── 取消正取後遞補：把同組別最前面的候補遞補為正取（原子操作）─────────
+// 回傳被遞補的 registrationId（若有）；webhook 在交易外觸發避免重試重複送
+const promoteNextWaitlist = async (competitionId, divisionId) => {
+  const db = getDb();
+  let promotedId = null, promotedComplete = false;
+  await db.runTransaction(async (tx) => {
+    const q = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS)
+      .where('competitionId', '==', competitionId)
+      .where('divisionId', '==', divisionId)
+      .where('status', '==', 'waitlist');
+    const snap = await tx.get(q);
+    if (snap.empty) return;
+    const sorted = snap.docs
+      .map(d => ({ ref: d.ref, ...d.data() }))
+      .sort((a, b) =>
+        (a.waitlistPosition || 9999) - (b.waitlistPosition || 9999) ||
+        ((a.registeredAt?.seconds || a.registeredAt?._seconds || 0) - (b.registeredAt?.seconds || b.registeredAt?._seconds || 0)));
+    const next = sorted[0];
+    tx.update(next.ref, { status: 'confirmed', waitlistPosition: null, promotedAt: new Date(), updatedAt: new Date() });
+    // 其餘候補位置往前遞移
+    for (let i = 1; i < sorted.length; i++) {
+      tx.update(sorted[i].ref, { waitlistPosition: i, updatedAt: new Date() });
+    }
+    promotedId = next.id;
+    promotedComplete = !!next.isComplete;
+  });
+  // 遞補者若已完成簽署（成年人或家長已簽），立即推送計分系統；未完成者待簽署後自然推送
+  if (promotedId && promotedComplete) await sendWebhook(promotedId);
+  return promotedId;
+};
+
 const getCompetitionRegistrations = async (competitionId) => {
   const db = getDb();
   const snap = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS)
@@ -349,6 +387,6 @@ module.exports = {
   SCORING_SYSTEMS,
   createCompetition, updateCompetition, getCompetitions, getCompetition,
   registerForCompetition, signParentCompetitionWaiver,
-  sendWebhook, retryWebhook,
+  sendWebhook, retryWebhook, promoteNextWaitlist,
   getCompetitionRegistrations, getMemberRegistrations,
 };

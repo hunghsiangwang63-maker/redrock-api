@@ -434,45 +434,10 @@ router.get('/verify-email/:token',
   }
 );
 
-// ── POST /members/:id/fall-test - 登記墜落測驗 ──────────────────
-router.post('/:id/fall-test',
-  authenticate,
-  [
-    body('result').isIn(['pass', 'fail']).withMessage('測驗結果必須為 pass 或 fail'),
-    body('testedAt').optional().isDate(),
-  ],
-  validate,
-  async (req, res) => {
-    try {
-      const db = getDb();
-      const { v4: uuidv4 } = require('uuid');
-      const testId = uuidv4();
-      const now = new Date();
-
-      const fallTest = {
-        id: testId,
-        memberId: req.params.id,
-        gymId: req.staff.gymId,
-        result: req.body.result,
-        testedAt: req.body.testedAt ? new Date(req.body.testedAt) : now,
-        confirmedBy: req.staff.id,
-        notes: req.body.notes || '',
-        createdAt: now,
-      };
-
-      await db.collection(COLLECTIONS.FALL_TESTS).doc(testId).set(fallTest);
-
-      // 如果通過，更新封鎖狀態
-      if (req.body.result === 'pass') {
-        await memberService.refreshBlockStatus(req.params.id);
-      }
-
-      res.status(201).json({ fallTest, message: '墜落測驗已登記' });
-    } catch (err) {
-      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
-    }
-  }
-);
+// 註：舊端點 POST /members/:id/fall-test 已移除。
+// 它寫入 result:'pass'/'fail'，但全系統（verify / eligibility / blockReasons）已統一只認
+// 'passed'/'failed'，舊端點為前端未使用的死碼且會產生不相容資料。登記墜測請改用
+// POST /fall-tests（routes/fallTests.js）。
 
 // ── POST /members/:id/promote - 子會員升級為正式會員 ──────────────
 router.post('/:id/promote', authenticate, checkPermission('members.create'),

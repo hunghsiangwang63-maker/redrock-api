@@ -241,6 +241,13 @@ router.post('/:testId/extend', authenticate, async (req, res) => {
 router.get('/signature/:memberId', authenticateAny, async (req, res) => {
   try {
     const db = getDb();
+    // 會員僅能查自己或自己子會員的同意書（員工不受限）
+    if (req.member && req.member.id !== req.params.memberId) {
+      const childDoc = await db.collection('members').doc(req.params.memberId).get();
+      if (!childDoc.exists || childDoc.data().parentMemberId !== req.member.id) {
+        return res.status(403).json({ error: 'FORBIDDEN', message: '只能查看自己或子會員的同意書' });
+      }
+    }
     const snap = await db.collection('fallTestSignatures')
       .where('memberId', '==', req.params.memberId)
       .get();

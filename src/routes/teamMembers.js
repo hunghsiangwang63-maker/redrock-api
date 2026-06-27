@@ -3,6 +3,8 @@ const router = express.Router();
 const { authenticate, authenticateAny, checkPermission, requireManagerOrStation } = require('../middleware/auth');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
+const XLSX = require('xlsx');
+const teamMemberService = require('../services/teamMemberService');
 
 // ── GET /team/fees - 取得目前年費設定（會員可讀） ──
 router.get('/fees', authenticateAny, async (req, res) => {
@@ -134,7 +136,8 @@ router.get('/my', authenticateAny, async (req, res) => {
 router.post('/applications/:id/confirm-payment', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const db = getDb();
-    await db.collection('teamApplications').doc(req.params.id).update({
+    const ref = db.collection('teamApplications').doc(req.params.id);
+    await ref.update({
       paymentStatus: 'confirmed',
       status: 'active',
       paidAt: new Date(),
@@ -142,11 +145,103 @@ router.post('/applications/:id/confirm-payment', authenticate, requireManagerOrS
       paidConfirmedByName: req.staff.name,
       updatedAt: new Date(),
     });
-    res.json({ success: true, message: '已確認收款，隊員狀態已啟用' });
+    // 開通會員實際折扣資格（依年度）
+    const app = (await ref.get()).data();
+    if (app?.memberId) {
+      await teamMemberService.setTeamMember({
+        memberId: app.memberId,
+        since: `${app.year}-01-01`,
+        until: `${app.year}-12-31`,
+        staffId: req.staff.id,
+      });
+    }
+    res.json({ success: true, message: '已確認收款，隊員資格已開通' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// ── GET /team/members/download - 下載名單 CSV ──
+// ── POST /team/members - 管理員手動新增隊員 ──
+router.post('/members', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const { memberId, paymentAmount, jerseySize, noJersey, status, primaryGym } = req.body;
+    if (!memberId) return res.status(400).json({ code: 'MISSING_MEMBER', message: '請選擇會員' });
+    const memberDoc = await db.collection(COLLECTIONS.MEMBERS).doc(memberId).get();
+    if (!memberDoc.exists) return res.status(404).json({ code: 'MEMBER_NOT_FOUND', message: '查無此會員' });
+    const m = memberDoc.data();
+    const year = parseInt(req.body.year) || dayjs().year();
+    const id = `team_${memberId}_${year}`;
+    const existing = await db.collection('teamApplications').doc(id).get();
+    if (existing.exists) return res.status(400).json({ code: 'ALREADY_EXISTS', message: `${m.name} ${year} 年度已在名單中` });
+
+    const finalStatus = status === 'pending' ? 'pending' : 'active';
+    const paid = finalStatus === 'active';
+    await db.collection('teamApplications').doc(id).set({
+      id, memberId, year,
+      memberName: m.name || '', memberPhone: m.phone || '', memberEmail: m.email || '',
+      memberGender: m.gender || '', memberBirthday: m.birthday || '',
+      primaryGym: primaryGym || '',
+      paymentAmount: Number(paymentAmount) || 0,
+      expectedFee: Number(paymentAmount) || 0,
+      jerseySize: jerseySize || '', noJersey: !!noJersey,
+      status: finalStatus,
+      paymentStatus: paid ? 'confirmed' : 'pending',
+      paidConfirmedBy: paid ? req.staff.id : null,
+      paidConfirmedByName: paid ? req.staff.name : null,
+      paidAt: paid ? new Date() : null,
+      addedManuallyBy: req.staff.id,
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    if (paid) {
+      await teamMemberService.setTeamMember({ memberId, since: `${year}-01-01`, until: `${year}-12-31`, staffId: req.staff.id });
+    }
+    res.status(201).json({ success: true, message: `${m.name} 已加入 ${year} 年度隊員名單` });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── PUT /team/applications/:id - 管理員編輯隊員資料 ──
+router.put('/applications/:id', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection('teamApplications').doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: 'NOT_FOUND' });
+    const cur = snap.data();
+
+    const allowed = ['memberName', 'memberPhone', 'primaryGym', 'paymentAmount', 'expectedFee', 'paymentDate', 'bankLastFive', 'jerseySize', 'noJersey', 'paymentStatus', 'status'];
+    const updates = { updatedAt: new Date() };
+    allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+    if (updates.paymentAmount !== undefined) updates.paymentAmount = Number(updates.paymentAmount) || 0;
+    if (updates.expectedFee !== undefined) updates.expectedFee = Number(updates.expectedFee) || 0;
+    await ref.update(updates);
+
+    // 同步折扣資格
+    const finalStatus = updates.status || cur.status;
+    if (cur.memberId) {
+      if (finalStatus === 'active') {
+        await teamMemberService.setTeamMember({ memberId: cur.memberId, since: `${cur.year}-01-01`, until: `${cur.year}-12-31`, staffId: req.staff.id });
+      } else if (finalStatus === 'cancelled') {
+        await teamMemberService.removeTeamMember({ memberId: cur.memberId, staffId: req.staff.id });
+      }
+    }
+    res.json({ success: true, message: '已更新' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── DELETE /team/applications/:id - 管理員刪除隊員 ──
+router.delete('/applications/:id', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection('teamApplications').doc(req.params.id);
+    const snap = await ref.get();
+    if (snap.exists && snap.data().memberId) {
+      await teamMemberService.removeTeamMember({ memberId: snap.data().memberId, staffId: req.staff.id });
+    }
+    await ref.delete();
+    res.json({ success: true, message: '已刪除' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /team/members/download - 下載名單 Excel(.xlsx) ──
 router.get('/members/download', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const db = getDb();
@@ -155,47 +250,41 @@ router.get('/members/download', authenticate, requireManagerOrStation, async (re
     const rows = snap.docs.map(d => d.data())
       .sort((a, b) => (a.createdAt?._seconds||0) - (b.createdAt?._seconds||0));
 
-    const headers = [
-      '序號','姓名','性別','生日','手機','Email','身分證字號','地址','LineID',
-      '主要岩館','抱石最高級數','每週頻率','加入原因',
-      '繳費金額','匯款日期','匯款末五碼','隊服尺寸',
-      '付款狀態','隊員狀態','建議團練','許願活動','其他建議','申請時間'
-    ];
-    const csvRows = [headers.join(',')];
-    rows.forEach((r, i) => {
-      const paid = r.paymentStatus==='confirmed' ? '已確認' : '待確認';
-      const status = r.status==='active' ? '正式隊員' : r.status==='cancelled' ? '已退隊' : '待審核';
-      const cols = [
-        i+1,
-        `"${r.memberName||''}"`,
-        r.memberGender||'',
-        r.memberBirthday||'',
-        r.memberPhone||'',
-        r.memberEmail||'',
-        `"${r.idNumber||''}"`,
-        `"${(r.address||'').replace(/"/g,'""')}"`,
-        r.lineId||'',
-        r.primaryGym||'',
-        r.currentGrade||'',
-        r.weeklyFrequency||'',
-        `"${(r.joinReasons||[]).join('、')}"`,
-        r.paymentAmount||'',
-        r.paymentDate||'',
-        r.bankLastFive||'',
-        r.jerseySize||'',
-        paid, status,
-        `"${(r.trainingContent||'').replace(/"/g,'""')}"`,
-        `"${(r.wishActivities||'').replace(/"/g,'""')}"`,
-        `"${(r.otherSuggestions||'').replace(/"/g,'""')}"`,
-        r.createdAt?._seconds ? new Date(r.createdAt._seconds*1000).toLocaleString('zh-TW') : '',
-      ];
-      csvRows.push(cols.join(','));
-    });
+    const data = rows.map((r, i) => ({
+      '序號': i + 1,
+      '姓名': r.memberName || '',
+      '性別': r.memberGender || '',
+      '生日': r.memberBirthday || '',
+      '手機': r.memberPhone || '',
+      'Email': r.memberEmail || '',
+      '身分證字號': r.idNumber || '',
+      '地址': r.address || '',
+      'LineID': r.lineId || '',
+      '主要岩館': r.primaryGym || '',
+      '抱石最高級數': r.currentGrade || '',
+      '每週頻率': r.weeklyFrequency || '',
+      '加入原因': (r.joinReasons || []).join('、'),
+      '應繳金額': r.expectedFee || '',
+      '繳費金額': r.paymentAmount || '',
+      '匯款日期': r.paymentDate || '',
+      '匯款末五碼': r.bankLastFive || '',
+      '隊服尺寸': r.noJersey ? '不拿隊服' : (r.jerseySize || ''),
+      '付款狀態': r.paymentStatus === 'confirmed' ? '已確認' : '待確認',
+      '隊員狀態': r.status === 'active' ? '正式隊員' : r.status === 'cancelled' ? '已退隊' : '待審核',
+      '建議團練': r.trainingContent || '',
+      '許願活動': r.wishActivities || '',
+      '其他建議': r.otherSuggestions || '',
+      '申請時間': r.createdAt?._seconds ? new Date(r.createdAt._seconds * 1000).toLocaleString('zh-TW') : '',
+    }));
 
-    const csv = '\uFEFF' + csvRows.join('\n');
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="team_members_${year}.csv"`);
-    res.send(csv);
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, `${year}年度`);
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="team_members_${year}.xlsx"`);
+    res.send(buf);
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

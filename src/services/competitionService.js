@@ -213,7 +213,24 @@ const registerForCompetition = async ({
     });
   }
 
-  await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(registrationId).set(registration);
+  // 原子化容量判斷 + 寫入：交易內重新讀取計數，避免並發超賣（前面的檢查僅為快速失敗）
+  const regRef = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(registrationId);
+  await db.runTransaction(async (tx) => {
+    const q = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS)
+      .where('competitionId', '==', competitionId)
+      .where('divisionId', '==', divisionId)
+      .where('status', 'in', ['confirmed', 'waitlist']);
+    const snap = await tx.get(q);
+    const cCount = snap.docs.filter(d => d.data().status === 'confirmed').length;
+    const wCount = snap.docs.filter(d => d.data().status === 'waitlist').length;
+    if (cCount >= maxParticipants && wCount >= waitlistMax) {
+      throw { code: 'DIVISION_FULL', message: '此組別已滿（含候補），無法報名' };
+    }
+    const willWaitlist = cCount >= maxParticipants;
+    registration.status = willWaitlist ? 'waitlist' : 'confirmed';
+    registration.waitlistPosition = willWaitlist ? wCount + 1 : null;
+    tx.set(regRef, registration);
+  });
 
   if (isMinor && parentEmail) {
     const emailService = require('./emailService');

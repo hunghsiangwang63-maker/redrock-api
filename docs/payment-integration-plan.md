@@ -5,6 +5,49 @@
 
 ---
 
+## 0. 實作現況（2026-06-27 更新）
+
+> 本節為「實際做到哪」的快照；下方第 1~9 節為原始設計（保留作參考）。
+
+### 已完成
+- **rail 核心**：`src/services/paymentService.js`
+  - 生命週期 `pending→paid`，callback 用 Firestore transaction **冪等**（已付不重複請款/記帳）。
+  - `orderResolvers[orderType]`：後端**權威**解析金額/場館/會員（前端不送這些值）。
+  - `orderHandlers[orderType]`：付款成功的業務動作；成功後自動呼叫既有 `recordTransaction()` 進營收帳。
+  - `loadGymPaymentSettings(db, gymId)`：載入**該館** `gyms/{gymId}.paymentSettings` 傳給 adapter（各館金鑰不同）。
+  - `handleCallback`：`extractOrderId` → 載入 payment → 取該館 gymSettings → `verifyCallback`（LinePay 在此 Confirm 請款）。
+- **路由**：`src/routes/payments.js` — `POST /payments`、`GET /payments/:id`、`POST /payments/:provider/callback`、`POST /payments/mock/pay`（mock 測試用）。
+- **前端元件**：`src/components/PaymentFlow.jsx`（redrock-web）— 接 `client` prop，會員/員工通用；匯出 `ONLINE_PAYMENT_ENABLED`。**mock 僅 `import.meta.env.DEV` 啟用**（正式環境關閉，避免零元確認）。
+- **adapters**（`src/services/paymentAdapters/`）— 介面一致 `createPayment / extractOrderId / verifyCallback`：
+  | adapter | 狀態 | 金鑰（gymSettings） |
+  |---|---|---|
+  | `mock` | 測試用（dev only） | — |
+  | `linepay` | ✅ 可運作實作（v3、HMAC、Confirm；待金鑰） | `linePayChannelId` / `linePayChannelSecret` |
+  | `jkopay` | 🟡 骨架（待整合手冊） | `jkoPayStoreId` / `jkoPaySecret` |
+  | `taiwanpay` | 🟡 骨架（待收單銀行 API） | `taiwanPayMerchantId` / `taiwanPayBankApiKey` |
+- **收費點接線**（orderType → orderRef）：
+  | 類型 | orderType / orderRef | 後端 | 前端 |
+  |---|---|---|---|
+  | 競賽報名 | `competition` / `{registrationId}` | ✅ | ✅ 會員端 |
+  | 體驗預約 | `experience` / `{bookingId}` | ✅ | ✅ 會員端 |
+  | 課程報名 | `course` / `{enrollmentId}` | ✅（enroll-all 加 deferPayment） | ✅ 會員端 |
+  | 器材租借 | `rental` / `{rentalId}` | ✅ | ✅ 會員端 |
+  | 定期票 | `pass` / `{passId}` | ✅（POST /passes 加 deferPayment） | ⏳ 員工 QR |
+  | 分期 | `installment` / `{planId, seq}` | ✅ | ⏳ 員工 QR |
+  | 入場 | `checkin` / `{checkInId}` | ✅（/phone 加 deferPayment） | ⏳ 員工 QR |
+  | 商品 POS | — | 不做（依決定） | — |
+
+  > 「會員自助」前端均受 `ONLINE_PAYMENT_ENABLED` 控管：正式環境在真實 gateway 上線前**不出現付款入口**，fallback 既有匯款流程。
+
+### 待辦（多需先取得外部資源）
+1. **各館**申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`。
+2. 環境變數：`LINEPAY_ENV`（sandbox/production）、`JKOPAY_ENV`、`API_URL`（confirmUrl）、`CLIENT_URL`（cancelUrl）。
+3. LinePay sandbox 端到端測試 → 將 `PaymentFlow` 的 `linepay` `enabled` 改 `true` + 啟用 `ONLINE_PAYMENT_ENABLED`。
+4. 員工端 QR PaymentFlow（pass / installment / checkin）。
+5. 補街口 / 台灣Pay 的 adapter TODO（依整合手冊 / 收單銀行 API）。
+
+---
+
 ## 1. 現況摘要（重要）
 
 - **付款方式目前只是「標籤」**：`cash / transfer / linepay / jkopay / taiwanpay` 是員工/會員手動點選的記錄值，**後端沒有任何 gateway API 串接**。`transfer`＝匯款+上傳截圖+員工確認。
@@ -139,11 +182,11 @@ refund({ providerTxnId, amount, gymSettings })                     // 之後做
 
 ## 8. 分階段實作計畫
 
-- **Phase 0（不需金鑰）**：建 `payments` collection + paymentService 骨架 + 一個 `mock` adapter（直接標記 paid）→ 打通「建立付款→callback→記帳→完成業務」全鏈路 + 前端 PaymentFlow。**可立即開始、可測。**
-- **Phase 1**：收斂前端 8 個收費點走 PaymentFlow（offline 行為不變）。
-- **Phase 2**：接 **LinePay sandbox**（adapter + callback 驗簽 + confirm）。
-- **Phase 3**：接 街口、台灣Pay（同 adapter 介面）。
-- **Phase 4**：退款、對帳報表、逾時自動取消、發票串接。
+- **Phase 0（不需金鑰）✅ 完成**：`payments` collection + paymentService + mock adapter + PaymentFlow，全鏈路端到端驗證（含冪等）。
+- **Phase 1 ✅ 大致完成**：收費點接 rail。會員自助（競賽/體驗/課程/租借）前後端皆接；櫃台（定期票/分期/入場）後端 rail 接好、前端員工 QR 待 Phase 2；商品 POS 不做。各收費點金額後端權威解析；建單即記帳的流程加 `deferPayment` 避免重複記帳。
+- **Phase 2 🟡 進行中**：LinePay adapter 已寫成可運作實作（待各館金鑰 + sandbox 測試 + 啟用 `ONLINE_PAYMENT_ENABLED` + 員工端 QR 前端）。
+- **Phase 3 🟡 骨架就緒**：街口、台灣Pay adapter 骨架已建並註冊（介面一致），待整合手冊/收單銀行 API + 金鑰補完 TODO。
+- **Phase 4（未開始）**：退款、對帳報表、逾時自動取消、發票串接。
 
 ---
 

@@ -374,42 +374,74 @@ const verifyEntry = async (memberId, gymId) => {
   const blackCards = await getMemberBlackCards(memberId);
   const singleEntryTickets = await getValidSingleEntryTickets(memberId);
 
-  // 單次入場價：一般用 single_general；兒童/學生改由 entryTypes 設定（預設 100/250，可設 0=免費）
-  let singleTypeId = 'single_ticket', singleLabel = '單次購票入場';
-  let singlePrice = await getEntryTypePrice('single_ticket', PRICES.single_general);
-  if (memberType === 'child') {
-    singleTypeId = 'child_free'; singleLabel = '兒童入場';
-    singlePrice = await getEntryTypePrice('child_free', 100);
-  } else if (memberType === 'student') {
-    singleTypeId = 'student_free'; singleLabel = '學生入場';
-    singlePrice = await getEntryTypePrice('student_free', 250);
+  // 付費入場類型：與員工端同源，依 systemSettings/entryTypes 動態顯示
+  //  - 過濾 active=false 與不適用身份者（memberTypes 空＝不限；course_member 需有課程權益）
+  //  - 排除 course_access（課程免費入場已於上方處理，且其 price=0、memberTypes 空會誤觸免費短路）
+  const withTeam = (price) => (isTeam && price >= TEAM_DISCOUNT_MIN_AMOUNT
+    ? Math.round(price * PRICES.team_discount_rate) : price);
+  const etDoc = await db.collection('systemSettings').doc('entryTypes').get();
+  const configuredTypes = (etDoc.exists ? (etDoc.data().types || []) : [])
+    .filter(t => t && t.id !== 'course_access' && typeof t.price === 'number' && t.active !== false)
+    .filter(t => {
+      if (!t.memberTypes || t.memberTypes.length === 0) return true;
+      if (t.memberTypes.includes(memberType)) return true;
+      if (t.memberTypes.includes('course_member') && courseAccess.length > 0) return true;
+      return false;
+    });
+
+  // 免費短路：此會員適用的入場類型中若有 price<=0（例如兒童/學生設 0），直接免費放行
+  const freeType = configuredTypes.find(t => t.price <= 0);
+  if (freeType) {
+    return { allowed: true, status: 'ok', entryType: freeType.id, freeEntry: true, member: memberInfo };
   }
-  // 設定為 0（免費）時直接放行
-  if (singlePrice <= 0) {
-    return { allowed: true, status: 'ok', entryType: singleTypeId, freeEntry: true, member: memberInfo };
+
+  // 付費入場類型選項；設定缺失/無適用類型時 fallback 至原本依身份的單一單次入場
+  let entryTypeOptions = configuredTypes
+    .filter(t => t.price > 0)
+    .map(t => ({
+      type: t.id,
+      label: t.name,
+      price: t.price,
+      discountedPrice: withTeam(t.price),
+      teamDiscount: isTeam && withTeam(t.price) < t.price,
+      available: true,
+      requiresPayment: true,
+    }));
+
+  if (entryTypeOptions.length === 0) {
+    let singleTypeId = 'single_ticket', singleLabel = '單次購票入場';
+    let singlePrice = await getEntryTypePrice('single_ticket', PRICES.single_general);
+    if (memberType === 'child') {
+      singleTypeId = 'child_free'; singleLabel = '兒童入場';
+      singlePrice = await getEntryTypePrice('child_free', 100);
+    } else if (memberType === 'student') {
+      singleTypeId = 'student_free'; singleLabel = '學生入場';
+      singlePrice = await getEntryTypePrice('student_free', 250);
+    }
+    if (singlePrice <= 0) {
+      return { allowed: true, status: 'ok', entryType: singleTypeId, freeEntry: true, member: memberInfo };
+    }
+    entryTypeOptions = [{
+      type: singleTypeId, label: singleLabel, price: singlePrice,
+      discountedPrice: withTeam(singlePrice),
+      teamDiscount: isTeam && withTeam(singlePrice) < singlePrice,
+      available: true, requiresPayment: true,
+    }];
   }
-  const singleAfterDiscount = isTeam && singlePrice >= TEAM_DISCOUNT_MIN_AMOUNT
-    ? Math.round(singlePrice * PRICES.team_discount_rate) : singlePrice;
 
   return {
     allowed: true, status: 'ok', freeEntry: false,
     requiresPayment: true,
     member: memberInfo,
     availableOptions: [
-      {
-        type: singleTypeId,
-        label: singleLabel,
-        price: singlePrice,
-        discountedPrice: singleAfterDiscount,
-        teamDiscount: isTeam && singleAfterDiscount < singlePrice,
-        available: true,
-      },
+      ...entryTypeOptions,
       {
         type: 'buy_discount_card',
         label: '購買優惠折扣券入場',
         price: PRICES.discount_card,
         note: '含本次入場＋10次八折＋紅利',
         available: true,
+        requiresPayment: true,
       },
       {
         type: 'use_discount_card',
@@ -485,6 +517,25 @@ const createPendingCheckIn = async ({
     });
   }
 
+  // 後端權威：依 entryTypes 設定重算入場金額（防止前端竄改）。
+  // 僅對設定中的付費入場類型生效；卡/券/黑卡（各自扣點）與 buy_discount_card（固定價）維持呼叫端帶入值。
+  let finalAmount = amount || 0;
+  let finalOriginal = originalAmount || 0;
+  let finalTeam = isTeamDiscount || false;
+  {
+    const etDoc = await db.collection('systemSettings').doc('entryTypes').get();
+    const t = etDoc.exists
+      ? (etDoc.data().types || []).find(x => x.id === entryType && x.active !== false)
+      : null;
+    if (t && typeof t.price === 'number') {
+      const isTeam = isActiveTeamMember(member);
+      finalOriginal = t.price;
+      finalAmount = isTeam && t.price >= TEAM_DISCOUNT_MIN_AMOUNT
+        ? Math.round(t.price * PRICES.team_discount_rate) : t.price;
+      finalTeam = finalAmount < finalOriginal;
+    }
+  }
+
   const qrToken = uuidv4();
   const now = new Date();
   const expiresAt = dayjs().add(30, 'minute').toDate();
@@ -497,9 +548,9 @@ const createPendingCheckIn = async ({
     blackCardId: blackCardId || null,
     singleEntryTicketId: singleEntryTicketId || null,
     paymentMethod: paymentMethod || null,
-    amount: amount || 0,
-    originalAmount: originalAmount || 0,
-    isTeamDiscount: isTeamDiscount || false,
+    amount: finalAmount,
+    originalAmount: finalOriginal,
+    isTeamDiscount: finalTeam,
     rentShoes: rentShoes || false,
     shoesPrice: rentShoes ? (shoesPrice || PRICES.shoes_rental) : 0,
     rentChalk: rentChalk || false,

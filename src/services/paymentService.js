@@ -26,14 +26,40 @@ const adapters = {
 // 回傳可含 { relatedId } 供記帳關聯。Phase 0 先放 mock；真實流程於 Phase 1+ 插入。
 const orderHandlers = {
   mock: async (_db, _payment) => ({ ok: true }),
-  // course: async (db, payment) => { ...建立報名... return { relatedId } },
-  // competition / experience / pass / product ...
+  competition: async (db, payment) => {
+    const regId = payment.orderRef?.registrationId;
+    if (!regId) return { ok: false };
+    await db.collection('competitionRegistrations').doc(regId).update({
+      paymentStatus: 'confirmed',
+      paidAmount: payment.amount,
+      paidAt: new Date(),
+      paidVia: payment.provider,
+      paymentId: payment.id,
+      updatedAt: new Date(),
+    });
+    return { relatedId: regId };
+  },
+  // course / experience / pass / product ... 後續階段插入
+};
+
+// orderType → 後端權威金額計算（前端不送金額）。未註冊者沿用傳入 amount（Phase 0 mock）。
+const amountResolvers = {
+  competition: async (db, orderRef) => {
+    const regId = orderRef?.registrationId;
+    if (!regId) throw { code: 'INVALID_ORDER', message: '缺少報名 id' };
+    const doc = await db.collection('competitionRegistrations').doc(regId).get();
+    if (!doc.exists) throw { code: 'REGISTRATION_NOT_FOUND', message: '找不到報名紀錄' };
+    const reg = doc.data();
+    if (reg.paymentStatus === 'confirmed') throw { code: 'ALREADY_PAID', message: '此報名已完成付款' };
+    return reg.registrationFee;
+  },
 };
 
 // orderType → revenue.js 既有的 transaction type（報表分類用）
 const TYPE_MAP = {
   mock: 'product',
-  // checkin: 'checkin', course: 'course', competition: 'competition', pass: 'pass', product: 'product', experience: 'product',
+  competition: 'competition',
+  // checkin: 'checkin', course: 'course', pass: 'pass', product: 'product', experience: 'product',
 };
 
 const PROVIDERS = Object.keys(adapters);
@@ -43,15 +69,17 @@ async function createPayment({ provider = 'mock', orderType, orderRef = {}, gymI
   const db = getDb();
   if (!adapters[provider]) throw { code: 'INVALID_PROVIDER', message: '不支援的付款方式' };
   if (!orderType) throw { code: 'MISSING_ORDER_TYPE', message: '缺少 orderType' };
-  // 註：Phase 0（mock）暫接受傳入 amount；正式串接時改由各 orderType 後端權威計算，前端不送金額。
-  if (!(Number(amount) > 0)) throw { code: 'INVALID_AMOUNT', message: '金額不正確' };
+  // 已註冊的 orderType 一律後端權威計算金額（前端不送）；未註冊者（mock）沿用傳入值
+  let finalAmount = amount;
+  if (amountResolvers[orderType]) finalAmount = await amountResolvers[orderType](db, orderRef);
+  if (!(Number(finalAmount) > 0)) throw { code: 'INVALID_AMOUNT', message: '金額不正確' };
 
   const paymentId = uuidv4();
   const now = new Date();
   const payment = {
     id: paymentId,
     provider, status: 'pending',
-    amount: Number(amount), currency: 'TWD',
+    amount: Number(finalAmount), currency: 'TWD',
     gymId, memberId, memberName,
     orderType, orderRef,
     relatedId: null, providerTxnId: null, paymentUrl: null,

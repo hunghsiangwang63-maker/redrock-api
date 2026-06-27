@@ -5,7 +5,7 @@
  *   node src/seed.js
  *
  * 建立內容：
- *   - 2個場館（新竹館、竹北館）
+ *   - 2個場館（新竹館、士林館）
  *   - 1個總管理員
  *   - 各館1個場館管理員、1個正職、1個兼職
  *   - 票種定義
@@ -54,10 +54,10 @@ async function seedGyms() {
       updatedAt: new Date(),
     },
     {
-      id: 'gym-zhubei',
-      name: '紅石攀岩館 竹北館',
-      shortName: '竹北館',
-      address: '新竹縣竹北市○○路456號',
+      id: 'gym-shilin',
+      name: '紅石攀岩館 士林館',
+      shortName: '士林館',
+      address: '台北市士林區○○路456號',
       phone: '03-234-5678',
       status: 'active',
       paymentSettings: {
@@ -97,9 +97,9 @@ async function seedStaff() {
     { id: 'staff-mgr-hc', email: 'manager.hc@redrock.app', name: '陳館長', role: 'gym_manager', gymId: 'gym-hsinchu', gymName: '新竹館' },
     { id: 'staff-ft-hc',  email: 'wang@redrock.app',       name: '王小明', role: 'full_time',  gymId: 'gym-hsinchu', gymName: '新竹館' },
     { id: 'staff-pt-hc',  email: 'lee@redrock.app',        name: '李志成', role: 'part_time',  gymId: 'gym-hsinchu', gymName: '新竹館' },
-    // 竹北館
-    { id: 'staff-mgr-zb', email: 'manager.zb@redrock.app', name: '林館長', role: 'gym_manager', gymId: 'gym-zhubei', gymName: '竹北館' },
-    { id: 'staff-ft-zb',  email: 'chen.zb@redrock.app',    name: '陳雅玲', role: 'full_time',  gymId: 'gym-zhubei', gymName: '竹北館' },
+    // 士林館
+    { id: 'staff-mgr-zb', email: 'manager.zb@redrock.app', name: '林館長', role: 'gym_manager', gymId: 'gym-shilin', gymName: '士林館' },
+    { id: 'staff-ft-zb',  email: 'chen.zb@redrock.app',    name: '陳雅玲', role: 'full_time',  gymId: 'gym-shilin', gymName: '士林館' },
   ];
 
   for (const s of staffList) {
@@ -126,9 +126,9 @@ async function seedPassTypes() {
   const types = [
     { id: 'pt-shared-monthly', gymId: null, name: '月票（全館）', scope: 'shared', targetGymId: null, price: 1800, durationDays: 30, credits: null },
     { id: 'pt-hc-monthly',     gymId: 'gym-hsinchu', name: '月票（新竹館）', scope: 'single', targetGymId: 'gym-hsinchu', price: 1500, durationDays: 30, credits: null },
-    { id: 'pt-zb-monthly',     gymId: 'gym-zhubei',  name: '月票（竹北館）', scope: 'single', targetGymId: 'gym-zhubei',  price: 1500, durationDays: 30, credits: null },
+    { id: 'pt-zb-monthly',     gymId: 'gym-shilin',  name: '月票（士林館）', scope: 'single', targetGymId: 'gym-shilin',  price: 1500, durationDays: 30, credits: null },
     { id: 'pt-hc-10x',         gymId: 'gym-hsinchu', name: '10次回數票（新竹）', scope: 'single', targetGymId: 'gym-hsinchu', price: 2800, durationDays: 90, credits: 10 },
-    { id: 'pt-zb-10x',         gymId: 'gym-zhubei',  name: '10次回數票（竹北）', scope: 'single', targetGymId: 'gym-zhubei',  price: 2800, durationDays: 90, credits: 10 },
+    { id: 'pt-zb-10x',         gymId: 'gym-shilin',  name: '10次回數票（士林）', scope: 'single', targetGymId: 'gym-shilin',  price: 2800, durationDays: 90, credits: 10 },
     { id: 'pt-child-hc',       gymId: 'gym-hsinchu', name: '兒童月票（新竹）',   scope: 'single', targetGymId: 'gym-hsinchu', price: 1200, durationDays: 30, credits: null },
   ];
 
@@ -313,7 +313,7 @@ async function seedGymHoursAndAnnouncements() {
     sun: { open: '10:00', close: '21:00', closed: false },
   };
 
-  for (const gymId of ['gym-hsinchu', 'gym-zhubei']) {
+  for (const gymId of ['gym-hsinchu', 'gym-shilin']) {
     await db.collection('gyms').doc(gymId).update({
       regularHours,
       googleMapsUrl: 'https://maps.google.com',

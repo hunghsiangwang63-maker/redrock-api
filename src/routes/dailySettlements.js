@@ -195,7 +195,7 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
         batch.set(ref, {
           type: 'settlement_difference',
           title: '結帳差異警示',
-          message: `${gymId === 'gym-hsinchu' ? '新竹館' : '竹北館'} ${today} 結帳差異 NT$${difference}，請確認`,
+          message: `${gymId === 'gym-hsinchu' ? '新竹館' : '士林館'} ${today} 結帳差異 NT$${difference}，請確認`,
           targetStaffId: m.id,
           isRead: false,
           createdAt: new Date(),

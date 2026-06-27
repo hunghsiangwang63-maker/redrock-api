@@ -22,11 +22,11 @@ async function seedStations() {
     },
     {
       id: 'station-zhubei',
-      name: '竹北館電腦',
+      name: '士林館電腦',
       email: 'zhubei@redrock.app',
       password: 'zhubei2026',
-      gymId: 'gym-zhubei',
-      gymName: '紅石攀岩館 竹北館',
+      gymId: 'gym-shilin',
+      gymName: '紅石攀岩館 士林館',
       isActive: true,
     },
   ];

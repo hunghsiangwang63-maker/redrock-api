@@ -738,7 +738,7 @@ const cancelCheckIn = async (checkInId, staffId, force = false) => {
 };
 
 // ── 今日統計 ────────────────────────────────────────────────────
-const GYM_NAMES = { 'gym-hsinchu': '新竹館', 'gym-zhubei': '竹北館' };
+const GYM_NAMES = { 'gym-hsinchu': '新竹館', 'gym-shilin': '士林館' };
 
 const countByEntryType = (records) => ({
   pass: records.filter(x => x.entryType === 'pass').length,
@@ -758,7 +758,7 @@ const getTodayStats = async (gymId) => {
   const _todayStrTW2 = new Date(Date.now() + _TZ2).toISOString().slice(0, 10);
   const start = new Date(_todayStrTW2 + 'T00:00:00+08:00');
   const end = new Date(_todayStrTW2 + 'T23:59:59+08:00');
-  const gymIds = gymId ? [gymId] : ['gym-hsinchu', 'gym-zhubei'];
+  const gymIds = gymId ? [gymId] : ['gym-hsinchu', 'gym-shilin'];
   const snap = await db.collection(COLLECTIONS.CHECK_INS)
     .where('gymId', 'in', gymIds)
     .where('checkedInAt', '>=', start)

@@ -1,6 +1,6 @@
 /**
  * 商品管理（含變體，庫存按館別分開）
- * 庫存結構：variant.gymStock = { 'gym-hsinchu': 10, 'gym-zhubei': 5 }
+ * 庫存結構：variant.gymStock = { 'gym-hsinchu': 10, 'gym-shilin': 5 }
  * 向下相容：若無 gymStock，fallback 到舊的 variant.stock
  */
 const express = require('express');

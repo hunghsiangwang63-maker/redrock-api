@@ -204,7 +204,7 @@ router.get('/:id/waiver', authenticateAny, async (req, res) => {
       waiver.contentIsFallback = true; // 標註：這是現行版本，非簽署當下的逐字快照
     }
 
-    res.json({ waiver });
+    res.json({ waiver, waiverSigned: !!waiver.isComplete });
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }

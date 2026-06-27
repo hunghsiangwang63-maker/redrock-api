@@ -464,6 +464,9 @@ router.post('/phone', authenticate, async (req, res) => {
 
     const docRef = await db.collection('checkIns').add(checkInData);
 
+    // 墜落測驗遞延（電話入場路徑；失敗不阻斷入場）
+    try { await checkinService.tryExtendFallTest(memberId, docRef.id); } catch (e) {}
+
     if (totalAmount > 0) {
       const { recordTransaction } = require('../utils/revenueLedger');
       const txn = await recordTransaction(db, {

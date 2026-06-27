@@ -210,14 +210,17 @@ const tryExtendFallTest = async (memberId, checkInId) => {
   const expectedExtensions = Math.floor(visitCount / FALL_TEST_EXTENSION_VISITS);
 
   if (expectedExtensions > extensionCount) {
+    // 補齊所有未套用的遞延（避免一次跨多門檻時只加一年、其餘永久遺失）
+    const missedExtensions = expectedExtensions - extensionCount;
     const previousExpiry = currentExpiry.format('YYYY-MM-DD');
-    const newExpiry = currentExpiry.add(FALL_TEST_EXTENSION_YEARS, 'year').format('YYYY-MM-DD');
+    const newExpiry = currentExpiry.add(missedExtensions * FALL_TEST_EXTENSION_YEARS, 'year').format('YYYY-MM-DD');
     const extensionLog = data.extensionLog || [];
     extensionLog.push({
       extendedAt: new Date(),
       checkInId,
       previousExpiresAt: previousExpiry,
       newExpiresAt: newExpiry,
+      extensionsApplied: missedExtensions,
     });
     await docRef.update({
       extensionCount: expectedExtensions,
@@ -806,6 +809,7 @@ module.exports = {
   getValidPasses,
   getCourseAccess,
   checkFallTest,
+  tryExtendFallTest,
   checkVip,
   getValidSingleEntryTickets,
   getMemberType,

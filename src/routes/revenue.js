@@ -20,23 +20,27 @@ router.get('/summary',
       const _todayStrTW = new Date(Date.now() + _TZ).toISOString().slice(0, 10);
       const todayStart = new Date(_todayStrTW + 'T00:00:00+08:00');
       const todayEnd = new Date(_todayStrTW + 'T23:59:59+08:00');
-      const weekStart = new Date(new Date(todayStart).setDate(todayStart.getDate() - todayStart.getDay()));
+      // 用 TW 日曆日計算週起點（避免在 UTC 伺服器上用 getDay 取到前一天的星期）
+      const _dow = dayjs(_todayStrTW).day(); // 0=週日 .. 6=週六，對 TW 日期正確
+      const weekStart = new Date(dayjs(_todayStrTW).subtract(_dow, 'day').format('YYYY-MM-DD') + 'T00:00:00+08:00');
       const monthStart = new Date(_todayStrTW.slice(0, 7) + '-01T00:00:00+08:00');
 
       let ref = db.collection(COLLECTIONS.TRANSACTIONS)
         .where('paymentStatus', '==', 'completed');
       if (gymId) ref = ref.where('gymId', '==', gymId);
 
-      // 本月資料（含今日和本週）
-      const monthSnap = await ref
-        .where('paidAt', '>=', monthStart)
+      // 查詢起點取「本週起」與「本月起」較早者，避免月初時本週橫跨上月而漏算
+      const queryStart = weekStart < monthStart ? weekStart : monthStart;
+      const dataSnap = await ref
+        .where('paidAt', '>=', queryStart)
         .where('paidAt', '<=', todayEnd)
         .get();
 
-      const txns = monthSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const all = dataSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-      const todayTxns = txns.filter(t => t.paidAt?.toDate() >= todayStart);
-      const weekTxns = txns.filter(t => t.paidAt?.toDate() >= weekStart);
+      const todayTxns = all.filter(t => t.paidAt?.toDate() >= todayStart);
+      const weekTxns = all.filter(t => t.paidAt?.toDate() >= weekStart);
+      const txns = all.filter(t => t.paidAt?.toDate() >= monthStart); // 本月統計用
 
       const sum = (arr) => arr.reduce((a, b) => a + (b.totalAmount || 0), 0);
 

@@ -365,7 +365,7 @@ router.delete('/:courseId',
       const now = new Date();
 
       // 取消所有尚未開始的場次（已開始/已結束的場次保留歷史紀錄）
-      const today = dayjs().format('YYYY-MM-DD');
+      const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期
       const sessionsSnap = await db.collection('courseSessions')
         .where('courseId', '==', courseId)
         .where('date', '>=', today)
@@ -527,7 +527,7 @@ router.post('/:courseId/enroll-all',
         .where('status', '==', 'scheduled')
         .get();
 
-      const today = new Date().toISOString().split('T')[0];
+      const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期
       const futureSessions = sessionsSnap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(s => s.date >= today)

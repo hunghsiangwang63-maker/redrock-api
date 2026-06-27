@@ -336,41 +336,71 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
   if (enrollment.memberId !== memberId) throw { code: 'FORBIDDEN' };
   if (enrollment.status !== 'confirmed') throw { code: 'INVALID_STATUS', message: '此報名狀態無法請假' };
 
+  const courseDoc = await db.collection(COURSE_COLLECTION).doc(enrollment.courseId).get();
+  const course = courseDoc.exists ? courseDoc.data() : {};
+
+  // 請假截止：上課前 leaveDeadlineHours 小時（以台灣時間為準）
+  const deadlineHours = course.leaveDeadlineHours ?? 2;
+  if (enrollment.date && enrollment.startTime) {
+    const classTime = dayjs(`${enrollment.date}T${enrollment.startTime}:00+08:00`);
+    if (classTime.isValid() && dayjs().add(deadlineHours, 'hour').isAfter(classTime)) {
+      throw { code: 'LEAVE_DEADLINE_PASSED', message: `需於上課前 ${deadlineHours} 小時提出請假` };
+    }
+  }
+
+  // 整期請假次數上限
+  const maxLeaves = course.maxLeaves ?? 2;
+  const usedLeaves = await db.collection(ENROLLMENT_COLLECTION)
+    .where('memberId', '==', memberId)
+    .where('courseId', '==', enrollment.courseId)
+    .where('status', '==', 'leave')
+    .get().then(s => s.size);
+  if (usedLeaves >= maxLeaves) {
+    throw { code: 'MAX_LEAVES_EXCEEDED', message: `已達整期請假上限（${maxLeaves} 次）` };
+  }
+
   const now = new Date();
-  const makeupId = uuidv4();
 
   // 更新報名狀態
   await enrollDoc.ref.update({ status: 'leave', leaveReason: reason || '', leaveAt: now, updatedAt: now });
 
   // 更新場次人數
   const sessionDoc = await db.collection(SESSION_COLLECTION).doc(enrollment.sessionId).get();
-  await sessionDoc.ref.update({
-    enrolledCount: Math.max(0, sessionDoc.data().enrolledCount - 1),
-    updatedAt: now,
-  });
+  if (sessionDoc.exists) {
+    await sessionDoc.ref.update({
+      enrolledCount: Math.max(0, (sessionDoc.data().enrolledCount || 0) - 1),
+      updatedAt: now,
+    });
+  }
 
-  // 自動產生補課資格（有效期：同期課程結束後 60 天）
-  const makeup = {
-    id: makeupId,
-    memberId,
-    originalEnrollmentId: enrollmentId,
-    courseId: enrollment.courseId,
-    courseName: enrollment.courseName,
-    gymId: enrollment.gymId,
-    tags: [], // 之後從 course 取
-    status: 'available',
-    expiresAt: dayjs(enrollment.date).add(60, 'day').toDate(),
-    usedSessionId: null,
-    usedAt: null,
-    createdAt: now,
-    updatedAt: now,
-  };
-  await db.collection(MAKEUP_COLLECTION).doc(makeupId).set(makeup);
+  // 自動產生補課資格（依課程 makeupDeadlineDays，預設 60 天）
+  let makeup = null;
+  if (course.allowMakeup !== false) {
+    const makeupId = uuidv4();
+    const makeupDays = course.makeupDeadlineDays || 60;
+    makeup = {
+      id: makeupId,
+      memberId,
+      originalEnrollmentId: enrollmentId,
+      courseId: enrollment.courseId,
+      courseName: enrollment.courseName,
+      categoryId: course.categoryId || null, // 補課篩選同類別用
+      gymId: enrollment.gymId,
+      tags: course.tags || [],
+      status: 'available',
+      expiresAt: dayjs(enrollment.date).add(makeupDays, 'day').toDate(),
+      usedSessionId: null,
+      usedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await db.collection(MAKEUP_COLLECTION).doc(makeupId).set(makeup);
+  }
 
   // 自動遞補候補者
   await promoteWaitlist(enrollment.sessionId);
 
-  return { makeup, message: '請假成功，補課資格已產生（60天有效）' };
+  return { makeup, message: makeup ? '請假成功，補課資格已產生' : '請假成功' };
 };
 
 // ── 自動遞補候補 ──────────────────────────────────────────────────
@@ -403,6 +433,31 @@ const promoteWaitlist = async (sessionId) => {
   // TODO: 發 Email 通知遞補成功
   console.log(`✅ 候補遞補：${first.data().memberName} → confirmed`);
   return first.data();
+};
+
+// ── 退費：取消某會員某課程所有有效報名並釋放名額 ──────────────────
+const cancelCourseEnrollments = async ({ courseId, memberId, reason }) => {
+  const db = getDb();
+  const now = new Date();
+  const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期
+  const snap = await db.collection(ENROLLMENT_COLLECTION)
+    .where('courseId', '==', courseId)
+    .where('memberId', '==', memberId)
+    .where('status', '==', 'confirmed')
+    .get();
+  let cancelled = 0;
+  for (const d of snap.docs) {
+    const e = d.data();
+    await d.ref.update({ status: 'cancelled', cancelledAt: now, cancelReason: reason || '退費取消', updatedAt: now });
+    const sDoc = await db.collection(SESSION_COLLECTION).doc(e.sessionId).get();
+    if (sDoc.exists) {
+      await sDoc.ref.update({ enrolledCount: Math.max(0, (sDoc.data().enrolledCount || 0) - 1), updatedAt: now });
+      // 僅未來場次才遞補候補
+      if ((sDoc.data().date || '') >= today) await promoteWaitlist(e.sessionId);
+    }
+    cancelled++;
+  }
+  return cancelled;
 };
 
 // ── 補課報名 ──────────────────────────────────────────────────────
@@ -534,7 +589,7 @@ const getSessionRoster = async (sessionId) => {
 // ── 課程狀態標籤（報名中/即將開始/進行中/已滿/已結束/已取消）──────
 const computeStatusLabel = (course, enrolledCount) => {
   if (course.status === 'cancelled') return 'cancelled';
-  const today = dayjs().format('YYYY-MM-DD');
+  const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期
   if (course.endDate && today > course.endDate) return 'ended';
   if (course.startDate && today >= course.startDate) return 'ongoing';
   if (enrolledCount >= (course.maxStudents || Infinity)) return 'full';
@@ -572,7 +627,7 @@ const getSessions = async (gymId, fromDate, toDate) => {
   let ref = db.collection(SESSION_COLLECTION);
   if (gymId) ref = ref.where('gymId', '==', gymId);
   ref = ref
-    .where('date', '>=', fromDate || dayjs().format('YYYY-MM-DD'))
+    .where('date', '>=', fromDate || new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10))
     .where('date', '<=', toDate || dayjs().add(30, 'day').format('YYYY-MM-DD'));
   const snap = await ref.get();
   const sessions = snap.docs.map(d => ({ id: d.id, ...d.data() }))
@@ -657,6 +712,7 @@ module.exports = {
   enrollCourse,
   requestLeave,
   promoteWaitlist,
+  cancelCourseEnrollments,
   enrollMakeup,
   markAttendance,
   getSessionRoster,

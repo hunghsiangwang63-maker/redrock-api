@@ -4,6 +4,8 @@ const { body } = require('express-validator');
 const { authenticate, authenticateAny, checkPermission, requireManagerOrStation, auditLog } = require('../middleware/auth');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
+const courseService = require('../services/courseService');
+const { recordTransaction } = require('../utils/revenueLedger');
 
 // ══════════════════════════════════════════════════════
 // GET /course-adjustments/requests - 取得所有課程調整申請
@@ -32,27 +34,28 @@ router.post('/enrollments/:enrollmentId/refund-request',
       const db = getDb();
       const memberId = req.member?.id || req.body.memberId;
 
-      // 先嘗試直接用 enrollmentId 找，找不到則用 courseId+memberId 找第一筆有效 enrollment
-      let enrollDoc = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).doc(req.params.enrollmentId).get();
-      if (!enrollDoc.exists) {
-        // enrollmentId 可能是 courseId，改為查詢
-        const snap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
-          .where('courseId', '==', req.params.enrollmentId)
-          .where('memberId', '==', memberId)
-          .where('status', '==', 'confirmed')
-          .limit(1).get();
-        if (snap.empty) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名記錄' });
-        enrollDoc = snap.docs[0];
-      }
-      const enrollment = { id: enrollDoc.id, ...enrollDoc.data() };
+      // 解析 courseId（route param 可能是 enrollmentId 或 courseId）
+      let courseId = req.params.enrollmentId;
+      const directDoc = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).doc(req.params.enrollmentId).get();
+      if (directDoc.exists) courseId = directDoc.data().courseId;
 
-      if (enrollment.status === 'cancelled') return res.status(400).json({ error: 'ALREADY_CANCELLED', message: '此報名已取消' });
-      if (enrollment.pauseStatus === 'paused') return res.status(400).json({ error: 'IS_PAUSED', message: '暫停中的課程請先恢復再申請退費' });
+      // 取該會員此課程「所有」有效報名（週課為多筆）
+      const allSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+        .where('courseId', '==', courseId)
+        .where('memberId', '==', memberId)
+        .where('status', '==', 'confirmed')
+        .get();
+      if (allSnap.empty) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到有效的報名記錄' });
+      const all = allSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const rep = all[0];
+      if (rep.pauseStatus === 'paused') return res.status(400).json({ error: 'IS_PAUSED', message: '暫停中的課程請先恢復再申請退費' });
 
-      const courseDoc = await db.collection('courses').doc(enrollment.courseId).get();
+      const courseDoc = await db.collection('courses').doc(courseId).get();
       const course = courseDoc.exists ? courseDoc.data() : null;
-      const paidAmount = enrollment.paidAmount || 0;
-      const today = dayjs().utcOffset(8).format('YYYY-MM-DD');
+      // 已付金額：彙總所有報名的 paidAmount，若皆為 0 則退而求其次用 enrollmentFee（避免抓到非持費那筆算成 0）
+      const paidAmount = all.reduce((s, e) => s + (e.paidAmount || 0), 0)
+        || all.reduce((s, e) => s + (e.enrollmentFee || 0), 0);
+      const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期
       const courseStartDate = course?.startDate || null;
       const perSessionDeduction = course?.perSessionDeduction ?? 850; // 每堂扣除金額，預設850
       const handlingFeeRate = course?.handlingFeeRate ?? 0.05; // 手續費率，預設5%
@@ -68,7 +71,7 @@ router.post('/enrollments/:enrollmentId/refund-request',
       } else {
         // 開課後：計算已開課堂數（日期已過的場次，不論有無出席/請假）
         const sessionSnap = await db.collection('courseSessions')
-          .where('courseId', '==', enrollment.courseId)
+          .where('courseId', '==', courseId)
           .get();
         const heldSessions = sessionSnap.docs
           .map(d => d.data())
@@ -82,11 +85,12 @@ router.post('/enrollments/:enrollmentId/refund-request',
       await db.collection('courseAdjustmentRequests').doc(reqId).set({
         id: reqId,
         type: 'refund',
-        enrollmentId: enrollment.id,
-        courseId: enrollment.courseId,
-        courseName: enrollment.courseName || course?.name || '',
-        memberId: enrollment.memberId,
-        memberName: enrollment.memberName || '',
+        enrollmentId: rep.id,
+        courseId,
+        courseName: rep.courseName || course?.name || '',
+        gymId: rep.gymId || null,
+        memberId,
+        memberName: rep.memberName || '',
         paidAmount,
         suggestedRefund,
         refundNote,
@@ -166,50 +170,56 @@ router.post('/requests/:id/approve',
 
       if (request.type === 'refund') {
         const finalRefund = req.body.finalRefund !== undefined ? Number(req.body.finalRefund) : request.suggestedRefund;
-        // 標記報名取消
-        await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).doc(request.enrollmentId).update({
-          status: 'cancelled',
-          cancelledAt: new Date(),
-          cancelReason: `退費申請核准（退款 NT$${finalRefund}）`,
-          updatedAt: new Date(),
+        // 取消該會員此課程「所有」有效報名，釋放名額並遞補候補
+        const cancelled = await courseService.cancelCourseEnrollments({
+          courseId: request.courseId,
+          memberId: request.memberId,
+          reason: `退費申請核准（退款 NT$${finalRefund}）`,
         });
-        // 從所有場次名單移除
-        const sessionEnrollSnap = await db.collection('courseSessionEnrollments')
-          .where('enrollmentId', '==', request.enrollmentId).get();
-        const batch = db.batch();
-        sessionEnrollSnap.docs.forEach(d => batch.update(d.ref, { status: 'cancelled', updatedAt: new Date() }));
-        await batch.commit();
-        // 更新申請狀態
+        // 記負向交易（退款），記帳失敗不阻擋核准
+        if (finalRefund > 0) {
+          try {
+            await recordTransaction(db, {
+              gymId: request.gymId || null,
+              type: 'course_refund',
+              totalAmount: -Math.abs(finalRefund),
+              paymentMethod: 'refund',
+              memberId: request.memberId,
+              memberName: request.memberName || '',
+              relatedId: request.id,
+              notes: `課程退費（${request.courseName || ''}）`,
+              staffId: req.staff.id,
+              staffName: req.staff.name,
+            });
+          } catch (e) { console.error('退費記帳失敗', e.message); }
+        }
         await db.collection('courseAdjustmentRequests').doc(req.params.id).update({
-          status: 'approved', finalRefund,
+          status: 'approved', finalRefund, cancelledCount: cancelled,
           approvedBy: req.staff.id, approvedByName: req.staff.name, approvedAt: new Date(), updatedAt: new Date(),
         });
-        return res.json({ success: true, message: `退費申請已核准，退款 NT$${finalRefund}` });
+        return res.json({ success: true, message: `退費申請已核准，退款 NT$${finalRefund}（已取消 ${cancelled} 堂報名）` });
       }
 
       if (request.type === 'pause') {
-        // 標記報名為暫停，並從所有未來場次移除
-        await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).doc(request.enrollmentId).update({
-          pauseStatus: 'paused',
-          pausedAt: new Date(),
-          pauseRequestId: req.params.id,
-          updatedAt: new Date(),
-        });
-        // 從所有未來場次名單移除
-        const today = new Date();
-        const sessionEnrollSnap = await db.collection('courseSessionEnrollments')
-          .where('enrollmentId', '==', request.enrollmentId)
-          .where('status', '==', 'confirmed').get();
-        const batch = db.batch();
-        sessionEnrollSnap.docs.forEach(d => {
-          batch.update(d.ref, { status: 'paused', updatedAt: new Date() });
-        });
-        await batch.commit();
+        const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期
+        const now = new Date();
+        // 暫停該會員此課程「所有未來」有效報名
+        const snap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+          .where('courseId', '==', request.courseId)
+          .where('memberId', '==', request.memberId)
+          .where('status', '==', 'confirmed')
+          .get();
+        let paused = 0;
+        for (const d of snap.docs) {
+          if ((d.data().date || '') < today) continue; // 已上的堂不動
+          await d.ref.update({ pauseStatus: 'paused', pausedAt: now, pauseRequestId: req.params.id, updatedAt: now });
+          paused++;
+        }
         await db.collection('courseAdjustmentRequests').doc(req.params.id).update({
-          status: 'approved',
+          status: 'approved', pausedCount: paused,
           approvedBy: req.staff.id, approvedByName: req.staff.name, approvedAt: new Date(), updatedAt: new Date(),
         });
-        return res.json({ success: true, message: '課程已暫停，學員已從場次名單移除' });
+        return res.json({ success: true, message: `課程已暫停（${paused} 堂未來場次）` });
       }
 
       res.status(400).json({ error: 'UNKNOWN_TYPE' });

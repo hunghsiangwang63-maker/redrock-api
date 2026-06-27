@@ -54,7 +54,7 @@ const getBlockReasons = async (memberId, memberData) => {
   // 3. 從未通過墜落測驗
   const fallTests = await db.collection(COLLECTIONS.FALL_TESTS)
     .where('memberId', '==', memberId)
-    .where('result', '==', 'pass')
+    .where('result', '==', 'passed')
     .limit(1)
     .get();
 

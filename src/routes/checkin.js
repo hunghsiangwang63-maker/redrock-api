@@ -29,8 +29,12 @@ router.post('/verify',
       const { identifier, gymId } = req.body;
       const effectiveGymId = req.staff?.role === 'super_admin' ? gymId : (req.staff?.gymId || gymId);
 
+      // 會員自助驗票一律以登入身分(token)為準，不用電話反查，
+      // 避免家長與子會員共用同一支電話時被誤判為對方（getMemberByPhone 無排序，limit(1)）
       let member;
-      if (identifier.startsWith('RR-')) {
+      if (req.member) {
+        member = await memberService.getMember(req.member.id);
+      } else if (identifier.startsWith('RR-')) {
         member = await memberService.getMemberByQRCode(identifier);
       } else {
         member = await memberService.getMemberByPhone(identifier);

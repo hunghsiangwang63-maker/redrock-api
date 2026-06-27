@@ -459,6 +459,7 @@ router.post('/phone', authenticate, async (req, res) => {
       status: 'checked_in',
       isCancelled: false,
       source: 'phone',
+      paymentStatus: req.body.deferPayment ? 'pending' : 'confirmed',
       ...(childName ? { childName, parentMemberId } : {}),
     };
 
@@ -467,7 +468,7 @@ router.post('/phone', authenticate, async (req, res) => {
     // 墜落測驗遞延（電話入場路徑；失敗不阻斷入場）
     try { await checkinService.tryExtendFallTest(memberId, docRef.id); } catch (e) {}
 
-    if (totalAmount > 0) {
+    if (totalAmount > 0 && !req.body.deferPayment) {
       const { recordTransaction } = require('../utils/revenueLedger');
       const txn = await recordTransaction(db, {
         gymId, type: 'checkin',

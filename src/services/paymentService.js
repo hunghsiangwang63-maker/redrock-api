@@ -79,6 +79,26 @@ const orderHandlers = {
     } catch (e) { if (e.code !== 'ALREADY_PAID') throw e; }
     return { relatedId: planId };
   },
+  rental: async (db, payment) => {
+    const id = payment.orderRef?.rentalId;
+    if (!id) return { ok: false };
+    await db.collection('equipmentRentals').doc(id).update({
+      paymentStatus: 'confirmed', status: 'active',
+      paidVia: payment.provider, paidAmount: payment.amount, paidAt: new Date(),
+      paymentId: payment.id, updatedAt: new Date(),
+    });
+    return { relatedId: id };
+  },
+  checkin: async (db, payment) => {
+    const id = payment.orderRef?.checkInId;
+    if (!id) return { ok: false };
+    await db.collection('checkIns').doc(id).update({
+      paymentStatus: 'confirmed',
+      paidVia: payment.provider, paidAmount: payment.amount, paidAt: new Date(),
+      paymentId: payment.id, updatedAt: new Date(),
+    });
+    return { relatedId: id };
+  },
   // product ... 後續階段插入
 };
 
@@ -135,6 +155,24 @@ const orderResolvers = {
     if (inst.status === 'paid') throw { code: 'ALREADY_PAID', message: '此期已繳款' };
     return { amount: inst.amount, gymId: plan.gymId || null, memberId: plan.memberId || null, memberName: plan.memberName || '' };
   },
+  rental: async (db, orderRef) => {
+    const id = orderRef?.rentalId;
+    if (!id) throw { code: 'INVALID_ORDER', message: '缺少租借 id' };
+    const doc = await db.collection('equipmentRentals').doc(id).get();
+    if (!doc.exists) throw { code: 'RENTAL_NOT_FOUND', message: '找不到租借申請' };
+    const r = doc.data();
+    if (r.paymentStatus === 'confirmed') throw { code: 'ALREADY_PAID', message: '此租借已完成付款' };
+    return { amount: (r.totalRentalFee || 0) + (r.totalDeposit || 0), gymId: r.gymId || null, memberId: r.memberId || null, memberName: r.memberName || '' };
+  },
+  checkin: async (db, orderRef) => {
+    const id = orderRef?.checkInId;
+    if (!id) throw { code: 'INVALID_ORDER', message: '缺少入場 id' };
+    const doc = await db.collection('checkIns').doc(id).get();
+    if (!doc.exists) throw { code: 'CHECKIN_NOT_FOUND', message: '找不到入場紀錄' };
+    const c = doc.data();
+    if (c.paymentStatus === 'confirmed') throw { code: 'ALREADY_PAID', message: '此入場已完成付款' };
+    return { amount: c.amountPaid || 0, gymId: c.gymId || null, memberId: c.memberId || null, memberName: c.memberName || '' };
+  },
 };
 
 // orderType → revenue.js 既有的 transaction type（報表分類用）
@@ -145,7 +183,9 @@ const TYPE_MAP = {
   course: 'course',
   pass: 'pass',
   installment: 'pass',
-  // checkin: 'checkin', product: 'product',
+  rental: 'product',
+  checkin: 'checkin',
+  // product: 'product',
 };
 
 const PROVIDERS = Object.keys(adapters);

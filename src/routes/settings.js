@@ -81,8 +81,8 @@ function getDefaultEntryTypes() {
   return [
     { id: 'single_ticket',  name: '單次入場', price: 200, active: true },
     { id: 'course_access',  name: '課程學員', price: 0,   active: true },
-    { id: 'child_free',     name: '兒童免費', price: 0,   active: true },
-    { id: 'student_free',   name: '學生免費', price: 0,   active: true },
+    { id: 'child_free',     name: '兒童入場', price: 100, active: true },
+    { id: 'student_free',   name: '學生入場', price: 250, active: true },
   ];
 }
 

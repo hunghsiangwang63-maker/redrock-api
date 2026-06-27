@@ -42,6 +42,17 @@ const getMemberType = (member) => {
 
 const isFreeEntry = (memberType) => memberType === 'child' || memberType === 'student';
 
+// 入場價由 systemSettings/entryTypes 設定（可隨時調整；找不到用 fallback）
+const getEntryTypePrice = async (entryTypeId, fallback) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('systemSettings').doc('entryTypes').get();
+    if (!doc.exists) return fallback;
+    const t = (doc.data().types || []).find(x => x.id === entryTypeId);
+    return (t && typeof t.price === 'number') ? t.price : fallback;
+  } catch (e) { return fallback; }
+};
+
 // ── 取得有效定期票 ───────────────────────────────────────────────
 const getValidPasses = async (memberId, gymId) => {
   const db = getDb();
@@ -354,15 +365,8 @@ const verifyEntry = async (memberId, gymId) => {
     // 這裡只標記身份，不直接 return，讓後面的付費流程正常執行
   }
 
-  // 7. 兒童/學生免費
-  if (isFreeEntry(memberType)) {
-    return {
-      allowed: true, status: 'ok',
-      entryType: memberType === 'child' ? 'child_free' : 'student_free',
-      freeEntry: true,
-      member: memberInfo,
-    };
-  }
+  // 7. 兒童/學生：不再固定免費，價格改由 entryTypes 設定決定（於下方付費流程處理；
+  //    只有課程學員為固定免費，已於上方 course_access 處理）
 
   // 7. 員工（full_time / part_time）— 由 staff token 判斷，這裡不處理
   // 8. 無免費資格 → 需要選擇付費方式
@@ -370,7 +374,20 @@ const verifyEntry = async (memberId, gymId) => {
   const blackCards = await getMemberBlackCards(memberId);
   const singleEntryTickets = await getValidSingleEntryTickets(memberId);
 
-  const singlePrice = PRICES.single_general;
+  // 單次入場價：一般用 single_general；兒童/學生改由 entryTypes 設定（預設 100/250，可設 0=免費）
+  let singleTypeId = 'single_ticket', singleLabel = '單次購票入場';
+  let singlePrice = await getEntryTypePrice('single_ticket', PRICES.single_general);
+  if (memberType === 'child') {
+    singleTypeId = 'child_free'; singleLabel = '兒童入場';
+    singlePrice = await getEntryTypePrice('child_free', 100);
+  } else if (memberType === 'student') {
+    singleTypeId = 'student_free'; singleLabel = '學生入場';
+    singlePrice = await getEntryTypePrice('student_free', 250);
+  }
+  // 設定為 0（免費）時直接放行
+  if (singlePrice <= 0) {
+    return { allowed: true, status: 'ok', entryType: singleTypeId, freeEntry: true, member: memberInfo };
+  }
   const singleAfterDiscount = isTeam && singlePrice >= TEAM_DISCOUNT_MIN_AMOUNT
     ? Math.round(singlePrice * PRICES.team_discount_rate) : singlePrice;
 
@@ -380,8 +397,8 @@ const verifyEntry = async (memberId, gymId) => {
     member: memberInfo,
     availableOptions: [
       {
-        type: 'single_ticket',
-        label: '單次購票入場',
+        type: singleTypeId,
+        label: singleLabel,
         price: singlePrice,
         discountedPrice: singleAfterDiscount,
         teamDiscount: isTeam && singleAfterDiscount < singlePrice,

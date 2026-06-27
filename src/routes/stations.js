@@ -11,6 +11,7 @@ const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { getDb } = require('../config/firebase');
+const { authenticateStation } = require('../middleware/auth');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -173,6 +174,7 @@ router.post('/shift/clockin',
 
 // ── POST /stations/shift/clockout - 交班 ─────────────────────────
 router.post('/shift/clockout',
+  authenticateStation,
   [
     body('shiftId').notEmpty(),
     body('stationId').notEmpty(),
@@ -214,7 +216,7 @@ router.post('/shift/clockout',
 );
 
 // ── GET /stations/shift/current - 取得目前值班人員 ───────────────
-router.get('/shift/current/:stationId', async (req, res) => {
+router.get('/shift/current/:stationId', authenticateStation, async (req, res) => {
   try {
     const db = getDb();
     const { stationId } = req.params;
@@ -244,7 +246,7 @@ router.get('/shift/current/:stationId', async (req, res) => {
 });
 
 // ── GET /stations/shift/history - 班次歷史 ───────────────────────
-router.get('/shift/history/:stationId', async (req, res) => {
+router.get('/shift/history/:stationId', authenticateStation, async (req, res) => {
   try {
     const db = getDb();
     const snap = await db.collection('shiftLogs')

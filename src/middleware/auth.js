@@ -83,6 +83,28 @@ const requireStationAuth = (req, res, next) => {
   next();
 };
 
+// ── 館別電腦驗證：接受 station（電腦登入）或 operator（已打卡值班）token ──
+// 用於打卡前後都需可呼叫的 shift 端點，避免無認證被任意人查詢/交班
+const authenticateStation = (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: '請先登入' });
+    }
+    const decoded = jwt.verify(authHeader.split(' ')[1], process.env.JWT_SECRET);
+    if (decoded.type !== 'station' && decoded.type !== 'operator') {
+      return res.status(403).json({ error: 'STATION_REQUIRED', message: '此功能僅限館別電腦使用' });
+    }
+    req.station = { stationId: decoded.stationId || null, gymId: decoded.gymId || null, type: decoded.type };
+    next();
+  } catch (err) {
+    if (err.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'TOKEN_EXPIRED', message: '登入已過期，請重新登入' });
+    }
+    return res.status(401).json({ error: 'INVALID_TOKEN', message: '無效的驗證資訊' });
+  }
+};
+
 // ── Member token 驗證 ────────────────────────────────────────────
 const authenticateMember = async (req, res, next) => {
   try {
@@ -207,5 +229,5 @@ const requireManagerOrStation = (req, res, next) => {
 
 module.exports = {
   authenticate, authenticateMember, authenticateAny,
-  checkPermission, requireSameGym, auditLog, requireStationAuth, requireManagerOrStation, DEFAULT_PERMISSIONS,
+  checkPermission, requireSameGym, auditLog, requireStationAuth, authenticateStation, requireManagerOrStation, DEFAULT_PERMISSIONS,
 };

@@ -652,6 +652,15 @@ const confirmCheckIn = async (qrToken, staffId, staffName) => {
 // ── 取消入場（10分鐘內）────────────────────────────────────────
 const cancelCheckIn = async (checkInId, staffId, force = false) => {
   const db = getDb();
+
+  // 防護：Firestore 文件 id 限制（保留字 __x__、空值、含 "/"、"."、".." 會丟底層錯誤）
+  // 提早回乾淨的 NOT_FOUND，避免把 Firestore 內部錯誤往外拋
+  if (typeof checkInId !== 'string' || !checkInId.trim()
+      || checkInId.includes('/') || checkInId === '.' || checkInId === '..'
+      || /^__.*__$/.test(checkInId)) {
+    throw { code: 'CHECKIN_NOT_FOUND', message: '入場紀錄不存在' };
+  }
+
   const checkInRef = db.collection(COLLECTIONS.CHECK_INS).doc(checkInId);
   const checkInDoc = await checkInRef.get();
 

@@ -17,9 +17,9 @@ const { v4: uuidv4 } = require('uuid');
 
 const adapters = {
   mock: require('./paymentAdapters/mock'),
-  linepay: require('./paymentAdapters/linepay'),     // Phase 2 骨架（待各館填 Channel 金鑰）
-  // jkopay: require('./paymentAdapters/jkopay'),     // Phase 3
-  // taiwanpay: require('./paymentAdapters/taiwanpay'),
+  linepay: require('./paymentAdapters/linepay'),     // 待各館填 Channel 金鑰（可運作）
+  jkopay: require('./paymentAdapters/jkopay'),       // 骨架：待街口整合手冊 + 金鑰
+  taiwanpay: require('./paymentAdapters/taiwanpay'), // 骨架：待收單銀行 API + 金鑰
 };
 
 // 各 orderType 在「付款成功」時要完成的業務動作。

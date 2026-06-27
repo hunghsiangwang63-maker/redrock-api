@@ -49,7 +49,17 @@ const orderHandlers = {
     });
     return { relatedId: id };
   },
-  // course / pass / product ... 後續階段插入
+  course: async (db, payment) => {
+    const id = payment.orderRef?.enrollmentId;
+    if (!id) return { ok: false };
+    await db.collection('courseEnrollments').doc(id).update({
+      paymentStatus: 'confirmed',
+      paidVia: payment.provider, paidAmount: payment.amount, paidAt: new Date(),
+      paymentId: payment.id, updatedAt: new Date(),
+    });
+    return { relatedId: id };
+  },
+  // pass / product ... 後續階段插入
 };
 
 // orderType → 後端權威解析（金額/場館/會員），前端不送這些值。未註冊者沿用傳入值（Phase 0 mock）。
@@ -74,6 +84,15 @@ const orderResolvers = {
     if (b.status === 'confirmed') throw { code: 'ALREADY_PAID', message: '此預約已完成付款' };
     return { amount: b.totalFee, gymId: b.gymId || null, memberId: b.memberId || null, memberName: b.contactName || '' };
   },
+  course: async (db, orderRef) => {
+    const id = orderRef?.enrollmentId;
+    if (!id) throw { code: 'INVALID_ORDER', message: '缺少報名 id' };
+    const doc = await db.collection('courseEnrollments').doc(id).get();
+    if (!doc.exists) throw { code: 'ENROLLMENT_NOT_FOUND', message: '找不到報名紀錄' };
+    const e = doc.data();
+    if (e.paymentStatus === 'confirmed') throw { code: 'ALREADY_PAID', message: '此報名已完成付款' };
+    return { amount: e.enrollmentFee, gymId: e.gymId || null, memberId: e.memberId || null, memberName: e.memberName || '' };
+  },
 };
 
 // orderType → revenue.js 既有的 transaction type（報表分類用）
@@ -81,10 +100,21 @@ const TYPE_MAP = {
   mock: 'product',
   competition: 'competition',
   experience: 'product',
-  // checkin: 'checkin', course: 'course', pass: 'pass', product: 'product',
+  course: 'course',
+  // checkin: 'checkin', pass: 'pass', product: 'product',
 };
 
 const PROVIDERS = Object.keys(adapters);
+
+// 各館的金流商戶設定（LinePay/街口/台灣Pay 帳號因館別而異），存於 gyms/{gymId}.paymentSettings。
+// 機密只在後端執行期取用，不存進 payment 文件、不回傳前端。
+async function loadGymPaymentSettings(db, gymId) {
+  if (!gymId) return {};
+  try {
+    const doc = await db.collection('gyms').doc(gymId).get();
+    return doc.exists ? (doc.data().paymentSettings || {}) : {};
+  } catch (e) { return {}; }
+}
 
 // ── 建立付款 ──────────────────────────────────────────────────────
 async function createPayment({ provider = 'mock', orderType, orderRef = {}, gymId = null, memberId = null, memberName = '', amount, returnUrls = {} }) {
@@ -117,10 +147,13 @@ async function createPayment({ provider = 'mock', orderType, orderRef = {}, gymI
     expiresAt: new Date(now.getTime() + 15 * 60 * 1000),
   };
 
+  // 用「該館」的商戶設定建立付款（各館 LinePay/街口/台灣Pay 帳號不同）
+  const gymSettings = await loadGymPaymentSettings(db, finalGymId);
   const r = await adapters[provider].createPayment({
     orderId: paymentId, amount: payment.amount,
     productName: `${orderType} 付款`,
-    memberInfo: { memberId, memberName }, returnUrls,
+    memberInfo: { memberId: finalMemberId, memberName: finalMemberName },
+    returnUrls, gymSettings,
   });
   payment.paymentUrl = r.paymentUrl || null;
   payment.providerTxnId = r.providerTxnId || null;

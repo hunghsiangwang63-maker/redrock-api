@@ -567,8 +567,10 @@ router.post('/:courseId/enroll-all',
       const discountResult = applyTeamDiscount(baseFee, isTeam);
       const fee = discountResult.discounted;
 
-      futureSessions.forEach(s => {
+      let firstEnrollmentId = null;
+      futureSessions.forEach((s, idx) => {
         const enrollmentId = uuidv4();
+        if (idx === 0) firstEnrollmentId = enrollmentId;
         batch.set(db.collection('courseEnrollments').doc(enrollmentId), {
           id: enrollmentId,
           memberId,
@@ -599,8 +601,9 @@ router.post('/:courseId/enroll-all',
 
       await batch.commit();
 
-      // 記錄交易（整堂課費用記在第一個場次上，僅在有實收費用時記錄）
-      if (fee > 0) {
+      // 記錄交易（整堂課費用記在第一個場次上，僅在有實收費用且非延後付款時記錄；
+      // 線上付款 deferPayment 時改由付款 callback 記帳，避免重複記帳）
+      if (fee > 0 && !req.body.deferPayment) {
         const { recordTransaction } = require('../utils/revenueLedger');
         await recordTransaction(db, {
           gymId: futureSessions[0].gymId || gymId,
@@ -617,6 +620,7 @@ router.post('/:courseId/enroll-all',
       }
 
       res.status(201).json({
+        enrollmentId: firstEnrollmentId,
         message: isTeam && discountResult.discount > 0
           ? `報名成功，已加入 ${futureSessions.length} 個場次（已套用攀岩隊員折扣，折抵 NT$${discountResult.discount}）`
           : `報名成功，已加入 ${futureSessions.length} 個場次`,

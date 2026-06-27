@@ -26,14 +26,23 @@ router.post('/verify',
   validate,
   async (req, res) => {
     try {
-      const { identifier, gymId } = req.body;
+      const { identifier, gymId, targetMemberId } = req.body;
       const effectiveGymId = req.staff?.role === 'super_admin' ? gymId : (req.staff?.gymId || gymId);
 
       // 會員自助驗票一律以登入身分(token)為準，不用電話反查，
       // 避免家長與子會員共用同一支電話時被誤判為對方（getMemberByPhone 無排序，limit(1)）
+      // 親子帳號：家長可帶 targetMemberId 為「自己的子會員」驗票
       let member;
       if (req.member) {
-        member = await memberService.getMember(req.member.id);
+        let targetId = req.member.id;
+        if (targetMemberId && targetMemberId !== req.member.id) {
+          const child = await memberService.getMember(targetMemberId);
+          if (!child || child.parentMemberId !== req.member.id) {
+            return res.status(403).json({ error: 'FORBIDDEN', message: '只能查詢自己或自己子會員的入場資格' });
+          }
+          targetId = targetMemberId;
+        }
+        member = await memberService.getMember(targetId);
       } else if (identifier.startsWith('RR-')) {
         member = await memberService.getMemberByQRCode(identifier);
       } else {
@@ -68,7 +77,20 @@ router.post('/qr/create',
         rentShoes, shoesPrice, rentChalk, chalkPrice,
       } = req.body;
 
-      const effectiveMemberId = req.member ? req.member.id : memberId;
+      // 親子帳號：家長可為「自己的子會員」產生入場 QR（需驗證擁有權）
+      let effectiveMemberId;
+      if (req.member) {
+        effectiveMemberId = req.member.id;
+        if (memberId && memberId !== req.member.id) {
+          const child = await memberService.getMember(memberId);
+          if (!child || child.parentMemberId !== req.member.id) {
+            return res.status(403).json({ error: 'FORBIDDEN', message: '只能為自己或自己子會員產生入場 QR' });
+          }
+          effectiveMemberId = memberId;
+        }
+      } else {
+        effectiveMemberId = memberId;
+      }
       const effectiveGymId = req.staff?.role === 'super_admin' ? gymId : (req.staff?.gymId || gymId);
 
       const result = await checkinService.createPendingCheckIn({
@@ -195,6 +217,9 @@ router.get('/eligibility/:memberId', authenticate, async (req, res) => {
       return p.endDate >= today && (p.scope === 'all' || p.gymId === (req.query.gymId || ''));
     });
 
+    // 墜落測驗狀態（櫃檯入場閘門用，與會員自助 verifyEntry 一致）
+    const fallTest = await checkinService.checkFallTest(req.params.memberId);
+
     res.json({
       memberType: member.memberType || 'general',
       hasCourseAccess,
@@ -202,6 +227,8 @@ router.get('/eligibility/:memberId', authenticate, async (req, res) => {
       hasValidPass,
       isVip,
       vipNote: vip?.note || null,
+      fallTestPassed: fallTest.passed,
+      fallTestReason: fallTest.passed ? null : fallTest.reason, // 'never_tested' | 'expired'
     });
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
@@ -410,6 +437,22 @@ router.post('/phone', authenticate, async (req, res) => {
     const { hasOverdueInstallment } = require('../services/installmentService');
     if (await hasOverdueInstallment(parentMemberId || memberId)) {
       return res.status(403).json({ message: '分期付款已逾期，入場資格已暫停，請至櫃檯完成繳款' });
+    }
+
+    // Waiver 硬擋（與會員自助入場一致；子會員代簽後 isComplete:true）
+    const waiverDoc = await db.collection('waivers').doc(memberId).get();
+    if (!waiverDoc.exists || waiverDoc.data().isComplete !== true) {
+      return res.status(403).json({ message: 'Waiver 尚未完成簽署，無法入場，請先完成簽署' });
+    }
+
+    // 墜落測驗硬擋（與會員自助 verifyEntry 一致）
+    const fallTestCheck = await checkinService.checkFallTest(memberId);
+    if (!fallTestCheck.passed) {
+      return res.status(403).json({
+        message: fallTestCheck.reason === 'expired'
+          ? '墜落測驗已到期，請至服務台重新進行測驗'
+          : '尚未通過安全墜落測驗，請先至服務台完成同意書簽署及測驗',
+      });
     }
 
     // 從 entryTypes 取得入場金額

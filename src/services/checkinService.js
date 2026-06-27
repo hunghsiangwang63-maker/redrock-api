@@ -32,10 +32,20 @@ const getOriginalEntryPrice = async (memberType) => {
   return getEntryTypePrice(id, fallback);
 };
 
-// ── 墜落測驗：有效期 2 年，期限內每入場2次遞延1年 ────────────────
-const FALL_TEST_VALID_YEARS = 2;
+// ── 墜落測驗：有效期 1 年，期限內每入場2次遞延1年 ────────────────
+const FALL_TEST_VALID_YEARS = 1;       // 初次效期（與登記時 settings.validYears 預設一致）
 const FALL_TEST_EXTENSION_VISITS = 2;  // 觸發遞延所需入場次數
 const FALL_TEST_EXTENSION_YEARS = 1;   // 每次遞延年數
+
+// 解析墜測有效期：優先 currentExpiresAt（含遞延），其次登記時的 expiresAt，最後回推 testedAt + 效期年數
+const resolveFallTestExpiry = (test) => {
+  if (test.currentExpiresAt) return dayjs(test.currentExpiresAt);
+  const raw = test.expiresAt;
+  const sec = raw?.seconds || raw?._seconds;
+  if (sec) return dayjs(sec * 1000);
+  if (raw) return dayjs(raw);
+  return dayjs(test.testedAt.toDate()).add(FALL_TEST_VALID_YEARS, 'year');
+};
 
 // ── 身份別判斷 ──────────────────────────────────────────────────
 // 優先序：VIP > 課程學員 > 攀岩隊員 > 兒童(未滿13) > 學生(13-22) > 一般
@@ -179,9 +189,7 @@ const checkFallTest = async (memberId) => {
   const fallTestId = last.id;
 
   // 計算目前有效期（含所有遞延）
-  const baseExpiry = last.currentExpiresAt
-    ? dayjs(last.currentExpiresAt)
-    : dayjs(last.testedAt.toDate()).add(FALL_TEST_VALID_YEARS, 'year');
+  const baseExpiry = resolveFallTestExpiry(last);
 
   const today = dayjs();
   const isExpired = today.isAfter(baseExpiry);
@@ -213,9 +221,7 @@ const tryExtendFallTest = async (memberId, checkInId) => {
   const data = snap.docs[0].data();
 
   // 計算目前有效期
-  const currentExpiry = data.currentExpiresAt
-    ? dayjs(data.currentExpiresAt)
-    : dayjs(data.testedAt.toDate()).add(FALL_TEST_VALID_YEARS, 'year');
+  const currentExpiry = resolveFallTestExpiry(data);
 
   // 統計有效期內入場次數（含本次）
   const visitsSnap = await db.collection(COLLECTIONS.CHECK_INS)

@@ -224,10 +224,17 @@ router.post('/:testId/extend', authenticate, async (req, res) => {
     const test = (await testRef.get()).data();
     if (!test) return res.status(404).json({ error: 'NOT_FOUND' });
 
-    const currentExpiry = dayjs(test.expiresAt?.seconds ? test.expiresAt.seconds * 1000 : test.expiresAt);
-    const newExpiry = currentExpiry.add(1, 'year').toDate();
+    // 以目前有效期為基準（含遞延）：currentExpiresAt → expiresAt → testedAt+1年
+    let base;
+    if (test.currentExpiresAt) base = dayjs(test.currentExpiresAt);
+    else {
+      const sec = test.expiresAt?.seconds || test.expiresAt?._seconds;
+      base = sec ? dayjs(sec * 1000) : test.expiresAt ? dayjs(test.expiresAt) : dayjs(test.testedAt.toDate()).add(1, 'year');
+    }
+    const newExpiry = base.add(1, 'year').format('YYYY-MM-DD');
 
-    await testRef.update({ expiresAt: newExpiry, extendedAt: new Date() });
+    // 統一寫入 currentExpiresAt（與自動遞延同欄位、同格式），入場閘門才讀得到
+    await testRef.update({ currentExpiresAt: newExpiry, extendedAt: new Date() });
     await db.collection('members').doc(test.memberId).update({
       fallTestExpiresAt: newExpiry,
       updatedAt: new Date(),

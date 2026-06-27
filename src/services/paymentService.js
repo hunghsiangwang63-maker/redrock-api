@@ -59,7 +59,27 @@ const orderHandlers = {
     });
     return { relatedId: id };
   },
-  // pass / product ... 後續階段插入
+  pass: async (db, payment) => {
+    const id = payment.orderRef?.passId;
+    if (!id) return { ok: false };
+    await db.collection('memberPasses').doc(id).update({
+      paymentStatus: 'confirmed',
+      paidVia: payment.provider, paidAmount: payment.amount, paidAt: new Date(),
+      paymentId: payment.id, updatedAt: new Date(),
+    });
+    return { relatedId: id };
+  },
+  installment: async (db, payment) => {
+    const { planId, seq } = payment.orderRef || {};
+    if (!planId || seq == null) return { ok: false };
+    const installmentService = require('./installmentService');
+    const method = installmentService.VALID_PAYMENT_METHODS.includes(payment.provider) ? payment.provider : 'transfer';
+    try {
+      await installmentService.markInstallmentPaid({ planId, seq, paymentMethod: method, staffId: null });
+    } catch (e) { if (e.code !== 'ALREADY_PAID') throw e; }
+    return { relatedId: planId };
+  },
+  // product ... 後續階段插入
 };
 
 // orderType → 後端權威解析（金額/場館/會員），前端不送這些值。未註冊者沿用傳入值（Phase 0 mock）。
@@ -93,6 +113,28 @@ const orderResolvers = {
     if (e.paymentStatus === 'confirmed') throw { code: 'ALREADY_PAID', message: '此報名已完成付款' };
     return { amount: e.enrollmentFee, gymId: e.gymId || null, memberId: e.memberId || null, memberName: e.memberName || '' };
   },
+  pass: async (db, orderRef) => {
+    const id = orderRef?.passId;
+    if (!id) throw { code: 'INVALID_ORDER', message: '缺少定期票 id' };
+    const doc = await db.collection('memberPasses').doc(id).get();
+    if (!doc.exists) throw { code: 'PASS_NOT_FOUND', message: '找不到定期票' };
+    const p = doc.data();
+    if (p.paymentStatus === 'confirmed') throw { code: 'ALREADY_PAID', message: '此定期票已完成付款' };
+    let price = 0;
+    try { const t = await db.collection('passTypes').doc(p.passTypeId).get(); if (t.exists) price = t.data().price || 0; } catch (e) {}
+    return { amount: price, gymId: p.gymId || null, memberId: p.memberId || null, memberName: p.memberName || '' };
+  },
+  installment: async (db, orderRef) => {
+    const { planId, seq } = orderRef || {};
+    if (!planId || seq == null) throw { code: 'INVALID_ORDER', message: '缺少分期計畫/期數' };
+    const doc = await db.collection('installmentPlans').doc(planId).get();
+    if (!doc.exists) throw { code: 'PLAN_NOT_FOUND', message: '找不到分期計畫' };
+    const plan = doc.data();
+    const inst = (plan.installments || []).find(i => i.seq === seq);
+    if (!inst) throw { code: 'INSTALLMENT_NOT_FOUND', message: '找不到此期數' };
+    if (inst.status === 'paid') throw { code: 'ALREADY_PAID', message: '此期已繳款' };
+    return { amount: inst.amount, gymId: plan.gymId || null, memberId: plan.memberId || null, memberName: plan.memberName || '' };
+  },
 };
 
 // orderType → revenue.js 既有的 transaction type（報表分類用）
@@ -101,7 +143,9 @@ const TYPE_MAP = {
   competition: 'competition',
   experience: 'product',
   course: 'course',
-  // checkin: 'checkin', pass: 'pass', product: 'product',
+  pass: 'pass',
+  installment: 'pass',
+  // checkin: 'checkin', product: 'product',
 };
 
 const PROVIDERS = Object.keys(adapters);

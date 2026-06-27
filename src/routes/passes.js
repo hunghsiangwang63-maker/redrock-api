@@ -162,13 +162,14 @@ router.post('/',
         startDate: req.body.startDate, endDate,
         credits: passType.credits, originalCredits: passType.credits,
         status: 'active', paymentId: req.body.paymentId || null,
+        paymentStatus: req.body.deferPayment ? 'pending' : 'confirmed',
         soldByStaffId: req.staff.id, notes: req.body.notes || '',
         createdAt: now, updatedAt: now,
       };
       await db.collection(COLLECTIONS.MEMBER_PASSES).doc(passId).set(pass);
 
-      // 記錄交易
-      if (passType.price > 0) {
+      // 記錄交易（線上付款 deferPayment 時略過，改由付款 callback 記，避免重複）
+      if (passType.price > 0 && !req.body.deferPayment) {
         const { recordTransaction } = require('../utils/revenueLedger');
         await recordTransaction(db, {
           gymId: req.staff.gymId,

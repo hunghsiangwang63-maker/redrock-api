@@ -51,6 +51,7 @@ app.use('/settings',       require('./routes/settings'));
 app.use('/stations',       require('./routes/stations'));
 app.use('/transfers',      require('./routes/transfers'));
 app.use('/notifications', require('./routes/notifications'));
+app.use('/payments',      require('./routes/payments'));
 
 // Phase 2 以後的路由（預留）
 // app.use('/courses',   require('./routes/courses'));

@@ -27,6 +27,22 @@ router.post('/', authenticateAny, async (req, res) => {
     if (!bookingDate) return res.status(400).json({ code:'MISSING_DATE', message:'請填寫體驗日期' });
     if (!participants?.length) return res.status(400).json({ code:'MISSING_PARTICIPANTS', message:'請填寫參加人員資料' });
 
+    // 後端權威計算費用（不信任前端傳入的 totalFee）：用與前端相同的設定來源
+    const _settingsDoc = await db.collection('systemSettings').doc('experienceCourses').get();
+    const _settings = _settingsDoc.exists ? _settingsDoc.data() : defaultSettings();
+    const _courseTypes = _settings.courseTypes || defaultSettings().courseTypes;
+    const _ct = _courseTypes.find(c => c.id === (courseType || 'general'));
+    if (!_ct) return res.status(400).json({ code:'INVALID_COURSE_TYPE', message:'課程類型不正確' });
+    const _n = participants.length;
+    let _unitPrice = 0;
+    if (_ct.pricingType === 'tiered' && Array.isArray(_ct.tiers)) {
+      const _tier = _ct.tiers.find(t => _n >= t.min && _n <= t.max);
+      _unitPrice = _tier ? _tier.price : (_ct.tiers[_ct.tiers.length - 1]?.price || 0);
+    } else {
+      _unitPrice = _ct.price || 0;
+    }
+    const computedFee = _unitPrice * _n;
+
     const id = `exp_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
     await db.collection('experienceBookings').doc(id).set({
       id, memberId, gymId, bookingDate, bookingTime, courseType: courseType||'general',
@@ -36,7 +52,7 @@ router.post('/', authenticateAny, async (req, res) => {
       facebookName: facebookName||'',
       participants, // 含姓名/身分證/生日/國籍
       numParticipants: participants.length,
-      totalFee: totalFee || 0,
+      totalFee: computedFee,
       paymentDate: paymentDate||null,
       bankLastFive: bankLastFive||null,
       notes: notes||'',

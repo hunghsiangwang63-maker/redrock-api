@@ -71,7 +71,7 @@ router.post('/qr/create',
   async (req, res) => {
     try {
       const {
-        memberId, gymId, entryType,
+        memberId, gymId, entryType, baseEntryType,
         passId, discountCardId, blackCardId, singleEntryTicketId, bonusId,
         paymentMethod, amount, originalAmount, isTeamDiscount,
         rentShoes, shoesPrice, rentChalk, chalkPrice,
@@ -96,7 +96,7 @@ router.post('/qr/create',
       const result = await checkinService.createPendingCheckIn({
         memberId: effectiveMemberId,
         gymId: effectiveGymId,
-        entryType, passId, discountCardId, blackCardId, singleEntryTicketId, bonusId,
+        entryType, baseEntryType, passId, discountCardId, blackCardId, singleEntryTicketId, bonusId,
         paymentMethod, amount, originalAmount, isTeamDiscount,
         rentShoes, shoesPrice, rentChalk, chalkPrice,
       });
@@ -220,8 +220,19 @@ router.get('/eligibility/:memberId', authenticate, async (req, res) => {
     // 墜落測驗狀態（櫃檯入場閘門用，與會員自助 verifyEntry 一致）
     const fallTest = await checkinService.checkFallTest(req.params.memberId);
 
+    // 可用票券（櫃檯兩段流程：選身分後可選用優惠券/黑卡/紅利/單次券）
+    const discountCards = await require('../services/discountCardService').getValidDiscountCards(req.params.memberId);
+    const blackCards = await require('../services/legacyCardService').getMemberBlackCards(req.params.memberId);
+    const bonuses = await require('../services/bonusService').getMemberBonuses(req.params.memberId);
+    const setSnap = await db.collection('singleEntryTickets')
+      .where('memberId', '==', req.params.memberId)
+      .where('status', '==', 'active')
+      .where('expiresAt', '>=', today)
+      .get();
+    const memberType = member.memberType || 'general';
+
     res.json({
-      memberType: member.memberType || 'general',
+      memberType,
       hasCourseAccess,
       waiverSigned,
       hasValidPass,
@@ -229,8 +240,55 @@ router.get('/eligibility/:memberId', authenticate, async (req, res) => {
       vipNote: vip?.note || null,
       fallTestPassed: fallTest.passed,
       fallTestReason: fallTest.passed ? null : fallTest.reason, // 'never_tested' | 'expired'
+      // 票券（兒童不適用折扣券）
+      instruments: {
+        discountCard: {
+          available: memberType !== 'child' && discountCards.length > 0,
+          rate: 0.8,
+          cards: discountCards.map(c => ({ id: c.id, remainingCredits: c.remainingCredits })),
+        },
+        blackCard: { available: blackCards.length > 0, cards: blackCards.map(c => ({ id: c.id, remainingCredits: c.remainingCredits })) },
+        bonus: { available: bonuses.length > 0, bonuses: bonuses.map(b => ({ id: b.id, expiresAt: b.expiresAtFormatted })) },
+        singleEntryTicket: { available: !setSnap.empty, tickets: setSnap.docs.map(d => ({ id: d.id })) },
+      },
     });
   } catch (err) {
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+// ── POST /checkin/direct - 員工端直接入場（兩段流程：身分＋票券）──────
+// 重用 createPendingCheckIn + confirmCheckIn 的結算邏輯（金額後端權威、票券扣除、營收、墜測遞延）
+router.post('/direct', authenticate, async (req, res) => {
+  try {
+    const db = require('../config/firebase').getDb();
+    const {
+      memberId, gymId, entryType, baseEntryType,
+      discountCardId, blackCardId, singleEntryTicketId, bonusId,
+      paymentMethod, rentShoes, rentChalk,
+    } = req.body;
+    if (!memberId || !entryType) return res.status(400).json({ message: '缺少會員或入場類型' });
+    const effGym = req.staff?.role === 'super_admin' ? gymId : (req.staff?.gymId || gymId);
+
+    // 同日同館重複入場檢查
+    const todayStr = new Date(Date.now() + 8*3600000).toISOString().slice(0, 10);
+    const dup = await db.collection('checkIns')
+      .where('memberId', '==', memberId).where('gymId', '==', effGym)
+      .where('isCancelled', '==', false)
+      .where('checkedInAt', '>=', new Date(todayStr + 'T00:00:00+08:00'))
+      .where('checkedInAt', '<=', new Date(todayStr + 'T23:59:59+08:00'))
+      .get();
+    if (!dup.empty) return res.status(400).json({ message: '今日已入場，不可重複入場' });
+
+    const { qrToken } = await checkinService.createPendingCheckIn({
+      memberId, gymId: effGym, entryType, baseEntryType,
+      discountCardId, blackCardId, singleEntryTicketId, bonusId,
+      paymentMethod: paymentMethod || 'cash', rentShoes, rentChalk,
+    });
+    const result = await checkinService.confirmCheckIn(qrToken, req.staff.id, req.staff.name);
+    res.status(201).json(result);
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }
 });

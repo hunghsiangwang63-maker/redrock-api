@@ -449,6 +449,30 @@ const verifyEntry = async (memberId, gymId) => {
     allowed: true, status: 'ok', freeEntry: false,
     requiresPayment: true,
     member: memberInfo,
+    // 兩段式流程：先選身分(entryTypeOptions)，再選要不要用票券(instruments)
+    entryTypeOptions,
+    instruments: {
+      // 折扣券 8 折金額依所選身分價格 ×rate，由前端/後端依 baseEntryType 計算（兒童不適用）
+      discountCard: {
+        available: canUseDiscountCard,
+        rate: DISCOUNT_CARD_RATE,
+        cards: discountCards.map(c => ({ id: c.id, remainingCredits: c.remainingCredits, expiresAt: c.expiresAt })),
+      },
+      blackCard: {
+        available: blackCards.length > 0,
+        cards: blackCards.map(c => ({ id: c.id, remainingCredits: c.remainingCredits, expiresAt: c.expiresAt })),
+      },
+      bonus: {
+        available: bonuses.length > 0,
+        bonuses: bonuses.map(b => ({ id: b.id, expiresAt: b.expiresAtFormatted, daysLeft: b.daysLeft })),
+      },
+      singleEntryTicket: {
+        available: singleEntryTickets.length > 0,
+        tickets: singleEntryTickets.map(t => ({ id: t.id, expiresAt: t.expiresAt })),
+      },
+      buyDiscountCard: { price: PRICES.discount_card },
+    },
+    // 舊欄位（相容）：扁平清單
     availableOptions: [
       ...entryTypeOptions,
       {
@@ -503,7 +527,7 @@ const verifyEntry = async (memberId, gymId) => {
 
 // ── 產生待確認入場 QR code ───────────────────────────────────────
 const createPendingCheckIn = async ({
-  memberId, gymId, entryType,
+  memberId, gymId, entryType, baseEntryType,
   passId, discountCardId, blackCardId, singleEntryTicketId, bonusId,
   paymentMethod, amount, originalAmount, isTeamDiscount,
   rentShoes, shoesPrice,
@@ -566,9 +590,15 @@ const createPendingCheckIn = async ({
     }
   }
 
-  // 後端權威：使用優惠折扣券 = 原價（依會員身份）8 折。不與隊員折扣疊加。
+  // 後端權威：使用優惠折扣券 = 所選身分(baseEntryType)原價的 8 折。不與隊員折扣疊加。
   if (entryType === 'discount_card') {
-    const base = await getOriginalEntryPrice(memberType);
+    let base;
+    if (baseEntryType) {
+      const fb = baseEntryType === 'student_free' ? 250 : baseEntryType === 'child_free' ? 100 : PRICES.single_general;
+      base = await getEntryTypePrice(baseEntryType, fb);
+    } else {
+      base = await getOriginalEntryPrice(memberType);
+    }
     finalOriginal = base;
     finalAmount = Math.round(base * DISCOUNT_CARD_RATE);
     finalTeam = false;
@@ -587,6 +617,7 @@ const createPendingCheckIn = async ({
   const pending = {
     qrToken,
     memberId, gymId, entryType,
+    baseEntryType: baseEntryType || null,
     passId: passId || null,
     discountCardId: discountCardId || null,
     blackCardId: blackCardId || null,

@@ -39,7 +39,17 @@ const orderHandlers = {
     });
     return { relatedId: regId };
   },
-  // course / experience / pass / product ... 後續階段插入
+  experience: async (db, payment) => {
+    const id = payment.orderRef?.bookingId;
+    if (!id) return { ok: false };
+    await db.collection('experienceBookings').doc(id).update({
+      status: 'confirmed',
+      paidVia: payment.provider, paidAmount: payment.amount, paidAt: new Date(),
+      paymentId: payment.id, updatedAt: new Date(),
+    });
+    return { relatedId: id };
+  },
+  // course / pass / product ... 後續階段插入
 };
 
 // orderType → 後端權威解析（金額/場館/會員），前端不送這些值。未註冊者沿用傳入值（Phase 0 mock）。
@@ -55,13 +65,23 @@ const orderResolvers = {
     try { const c = await db.collection('competitions').doc(reg.competitionId).get(); if (c.exists) gymId = c.data().gymId || null; } catch (e) {}
     return { amount: reg.registrationFee, gymId, memberId: reg.memberId, memberName: reg.memberName };
   },
+  experience: async (db, orderRef) => {
+    const id = orderRef?.bookingId;
+    if (!id) throw { code: 'INVALID_ORDER', message: '缺少預約 id' };
+    const doc = await db.collection('experienceBookings').doc(id).get();
+    if (!doc.exists) throw { code: 'BOOKING_NOT_FOUND', message: '找不到體驗預約' };
+    const b = doc.data();
+    if (b.status === 'confirmed') throw { code: 'ALREADY_PAID', message: '此預約已完成付款' };
+    return { amount: b.totalFee, gymId: b.gymId || null, memberId: b.memberId || null, memberName: b.contactName || '' };
+  },
 };
 
 // orderType → revenue.js 既有的 transaction type（報表分類用）
 const TYPE_MAP = {
   mock: 'product',
   competition: 'competition',
-  // checkin: 'checkin', course: 'course', pass: 'pass', product: 'product', experience: 'product',
+  experience: 'product',
+  // checkin: 'checkin', course: 'course', pass: 'pass', product: 'product',
 };
 
 const PROVIDERS = Object.keys(adapters);

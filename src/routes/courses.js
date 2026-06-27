@@ -434,6 +434,42 @@ router.delete('/:courseId',
 );
 
 
+// DELETE /courses/:courseId/permanent - 永久刪除課程（含場次/報名，僅限無在籍學員）
+router.delete('/:courseId/permanent',
+  authenticate, checkPermission('courses.manage'),
+  async (req, res) => {
+    try {
+      const db = require('../config/firebase').getDb();
+      const courseId = req.params.courseId;
+
+      // 防呆：尚有有效報名（confirmed/leave/waitlist）不可硬刪，須先「取消課程」並處理退費
+      const activeSnap = await db.collection('courseEnrollments')
+        .where('courseId', '==', courseId)
+        .where('status', 'in', ['confirmed', 'leave', 'waitlist'])
+        .get();
+      if (!activeSnap.empty) {
+        return res.status(400).json({ error: 'HAS_ENROLLMENTS', message: `尚有 ${activeSnap.size} 筆有效報名，請先「取消課程」並處理退費後再刪除` });
+      }
+
+      // 級聯刪除：場次、所有報名(含已取消)、補課額度、調整申請，最後刪課程本身
+      let deleted = 0;
+      for (const name of ['courseSessions', 'courseEnrollments', 'courseMakeupRights', 'courseAdjustmentRequests']) {
+        const snap = await db.collection(name).where('courseId', '==', courseId).get();
+        for (let i = 0; i < snap.docs.length; i += 450) {
+          const batch = db.batch();
+          snap.docs.slice(i, i + 450).forEach(d => { batch.delete(d.ref); deleted++; });
+          await batch.commit();
+        }
+      }
+      await db.collection('courses').doc(courseId).delete();
+
+      res.json({ success: true, message: '課程已永久刪除', deletedDocs: deleted });
+    } catch (err) {
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // PUT /courses/:courseId - 更新課程
 router.put('/:courseId',
   authenticate, checkPermission('courses.manage'), auditLog('course.update'),

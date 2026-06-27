@@ -42,8 +42,8 @@ const orderHandlers = {
   // course / experience / pass / product ... 後續階段插入
 };
 
-// orderType → 後端權威金額計算（前端不送金額）。未註冊者沿用傳入 amount（Phase 0 mock）。
-const amountResolvers = {
+// orderType → 後端權威解析（金額/場館/會員），前端不送這些值。未註冊者沿用傳入值（Phase 0 mock）。
+const orderResolvers = {
   competition: async (db, orderRef) => {
     const regId = orderRef?.registrationId;
     if (!regId) throw { code: 'INVALID_ORDER', message: '缺少報名 id' };
@@ -51,7 +51,9 @@ const amountResolvers = {
     if (!doc.exists) throw { code: 'REGISTRATION_NOT_FOUND', message: '找不到報名紀錄' };
     const reg = doc.data();
     if (reg.paymentStatus === 'confirmed') throw { code: 'ALREADY_PAID', message: '此報名已完成付款' };
-    return reg.registrationFee;
+    let gymId = null;
+    try { const c = await db.collection('competitions').doc(reg.competitionId).get(); if (c.exists) gymId = c.data().gymId || null; } catch (e) {}
+    return { amount: reg.registrationFee, gymId, memberId: reg.memberId, memberName: reg.memberName };
   },
 };
 
@@ -69,9 +71,15 @@ async function createPayment({ provider = 'mock', orderType, orderRef = {}, gymI
   const db = getDb();
   if (!adapters[provider]) throw { code: 'INVALID_PROVIDER', message: '不支援的付款方式' };
   if (!orderType) throw { code: 'MISSING_ORDER_TYPE', message: '缺少 orderType' };
-  // 已註冊的 orderType 一律後端權威計算金額（前端不送）；未註冊者（mock）沿用傳入值
-  let finalAmount = amount;
-  if (amountResolvers[orderType]) finalAmount = await amountResolvers[orderType](db, orderRef);
+  // 已註冊的 orderType 一律後端權威解析金額/場館/會員（前端不送）；未註冊者（mock）沿用傳入值
+  let finalAmount = amount, finalGymId = gymId, finalMemberId = memberId, finalMemberName = memberName;
+  if (orderResolvers[orderType]) {
+    const ctx = await orderResolvers[orderType](db, orderRef);
+    finalAmount = ctx.amount;
+    if (ctx.gymId != null) finalGymId = ctx.gymId;
+    if (ctx.memberId != null) finalMemberId = ctx.memberId;
+    if (ctx.memberName) finalMemberName = ctx.memberName;
+  }
   if (!(Number(finalAmount) > 0)) throw { code: 'INVALID_AMOUNT', message: '金額不正確' };
 
   const paymentId = uuidv4();
@@ -80,7 +88,7 @@ async function createPayment({ provider = 'mock', orderType, orderRef = {}, gymI
     id: paymentId,
     provider, status: 'pending',
     amount: Number(finalAmount), currency: 'TWD',
-    gymId, memberId, memberName,
+    gymId: finalGymId, memberId: finalMemberId, memberName: finalMemberName,
     orderType, orderRef,
     relatedId: null, providerTxnId: null, paymentUrl: null,
     idempotencyKey: paymentId,

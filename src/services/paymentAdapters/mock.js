@@ -1,31 +1,27 @@
 /**
- * Mock 金流 Adapter（Phase 0 用，無需任何商戶金鑰）
+ * Mock 金流 Adapter（Phase 0/1 測試用，無需任何商戶金鑰）
  *
- * 用來打通「建立付款 → callback → 記帳 → 完成業務」全鏈路，
- * 之後 linepay/jkopay/taiwanpay 只要實作相同三個方法即可替換。
- *
- * adapter 介面：
- *   createPayment({ orderId, amount, productName, memberInfo, returnUrls }) → { paymentUrl, providerTxnId }
- *   verifyCallback(req) → { orderId, providerTxnId, success, raw }
- *   confirmPayment(...)  // 需二次確認的 gateway（如 LinePay）才實作；mock 不需要
+ * adapter 介面（與 linepay 一致）：
+ *   createPayment({ orderId, amount, productName, memberInfo, returnUrls, gymSettings })
+ *       → { paymentUrl, providerTxnId }
+ *   extractOrderId(req) → orderId            // 從 callback 取出我方訂單 id（不需金鑰）
+ *   verifyCallback(req, gymSettings, payment) → { success, providerTxnId, raw }
+ *                                              // 驗章 / 對 gateway 做 Confirm（如 LinePay）
  */
 module.exports = {
   async createPayment({ orderId, amount }) {
-    // 真實 gateway 會回 gateway 端的付款頁/QR；mock 回本地模擬付款頁
     return {
       paymentUrl: `/payments/mock/pay?paymentId=${orderId}&amount=${amount}`,
       providerTxnId: `MOCK-${orderId}`,
     };
   },
 
-  async verifyCallback(req) {
-    // 真實 gateway 會在此驗章；mock 直接信任 body 的 { paymentId, success }
-    const { paymentId, success } = req.body || {};
-    return {
-      orderId: paymentId || null,
-      providerTxnId: paymentId ? `MOCK-${paymentId}` : null,
-      success: success !== false,
-      raw: req.body || null,
-    };
+  extractOrderId(req) {
+    return req.body?.paymentId || req.query?.paymentId || null;
+  },
+
+  async verifyCallback(req, _gymSettings, payment) {
+    const success = (req.body?.success ?? req.query?.success) !== false;
+    return { success, providerTxnId: payment?.providerTxnId || null, raw: req.body || null };
   },
 };

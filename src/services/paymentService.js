@@ -17,7 +17,7 @@ const { v4: uuidv4 } = require('uuid');
 
 const adapters = {
   mock: require('./paymentAdapters/mock'),
-  // linepay: require('./paymentAdapters/linepay'),   // Phase 2
+  linepay: require('./paymentAdapters/linepay'),     // Phase 2 骨架（待各館填 Channel 金鑰）
   // jkopay: require('./paymentAdapters/jkopay'),     // Phase 3
   // taiwanpay: require('./paymentAdapters/taiwanpay'),
 };
@@ -256,27 +256,37 @@ async function getPayment(id) {
 // ── gateway 回呼處理：驗簽 → 冪等更新 → 記帳 + 完成業務 ──────────────
 async function handleCallback(provider, req) {
   const db = getDb();
-  if (!adapters[provider]) throw { code: 'INVALID_PROVIDER', message: '不支援的付款方式' };
+  const adapter = adapters[provider];
+  if (!adapter) throw { code: 'INVALID_PROVIDER', message: '不支援的付款方式' };
 
-  const parsed = await adapters[provider].verifyCallback(req); // { orderId, providerTxnId, success, raw }
-  if (!parsed || !parsed.orderId) throw { code: 'INVALID_CALLBACK', message: 'callback 驗證失敗' };
+  // 1) 從 callback 取出我方訂單 id（不需金鑰）
+  const orderId = adapter.extractOrderId ? adapter.extractOrderId(req) : null;
+  if (!orderId) throw { code: 'INVALID_CALLBACK', message: 'callback 缺少訂單 id' };
 
-  const ref = db.collection('payments').doc(parsed.orderId);
+  const ref = db.collection('payments').doc(orderId);
+  const snap0 = await ref.get();
+  if (!snap0.exists) throw { code: 'PAYMENT_NOT_FOUND', message: '找不到付款單' };
+  const payment0 = snap0.data();
+  if (payment0.status === 'paid') return { payment: payment0, alreadyPaid: true }; // 冪等：已付不重複 confirm/請款
 
-  // 用 transaction 保證冪等：只有第一次 pending→paid 會回 justPaid
+  // 2) 用「該館」設定驗章 / 對 gateway 做 Confirm（LinePay 在此實際請款，金額以 payment 文件為準）
+  const gymSettings = await loadGymPaymentSettings(db, payment0.gymId);
+  const verified = await adapter.verifyCallback(req, gymSettings, payment0); // { success, providerTxnId, raw }
+
+  // 3) transaction 內冪等更新狀態
   const result = await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists) throw { code: 'PAYMENT_NOT_FOUND', message: '找不到付款單' };
     const payment = snap.data();
     if (payment.status === 'paid') return { payment, alreadyPaid: true };
-    if (!parsed.success) {
-      tx.update(ref, { status: 'failed', updatedAt: new Date(), rawCallback: parsed.raw || null });
+    if (!verified.success) {
+      tx.update(ref, { status: 'failed', updatedAt: new Date(), rawCallback: verified.raw || null });
       return { payment: { ...payment, status: 'failed' }, failed: true };
     }
     tx.update(ref, {
       status: 'paid', paidAt: new Date(),
-      providerTxnId: parsed.providerTxnId || payment.providerTxnId,
-      updatedAt: new Date(), rawCallback: parsed.raw || null,
+      providerTxnId: verified.providerTxnId || payment.providerTxnId,
+      updatedAt: new Date(), rawCallback: verified.raw || null,
     });
     return { payment: { ...payment, status: 'paid' }, justPaid: true };
   });

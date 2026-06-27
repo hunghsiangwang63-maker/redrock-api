@@ -125,15 +125,16 @@ router.post('/member/login',
       const { identifier, password } = req.body;
 
       // 支援手機號碼或 Email 登入
+      // 親子帳號常共用同一支電話／Email；登入身分應指向「可登入的正式帳號」（非子帳號），
+      // 子會員只能由家長代為操作。故取所有相符者後優先挑非子帳號，避免 limit(1) 依
+      // 文件 id 排序誤判成子帳號（子帳號 id 若排在前，家長將無法登入自己的帳號）。
       let memberDoc;
-      if (identifier.includes('@')) {
-        const snapshot = await db.collection(COLLECTIONS.MEMBERS)
-          .where('email', '==', identifier).limit(1).get();
-        if (!snapshot.empty) memberDoc = snapshot.docs[0];
-      } else {
-        const snapshot = await db.collection(COLLECTIONS.MEMBERS)
-          .where('phone', '==', identifier).limit(1).get();
-        if (!snapshot.empty) memberDoc = snapshot.docs[0];
+      const field = identifier.includes('@') ? 'email' : 'phone';
+      const snapshot = await db.collection(COLLECTIONS.MEMBERS)
+        .where(field, '==', identifier).get();
+      if (!snapshot.empty) {
+        const docs = snapshot.docs;
+        memberDoc = docs.find(d => d.data().isChildAccount !== true) || docs[0];
       }
 
       if (!memberDoc) {

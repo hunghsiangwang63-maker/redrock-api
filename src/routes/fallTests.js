@@ -35,7 +35,7 @@ const calcFallTestStatus = async (db, memberId, settings) => {
   if (snap.empty) return { status: 'not_tested', needsTest: true };
 
   // 客戶端排序取最新一筆（避免需要 Firestore 複合索引）
-  const tests = snap.docs.map(d => d.data()).sort((a, b) => {
+  const tests = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => {
     const ta = a.testedAt?.seconds || 0;
     const tb = b.testedAt?.seconds || 0;
     return tb - ta;
@@ -75,7 +75,7 @@ const calcFallTestStatus = async (db, memberId, settings) => {
     expiresAt: expiresAt.format('YYYY-MM-DD'),
     checkinCount,
     requiredCheckins: settings.requiredCheckins,
-    testId: snap.docs[0].id,
+    testId: test.id,
   };
 };
 
@@ -135,7 +135,7 @@ router.post('/sign', authenticateAny, async (req, res) => {
     const { signatureData, watchPercent, agreedParagraphs, guardianSignatureData, guardianName } = req.body;
     const settings = await getFallTestSettings(db);
 
-    if (watchPercent < settings.watchPercentRequired)
+    if (!(watchPercent >= settings.watchPercentRequired))
       return res.status(400).json({ error: 'INSUFFICIENT_WATCH', message: `請觀看至少 ${settings.watchPercentRequired}% 的影片` });
 
     if (!agreedParagraphs || !Array.isArray(agreedParagraphs) || agreedParagraphs.length === 0)

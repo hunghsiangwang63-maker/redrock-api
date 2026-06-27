@@ -84,7 +84,8 @@ router.post('/requests',
   validate,
   async (req, res) => {
     try {
-      const memberId = req.body.memberId || req.member?.id;
+      // 會員 token 一律用自己的 id，避免帶他人 memberId+passId 繞過擁有權檢查（IDOR）
+      const memberId = req.member ? req.member.id : req.body.memberId;
       if (!memberId) return res.status(400).json({ error: 'MISSING_MEMBER' });
       const request = await passAdjustmentService.createPassRequest({
         passId: req.body.passId, memberId,

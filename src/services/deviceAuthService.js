@@ -32,17 +32,20 @@ const isDeviceTrusted = async (accountType, accountId, deviceToken) => {
 const createDeviceVerification = async ({ accountType, accountId, accountName, accountEmail, deviceToken, deviceLabel }) => {
   const db = getDb();
 
-  const existing = await db.collection(COLLECTION_PENDING)
-    .where('accountType', '==', accountType)
-    .where('accountId', '==', accountId)
-    .where('deviceToken', '==', deviceToken)
-    .where('status', '==', 'pending')
-    .limit(1).get();
+  // deviceToken 可能為 undefined（client 未帶）；Firestore where/set 不接受 undefined，先防護
+  if (deviceToken) {
+    const existing = await db.collection(COLLECTION_PENDING)
+      .where('accountType', '==', accountType)
+      .where('accountId', '==', accountId)
+      .where('deviceToken', '==', deviceToken)
+      .where('status', '==', 'pending')
+      .limit(1).get();
 
-  if (!existing.empty) {
-    const doc = existing.docs[0];
-    if (dayjs(toDate(doc.data().otpExpiresAt)).isAfter(dayjs())) {
-      return { verificationId: doc.id };
+    if (!existing.empty) {
+      const doc = existing.docs[0];
+      if (dayjs(toDate(doc.data().otpExpiresAt)).isAfter(dayjs())) {
+        return { verificationId: doc.id };
+      }
     }
   }
 
@@ -52,7 +55,7 @@ const createDeviceVerification = async ({ accountType, accountId, accountName, a
   await ref.set({
     id: ref.id, accountType, accountId,
     accountName: accountName || '', accountEmail: accountEmail || '',
-    deviceToken, deviceLabel: deviceLabel || '',
+    deviceToken: deviceToken || null, deviceLabel: deviceLabel || '',
     otpCode: code,
     otpExpiresAt: dayjs().add(OTP_EXPIRY_MINUTES, 'minute').toDate(),
     status: 'pending',

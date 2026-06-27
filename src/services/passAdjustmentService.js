@@ -290,7 +290,8 @@ const runHolidayBatchExtension = async ({ holidayRanges, operatorId, operatorNam
     .get();
 
   let extendedCount = 0;
-  const batch = db.batch();
+  let batch = db.batch();
+  let batchOps = 0;
   const adjustmentLogs = [];
 
   for (const doc of snap.docs) {
@@ -310,6 +311,7 @@ const runHolidayBatchExtension = async ({ holidayRanges, operatorId, operatorNam
     if (extendDays > 0) {
       const newEndDate = dayjs(pass.endDate).add(extendDays, 'day').format('YYYY-MM-DD');
       batch.update(doc.ref, { endDate: newEndDate, updatedAt: new Date() });
+      if (++batchOps >= 450) { await batch.commit(); batch = db.batch(); batchOps = 0; }
       adjustmentLogs.push({
         passId: doc.id, type: 'holiday_batch',
         beforeData: { endDate: pass.endDate },
@@ -322,7 +324,7 @@ const runHolidayBatchExtension = async ({ holidayRanges, operatorId, operatorNam
     }
   }
 
-  await batch.commit();
+  if (batchOps > 0) await batch.commit();
   // 異動記錄量可能很大，逐筆寫入（非batch，避免單一batch超過500筆限制）
   for (const log of adjustmentLogs) {
     await logAdjustment(log);

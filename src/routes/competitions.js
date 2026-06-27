@@ -133,11 +133,19 @@ router.post('/:id/register',
         }
       }
 
+      // 取報名對象的真實生日（服務端據此計算兒童費率，不信任前端傳值）
+      let registrantBirthday = null;
+      try {
+        const _mDoc = await require('../config/firebase').getDb().collection('members').doc(memberId).get();
+        if (_mDoc.exists) registrantBirthday = _mDoc.data().birthday || null;
+      } catch (e) {}
+
       const registration = await competitionService.registerForCompetition({
         competitionId: req.params.id,
         memberId,
         memberName: req.body.memberName || req.member?.name,
         isMinor: req.body.isMinor,
+        birthday: registrantBirthday,
         divisionId: req.body.divisionId,
         customFieldValues: req.body.customFieldValues,
         signatureData: req.body.signatureData,

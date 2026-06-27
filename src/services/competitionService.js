@@ -105,7 +105,7 @@ const getCompetition = async (competitionId) => {
 // ══════════════════════════════════════════════════════
 
 const registerForCompetition = async ({
-  competitionId, memberId, memberName, isMinor, divisionId,
+  competitionId, memberId, memberName, isMinor, birthday, divisionId,
   customFieldValues, signatureData, parentEmail, parentName, parentPhone, parentRelation,
   // 保險用欄位
   idNumber, emergencyContact, emergencyPhone,
@@ -150,8 +150,8 @@ const registerForCompetition = async ({
   const todayStr = new Date(Date.now() + 8*3600000).toISOString().slice(0,10);
   const isEarlyBird = competition.earlyBirdDeadline && todayStr <= competition.earlyBirdDeadline;
   const childAgeLimit = fees.childAgeLimit || 15;
-  const memberBirthday = null; // 由呼叫方傳入 birthday 計算
-  const isChild = isMinor && false; // 待擴充：由 member.birthday 計算年齡
+  const age = birthday ? dayjs().diff(dayjs(birthday), 'year') : null;
+  const isChild = age !== null && age < childAgeLimit;
   let registrationFee = isChild
     ? (isEarlyBird ? fees.childEarlyBird : fees.childRegular) || 950
     : (isEarlyBird ? fees.adultEarlyBird : fees.adultRegular) || 1100;

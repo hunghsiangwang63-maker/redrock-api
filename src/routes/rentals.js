@@ -88,7 +88,9 @@ router.post('/apply', authenticateAny, async (req, res) => {
 router.get('/', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    const { gymId, status, from, to } = req.query;
+    const { status, from, to } = req.query;
+    // 非 super_admin 強制只看自己館別，避免省略 gymId 就看到全館租借（含會員個資）
+    const gymId = req.staff?.role === 'super_admin' ? req.query.gymId : req.staff?.gymId;
     let ref = db.collection('equipmentRentals');
     if (gymId) ref = ref.where('gymId', '==', gymId);
     if (status) ref = ref.where('status', '==', status);

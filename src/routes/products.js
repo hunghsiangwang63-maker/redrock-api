@@ -213,6 +213,17 @@ router.post('/sell', authenticate, auditLog('product.sell'), async (req, res) =>
       } catch (e) { /* 找不到會員不影響銷售，視為非隊員 */ }
     }
 
+    // 先檢查所有品項庫存，避免前面已扣、後面不足才中止造成庫存洩漏
+    for (const item of items) {
+      const doc = await db.collection('products').doc(item.productId).get();
+      if (!doc.exists) continue;
+      const variant = doc.data().variants.find(v => v.id === item.variantId);
+      if (!variant) continue;
+      const stock = getGymStock(variant, gymId);
+      if (stock < item.quantity)
+        return res.status(400).json({ error: 'INSUFFICIENT_STOCK', message: `${doc.data().name} ${variant.size} ${variant.color} 庫存不足（${gymId} 剩 ${stock} 件）` });
+    }
+
     for (const item of items) {
       const ref = db.collection('products').doc(item.productId);
       const doc = await ref.get();

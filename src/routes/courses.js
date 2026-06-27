@@ -512,6 +512,15 @@ router.post('/:courseId/enroll-all',
 
       if (!memberId) return res.status(400).json({ error: 'MISSING_MEMBER' });
 
+      // 會員只能為自己或子會員整期報名（防帶他人 memberId）
+      if (req.member && memberId !== req.member.id) {
+        const targetDoc = await db.collection('members').doc(memberId).get();
+        const target = targetDoc.exists ? targetDoc.data() : null;
+        if (!target || !target.isChildAccount || target.parentMemberId !== req.member.id) {
+          return res.status(403).json({ error: 'FORBIDDEN', message: '只能為自己或子會員報名' });
+        }
+      }
+
       // 取得課程所有未取消場次
       const sessionsSnap = await db.collection('courseSessions')
         .where('courseId', '==', courseId)

@@ -51,7 +51,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     checkinSnap.docs.forEach(d => {
       const data = d.data();
       const amount = data.amountPaid || 0;
-      entryIncome += data.entryFee || amount;
+      entryIncome += data.entryFee ?? amount;
       shoeRentalIncome += data.shoesPrice || 0;
       if (data.paymentMethod === 'cash') cashEntry += amount;
       else if (data.paymentMethod === 'linepay') linePayEntry += amount;
@@ -204,7 +204,7 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
       await batch.commit();
     }
 
-    res.status(201).json({ settlement, message: difference > 200 ? `結帳完成，差異 NT$${difference} 已通知管理員` : '結帳完成' });
+    res.status(201).json({ settlement, message: Math.abs(difference) > 200 ? `結帳完成，差異 NT$${difference} 已通知管理員` : '結帳完成' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

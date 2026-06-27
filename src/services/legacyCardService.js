@@ -33,7 +33,7 @@ const bindBlackCard = async ({ barcode, memberId, remainingCredits, gymId, staff
     barcode: barcode || null,
     memberId,
     originalCredits: BLACK_CARD_CREDITS,
-    remainingCredits: Math.min(parseInt(remainingCredits), BLACK_CARD_CREDITS),
+    remainingCredits: Math.min(Math.max(0, parseInt(remainingCredits) || 0), BLACK_CARD_CREDITS),
     gymId,
     boundAt: now,
     boundBy: staffId,

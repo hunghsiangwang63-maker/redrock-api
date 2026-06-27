@@ -106,6 +106,11 @@ router.put('/:id',
       const updates = { updatedAt: new Date() };
       allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
       if (updates.role === 'super_admin') updates.gymId = null;
+      // 降為非總管理員時必須有所屬館別，否則限館過濾會失效
+      if (updates.role && updates.role !== 'super_admin') {
+        const finalGymId = updates.gymId !== undefined ? updates.gymId : doc.data().gymId;
+        if (!finalGymId) return res.status(400).json({ error: 'GYM_REQUIRED', message: '非總管理員必須指定所屬館別' });
+      }
 
       await ref.update(updates);
       res.json({ message: '員工帳號已更新' });

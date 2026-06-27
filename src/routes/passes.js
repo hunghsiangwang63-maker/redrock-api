@@ -204,6 +204,7 @@ router.put('/:id',
         const passTypeDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(req.body.passTypeId).get();
         if (passTypeDoc.exists) {
           const passDoc = await db.collection(COLLECTIONS.MEMBER_PASSES).doc(req.params.id).get();
+          if (!passDoc.exists) return res.status(404).json({ error: 'PASS_NOT_FOUND', message: '找不到此定期票' });
           const passData = passDoc.data();
           const passType = passTypeDoc.data();
           const currentEnd = passData.endDate;

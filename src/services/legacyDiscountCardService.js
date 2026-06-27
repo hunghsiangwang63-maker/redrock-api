@@ -18,7 +18,7 @@ const bindLegacyDiscountCard = async ({ memberId, remainingCredits, gymId, staff
   const db = getDb();
   const cardId = uuidv4();
   const now = new Date();
-  const credits = parseInt(remainingCredits);
+  const credits = Math.max(0, parseInt(remainingCredits) || 0);
 
   const card = {
     id: cardId,

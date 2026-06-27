@@ -15,13 +15,15 @@ const { v4: uuidv4 } = require('uuid');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 // POST /transfers/upload - 會員上傳截圖
-router.post('/upload', upload.single('screenshot'), async (req, res) => {
+router.post('/upload', authenticateAny, upload.single('screenshot'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'NO_FILE', message: '請上傳截圖' });
     const db = getDb();
     const storage = getStorage();
     const id = uuidv4();
-    const { memberId, memberName, gymId, enrollmentId, courseId, courseName, amount, paymentMethod } = req.body;
+    const { memberName, gymId, enrollmentId, courseId, courseName, amount, paymentMethod } = req.body;
+    // 會員 token 一律用自己的 id，避免偽造他人 memberId
+    const memberId = req.member?.id || req.body.memberId;
 
     // 上傳到 Firebase Storage
     const bucket = storage.bucket();
@@ -51,7 +53,7 @@ router.post('/upload', upload.single('screenshot'), async (req, res) => {
 router.get('/pending', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    const gymId = req.query.gymId || (req.staff?.role !== 'super_admin' ? req.staff?.gymId : null);
+    const gymId = req.staff?.role === 'super_admin' ? req.query.gymId : req.staff?.gymId;
     let ref = db.collection('transferRecords').where('status', '==', 'pending');
     if (gymId) ref = ref.where('gymId', '==', gymId);
     const snap = await ref.get();

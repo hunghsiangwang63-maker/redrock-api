@@ -75,10 +75,15 @@ const markInstallmentPaid = async ({ planId, seq, paymentMethod, staffId }) => {
     i.seq === seq ? { ...i, status: 'paid', paidAt: now, paymentMethod, paidBy: staffId } : i
   );
   const allPaid = updatedInstallments.every(i => i.status === 'paid');
+  // 仍有其他期逾期/已過到期未繳 → 維持 overdue（避免補一期就解除入場限制）
+  const today = dayjs().format('YYYY-MM-DD');
+  const stillOverdue = updatedInstallments.some(i =>
+    i.status !== 'paid' && (i.status === 'overdue' || i.dueDate < today)
+  );
 
   await ref.update({
     installments: updatedInstallments,
-    status: allPaid ? 'completed' : 'active',
+    status: allPaid ? 'completed' : (stillOverdue ? 'overdue' : 'active'),
     updatedAt: now,
   });
 

@@ -129,7 +129,13 @@ router.post('/requests/:id/approve',
     try {
       const db = require('../config/firebase').getDb();
       const { COLLECTIONS } = require('../config/firebase');
-      const reqDoc = await db.collection(COLLECTIONS.PASS_ADJUSTMENTS || 'passAdjustmentRequests').doc(req.params.id).get();
+      // 申請可能在 passRequests（展延/退費/轉讓）或 passAdjustments（課程練習期遞延），兩處都找
+      let reqRef = db.collection(COLLECTIONS.PASS_REQUESTS).doc(req.params.id);
+      let reqDoc = await reqRef.get();
+      if (!reqDoc.exists) {
+        reqRef = db.collection(COLLECTIONS.PASS_ADJUSTMENTS).doc(req.params.id);
+        reqDoc = await reqRef.get();
+      }
       if (!reqDoc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
       const request = reqDoc.data();
 
@@ -137,7 +143,7 @@ router.post('/requests/:id/approve',
       if (request.type === 'course_practice_deferral') {
         if (request.status !== 'pending') return res.status(400).json({ code: 'ALREADY_PROCESSED', message: '此申請已處理' });
         await db.collection(COLLECTIONS.MEMBER_PASSES).doc(request.passId).update({ endDate: request.proposedEndDate, updatedAt: new Date() });
-        await db.collection(COLLECTIONS.PASS_ADJUSTMENTS || 'passAdjustmentRequests').doc(req.params.id).update({
+        await reqRef.update({
           status: 'approved', approvedBy: req.staff.id, approvedByName: req.staff.name, approvedAt: new Date(), updatedAt: new Date(),
         });
         await passAdjustmentService.logAdjustment({

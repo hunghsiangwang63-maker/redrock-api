@@ -148,24 +148,20 @@ router.get('/:id',
         .get();
       const hasFallTestSignature = !fallTestSigSnap.empty;
 
-      // 即時計算 blockReasons（不依賴 member doc 上的快取欄位，確保退回重簽後立即反映）
-      const liveBlockReasons = [];
+      // waiver 簽署狀態（供顯示）
       const waiverData = waiverDoc.exists ? waiverDoc.data() : null;
-      if (!waiverData || !waiverData.isComplete) {
-        if (!waiverData) liveBlockReasons.push('waiver_unsigned');
-        else if (waiverData.parentRequired && !waiverData.parentSignedAt) liveBlockReasons.push('parent_waiver_pending');
-        else liveBlockReasons.push('waiver_unsigned');
-      }
-      const liveWaiverSigned = liveBlockReasons.length === 0 || (!liveBlockReasons.includes('waiver_unsigned') && !liveBlockReasons.includes('parent_waiver_pending'));
-      member.blockReasons = liveBlockReasons;
-      member.isBlocked = liveBlockReasons.length > 0;
+      const liveWaiverSigned = !!(waiverData && waiverData.isComplete);
       member.waiverSigned = liveWaiverSigned;
 
-      // 靜默修正 member 文件的 waiverSigned（確保搜尋列表下次同步）
+      // 用權威函式重算「完整」封鎖狀態（含 waiver / 墜落測驗 / Email 未驗證），
+      // 避免只用 waiver 原因覆寫而把因墜測/Email 被封鎖的會員誤解鎖
+      const blockReasons = await memberService.refreshBlockStatus(req.params.id);
+      member.blockReasons = blockReasons;
+      member.isBlocked = blockReasons.length > 0;
+
+      // 同步 waiverSigned（refreshBlockStatus 不含此欄位）
       db.collection(COLLECTIONS.MEMBERS).doc(req.params.id).update({
         waiverSigned: liveWaiverSigned,
-        isBlocked: liveBlockReasons.length > 0,
-        blockReasons: liveBlockReasons,
       }).catch(() => {});
 
       res.json({

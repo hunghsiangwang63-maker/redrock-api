@@ -16,7 +16,7 @@ const dayjs = require('dayjs');
 router.get('/today', authenticate, requireStationAuth, async (req, res) => {
   try {
     const db = getDb();
-    const gymId = req.query.gymId || req.staff?.gymId;
+    const gymId = req.staff?.role === 'super_admin' ? (req.query.gymId || req.staff?.gymId) : req.staff?.gymId;
     const today = dayjs().format('YYYY-MM-DD');
 
     // 查今日是否已結帳
@@ -139,7 +139,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
 router.post('/', authenticate, requireStationAuth, async (req, res) => {
   try {
     const db = getDb();
-    const gymId = req.body.gymId || req.staff?.gymId;
+    const gymId = req.staff?.role === 'super_admin' ? (req.body.gymId || req.staff?.gymId) : req.staff?.gymId;
     const today = dayjs().format('YYYY-MM-DD');
 
     // 確認今日未結帳
@@ -212,7 +212,7 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
 router.get('/', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    const gymId = req.query.gymId || (req.staff?.role !== 'super_admin' ? req.staff?.gymId : null);
+    const gymId = req.staff?.role === 'super_admin' ? req.query.gymId : req.staff?.gymId;
     const days = parseInt(req.query.days) || 30;
     const fromDate = dayjs().subtract(days, 'day').format('YYYY-MM-DD');
     let ref = db.collection('dailySettlements').where('date', '>=', fromDate);

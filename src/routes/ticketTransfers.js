@@ -153,12 +153,16 @@ router.post('/:id/accept', authenticateAny, async (req, res) => {
 router.post('/:id/reject', authenticateAny, async (req, res) => {
   try {
     const db = getDb();
+    const transfer = (await db.collection('ticketTransfers').doc(req.params.id).get()).data();
+    if (!transfer) return res.status(404).json({ error: 'NOT_FOUND' });
+    if (transfer.status !== 'pending') return res.status(400).json({ error: 'ALREADY_PROCESSED' });
+    if (transfer.toMemberId !== (req.member?.id || req.staff?.id))
+      return res.status(403).json({ error: 'NOT_TARGET' });
+
     await db.collection('ticketTransfers').doc(req.params.id).update({
       status: 'rejected',
       rejectedAt: new Date(),
     });
-
-    const transfer = (await db.collection('ticketTransfers').doc(req.params.id).get()).data();
     await db.collection('notifications').add({
       type: 'ticket_transfer_rejected',
       title: '票券移轉被拒絕',

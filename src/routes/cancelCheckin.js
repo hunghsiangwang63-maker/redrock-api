@@ -27,6 +27,14 @@ router.post('/direct', authenticateAny, async (req, res) => {
     if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
 
     const checkIn = doc.data();
+
+    // 擁有權檢查：會員只能取消自己的入場（員工/站台不限）
+    if (req.member && checkIn.memberId !== req.member.id)
+      return res.status(403).json({ error: 'FORBIDDEN', message: '無權取消此入場紀錄' });
+    // 防重複取消（避免重複退款）
+    if (checkIn.isCancelled || checkIn.status === 'cancelled')
+      return res.status(400).json({ error: 'ALREADY_CANCELLED', message: '此入場紀錄已取消' });
+
     const checkedInAt = dayjs(checkIn.checkedInAt?.seconds ? checkIn.checkedInAt.seconds * 1000 : checkIn.checkedInAt);
     const minutesSince = dayjs().diff(checkedInAt, 'minute');
 
@@ -40,12 +48,15 @@ router.post('/direct', authenticateAny, async (req, res) => {
     // 直接取消
     await ref.update({ status: 'cancelled', cancelledAt: new Date(), isCancelled: true });
 
-    // 退回票券次數
-    if (checkIn.cardId && checkIn.ticketType === 'discount_card') {
-      await db.collection('discountCards').doc(checkIn.cardId).update({
-        usedCount: db.FieldValue ? db.FieldValue.increment(-1) : -1,
-        updatedAt: new Date(),
-      });
+    // 退回優惠卡次數（對齊 checkinService：用 entryType/discountCardId、還原 remainingCredits）
+    if (checkIn.entryType === 'discount_card' && checkIn.discountCardId) {
+      const cardDoc = await db.collection('discountCards').doc(checkIn.discountCardId).get();
+      if (cardDoc.exists) {
+        await cardDoc.ref.update({
+          remainingCredits: cardDoc.data().remainingCredits + 1,
+          updatedAt: new Date(),
+        });
+      }
     }
 
     // 退回交易紀錄
@@ -134,6 +145,8 @@ router.post('/:id/approve', authenticate, async (req, res) => {
     const reqDoc = await db.collection('cancelCheckinRequests').doc(req.params.id).get();
     if (!reqDoc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
     const cancelReq = reqDoc.data();
+    if (cancelReq.status !== 'pending')
+      return res.status(400).json({ error: 'ALREADY_PROCESSED', message: '此申請已處理' });
 
     const checkInRef = db.collection('checkIns').doc(cancelReq.checkInId);
     const checkInDoc = await checkInRef.get();
@@ -145,12 +158,15 @@ router.post('/:id/approve', authenticate, async (req, res) => {
     });
     await reqDoc.ref.update({ status: 'approved', approvedBy: req.staff.id, approvedAt: new Date() });
 
-    // 退回票券次數
-    if (checkIn?.cardId && checkIn.ticketType === 'discount_card') {
-      await db.collection('discountCards').doc(checkIn.cardId).update({
-        usedCount: db.FieldValue ? db.FieldValue.increment(-1) : -1,
-        updatedAt: new Date(),
-      });
+    // 退回優惠卡次數（對齊 checkinService：用 entryType/discountCardId、還原 remainingCredits）
+    if (checkIn?.entryType === 'discount_card' && checkIn.discountCardId) {
+      const cardDoc = await db.collection('discountCards').doc(checkIn.discountCardId).get();
+      if (cardDoc.exists) {
+        await cardDoc.ref.update({
+          remainingCredits: cardDoc.data().remainingCredits + 1,
+          updatedAt: new Date(),
+        });
+      }
     }
 
     // 退回交易紀錄

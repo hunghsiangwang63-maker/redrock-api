@@ -1,6 +1,7 @@
 # RedRock 紅石攀岩館 — 系統說明
 
 > 本檔已可安全提交（無機密）。測試帳號 / 金鑰等敏感資料見 `CLAUDE.local.md`（git-ignored）。
+> 接手 / 維護這份 context 的方式見 `docs/maintaining-context.md`。
 
 ## 專案概述
 RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsinchu`）和士林館（`gym-shilin`）。

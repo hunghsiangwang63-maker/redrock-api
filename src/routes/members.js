@@ -70,6 +70,11 @@ router.post('/my/children',
       const parent = await memberService.getMember(memberId);
       if (!parent) return res.status(404).json({ error: 'PARENT_NOT_FOUND' });
 
+      // 家庭成員僅限未滿 18 歲（滿 18 歲應註冊正式會員）
+      if (req.body.birthday && dayjs().diff(dayjs(req.body.birthday), 'year') >= 18) {
+        return res.status(400).json({ code: 'AGE_RESTRICTION', message: '家庭成員僅限未滿 18 歲，滿 18 歲請註冊正式會員' });
+      }
+
       const db = require('../config/firebase').getDb();
       const { COLLECTIONS } = require('../config/firebase');
       const existing = await db.collection(COLLECTIONS.MEMBERS)

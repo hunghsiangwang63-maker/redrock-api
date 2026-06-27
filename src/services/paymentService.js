@@ -200,6 +200,33 @@ async function loadGymPaymentSettings(db, gymId) {
   } catch (e) { return {}; }
 }
 
+// 各 gateway 的顯示資訊與「該館需具備哪些金鑰」才算已設定
+const PROVIDER_META = {
+  linepay:   { label: 'LinePay', icon: '💚', credKeys: ['linePayChannelId', 'linePayChannelSecret'] },
+  jkopay:    { label: '街口',    icon: '🔵', credKeys: ['jkoPayStoreId', 'jkoPaySecret'] },
+  taiwanpay: { label: '台灣Pay', icon: '🇹🇼', credKeys: ['taiwanPayMerchantId', 'taiwanPayBankApiKey'] },
+};
+
+// 某館「可用的線上付款方式」= 全域啟用(env PAYMENT_PROVIDERS) ∩ 該館已填金鑰。
+// 分段開放：加入 PAYMENT_PROVIDERS 啟用某 gateway、填某館金鑰啟用某館，皆無需改程式。
+async function getAvailableMethods(gymId) {
+  const db = getDb();
+  const settings = await loadGymPaymentSettings(db, gymId);
+  const enabled = (process.env.PAYMENT_PROVIDERS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const methods = [];
+  for (const key of enabled) {
+    const meta = PROVIDER_META[key];
+    if (meta && meta.credKeys.every(k => settings[k])) {
+      methods.push({ key, label: meta.label, icon: meta.icon });
+    }
+  }
+  // 非正式環境加入 mock 供測試（正式環境永不出現）
+  if (process.env.NODE_ENV !== 'production') {
+    methods.unshift({ key: 'mock', label: '測試付款', icon: '🧪' });
+  }
+  return methods;
+}
+
 // ── 建立付款 ──────────────────────────────────────────────────────
 async function createPayment({ provider = 'mock', orderType, orderRef = {}, gymId = null, memberId = null, memberName = '', amount, returnUrls = {} }) {
   const db = getDb();
@@ -317,4 +344,4 @@ async function handleCallback(provider, req) {
   return result;
 }
 
-module.exports = { createPayment, getPayment, handleCallback, PROVIDERS };
+module.exports = { createPayment, getPayment, handleCallback, getAvailableMethods, PROVIDERS };

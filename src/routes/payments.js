@@ -30,6 +30,16 @@ router.post('/', authenticateAny, async (req, res) => {
   }
 });
 
+// ── 某館可用的線上付款方式（per-gym + per-gateway 分段開放）──────────
+router.get('/methods', authenticateAny, async (req, res) => {
+  try {
+    const methods = await paymentService.getAvailableMethods(req.query.gymId || null);
+    res.json({ methods });
+  } catch (err) {
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 // ── 查詢付款狀態 ──────────────────────────────────────────────────
 router.get('/:id', authenticateAny, async (req, res) => {
   try {

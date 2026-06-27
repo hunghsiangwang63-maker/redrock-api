@@ -226,6 +226,7 @@ router.get('/announcements/all', async (req, res) => {
     const db = getDb();
     const today = dayjs().format('YYYY-MM-DD');
     const now = new Date();
+    const includeScheduled = req.query.all === '1'; // 員工端：連未到發布時間的排程公告一起回傳
 
     const snap = await db.collection(ANNOUNCE_COLLECTION)
       .where('isPublished', '==', true)
@@ -238,11 +239,11 @@ router.get('/announcements/all', async (req, res) => {
       .filter(a => {
         const notExpired = a.effectiveTo === null || a.effectiveTo >= today;
         const published = !a.publishAt || a.publishAt.toDate() <= now;
-        return notExpired && published;
+        return notExpired && (published || includeScheduled);
       });
 
     res.json({
-      banner: all.filter(a => a.showOnBanner),
+      banner: all.filter(a => a.showOnBanner && (!a.publishAt || a.publishAt.toDate() <= now)),
       announcements: all,
       count: all.length,
     });
@@ -356,7 +357,8 @@ router.post('/:id/announcements',
         specialClose: req.body.specialClose || null,
         // 排期發布
         publishAt: req.body.publishAt ? new Date(req.body.publishAt) : null,
-        isPublished: !req.body.publishAt, // 有排期就先不發布
+        // isPublished = 是否「上架（未下架）」；排程發布交由 publishAt <= now 於讀取時過濾
+        isPublished: true,
         createdBy: req.staff.id,
         createdAt: now,
         updatedAt: now,
@@ -384,6 +386,8 @@ router.put('/:id/announcements/:aid',
         'publishAt', 'isPublished'];
       const updates = {};
       allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+      // publishAt 需存為 Date（讀取時會 .toDate()）
+      if (req.body.publishAt !== undefined) updates.publishAt = req.body.publishAt ? new Date(req.body.publishAt) : null;
       updates.updatedAt = new Date();
 
       await db.collection(ANNOUNCE_COLLECTION).doc(req.params.aid).update(updates);

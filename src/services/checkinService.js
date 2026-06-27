@@ -22,6 +22,16 @@ const PRICES = {
   team_discount_min: 100,
 };
 
+// 使用優惠折扣券入場：原價 8 折（兒童不適用）。原價依會員身份取 entryTypes 價格。
+const DISCOUNT_CARD_RATE = 0.8;
+
+// 取得「原價」（折扣券 8 折的基準）：一般→single_ticket，學生→student_free
+const getOriginalEntryPrice = async (memberType) => {
+  const id = memberType === 'student' ? 'student_free' : 'single_ticket';
+  const fallback = memberType === 'student' ? 250 : PRICES.single_general;
+  return getEntryTypePrice(id, fallback);
+};
+
 // ── 墜落測驗：有效期 2 年，期限內每入場2次遞延1年 ────────────────
 const FALL_TEST_VALID_YEARS = 2;
 const FALL_TEST_EXTENSION_VISITS = 2;  // 觸發遞延所需入場次數
@@ -373,6 +383,12 @@ const verifyEntry = async (memberId, gymId) => {
   const discountCards = await getValidDiscountCards(memberId);
   const blackCards = await getMemberBlackCards(memberId);
   const singleEntryTickets = await getValidSingleEntryTickets(memberId);
+  const bonuses = await require('./bonusService').getMemberBonuses(memberId);
+
+  // 折扣券入場 8 折基準（原價依會員身份）；兒童不適用折扣券
+  const discountOriginalPrice = await getOriginalEntryPrice(memberType);
+  const discountCardPrice = Math.round(discountOriginalPrice * DISCOUNT_CARD_RATE);
+  const canUseDiscountCard = memberType !== 'child' && discountCards.length > 0;
 
   // 付費入場類型：與員工端同源，依 systemSettings/entryTypes 動態顯示
   //  - 過濾 active=false 與不適用身份者（memberTypes 空＝不限；course_member 需有課程權益）
@@ -443,14 +459,18 @@ const verifyEntry = async (memberId, gymId) => {
         available: true,
         requiresPayment: true,
       },
-      {
-        type: 'use_discount_card',
-        label: '使用優惠折扣券入場',
-        available: discountCards.length > 0,
+      // 使用優惠折扣券：原價 8 折（兒童不適用，故 child 不顯示此選項）
+      ...(memberType !== 'child' ? [{
+        type: 'discount_card',
+        label: '使用優惠折扣券入場（原價 8 折）',
+        price: discountOriginalPrice,
+        discountedPrice: discountCardPrice,
+        available: canUseDiscountCard,
+        requiresPayment: true,
         discountCards: discountCards.map(c => ({
           id: c.id, remainingCredits: c.remainingCredits, expiresAt: c.expiresAt,
         })),
-      },
+      }] : []),
       {
         type: 'black_card',
         label: '使用黑卡入場',
@@ -467,6 +487,16 @@ const verifyEntry = async (memberId, gymId) => {
           id: t.id, expiresAt: t.expiresAt,
         })),
       },
+      // 使用紅利：免費入場一次
+      {
+        type: 'bonus',
+        label: '使用紅利免費入場',
+        price: 0,
+        available: bonuses.length > 0,
+        bonuses: bonuses.map(b => ({
+          id: b.id, expiresAt: b.expiresAtFormatted, daysLeft: b.daysLeft,
+        })),
+      },
     ],
   };
 };
@@ -474,7 +504,7 @@ const verifyEntry = async (memberId, gymId) => {
 // ── 產生待確認入場 QR code ───────────────────────────────────────
 const createPendingCheckIn = async ({
   memberId, gymId, entryType,
-  passId, discountCardId, blackCardId, singleEntryTicketId,
+  passId, discountCardId, blackCardId, singleEntryTicketId, bonusId,
   paymentMethod, amount, originalAmount, isTeamDiscount,
   rentShoes, shoesPrice,
   rentChalk, chalkPrice,
@@ -536,6 +566,20 @@ const createPendingCheckIn = async ({
     }
   }
 
+  // 後端權威：使用優惠折扣券 = 原價（依會員身份）8 折。不與隊員折扣疊加。
+  if (entryType === 'discount_card') {
+    const base = await getOriginalEntryPrice(memberType);
+    finalOriginal = base;
+    finalAmount = Math.round(base * DISCOUNT_CARD_RATE);
+    finalTeam = false;
+  }
+  // 紅利入場為免費
+  if (entryType === 'bonus') {
+    finalOriginal = 0;
+    finalAmount = 0;
+    finalTeam = false;
+  }
+
   const qrToken = uuidv4();
   const now = new Date();
   const expiresAt = dayjs().add(30, 'minute').toDate();
@@ -547,6 +591,7 @@ const createPendingCheckIn = async ({
     discountCardId: discountCardId || null,
     blackCardId: blackCardId || null,
     singleEntryTicketId: singleEntryTicketId || null,
+    bonusId: bonusId || null,
     paymentMethod: paymentMethod || null,
     amount: finalAmount,
     originalAmount: finalOriginal,
@@ -640,6 +685,7 @@ const confirmCheckIn = async (qrToken, staffId, staffName) => {
     discountCardId: pending.discountCardId,
     blackCardId: pending.blackCardId,
     singleEntryTicketId: pending.singleEntryTicketId,
+    bonusId: pending.bonusId || null,
     transactionId: null,
     amountPaid: pending.amount + pending.shoesPrice + (pending.chalkPrice || 0),
     paymentMethod: pending.paymentMethod,
@@ -693,6 +739,9 @@ const confirmCheckIn = async (qrToken, staffId, staffName) => {
       usedCheckInId: checkInId,
       updatedAt: now,
     });
+  } else if (pending.entryType === 'bonus' && pending.bonusId) {
+    // 使用紅利免費入場
+    await require('./bonusService').useBonus(pending.bonusId, pending.gymId);
   }
 
   // 墜落測驗遞延

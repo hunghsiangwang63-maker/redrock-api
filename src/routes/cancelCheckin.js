@@ -59,6 +59,16 @@ router.post('/direct', authenticateAny, async (req, res) => {
       }
     }
 
+    // 退回紅利（還原為可再次使用）
+    if (checkIn.entryType === 'bonus' && checkIn.bonusId) {
+      const bonusDoc = await db.collection('discountBonuses').doc(checkIn.bonusId).get();
+      if (bonusDoc.exists) {
+        await bonusDoc.ref.update({
+          isUsed: false, isActive: true, usedAt: null, usedAtGymId: null, updatedAt: new Date(),
+        });
+      }
+    }
+
     // 退回交易紀錄
     if (checkIn.amountPaid > 0) {
       const { recordTransaction } = require('../utils/revenueLedger');
@@ -165,6 +175,16 @@ router.post('/:id/approve', authenticate, async (req, res) => {
         await cardDoc.ref.update({
           remainingCredits: cardDoc.data().remainingCredits + 1,
           updatedAt: new Date(),
+        });
+      }
+    }
+
+    // 退回紅利（還原為可再次使用）
+    if (checkIn?.entryType === 'bonus' && checkIn.bonusId) {
+      const bonusDoc = await db.collection('discountBonuses').doc(checkIn.bonusId).get();
+      if (bonusDoc.exists) {
+        await bonusDoc.ref.update({
+          isUsed: false, isActive: true, usedAt: null, usedAtGymId: null, updatedAt: new Date(),
         });
       }
     }

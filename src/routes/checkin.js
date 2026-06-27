@@ -72,7 +72,7 @@ router.post('/qr/create',
     try {
       const {
         memberId, gymId, entryType,
-        passId, discountCardId, blackCardId, singleEntryTicketId,
+        passId, discountCardId, blackCardId, singleEntryTicketId, bonusId,
         paymentMethod, amount, originalAmount, isTeamDiscount,
         rentShoes, shoesPrice, rentChalk, chalkPrice,
       } = req.body;
@@ -96,7 +96,7 @@ router.post('/qr/create',
       const result = await checkinService.createPendingCheckIn({
         memberId: effectiveMemberId,
         gymId: effectiveGymId,
-        entryType, passId, discountCardId, blackCardId, singleEntryTicketId,
+        entryType, passId, discountCardId, blackCardId, singleEntryTicketId, bonusId,
         paymentMethod, amount, originalAmount, isTeamDiscount,
         rentShoes, shoesPrice, rentChalk, chalkPrice,
       });

@@ -443,17 +443,24 @@ const cancelCourseEnrollments = async ({ courseId, memberId, reason }) => {
   const snap = await db.collection(ENROLLMENT_COLLECTION)
     .where('courseId', '==', courseId)
     .where('memberId', '==', memberId)
-    .where('status', '==', 'confirmed')
+    .where('status', 'in', ['confirmed', 'leave', 'waitlist'])
     .get();
   let cancelled = 0;
   for (const d of snap.docs) {
     const e = d.data();
+    const prevStatus = e.status;
     await d.ref.update({ status: 'cancelled', cancelledAt: now, cancelReason: reason || '退費取消', updatedAt: now });
     const sDoc = await db.collection(SESSION_COLLECTION).doc(e.sessionId).get();
     if (sDoc.exists) {
-      await sDoc.ref.update({ enrolledCount: Math.max(0, (sDoc.data().enrolledCount || 0) - 1), updatedAt: now });
-      // 僅未來場次才遞補候補（遞補失敗不中斷退費）
-      if ((sDoc.data().date || '') >= today) { try { await promoteWaitlist(e.sessionId); } catch (err) { console.error('promoteWaitlist 失敗', err.message); } }
+      const sd = sDoc.data();
+      if (prevStatus === 'confirmed') {
+        // confirmed 占名額 → 釋放並遞補候補
+        await sDoc.ref.update({ enrolledCount: Math.max(0, (sd.enrolledCount || 0) - 1), updatedAt: now });
+        if ((sd.date || '') >= today) { try { await promoteWaitlist(e.sessionId); } catch (err) { console.error('promoteWaitlist 失敗', err.message); } }
+      } else if (prevStatus === 'waitlist') {
+        await sDoc.ref.update({ waitlistCount: Math.max(0, (sd.waitlistCount || 0) - 1), updatedAt: now });
+      }
+      // leave：請假時已釋放名額，這裡不重複扣
     }
     cancelled++;
   }

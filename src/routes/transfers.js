@@ -94,12 +94,33 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
     });
     // 依訂單型別確認底層付款（side-effect 失敗不阻斷收款確認）
     try {
+      const by = req.staff.id, byName = req.staff.name;
       if (t.orderType === 'experience' && t.refId) {
         await db.collection('experienceBookings').doc(t.refId).update({
-          status: 'confirmed', confirmedBy: req.staff.id, confirmedByName: req.staff.name, confirmedAt: now, updatedAt: now,
+          status: 'confirmed', confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
         });
       } else if (t.orderType === 'course' && t.refId) {
         await db.collection('courseEnrollments').doc(t.refId).update({ paymentConfirmed: true, updatedAt: now });
+      } else if (t.orderType === 'competition' && t.refId) {
+        await db.collection('competitionRegistrations').doc(t.refId).update({
+          paymentStatus: 'confirmed', paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,
+        });
+      } else if (t.orderType === 'rental' && t.refId) {
+        await db.collection('equipmentRentals').doc(t.refId).update({
+          paymentStatus: 'confirmed', status: 'active', confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
+        });
+      } else if (t.orderType === 'team_member' && t.refId) {
+        const appRef = db.collection('teamApplications').doc(t.refId);
+        await appRef.update({
+          paymentStatus: 'confirmed', status: 'active', paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,
+        });
+        // 開通隊員折扣資格（依年度）
+        const app = (await appRef.get()).data();
+        if (app?.memberId && app?.year) {
+          await require('../services/teamMemberService').setTeamMember({
+            memberId: app.memberId, since: `${app.year}-01-01`, until: `${app.year}-12-31`, staffId: by,
+          });
+        }
       }
     } catch (e) { console.error('transfer confirm side-effect:', e.message); }
     res.json({ message: '已確認收款' });

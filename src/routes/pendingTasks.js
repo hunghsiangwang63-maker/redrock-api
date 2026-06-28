@@ -13,6 +13,14 @@ router.get('/', authenticate, async (req, res) => {
 
     const tasks = [];
 
+    // 轉帳確認單一來源：凡有「待確認 transferRecords」的訂單，一律由轉帳確認段處理，
+    // 其各自待辦任務(租借/比賽/體驗…)以 refId 排除，避免雙列。
+    const transferRefIds = new Set();
+    try {
+      const trSnap = await db.collection('transferRecords').where('status', '==', 'pending').get();
+      trSnap.forEach(d => { const r = d.data(); if (r.refId) transferRefIds.add(r.refId); });
+    } catch(e) {}
+
     // 1. 器材租借 - 待確認
     try {
       let ref = db.collection('equipmentRentals').where('status', '==', 'pending');
@@ -20,6 +28,7 @@ router.get('/', authenticate, async (req, res) => {
       const snap = await ref.get();
       snap.forEach(d => {
         const r = d.data();
+        if (transferRefIds.has(d.id)) return; // 已有轉帳待確認 → 走轉帳確認段
         tasks.push({
           id: `rental_${d.id}`, type: 'rental', targetId: d.id,
           title: `器材租借申請`,
@@ -81,6 +90,7 @@ router.get('/', authenticate, async (req, res) => {
         .where('status', '==', 'confirmed').get();
       snap.forEach(d => {
         const r = d.data();
+        if (transferRefIds.has(d.id)) return; // 已有轉帳待確認 → 走轉帳確認段
         tasks.push({
           id: `compReg_${d.id}`, type: 'competition_payment', targetId: d.id,
           title: '比賽報名待收款',
@@ -99,6 +109,7 @@ router.get('/', authenticate, async (req, res) => {
       const snap = await db.collection('teamMembers').where('status', '==', 'pending').get();
       snap.forEach(d => {
         const r = d.data();
+        if (transferRefIds.has(d.id)) return; // 已有轉帳待確認 → 走轉帳確認段
         tasks.push({
           id: `team_${d.id}`, type: 'team_member', targetId: d.id,
           title: '攀岩隊入隊申請',
@@ -158,7 +169,7 @@ router.get('/', authenticate, async (req, res) => {
       const snap = await ref.get();
       snap.forEach(d => {
         const r = d.data();
-        if (r.paymentMethod === 'transfer') return; // 轉帳預約改由 transferRecords(轉帳確認)處理，避免雙列
+        if (transferRefIds.has(d.id)) return; // 已有轉帳待確認 → 走轉帳確認段，避免雙列
         tasks.push({
           id: `exp_${d.id}`, type: 'experience', targetId: d.id,
           title: '體驗課程預約申請',

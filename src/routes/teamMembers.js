@@ -103,7 +103,7 @@ router.post('/apply', authenticateAny, async (req, res) => {
       updatedAt: new Date(),
     });
 
-    res.status(201).json({ success: true, expectedFee, message: '申請已送出，請等待工作人員確認付款' });
+    res.status(201).json({ success: true, id, expectedFee, message: '申請已送出，請等待工作人員確認付款' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

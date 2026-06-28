@@ -200,6 +200,24 @@ const useBlackCard = async (cardId) => {
   return { creditsAfter: newCredits };
 };
 
+// ── 取單張黑卡（供入場 QR 產生時 fail-fast 驗證）─────────────────
+const getBlackCardById = async (cardId) => {
+  const db = getDb();
+  const doc = await db.collection(COLLECTION).doc(cardId).get();
+  return doc.exists ? { id: doc.id, ...doc.data() } : null;
+};
+
+// ── 退回黑卡 1 次（入場取消時還原；對齊 useBlackCard 的集合）─────
+const refundBlackCard = async (cardId) => {
+  const db = getDb();
+  const ref = db.collection(COLLECTION).doc(cardId);
+  const doc = await ref.get();
+  if (!doc.exists) return null;
+  const credits = (doc.data().remainingCredits || 0) + 1;
+  await ref.update({ remainingCredits: credits, isActive: true, updatedAt: new Date() });
+  return { creditsAfter: credits };
+};
+
 // ── 查詢會員有效黑卡 ─────────────────────────────────────────────
 const getMemberBlackCards = async (memberId) => {
   const db = getDb();
@@ -226,6 +244,8 @@ module.exports = {
   getTransferPreview,
   transferBlackCard,
   useBlackCard,
+  getBlackCardById,
+  refundBlackCard,
   getMemberBlackCards,
   EXPIRY_WARNING_DAYS,
 };

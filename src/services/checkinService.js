@@ -6,7 +6,7 @@
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const { getMember } = require('./memberService');
 const { getValidDiscountCards, useDiscountCard } = require('./discountCardService');
-const { getMemberBlackCards, useBlackCard } = require('./legacyCardService');
+const { getMemberBlackCards, useBlackCard, getBlackCardById, refundBlackCard } = require('./legacyCardService');
 const { isActiveTeamMember, TEAM_DISCOUNT_MIN_AMOUNT } = require('./teamMemberService');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
@@ -550,17 +550,16 @@ const createPendingCheckIn = async ({
   const fallTest = await checkFallTest(memberId);
   if (!fallTest.passed) throw { code: 'FALL_TEST_REQUIRED', message: '墜落測驗未通過或已到期' };
 
-  // 黑卡/單次入場券：預扣點數
+  // 黑卡/單次入場券：QR 階段只驗證可用性，「不」預扣。
+  // 實際扣點延後到 confirmCheckIn（確認入場才扣）→ 產生 QR 但未入場不會扣卡/鎖券。
   if (entryType === 'black_card' && blackCardId) {
-    const cardDoc = await db.collection(COLLECTIONS.BLACK_CARDS).doc(blackCardId).get();
-    if (!cardDoc.exists || cardDoc.data().status !== 'active' || cardDoc.data().remainingCredits <= 0) {
+    const card = await getBlackCardById(blackCardId);
+    if (!card || !card.isActive || (card.remainingCredits || 0) <= 0) {
       throw { code: 'CARD_INVALID', message: '黑卡無效或已無剩餘次數' };
     }
-    await db.collection(COLLECTIONS.BLACK_CARDS).doc(blackCardId).update({
-      remainingCredits: cardDoc.data().remainingCredits - 1,
-      pendingDeduction: true,
-      updatedAt: new Date(),
-    });
+    if (card.expiresAt && dayjs().isAfter(dayjs(card.expiresAt.toDate()))) {
+      throw { code: 'CARD_EXPIRED', message: '黑卡已過期' };
+    }
   }
 
   if (entryType === 'single_entry_ticket' && singleEntryTicketId) {
@@ -571,10 +570,6 @@ const createPendingCheckIn = async ({
     if (dayjs().isAfter(dayjs(ticketDoc.data().expiresAt))) {
       throw { code: 'TICKET_EXPIRED', message: '單次入場券已過期' };
     }
-    await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(singleEntryTicketId).update({
-      status: 'pending',
-      updatedAt: new Date(),
-    });
   }
 
   // 後端權威：依 entryTypes 設定重算入場金額（防止前端竄改）。
@@ -710,6 +705,37 @@ const confirmCheckIn = async (qrToken, staffId, staffName) => {
   const now = new Date();
   const checkInId = uuidv4();
 
+  // ── 先處理票券/卡扣除（扣點失敗則 throw、不建立入場紀錄，避免「有入場、沒扣點」孤兒記錄）──
+  // 黑卡/單次券改為「確認入場才扣」：產生 QR 但未入場 → 不扣卡、不鎖券。
+  if (pending.entryType === 'buy_discount_card') {
+    // 購買折扣優惠卡入場：建立一張新優惠卡給會員
+    const { purchaseDiscountCard } = require('./discountCardService');
+    await purchaseDiscountCard({
+      memberId: pending.memberId,
+      gymId: pending.gymId,
+      staffId,
+      price: pending.amount || 0,
+      paymentId: checkInId,
+    });
+  } else if (pending.entryType === 'discount_card' && pending.discountCardId) {
+    await useDiscountCard(pending.discountCardId, pending.gymId);
+  } else if (pending.entryType === 'black_card' && pending.blackCardId) {
+    await useBlackCard(pending.blackCardId); // legacyBlackCards：與資格查詢同源，確認才扣
+  } else if (pending.entryType === 'single_entry_ticket' && pending.singleEntryTicketId) {
+    // 重新驗證後才標記使用（防兩張 QR 重複使用同一張券）
+    const ticketRef = db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(pending.singleEntryTicketId);
+    const ticketDoc = await ticketRef.get();
+    if (!ticketDoc.exists || ticketDoc.data().status !== 'active') {
+      throw { code: 'TICKET_INVALID', message: '單次入場券無效或已使用' };
+    }
+    if (dayjs().isAfter(dayjs(ticketDoc.data().expiresAt))) {
+      throw { code: 'TICKET_EXPIRED', message: '單次入場券已過期' };
+    }
+    await ticketRef.update({ status: 'used', usedAt: now, usedCheckInId: checkInId, updatedAt: now });
+  } else if (pending.entryType === 'bonus' && pending.bonusId) {
+    await require('./bonusService').useBonus(pending.bonusId, pending.gymId);
+  }
+
   // 建立入場紀錄
   const checkIn = {
     id: checkInId,
@@ -749,37 +775,6 @@ const confirmCheckIn = async (qrToken, staffId, staffName) => {
     confirmedBy: staffId,
     checkInId,
   });
-
-  // 依入場類型處理票券扣除
-  if (pending.entryType === 'buy_discount_card') {
-    // 購買折扣優惠券：自動建立一張新優惠卡給會員
-    const { purchaseDiscountCard } = require('./discountCardService');
-    await purchaseDiscountCard({
-      memberId: pending.memberId,
-      gymId: pending.gymId,
-      staffId,
-      price: pending.amount || 0,
-      paymentId: checkInId,
-    });
-  } else if (pending.entryType === 'discount_card' && pending.discountCardId) {
-    await useDiscountCard(pending.discountCardId, pending.gymId);
-  } else if (pending.entryType === 'black_card' && pending.blackCardId) {
-    // 預扣已在 createPendingCheckIn 完成，這裡只清除 pending flag
-    await db.collection(COLLECTIONS.BLACK_CARDS).doc(pending.blackCardId).update({
-      pendingDeduction: false,
-      updatedAt: now,
-    });
-  } else if (pending.entryType === 'single_entry_ticket' && pending.singleEntryTicketId) {
-    await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(pending.singleEntryTicketId).update({
-      status: 'used',
-      usedAt: now,
-      usedCheckInId: checkInId,
-      updatedAt: now,
-    });
-  } else if (pending.entryType === 'bonus' && pending.bonusId) {
-    // 使用紅利免費入場
-    await require('./bonusService').useBonus(pending.bonusId, pending.gymId);
-  }
 
   // 墜落測驗遞延
   await tryExtendFallTest(pending.memberId, checkInId);
@@ -833,13 +828,7 @@ const cancelCheckIn = async (checkInId, staffId, force = false) => {
 
   // 退回票券
   if (checkIn.entryType === 'black_card' && checkIn.blackCardId) {
-    const cardDoc = await db.collection(COLLECTIONS.BLACK_CARDS).doc(checkIn.blackCardId).get();
-    if (cardDoc.exists) {
-      await db.collection(COLLECTIONS.BLACK_CARDS).doc(checkIn.blackCardId).update({
-        remainingCredits: cardDoc.data().remainingCredits + 1,
-        updatedAt: now,
-      });
-    }
+    await refundBlackCard(checkIn.blackCardId); // legacyBlackCards：與扣點同源
   } else if (checkIn.entryType === 'single_entry_ticket' && checkIn.singleEntryTicketId) {
     await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(checkIn.singleEntryTicketId).update({
       status: 'active',

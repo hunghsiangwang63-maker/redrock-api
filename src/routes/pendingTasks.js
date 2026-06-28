@@ -28,6 +28,7 @@ router.get('/', authenticate, async (req, res) => {
           createdAt: r.createdAt?._seconds || 0,
           gymId: r.gymId, memberName: r.memberName,
           link: '/staff/rentals',
+          record: { id: d.id, ...r },
         });
       });
     } catch(e) {}
@@ -46,6 +47,7 @@ router.get('/', authenticate, async (req, res) => {
           createdAt: r.createdAt?._seconds || 0,
           gymId: r.gymId, memberName: r.memberName,
           link: '/staff/passes?tab=courseRequests',
+          record: { id: d.id, ...r },
         });
       });
     } catch(e) {}
@@ -66,6 +68,7 @@ router.get('/', authenticate, async (req, res) => {
           createdAt: r.createdAt?._seconds || 0,
           gymId: r.gymId, memberName: r.memberName,
           link: '/staff/passes?tab=requests',
+          record: { id: d.id, ...r },
         });
       });
     } catch(e) {}
@@ -85,6 +88,7 @@ router.get('/', authenticate, async (req, res) => {
           createdAt: r.registeredAt?._seconds || 0,
           gymId: null, memberName: r.memberName,
           link: '/staff/competitions',
+          record: { id: d.id, ...r },
         });
       });
     } catch(e) {}
@@ -140,6 +144,7 @@ router.get('/', authenticate, async (req, res) => {
             date: today, createdAt: Date.now()/1000,
             gymId: r.gymId, memberName: r.memberName,
             link: '/staff/rentals',
+            record: { id: d.id, ...r },
           });
         }
       });

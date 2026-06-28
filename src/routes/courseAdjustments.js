@@ -39,11 +39,11 @@ router.post('/enrollments/:enrollmentId/refund-request',
       const directDoc = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).doc(req.params.enrollmentId).get();
       if (directDoc.exists) courseId = directDoc.data().courseId;
 
-      // 取該會員此課程「所有」有效報名（週課為多筆）
+      // 取該會員此課程「所有」有效報名（週課為多筆；含請假/候補）
       const allSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
         .where('courseId', '==', courseId)
         .where('memberId', '==', memberId)
-        .where('status', '==', 'confirmed')
+        .where('status', 'in', ['confirmed', 'leave', 'waitlist'])
         .get();
       if (allSnap.empty) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到有效的報名記錄' });
       const all = allSnap.docs.map(d => ({ id: d.id, ...d.data() }));

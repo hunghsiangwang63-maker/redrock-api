@@ -15,6 +15,31 @@ const dayjs = require('dayjs');
 
 const CANCEL_WINDOW_MINUTES = 30;
 
+// 取消入場時還原票券/卡（黑卡/單次券/折扣卡/紅利）— /direct 與 /approve 共用，
+// 與 checkinService.cancelCheckIn 的還原集合一致（黑卡走 legacyBlackCards）。
+const restoreEntryCredits = async (db, checkIn) => {
+  if (!checkIn) return;
+  const now = new Date();
+  if (checkIn.entryType === 'black_card' && checkIn.blackCardId) {
+    const { refundBlackCard } = require('../services/legacyCardService');
+    await refundBlackCard(checkIn.blackCardId);
+  } else if (checkIn.entryType === 'single_entry_ticket' && checkIn.singleEntryTicketId) {
+    await db.collection('singleEntryTickets').doc(checkIn.singleEntryTicketId).update({
+      status: 'active', usedAt: null, usedCheckInId: null, updatedAt: now,
+    });
+  } else if (checkIn.entryType === 'discount_card' && checkIn.discountCardId) {
+    const cardDoc = await db.collection('discountCards').doc(checkIn.discountCardId).get();
+    if (cardDoc.exists) {
+      await cardDoc.ref.update({ remainingCredits: cardDoc.data().remainingCredits + 1, updatedAt: now });
+    }
+  } else if (checkIn.entryType === 'bonus' && checkIn.bonusId) {
+    const bonusDoc = await db.collection('discountBonuses').doc(checkIn.bonusId).get();
+    if (bonusDoc.exists) {
+      await bonusDoc.ref.update({ isUsed: false, isActive: true, usedAt: null, usedAtGymId: null, updatedAt: now });
+    }
+  }
+};
+
 // ── POST /cancel-checkins/direct ─────────────────────────────────
 router.post('/direct', authenticateAny, async (req, res) => {
   try {
@@ -48,26 +73,8 @@ router.post('/direct', authenticateAny, async (req, res) => {
     // 直接取消
     await ref.update({ status: 'cancelled', cancelledAt: new Date(), isCancelled: true });
 
-    // 退回優惠卡次數（對齊 checkinService：用 entryType/discountCardId、還原 remainingCredits）
-    if (checkIn.entryType === 'discount_card' && checkIn.discountCardId) {
-      const cardDoc = await db.collection('discountCards').doc(checkIn.discountCardId).get();
-      if (cardDoc.exists) {
-        await cardDoc.ref.update({
-          remainingCredits: cardDoc.data().remainingCredits + 1,
-          updatedAt: new Date(),
-        });
-      }
-    }
-
-    // 退回紅利（還原為可再次使用）
-    if (checkIn.entryType === 'bonus' && checkIn.bonusId) {
-      const bonusDoc = await db.collection('discountBonuses').doc(checkIn.bonusId).get();
-      if (bonusDoc.exists) {
-        await bonusDoc.ref.update({
-          isUsed: false, isActive: true, usedAt: null, usedAtGymId: null, updatedAt: new Date(),
-        });
-      }
-    }
+    // 退回票券/卡（黑卡/單次券/折扣卡/紅利）
+    await restoreEntryCredits(db, checkIn);
 
     // 退回交易紀錄
     if (checkIn.amountPaid > 0) {
@@ -168,26 +175,8 @@ router.post('/:id/approve', authenticate, async (req, res) => {
     });
     await reqDoc.ref.update({ status: 'approved', approvedBy: req.staff.id, approvedAt: new Date() });
 
-    // 退回優惠卡次數（對齊 checkinService：用 entryType/discountCardId、還原 remainingCredits）
-    if (checkIn?.entryType === 'discount_card' && checkIn.discountCardId) {
-      const cardDoc = await db.collection('discountCards').doc(checkIn.discountCardId).get();
-      if (cardDoc.exists) {
-        await cardDoc.ref.update({
-          remainingCredits: cardDoc.data().remainingCredits + 1,
-          updatedAt: new Date(),
-        });
-      }
-    }
-
-    // 退回紅利（還原為可再次使用）
-    if (checkIn?.entryType === 'bonus' && checkIn.bonusId) {
-      const bonusDoc = await db.collection('discountBonuses').doc(checkIn.bonusId).get();
-      if (bonusDoc.exists) {
-        await bonusDoc.ref.update({
-          isUsed: false, isActive: true, usedAt: null, usedAtGymId: null, updatedAt: new Date(),
-        });
-      }
-    }
+    // 退回票券/卡（黑卡/單次券/折扣卡/紅利）
+    await restoreEntryCredits(db, checkIn);
 
     // 退回交易紀錄
     if (checkIn?.amountPaid > 0) {
@@ -249,3 +238,4 @@ router.post('/:id/reject', authenticate, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.restoreEntryCredits = restoreEntryCredits; // 供測試

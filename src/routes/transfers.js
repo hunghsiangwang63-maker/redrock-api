@@ -83,11 +83,25 @@ router.get('/pending', authenticate, async (req, res) => {
 router.put('/:id/confirm', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    await db.collection('transferRecords').doc(req.params.id).update({
+    const ref = db.collection('transferRecords').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此轉帳紀錄' });
+    const t = doc.data();
+    const now = new Date();
+    await ref.update({
       status: 'confirmed', confirmedBy: req.staff.id,
-      confirmedAt: new Date(), updatedAt: new Date(),
-      notes: req.body.notes || '',
+      confirmedAt: now, updatedAt: now, notes: req.body.notes || '',
     });
+    // 依訂單型別確認底層付款（side-effect 失敗不阻斷收款確認）
+    try {
+      if (t.orderType === 'experience' && t.refId) {
+        await db.collection('experienceBookings').doc(t.refId).update({
+          status: 'confirmed', confirmedBy: req.staff.id, confirmedByName: req.staff.name, confirmedAt: now, updatedAt: now,
+        });
+      } else if (t.orderType === 'course' && t.refId) {
+        await db.collection('courseEnrollments').doc(t.refId).update({ paymentConfirmed: true, updatedAt: now });
+      }
+    } catch (e) { console.error('transfer confirm side-effect:', e.message); }
     res.json({ message: '已確認收款' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

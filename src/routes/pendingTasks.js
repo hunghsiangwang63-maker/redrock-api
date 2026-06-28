@@ -158,6 +158,7 @@ router.get('/', authenticate, async (req, res) => {
       const snap = await ref.get();
       snap.forEach(d => {
         const r = d.data();
+        if (r.paymentMethod === 'transfer') return; // 轉帳預約改由 transferRecords(轉帳確認)處理，避免雙列
         tasks.push({
           id: `exp_${d.id}`, type: 'experience', targetId: d.id,
           title: '體驗課程預約申請',
@@ -173,47 +174,8 @@ router.get('/', authenticate, async (req, res) => {
     // 排序：同一天內最新在前
     tasks.sort((a, b) => b.createdAt - a.createdAt);
 
-    // 8. 轉帳付款待確認 - 課程報名中有轉帳但未確認的
-    try {
-      let ref = db.collection('courseEnrollments')
-        .where('paymentMethod', '==', 'transfer')
-        .where('paymentConfirmed', '==', false)
-        .where('status', '==', 'confirmed');
-      if (gymId) ref = ref.where('gymId', '==', gymId);
-      const snap = await ref.get();
-      snap.docs.forEach(d => {
-        const e = d.data();
-        tasks.push({
-          id: d.id, type: 'transfer_payment',
-          title: '轉帳付款待確認',
-          description: `${e.memberName} — ${e.courseName}${e.bankLastFive ? ` (末五碼 ${e.bankLastFive})` : ''}`,
-          date: e.paymentDate || e.enrolledAt?.toDate?.()?.toISOString()?.slice(0,10) || today,
-          memberId: e.memberId, memberName: e.memberName,
-          gymId: e.gymId, amount: e.fee,
-          link: '/staff/activities?tab=courses',
-        });
-      });
-    } catch(e) { console.error('transfer_payment tasks error:', e.message); }
-
-    // 9. 體驗課程轉帳待確認
-    try {
-      let ref = db.collection('experienceBookings')
-        .where('paymentMethod', '==', 'transfer')
-        .where('status', '==', 'pending');
-      if (gymId) ref = ref.where('gymId', '==', gymId);
-      const snap = await ref.get();
-      snap.docs.forEach(d => {
-        const b = d.data();
-        tasks.push({
-          id: d.id, type: 'experience_transfer',
-          title: '體驗課程轉帳待確認',
-          description: `${b.contactName}${b.bankLastFive ? ` (末五碼 ${b.bankLastFive})` : ''} — ${b.bookingDate}`,
-          date: b.bookingDate || today,
-          gymId: b.gymId, amount: b.totalFee,
-          link: '/staff/activities?tab=experience',
-        });
-      });
-    } catch(e) { console.error('experience_transfer tasks error:', e.message); }
+    // 8+9. 轉帳待確認統一改由 transferRecords 處理（見下方 9b）；
+    //      舊的 courseEnrollments(transfer_payment) / experienceBookings(experience_transfer) 區塊已移除。
 
     // 9b. 轉帳待確認（transferRecords：截圖或填末五碼皆可，單一來源）
     try {

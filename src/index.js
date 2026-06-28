@@ -73,7 +73,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     env: process.env.NODE_ENV,
-    version: '1.2.0-deferred-deduction',
+    version: '1.3.0-transfer-unified',
   });
 });
 

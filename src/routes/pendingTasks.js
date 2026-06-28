@@ -209,7 +209,67 @@ router.get('/', authenticate, async (req, res) => {
       });
     } catch(e) { console.error('experience_transfer tasks error:', e.message); }
 
-    res.json({ tasks, total: tasks.length });
+    // 10. 單次入場券待審核（票券審核）
+    try {
+      let ref = db.collection('singleEntryTickets').where('status', '==', 'pending_approval');
+      if (gymId) ref = ref.where('gymId', '==', gymId);
+      const snap = await ref.get();
+      snap.forEach(d => {
+        const t = d.data();
+        tasks.push({
+          id: `ticket_${d.id}`, type: 'ticket_approval', targetId: d.id,
+          title: '單次入場券待審核',
+          desc: `${t.memberName || ''}${t.amount ? ` — NT$${t.amount}` : ''}`,
+          date: t.issuedAt?._seconds ? new Date(t.issuedAt._seconds*1000).toISOString().slice(0,10) : today,
+          createdAt: t.createdAt?._seconds || t.issuedAt?._seconds || 0,
+          gymId: t.gymId, memberName: t.memberName,
+          link: '/staff/passes?tab=tickets',
+        });
+      });
+    } catch(e) {}
+
+    // 最終排序（最新在前）
+    tasks.sort((a, b) => b.createdAt - a.createdAt);
+
+    // ── 新報名通知（近 7 天，分項：課程 / 比賽 / 體驗；資訊性，不計入待辦 badge）──
+    const sevenDaysAgo = new Date(Date.now() - 7*86400000);
+    const registrations = [];
+    const secOf = ts => ts?._seconds || (ts?.toDate ? Math.floor(ts.toDate().getTime()/1000) : 0);
+    const dayOf = ts => { const s = secOf(ts); return s ? new Date(s*1000 + 8*3600000).toISOString().slice(0,10) : today; };
+    // 課程（依會員+課程去重，週課多堂只算一筆）
+    try {
+      const snap = await db.collection('courseEnrollments').where('createdAt', '>=', sevenDaysAgo).get();
+      const seen = new Set();
+      snap.docs.forEach(d => {
+        const e = d.data();
+        if (!['confirmed','waitlist'].includes(e.status) || e.isMakeup) return;
+        if (gymId && e.gymId && e.gymId !== gymId) return;
+        const key = `${e.memberId}_${e.courseId}`;
+        if (seen.has(key)) return; seen.add(key);
+        registrations.push({ id:`reg_course_${d.id}`, regType:'course', memberName:e.memberName||'', name:e.courseName||'', detail:e.date||'', createdAt: secOf(e.createdAt), dateStr: dayOf(e.createdAt), gymId:e.gymId, link:'/staff/courses' });
+      });
+    } catch(e) {}
+    // 比賽
+    try {
+      const snap = await db.collection('competitionRegistrations').where('registeredAt', '>=', sevenDaysAgo).get();
+      snap.docs.forEach(d => {
+        const r = d.data();
+        if (!['confirmed','waitlist'].includes(r.status)) return;
+        registrations.push({ id:`reg_comp_${d.id}`, regType:'competition', memberName:r.memberName||'', name:r.competitionName||'', detail:r.divisionName||'', createdAt: secOf(r.registeredAt), dateStr: dayOf(r.registeredAt), gymId:null, link:'/staff/competitions' });
+      });
+    } catch(e) {}
+    // 體驗
+    try {
+      const snap = await db.collection('experienceBookings').where('createdAt', '>=', sevenDaysAgo).get();
+      snap.docs.forEach(d => {
+        const b = d.data();
+        if (gymId && b.gymId && b.gymId !== gymId) return;
+        registrations.push({ id:`reg_exp_${d.id}`, regType:'experience', memberName:b.contactName||'', name:b.courseType||'體驗課程', detail:`${b.bookingDate||''}${b.numParticipants?` · ${b.numParticipants}人`:''}`.trim(), createdAt: secOf(b.createdAt), dateStr: dayOf(b.createdAt), gymId:b.gymId, link:'/staff/experience' });
+      });
+    } catch(e) {}
+    registrations.sort((a, b) => b.createdAt - a.createdAt);
+
+    res.json({ tasks, total: tasks.length, registrations, registrationCount: registrations.length });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

@@ -115,7 +115,132 @@ const createSession = async ({ courseId, gymId, staffId, data }) => {
 
 
 // ── 週課批次建立場次 ──────────────────────────────────────────────
-const createWeeklySessions = async ({ courseId, gymId, staffId }) => {
+// 依新課表掃出目標上課日（0=日…6=六）。
+const computeTargetDates = (course) => {
+  const dates = [];
+  let current = dayjs(course.startDate);
+  const end = dayjs(course.endDate);
+  while (current.isBefore(end) || current.isSame(end, 'day')) {
+    if (course.weekdays.includes(current.day())) dates.push(current.format('YYYY-MM-DD'));
+    current = current.add(1, 'day');
+  }
+  return dates;
+};
+
+// 為孤兒場次挑「最接近的新場次日期」：同週優先，其次日數差最小，再以較早日期為先。
+const pickNearestDate = (orphanDate, targetDates) => {
+  if (!targetDates.length) return null;
+  const od = dayjs(orphanDate);
+  const sameWeek = targetDates.filter(t => dayjs(t).startOf('week').isSame(od.startOf('week'), 'day'));
+  const pool = sameWeek.length ? sameWeek : targetDates;
+  let best = null, bestDiff = Infinity;
+  for (const t of pool) {
+    const diff = Math.abs(dayjs(t).diff(od, 'day'));
+    if (diff < bestDiff || (diff === bestDiff && (best === null || t < best))) { best = t; bestDiff = diff; }
+  }
+  return best;
+};
+
+// 一個場次是否「有學員」（confirmed 或 waitlist），有的話不可直接刪除。
+const sessionHasStudents = (s) => (s.enrolledCount || 0) > 0 || (s.waitlistCount || 0) > 0;
+
+// 規劃重產：純計算、不寫入。預覽與執行共用，確保兩者一致。
+// 回傳：targetDates / createDates(需新建) / keptMatching(留用) / emptyToDelete(可刪)
+//        / orphanPlan[{ session, enrollments, members, confirmedCount, waitlistCount,
+//                       leaveCount, targetDate, willTransfer, reason }]
+const planRegenerate = async ({ db, course, existingSessions }) => {
+  const targetDates = computeTargetDates(course);
+  const targetSet = new Set(targetDates);
+
+  const emptyToDelete = [];
+  const keptMatching = [];
+  const orphanSessions = [];
+  existingSessions.forEach(s => {
+    if (!sessionHasStudents(s)) emptyToDelete.push(s);
+    else if (targetSet.has(s.date)) keptMatching.push(s);
+    else orphanSessions.push(s);
+  });
+
+  // 目標日期已被「留用場次」佔用的，不需新建。
+  const coveredDates = new Set(keptMatching.map(s => s.date));
+  const createDates = targetDates.filter(d => !coveredDates.has(d));
+
+  // 模擬各目標場次的 confirmed 佔用，逐一規劃孤兒轉移（與執行同序：依日期）。
+  const maxStudents = course.maxStudents || 0;
+  const targetEnrolled = {}; // date -> 目前 confirmed 數
+  targetDates.forEach(d => { targetEnrolled[d] = 0; });
+  keptMatching.forEach(s => { targetEnrolled[s.date] = s.enrolledCount || 0; });
+
+  const orphanPlan = [];
+  const sortedOrphans = [...orphanSessions].sort((a, b) => (a.date < b.date ? -1 : 1));
+  for (const s of sortedOrphans) {
+    const enrollSnap = await db.collection(ENROLLMENT_COLLECTION)
+      .where('sessionId', '==', s.id).get();
+    const enrollments = enrollSnap.docs
+      .map(d => ({ ref: d.ref, ...d.data() }))
+      .filter(e => ['confirmed', 'waitlist', 'leave'].includes(e.status));
+    const confirmedCount = enrollments.filter(e => e.status === 'confirmed').length;
+    const waitlistCount  = enrollments.filter(e => e.status === 'waitlist').length;
+    const leaveCount     = enrollments.filter(e => e.status === 'leave').length;
+    const members = enrollments.map(e => e.memberName).filter(Boolean);
+
+    const targetDate = pickNearestDate(s.date, targetDates);
+    let willTransfer = false, reason = '';
+    if (!targetDate) {
+      reason = '新課表無任何場次';
+    } else if ((targetEnrolled[targetDate] || 0) + confirmedCount > maxStudents) {
+      reason = '最接近場次已額滿，保留原場次';
+    } else {
+      willTransfer = true;
+      targetEnrolled[targetDate] += confirmedCount; // 佔用名額，供後續孤兒判斷
+    }
+
+    orphanPlan.push({
+      session: s, enrollments, members,
+      confirmedCount, waitlistCount, leaveCount,
+      targetDate, willTransfer, reason,
+    });
+  }
+
+  return { targetDates, createDates, keptMatching, emptyToDelete, orphanPlan, targetEnrolled };
+};
+
+const buildSession = (course, courseId, gymId, staffId, date, now) => ({
+  id: uuidv4(),
+  courseId,
+  gymId: gymId || null,
+  courseName: course.name,
+  tags: course.tags || [],
+  date,
+  startTime: course.startTime || '',
+  endTime: course.endTime || '',
+  instructor: course.instructor || '',
+  maxStudents: course.maxStudents,
+  enrolledCount: 0,
+  waitlistCount: 0,
+  status: 'scheduled',
+  createdBy: staffId,
+  notes: '',
+  createdAt: now,
+  updatedAt: now,
+});
+
+// 把孤兒清單整理成前端要的簡潔格式。
+const orphanSummary = (orphanPlan) => orphanPlan.map(o => ({
+  sessionId: o.session.id,
+  date: o.session.date,
+  startTime: o.session.startTime,
+  endTime: o.session.endTime,
+  confirmedCount: o.confirmedCount,
+  waitlistCount: o.waitlistCount,
+  leaveCount: o.leaveCount,
+  members: o.members,
+  targetDate: o.targetDate,
+  willTransfer: o.willTransfer,
+  reason: o.reason,
+}));
+
+const createWeeklySessions = async ({ courseId, gymId, staffId, confirm = false }) => {
   const db = getDb();
   const courseDoc = await db.collection(COURSE_COLLECTION).doc(courseId).get();
   if (!courseDoc.exists) throw { code: 'COURSE_NOT_FOUND' };
@@ -125,72 +250,127 @@ const createWeeklySessions = async ({ courseId, gymId, staffId }) => {
     throw { code: 'MISSING_COURSE_INFO', message: '課程需設定起訖日期與上課星期' };
   }
 
-  // 先刪除現有場次（無學員的）
   const existingSnap = await db.collection(SESSION_COLLECTION)
     .where('courseId', '==', courseId).get();
-  const deleteBatch = db.batch();
-  let skipped = 0;
-  existingSnap.docs.forEach(doc => {
-    if ((doc.data().enrolledCount || 0) === 0) {
-      deleteBatch.delete(doc.ref);
-    } else {
-      skipped++;
-    }
-  });
-  if (existingSnap.size > 0) await deleteBatch.commit();
-  if (skipped > 0) console.log(`⚠️ 跳過 ${skipped} 個已有學員的場次`);
+  const existingSessions = existingSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-  const sessions = [];
-  let current = dayjs(course.startDate);
-  const end = dayjs(course.endDate);
+  const plan = await planRegenerate({ db, course, existingSessions });
+  const orphans = plan.orphanPlan.filter(o => o.confirmedCount + o.waitlistCount + o.leaveCount > 0);
+
+  // ── 預覽：不寫入，回傳將建立／刪除／孤兒清單供員工確認 ──
+  if (!confirm) {
+    return {
+      preview: true,
+      willCreate: plan.createDates.length,
+      willKeep: plan.keptMatching.length,
+      willDelete: plan.emptyToDelete.length,
+      orphans: orphanSummary(orphans),
+      message: orphans.length
+        ? `偵測到 ${orphans.length} 個已有學員、但不在新課表的場次`
+        : '無孤兒場次，可直接重新產生',
+    };
+  }
+
+  // ── 執行：刪空場次 → 建新場次 → 轉移孤兒報名 ──
   const now = new Date();
 
-  while (current.isBefore(end) || current.isSame(end, 'day')) {
-    if (course.weekdays.includes(current.day())) {
-      const id = uuidv4();
-      const session = {
-        id,
-        courseId,
-        gymId: gymId || null,
-        courseName: course.name,
-        tags: course.tags || [],
-        date: current.format('YYYY-MM-DD'),
+  // 1) 刪除無學員的舊場次
+  if (plan.emptyToDelete.length) {
+    const delBatch = db.batch();
+    plan.emptyToDelete.forEach(s => delBatch.delete(db.collection(SESSION_COLLECTION).doc(s.id)));
+    await delBatch.commit();
+  }
+
+  // 2) 建立缺少的目標場次（已留用的日期不重建）
+  const created = plan.createDates.map(d => buildSession(course, courseId, gymId, staffId, d, now));
+  const BATCH_SIZE = 400;
+  for (let i = 0; i < created.length; i += BATCH_SIZE) {
+    const chunk = created.slice(i, i + BATCH_SIZE);
+    const batch = db.batch();
+    chunk.forEach(s => batch.set(db.collection(SESSION_COLLECTION).doc(s.id), s));
+    await batch.commit();
+  }
+
+  // 目標日期 → 場次 id（留用 + 新建），供孤兒轉入
+  const sessionIdByDate = {};
+  plan.keptMatching.forEach(s => { sessionIdByDate[s.date] = s.id; });
+  created.forEach(s => { sessionIdByDate[s.date] = s.id; });
+  // 目標場次的累計人數（轉入後一次寫回）
+  const targetCounts = {};
+  plan.targetDates.forEach(d => { targetCounts[d] = { enrolled: 0, waitlist: 0 }; });
+  plan.keptMatching.forEach(s => { targetCounts[s.date] = { enrolled: s.enrolledCount || 0, waitlist: s.waitlistCount || 0 }; });
+
+  // 3) 轉移孤兒報名
+  const transferred = [];
+  const keptOrphans = [];
+  const touchedDates = new Set(); // 僅轉入過的目標場次需回寫人數
+  for (const o of plan.orphanPlan) {
+    if (!o.willTransfer) {
+      if (o.confirmedCount + o.waitlistCount + o.leaveCount > 0) {
+        keptOrphans.push({ date: o.session.date, members: o.members, reason: o.reason });
+      }
+      continue;
+    }
+    const targetDate = o.targetDate;
+    const targetId = sessionIdByDate[targetDate];
+    const tc = targetCounts[targetDate];
+    const gymAccessStart = dayjs(targetDate).subtract(course.gymAccessDaysBefore || 0, 'day').format('YYYY-MM-DD');
+    const gymAccessEnd   = dayjs(targetDate).add(course.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD');
+
+    let waitSeq = tc.waitlist;
+    const moveBatch = db.batch();
+    o.enrollments.forEach(e => {
+      const upd = {
+        sessionId: targetId,
+        date: targetDate,
         startTime: course.startTime || '',
         endTime: course.endTime || '',
-        instructor: course.instructor || '',
-        maxStudents: course.maxStudents,
-        enrolledCount: 0,
-        waitlistCount: 0,
-        status: 'scheduled',
-        createdBy: staffId,
-        notes: '',
-        createdAt: now,
+        gymAccessStart, gymAccessEnd,
+        transferredFrom: o.session.date,
+        transferredAt: now,
         updatedAt: now,
       };
-      sessions.push(session);
-    }
-    current = current.add(1, 'day');
+      if (e.status === 'waitlist') upd.waitlistPosition = ++waitSeq;
+      moveBatch.update(e.ref, upd);
+    });
+    // 孤兒場次已清空 → 刪除
+    moveBatch.delete(db.collection(SESSION_COLLECTION).doc(o.session.id));
+    await moveBatch.commit();
+
+    tc.enrolled += o.confirmedCount;
+    tc.waitlist = waitSeq;
+    touchedDates.add(targetDate);
+    transferred.push({ from: o.session.date, to: targetDate, count: o.enrollments.length, members: o.members });
   }
 
-  // 分批寫入（每批 400 筆）
-  const BATCH_SIZE = 400;
-  for (let i = 0; i < sessions.length; i += BATCH_SIZE) {
-    const chunk = sessions.slice(i, i + BATCH_SIZE);
+  // 4) 寫回「有轉入」的目標場次人數（其餘場次人數不變，免動）
+  const touched = [...touchedDates];
+  for (let i = 0; i < touched.length; i += BATCH_SIZE) {
+    const chunk = touched.slice(i, i + BATCH_SIZE);
     const batch = db.batch();
-    chunk.forEach(s => {
-      batch.set(db.collection(SESSION_COLLECTION).doc(s.id), s);
+    chunk.forEach(date => {
+      const tc = targetCounts[date];
+      batch.update(db.collection(SESSION_COLLECTION).doc(sessionIdByDate[date]),
+        { enrolledCount: tc.enrolled, waitlistCount: tc.waitlist, updatedAt: now });
     });
     await batch.commit();
-    console.log(`✅ 寫入場次 ${i+1}~${Math.min(i+BATCH_SIZE, sessions.length)}`);
   }
 
-  // 更新課程總堂數
-  await db.collection(COURSE_COLLECTION).doc(courseId).update({
-    totalSessions: sessions.length,
-    updatedAt: now,
-  });
+  // 5) 更新課程總堂數（目標場次 + 保留的孤兒）
+  const totalSessions = plan.targetDates.length + keptOrphans.length;
+  await db.collection(COURSE_COLLECTION).doc(courseId).update({ totalSessions, updatedAt: now });
 
-  return { sessions, count: sessions.length };
+  return {
+    preview: false,
+    count: created.length,
+    kept: plan.keptMatching.length,
+    deleted: plan.emptyToDelete.length,
+    transferred,
+    keptOrphans,
+    message: `已產生 ${created.length} 個場次`
+      + (transferred.length ? `，轉移 ${transferred.length} 個孤兒場次報名` : '')
+      + (keptOrphans.length ? `，${keptOrphans.length} 個因額滿保留原場次` : ''),
+  };
 };
 
 // ── 取消/修改單一場次 ─────────────────────────────────────────────

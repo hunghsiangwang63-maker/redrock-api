@@ -326,8 +326,9 @@ router.post('/:courseId/generate-sessions',
         courseId: req.params.courseId,
         gymId: req.staff.gymId || req.body.gymId || null,
         staffId: req.staff.id,
+        confirm: req.body.confirm === true,
       });
-      res.status(201).json({ ...result, message: `已建立 ${result.count} 個場次` });
+      res.status(result.preview ? 200 : 201).json(result);
     } catch (err) {
       if (err.code) return res.status(400).json(err);
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

@@ -54,7 +54,7 @@ router.get('/', authenticate, async (req, res) => {
 
     // 3. 票券展延/退費申請
     try {
-      const snap = await db.collection('passAdjustmentRequests').where('status', '==', 'pending').get();
+      const snap = await db.collection('passRequests').where('status', '==', 'pending').get();
       snap.forEach(d => {
         const r = d.data();
         if (gymId && r.gymId && r.gymId !== gymId) return;
@@ -64,11 +64,11 @@ router.get('/', authenticate, async (req, res) => {
                : r.type === 'refund' ? '定期票退費申請'
                : r.type === 'transfer' ? '票券轉讓申請'
                : r.type === 'course_practice_deferral' ? '課程練習期遞延申請' : '票券調整申請',
-          desc: `${r.memberName} — ${r.reason || ''}`,
+          desc: `${r.memberName} — ${r.reasonLabel || r.reason || ''}`,
           date: r.createdAt?._seconds ? new Date(r.createdAt._seconds*1000).toISOString().slice(0,10) : today,
           createdAt: r.createdAt?._seconds || 0,
           gymId: r.gymId, memberName: r.memberName,
-          link: '/staff/passes?tab=requests',
+          link: '/staff/pending-tasks',
           record: { id: d.id, ...r },
         });
       });

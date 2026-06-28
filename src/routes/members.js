@@ -101,6 +101,66 @@ router.post('/my/children',
   }
 );
 
+// ── GET /members/reports/active-passes - 持有效定期票人員（分票種）──
+router.get('/reports/active-passes', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const today = dayjs().format('YYYY-MM-DD');
+    const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
+    const snap = await db.collection(COLLECTIONS.MEMBER_PASSES).where('status', '==', 'active').get();
+    let passes = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => (p.endDate || '') >= today);
+    if (gymId) passes = passes.filter(p => p.scope === 'all' || p.gymId === gymId || p.targetGymId === gymId);
+    const groups = {};
+    passes.forEach(p => {
+      const key = p.passTypeId || p.passTypeName || 'other';
+      if (!groups[key]) groups[key] = { passTypeId: p.passTypeId || null, passTypeName: p.passTypeName || '定期票', members: [] };
+      groups[key].members.push({ memberId: p.memberId, memberName: p.memberName || '', startDate: p.startDate || null, endDate: p.endDate || null });
+    });
+    const passTypes = Object.values(groups)
+      .map(g => ({ ...g, count: g.members.length, members: g.members.sort((a, b) => (a.endDate || '') < (b.endDate || '') ? -1 : 1) }))
+      .sort((a, b) => b.count - a.count);
+    res.json({ passTypes, total: passes.length });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /members/reports/active-course-students - 課程效期內學員（分課程）──
+router.get('/reports/active-course-students', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const today = dayjs().format('YYYY-MM-DD');
+    const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
+    const courseSnap = await db.collection('courses').get();
+    let courses = courseSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.status !== 'cancelled');
+    if (gymId) courses = courses.filter(c => c.gymId === gymId);
+    const practiceEndOf = (c) => c.unlimitedPracticeEnd
+      || (c.endDate ? dayjs(c.endDate).add(c.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : null);
+    courses = courses.filter(c => {
+      const ps = c.unlimitedPracticeStart || c.startDate;
+      const pe = practiceEndOf(c);
+      return ps && pe && ps <= today && today <= pe;
+    });
+    const out = [];
+    for (const c of courses) {
+      const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', c.id).get();
+      const seen = new Map();
+      enrollSnap.docs.forEach(d => {
+        const e = d.data();
+        if (e.status !== 'confirmed' || e.pauseStatus === 'paused') return;
+        if (!seen.has(e.memberId)) seen.set(e.memberId, { memberId: e.memberId, memberName: e.memberName || '' });
+      });
+      const members = [...seen.values()];
+      if (members.length) {
+        out.push({
+          courseId: c.id, courseName: c.name, gymId: c.gymId, practiceEnd: practiceEndOf(c),
+          count: members.length, members: members.sort((a, b) => (a.memberName || '').localeCompare(b.memberName || '')),
+        });
+      }
+    }
+    out.sort((a, b) => b.count - a.count);
+    res.json({ courses: out, total: out.reduce((s, c) => s + c.count, 0) });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /members/:id - 取得單一會員 ─────────────────────────────
 router.get('/:id',
   authenticate,

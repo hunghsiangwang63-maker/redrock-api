@@ -440,17 +440,23 @@ router.get('/history',
       const gymId = isMemberToken ? null : (req.staff?.role === 'super_admin' ? req.query.gymId : req.staff?.gymId);
       const { ticketId, ticketType, dateFrom, dateTo, limit = 50 } = req.query;
 
+      // 避免複合索引：查詢端只放單一條件（有日期→日期範圍；否則→memberId/gymId 等值），其餘記憶體過濾
       let ref = db.collection(COLLECTIONS.CHECK_INS);
-      if (gymId) ref = ref.where('gymId', '==', gymId);
-      if (scopedMemberId) ref = ref.where('memberId', '==', scopedMemberId);
-      if (ticketId) ref = ref.where('ticketId', '==', ticketId);
-      if (ticketType) ref = ref.where('ticketType', '==', ticketType);
-      if (dateFrom) ref = ref.where('checkedInAt', '>=', new Date(dateFrom));
-      if (dateTo) ref = ref.where('checkedInAt', '<=', new Date(dateTo));
-
-      // 避免複合索引錯誤：client-side sort
-      const snapshot = await ref.limit(parseInt(limit) * 3).get();
-      const checkIns = snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
+      if (dateFrom || dateTo) {
+        if (dateFrom) ref = ref.where('checkedInAt', '>=', new Date(dateFrom));
+        if (dateTo) ref = ref.where('checkedInAt', '<=', new Date(dateTo));
+      } else if (scopedMemberId) {
+        ref = ref.where('memberId', '==', scopedMemberId);
+      } else if (gymId) {
+        ref = ref.where('gymId', '==', gymId);
+      }
+      const snapshot = await ref.limit(2000).get();
+      let checkIns = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (gymId) checkIns = checkIns.filter(c => c.gymId === gymId);
+      if (scopedMemberId) checkIns = checkIns.filter(c => c.memberId === scopedMemberId);
+      if (ticketId) checkIns = checkIns.filter(c => c.ticketId === ticketId);
+      if (ticketType) checkIns = checkIns.filter(c => c.ticketType === ticketType);
+      checkIns = checkIns
         .sort((a, b) => (b.checkedInAt?._seconds||0) - (a.checkedInAt?._seconds||0))
         .slice(0, parseInt(limit));
       res.json({ checkIns, count: checkIns.length });

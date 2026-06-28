@@ -324,9 +324,9 @@ router.get('/today-course-students', authenticate, async (req, res) => {
     }
     if (enrollments.length === 0) return res.json({ students: [] });
 
-    // 今日已入場名單（用於標註禁止重複點選）
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    // 今日已入場名單（用於標註禁止重複點選）；以台灣時間午夜為界
+    const todayStr0 = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    const todayStart = new Date(todayStr0 + 'T00:00:00+08:00');
     const checkedInSnap = await db.collection('checkIns')
       .where('gymId', '==', gymId)
       .where('isCancelled', '==', false)
@@ -366,8 +366,9 @@ router.get('/today',
     try {
       const { getDb } = require('../config/firebase');
       const db = getDb();
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      // 「今日」以台灣時間(UTC+8)午夜為界（伺服器為 UTC，不可用 setHours 否則跨日不清空）
+      const todayStr = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+      const today = new Date(todayStr + 'T00:00:00+08:00');
 
       // 個人帳號登入(非館別電腦值班、非管理層)完全看不到今日統計，僅館別電腦值班/各館管理員/總管理員可見
       const isPersonalLogin = req.staff.type === 'staff';
@@ -480,9 +481,9 @@ router.post('/phone', authenticate, async (req, res) => {
     const member = memberDoc.data();
     const memberName = childName ? `${member.name}（${childName}）` : member.name;
 
-    // 同日同館只能入場一次（用isCancelled而非status，才能同時擋下QR入場與電話入場）
-    const today = new Date();
-    today.setHours(0,0,0,0);
+    // 同日同館只能入場一次（用isCancelled而非status，才能同時擋下QR入場與電話入場）；台灣時間午夜為界
+    const todayStr = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    const today = new Date(todayStr + 'T00:00:00+08:00');
     const existing = await db.collection('checkIns')
       .where('memberId', '==', memberId)
       .where('gymId', '==', gymId)

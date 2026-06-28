@@ -17,7 +17,7 @@ app.use(cors({
     'http://localhost:3000', 'http://localhost:5173', 'http://localhost:5174',
     'https://app.redrocktaiwan.com', 'https://staff.redrocktaiwan.com',
     'https://redrock-member.web.app', 'https://redrock-staff.web.app',
-    'https://redrock-web-three.vercel.app', 'https://redrock-dev-a35c1.web.app', 'https://redrock-dev-a35c1.firebaseapp.com',
+    'https://redrock-dev-a35c1.web.app', 'https://redrock-dev-a35c1.firebaseapp.com',
   ],
   credentials: true,
 }));

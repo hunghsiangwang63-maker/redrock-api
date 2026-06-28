@@ -397,8 +397,8 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
     await db.collection(MAKEUP_COLLECTION).doc(makeupId).set(makeup);
   }
 
-  // 自動遞補候補者
-  await promoteWaitlist(enrollment.sessionId);
+  // 自動遞補候補者（遞補失敗不中斷請假）
+  try { await promoteWaitlist(enrollment.sessionId); } catch (err) { console.error('promoteWaitlist 失敗', err.message); }
 
   return { makeup, message: makeup ? '請假成功，補課資格已產生' : '請假成功' };
 };
@@ -406,16 +406,16 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
 // ── 自動遞補候補 ──────────────────────────────────────────────────
 const promoteWaitlist = async (sessionId) => {
   const db = getDb();
+  // 注意：不用 orderBy 以免需要 (sessionId,status,waitlistPosition) 複合索引；改在記憶體排序
   const waitlistSnap = await db.collection(ENROLLMENT_COLLECTION)
     .where('sessionId', '==', sessionId)
     .where('status', '==', 'waitlist')
-    .orderBy('waitlistPosition', 'asc')
-    .limit(1)
     .get();
 
   if (waitlistSnap.empty) return null;
 
-  const first = waitlistSnap.docs[0];
+  const first = waitlistSnap.docs
+    .sort((a, b) => (a.data().waitlistPosition || 0) - (b.data().waitlistPosition || 0))[0];
   await first.ref.update({
     status: 'confirmed',
     waitlistPosition: null,
@@ -452,8 +452,8 @@ const cancelCourseEnrollments = async ({ courseId, memberId, reason }) => {
     const sDoc = await db.collection(SESSION_COLLECTION).doc(e.sessionId).get();
     if (sDoc.exists) {
       await sDoc.ref.update({ enrolledCount: Math.max(0, (sDoc.data().enrolledCount || 0) - 1), updatedAt: now });
-      // 僅未來場次才遞補候補
-      if ((sDoc.data().date || '') >= today) await promoteWaitlist(e.sessionId);
+      // 僅未來場次才遞補候補（遞補失敗不中斷退費）
+      if ((sDoc.data().date || '') >= today) { try { await promoteWaitlist(e.sessionId); } catch (err) { console.error('promoteWaitlist 失敗', err.message); } }
     }
     cancelled++;
   }

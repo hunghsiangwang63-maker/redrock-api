@@ -60,9 +60,10 @@ router.get('/', authenticate, async (req, res) => {
         if (gymId && r.gymId && r.gymId !== gymId) return;
         tasks.push({
           id: `passAdj_${d.id}`, type: 'pass_adjustment', targetId: d.id,
-          title: r.adjustmentType === 'extension' ? '定期票展延申請'
-               : r.adjustmentType === 'refund' ? '定期票退費申請'
-               : r.adjustmentType === 'transfer' ? '票券轉讓申請' : '票券調整申請',
+          title: r.type === 'extension' ? '定期票展延申請'
+               : r.type === 'refund' ? '定期票退費申請'
+               : r.type === 'transfer' ? '票券轉讓申請'
+               : r.type === 'course_practice_deferral' ? '課程練習期遞延申請' : '票券調整申請',
           desc: `${r.memberName} — ${r.reason || ''}`,
           date: r.createdAt?._seconds ? new Date(r.createdAt._seconds*1000).toISOString().slice(0,10) : today,
           createdAt: r.createdAt?._seconds || 0,

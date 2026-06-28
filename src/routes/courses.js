@@ -442,13 +442,17 @@ router.delete('/:courseId/permanent',
       const db = require('../config/firebase').getDb();
       const courseId = req.params.courseId;
 
-      // 防呆：尚有有效報名（confirmed/leave/waitlist）不可硬刪，須先「取消課程」並處理退費
-      const activeSnap = await db.collection('courseEnrollments')
-        .where('courseId', '==', courseId)
-        .where('status', 'in', ['confirmed', 'leave', 'waitlist'])
-        .get();
-      if (!activeSnap.empty) {
-        return res.status(400).json({ error: 'HAS_ENROLLMENTS', message: `尚有 ${activeSnap.size} 筆有效報名，請先「取消課程」並處理退費後再刪除` });
+      // 防呆：僅「開放中」課程要求先取消；已取消的課程可直接永久刪除
+      const courseSnap = await db.collection('courses').doc(courseId).get();
+      const isCancelled = courseSnap.exists && courseSnap.data().status === 'cancelled';
+      if (!isCancelled) {
+        const activeSnap = await db.collection('courseEnrollments')
+          .where('courseId', '==', courseId)
+          .where('status', 'in', ['confirmed', 'leave', 'waitlist'])
+          .get();
+        if (!activeSnap.empty) {
+          return res.status(400).json({ error: 'HAS_ENROLLMENTS', message: `尚有 ${activeSnap.size} 筆有效報名，請先「取消課程」並處理退費後再刪除` });
+        }
       }
 
       // 級聯刪除：場次、所有報名(含已取消)、補課額度、調整申請，最後刪課程本身

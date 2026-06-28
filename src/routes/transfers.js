@@ -14,38 +14,56 @@ const { v4: uuidv4 } = require('uuid');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
-// POST /transfers/upload - 會員上傳截圖
+// POST /transfers/upload - 會員提交轉帳待確認（截圖或填寫資料皆可，擇一即可）
 router.post('/upload', authenticateAny, upload.single('screenshot'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'NO_FILE', message: '請上傳截圖' });
     const db = getDb();
-    const storage = getStorage();
     const id = uuidv4();
-    const { memberName, gymId, enrollmentId, courseId, courseName, amount, paymentMethod } = req.body;
+    const {
+      memberName, gymId, enrollmentId, courseId, courseName, amount,
+      orderType, refId, orderName, bankLastFive, paymentDate,
+    } = req.body;
     // 會員 token 一律用自己的 id，避免偽造他人 memberId
     const memberId = req.member?.id || req.body.memberId;
 
-    // 上傳到 Firebase Storage
-    const bucket = storage.bucket();
-    const fileName = `transfers/${id}_${Date.now()}.jpg`;
-    const file = bucket.file(fileName);
-    await file.save(req.file.buffer, { metadata: { contentType: req.file.mimetype } });
-    const [url] = await file.getSignedUrl({ action: 'read', expires: '2030-01-01' });
+    // 截圖或填寫資料(末五碼)至少其一
+    const last5 = (bankLastFive || '').trim();
+    if (!req.file && !last5) {
+      return res.status(400).json({ error: 'NO_PROOF', message: '請上傳轉帳截圖，或填寫帳號末五碼' });
+    }
+
+    // 有截圖才上傳到 Firebase Storage
+    let url = null, fileName = null;
+    if (req.file) {
+      const storage = getStorage();
+      const bucket = storage.bucket();
+      fileName = `transfers/${id}_${Date.now()}.jpg`;
+      const file = bucket.file(fileName);
+      await file.save(req.file.buffer, { metadata: { contentType: req.file.mimetype } });
+      [url] = await file.getSignedUrl({ action: 'read', expires: '2030-01-01' });
+    }
 
     // 建立轉帳紀錄
     const now = new Date();
     const transfer = {
       id, memberId, memberName: memberName || '',
-      gymId, enrollmentId: enrollmentId || null,
+      gymId,
+      // 訂單型別（course/experience/...）；相容舊欄位 enrollmentId/courseId
+      orderType: orderType || (enrollmentId ? 'course' : null),
+      refId: refId || enrollmentId || null,
+      orderName: orderName || courseName || '',
+      enrollmentId: enrollmentId || null,
       courseId: courseId || null, courseName: courseName || '',
       amount: parseInt(amount) || 0,
-      paymentMethod: paymentMethod || 'cash',
-      screenshotUrl: url, screenshotPath: fileName,
+      paymentMethod: 'transfer',
+      screenshotUrl: url, screenshotPath: fileName,   // 無截圖則為 null
+      bankLastFive: last5 || null,
+      paymentDate: paymentDate || null,
       status: 'pending',
       submittedAt: now, createdAt: now, updatedAt: now,
     };
     await db.collection('transferRecords').doc(id).set(transfer);
-    res.status(201).json({ transfer, message: '截圖已上傳，等待工作人員確認' });
+    res.status(201).json({ transfer, message: '已提交，等待工作人員確認收款' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

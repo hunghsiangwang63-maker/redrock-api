@@ -215,6 +215,26 @@ router.get('/', authenticate, async (req, res) => {
       });
     } catch(e) { console.error('experience_transfer tasks error:', e.message); }
 
+    // 9b. 轉帳待確認（transferRecords：截圖或填末五碼皆可，單一來源）
+    try {
+      let ref = db.collection('transferRecords').where('status', '==', 'pending');
+      if (gymId) ref = ref.where('gymId', '==', gymId);
+      const snap = await ref.get();
+      snap.docs.forEach(d => {
+        const t = d.data();
+        tasks.push({
+          id: `transfer_${d.id}`, type: 'transfer_confirm', targetId: d.id,
+          title: '轉帳待確認收款',
+          desc: `${t.memberName || ''} — ${t.orderName || t.courseName || ''}${t.bankLastFive ? `（末五碼 ${t.bankLastFive}）` : ''}`,
+          date: t.paymentDate || (t.createdAt?._seconds ? new Date(t.createdAt._seconds*1000).toISOString().slice(0,10) : today),
+          createdAt: t.createdAt?._seconds || 0,
+          gymId: t.gymId, memberName: t.memberName, amount: t.amount,
+          link: '/staff/pending-tasks',
+          record: { id: d.id, ...t },
+        });
+      });
+    } catch(e) { console.error('transfer_confirm tasks error:', e.message); }
+
     // 10. 單次入場券待審核（票券審核）
     try {
       let ref = db.collection('singleEntryTickets').where('status', '==', 'pending_approval');

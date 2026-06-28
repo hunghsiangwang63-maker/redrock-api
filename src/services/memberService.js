@@ -177,24 +177,25 @@ const getMemberByQRCode = async (qrCodeId) => {
 // ── 透過電話取得會員 ─────────────────────────────────────────────
 const getMemberByPhone = async (phone) => {
   const db = getDb();
+  let docs;
   // 支援輸入末四碼
   if (phone.length === 4) {
     const snapshot = await db.collection(COLLECTIONS.MEMBERS)
       .orderBy('createdAt', 'desc')
       .limit(500)
       .get();
-    const match = snapshot.docs.find(d => d.data().phone?.endsWith(phone));
-    if (!match) throw { code: 'MEMBER_NOT_FOUND', message: '查無此電話' };
-    return { id: match.id, ...match.data() };
+    docs = snapshot.docs.filter(d => d.data().phone?.endsWith(phone));
+  } else {
+    const snapshot = await db.collection(COLLECTIONS.MEMBERS)
+      .where('phone', '==', phone)
+      .get();
+    docs = snapshot.docs;
   }
-
-  const snapshot = await db.collection(COLLECTIONS.MEMBERS)
-    .where('phone', '==', phone)
-    .limit(1)
-    .get();
-  if (snapshot.empty) throw { code: 'MEMBER_NOT_FOUND', message: '查無此電話' };
-  const doc = snapshot.docs[0];
-  return { id: doc.id, ...doc.data() };
+  if (!docs.length) throw { code: 'MEMBER_NOT_FOUND', message: '查無此電話' };
+  // 親子共用電話：子帳號繼承家長電話，一支電話可能對應多筆。
+  // 優先回傳「家長帳號」（非子帳號），避免誤解析到子會員（原 limit(1) 無排序不確定）。
+  const pick = docs.find(d => { const m = d.data(); return !m.isChildAccount && !m.parentMemberId; }) || docs[0];
+  return { id: pick.id, ...pick.data() };
 };
 
 // ── 更新封鎖狀態 ──────────────────────────────────────────────────

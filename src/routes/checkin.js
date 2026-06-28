@@ -30,7 +30,7 @@ router.post('/verify',
       const effectiveGymId = req.staff?.role === 'super_admin' ? gymId : (req.staff?.gymId || gymId);
 
       // 會員自助驗票一律以登入身分(token)為準，不用電話反查，
-      // 避免家長與子會員共用同一支電話時被誤判為對方（getMemberByPhone 無排序，limit(1)）
+      // 避免家長與子會員共用同一支電話時被誤判為對方（電話非唯一，反查不可靠）
       // 親子帳號：家長可帶 targetMemberId 為「自己的子會員」驗票
       let member;
       if (req.member) {

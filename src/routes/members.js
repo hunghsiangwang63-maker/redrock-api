@@ -151,7 +151,9 @@ router.get('/reports/active-course-students', authenticate, async (req, res) => 
       const members = [...seen.values()];
       if (members.length) {
         out.push({
-          courseId: c.id, courseName: c.name, gymId: c.gymId, practiceEnd: practiceEndOf(c),
+          courseId: c.id, courseName: c.name, gymId: c.gymId,
+          practiceStart: c.unlimitedPracticeStart || c.startDate || null,
+          practiceEnd: practiceEndOf(c),
           count: members.length, members: members.sort((a, b) => (a.memberName || '').localeCompare(b.memberName || '')),
         });
       }

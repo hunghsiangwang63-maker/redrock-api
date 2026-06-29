@@ -11,25 +11,28 @@ const CLIENT_URL = process.env.CLIENT_URL || 'https://app.redrocktaiwan.com';
 /**
  * 核心發信函式
  */
-const sendEmail = async ({ to, subject, html, text }) => {
+const sendEmail = async ({ to, subject, html, text, attachments }) => {
   if (!RESEND_API_KEY) {
     console.warn('[Email] RESEND_API_KEY 未設定，跳過發信');
     return { skipped: true };
   }
   try {
+    const payload = {
+      from: `${FROM_NAME} <${FROM_EMAIL}>`,
+      to: Array.isArray(to) ? to : [to],
+      subject,
+      html,
+      text: text || subject,
+    };
+    // 附件：Resend 格式 [{ filename, content(base64 字串) }]
+    if (Array.isArray(attachments) && attachments.length) payload.attachments = attachments;
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${RESEND_API_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        from: `${FROM_NAME} <${FROM_EMAIL}>`,
-        to: Array.isArray(to) ? to : [to],
-        subject,
-        html,
-        text: text || subject,
-      }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || `Resend error ${res.status}`);

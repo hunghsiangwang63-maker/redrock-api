@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate, authenticateAny } = require('../middleware/auth');
-const { getDb } = require('../config/firebase');
+const { getDb, getStorage } = require('../config/firebase');
 const XLSX = require('xlsx');
+const emailService = require('../services/emailService');
 
 const COURSE_TYPES = [
   { id:'general',   label:'抱石體驗課程',          priceMap:{ 1:975, 2:875, 3:875, '4-5':825, '6-8':775, '9-12':775 } },
@@ -185,27 +186,8 @@ router.get('/download', authenticate, async (req, res) => {
 
 module.exports = router;
 
-// ── GET /experience-bookings/insurance-download - 下載保險名冊 XLS ──
-router.get('/insurance-download', authenticate, async (req, res) => {
-  try {
-    const db = getDb();
-    const { bookingId, gymId, from, to } = req.query;
-    const effectiveGymId = req.staff.role === 'super_admin' ? gymId : req.staff.gymId;
-
-    // 取得指定預約或日期範圍內的預約
-    let bookings = [];
-    if (bookingId) {
-      const doc = await db.collection('experienceBookings').doc(bookingId).get();
-      if (doc.exists) bookings = [{ id: doc.id, ...doc.data() }];
-    } else {
-      let ref = db.collection('experienceBookings').where('status', '!=', 'cancelled');
-      if (effectiveGymId) ref = ref.where('gymId', '==', effectiveGymId);
-      const snap = await ref.get();
-      bookings = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      if (from) bookings = bookings.filter(b => b.bookingDate >= from);
-      if (to)   bookings = bookings.filter(b => b.bookingDate <= to);
-    }
-
+// ── 保險名冊 XLS 產生（下載與一鍵寄送共用）──────────────────────
+function buildInsuranceXlsBuffer(bookings) {
     // 工具函式
     const parseRocBirthday = (bStr) => {
       // 輸入可能是 920110(6位) 或 0920110(7位)，統一轉為 Date
@@ -294,11 +276,102 @@ router.get('/insurance-download', authenticate, async (req, res) => {
     XLSX.utils.book_append_sheet(wb, ws1, '成人名冊（15歲以上）');
     XLSX.utils.book_append_sheet(wb, ws2, '未成年名冊（未滿15歲）');
 
+    return XLSX.write(wb, { type: 'buffer', bookType: 'xls' });
+}
+
+// ── GET /experience-bookings/insurance-download - 下載保險名冊 XLS ──
+router.get('/insurance-download', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const { bookingId, gymId, from, to } = req.query;
+    const effectiveGymId = req.staff.role === 'super_admin' ? gymId : req.staff.gymId;
+    let bookings = [];
+    if (bookingId) {
+      const doc = await db.collection('experienceBookings').doc(bookingId).get();
+      if (doc.exists) bookings = [{ id: doc.id, ...doc.data() }];
+    } else {
+      let ref = db.collection('experienceBookings').where('status', '!=', 'cancelled');
+      if (effectiveGymId) ref = ref.where('gymId', '==', effectiveGymId);
+      const snap = await ref.get();
+      bookings = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (from) bookings = bookings.filter(b => b.bookingDate >= from);
+      if (to)   bookings = bookings.filter(b => b.bookingDate <= to);
+    }
+    const buf = buildInsuranceXlsBuffer(bookings);
     const today = new Date(Date.now() + 8*3600000).toISOString().slice(0, 10).replace(/-/g, '');
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xls' });
     res.setHeader('Content-Type', 'application/vnd.ms-excel');
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(`旅平險名冊_${today}.xls`)}`);
     res.send(buf);
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── POST /experience-bookings/:id/send-insurance-email - 一鍵寄送單筆保險名冊 ──
+router.post('/:id/send-insurance-email', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('experienceBookings').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
+    const b = { id: doc.id, ...doc.data() };
+
+    const sdoc = await db.collection('systemSettings').doc('experienceCourses').get();
+    const settings = sdoc.exists ? sdoc.data() : {};
+    const to = (settings.insuranceRecipientEmail || '').trim();
+    if (!to) return res.status(400).json({ error: 'NO_RECIPIENT', message: '尚未設定保險名冊收件人 email（請至體驗課程設定填寫）' });
+
+    // 標題：紅石攀岩{館}{年}年{月}月{日}日{首位姓名}等{N}人保險名冊
+    const gymName = b.gymId === 'gym-hsinchu' ? '新竹館' : b.gymId === 'gym-shilin' ? '士林館' : '';
+    const [yy, mm, dd] = String(b.bookingDate || '').split('-');
+    const firstName = (b.participants && b.participants[0]?.name) || b.contactName || '';
+    const count = b.numParticipants || (b.participants || []).length || 0;
+    const title = `紅石攀岩${gymName}${yy || ''}年${mm ? parseInt(mm) : ''}月${dd ? parseInt(dd) : ''}日${firstName}等${count}人保險名冊`;
+
+    const tpl = settings.insuranceEmailTemplate || '{title}';
+    const body = tpl.replace(/{title}/g, title).replace(/{gym}/g, gymName)
+      .replace(/{date}/g, b.bookingDate || '').replace(/{name}/g, firstName).replace(/{count}/g, count);
+
+    const buf = buildInsuranceXlsBuffer([b]);
+    const fileName = `${title}.xls`;
+
+    const result = await emailService.sendEmail({
+      to, subject: title,
+      html: `<div style="font-family:sans-serif;white-space:pre-wrap;font-size:14px">${body}</div>`,
+      text: body,
+      attachments: [{ filename: fileName, content: buf.toString('base64') }],
+    });
+    if (result.error) return res.status(502).json({ error: 'EMAIL_FAILED', message: '寄送失敗：' + result.error });
+
+    // 上傳 Storage + 保存歷史紀錄
+    let fileUrl = null, filePath = null;
+    try {
+      const bucket = getStorage().bucket();
+      filePath = `insurance-rosters/${b.gymId}/${b.id}_${Date.now()}.xls`;
+      const f = bucket.file(filePath);
+      await f.save(buf, { metadata: { contentType: 'application/vnd.ms-excel' } });
+      [fileUrl] = await f.getSignedUrl({ action: 'read', expires: '2035-01-01' });
+    } catch (e) { console.error('insurance storage:', e.message); }
+
+    await db.collection('insuranceExports').add({
+      bookingId: b.id, gymId: b.gymId, courseType: b.courseType,
+      title, recipient: to, bookingDate: b.bookingDate, count, firstName,
+      fileName, filePath, fileUrl,
+      emailId: result.id || null, skipped: !!result.skipped,
+      sentBy: req.staff.id, sentByName: req.staff.name, createdAt: new Date(),
+    });
+
+    res.json({ success: true, title, message: result.skipped ? '已建立名冊並保存（Email 未設定 RESEND_API_KEY，未實際寄出）' : `已寄送至 ${to}` });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /experience-bookings/insurance-history - 歷史保險名冊（分館）──
+router.get('/insurance-history', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
+    const snap = await db.collection('insuranceExports').get();
+    let records = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (gymId) records = records.filter(r => r.gymId === gymId);
+    records.sort((a, b) => (b.createdAt?._seconds || 0) - (a.createdAt?._seconds || 0));
+    res.json({ records: records.slice(0, 200) });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -334,14 +407,17 @@ function defaultSettings() {
       shilin:  { bankName: '富邦銀行(012)', branch: '竹北分行', account: '746102003014', accountName: '紅石攀岩有限公司' },
     },
     courseTypes: [
-      { id:'general',    label:'抱石體驗課程',           active:true,
+      { id:'general',    label:'抱石體驗課程',           active:true, needsInsurance:true,
         pricingType:'tiered',
         tiers:[{min:1,max:1,price:975},{min:2,max:3,price:875},{min:4,max:5,price:825},{min:6,max:12,price:775}],
         durationNote:'1~2小時' },
-      { id:'children',   label:'小蜘蛛人（兒童）',         active:true, pricingType:'fixed', price:600, durationNote:'1小時' },
-      { id:'skill_fri',  label:'抱石技巧班（週五20:00）',   active:true, pricingType:'fixed', price:1075, durationNote:'2小時' },
-      { id:'skill_sun14',label:'抱石技巧班（週日14:00）',   active:true, pricingType:'fixed', price:900,  durationNote:'1.5小時' },
+      { id:'children',   label:'小蜘蛛人（兒童）',         active:true, needsInsurance:false, pricingType:'fixed', price:600, durationNote:'1小時' },
+      { id:'skill_fri',  label:'抱石技巧班（週五20:00）',   active:true, needsInsurance:true, pricingType:'fixed', price:1075, durationNote:'2小時' },
+      { id:'skill_sun14',label:'抱石技巧班（週日14:00）',   active:true, needsInsurance:true, pricingType:'fixed', price:900,  durationNote:'1.5小時' },
     ],
+    // 保險名冊一鍵寄送設定
+    insuranceRecipientEmail: '',   // 全館共用收件人 email
+    insuranceEmailTemplate: '{title}', // 信件內容公版（可用 {title} {gym} {date} {name} {count}）
     hsinchu: { bankInfo: null }, // 新竹館可覆蓋匯款帳號
   };
 }

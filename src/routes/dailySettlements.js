@@ -48,10 +48,15 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
 
     let entryIncome = 0, shoeRentalIncome = 0;
     let cashEntry = 0, linePayEntry = 0, jkoEntry = 0, twPayEntry = 0;
+    const entryByType = {};   // 入場收入細項（依入場類型）
+    const ENTRY_LABEL = { single_ticket:'單次購票', single_entry_ticket:'單次入場券', pass:'定期票入場', vip:'VIP', course_access:'課程學員', discount_card:'優惠折扣券', black_card:'黑卡', child_free:'兒童免費', student_free:'學生免費', experience:'體驗' };
     checkinSnap.docs.forEach(d => {
       const data = d.data();
       const amount = data.amountPaid || 0;
-      entryIncome += data.entryFee ?? amount;
+      const entryAmt = data.entryFee ?? amount;
+      entryIncome += entryAmt;
+      const et = data.entryType || 'other';
+      entryByType[et] = (entryByType[et] || 0) + entryAmt;
       shoeRentalIncome += data.shoesPrice || 0;
       if (data.paymentMethod === 'cash') cashEntry += amount;
       else if (data.paymentMethod === 'linepay') linePayEntry += amount;
@@ -84,6 +89,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
 
     let courseIncome = 0, cashCourse = 0;
     let passIncome = 0, cashPass = 0;
+    const passByType = {};   // 定期票收入細項（依票種，從 notes「定期票購買：xxx」取名）
     txnSnap.docs.forEach(d => {
       const data = d.data();
       if (data.paymentStatus !== 'completed' || data.gymId !== gymId) return;
@@ -94,6 +100,8 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       } else if (data.type === 'pass') {
         passIncome += amount;
         if (data.paymentMethod === 'cash') cashPass += amount;
+        const nm = ((data.notes || '').split('：')[1] || '定期票').trim() || '定期票';
+        passByType[nm] = (passByType[nm] || 0) + amount;
       }
       // type === 'checkin' / 'product' / 'single_entry_ticket' / 'refund' 等
       // 已分別由 checkinSnap / salesSnap 統計，此處不重複加總，僅作為交叉驗證來源
@@ -114,6 +122,9 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
         course: courseIncome,
         pass: passIncome,
         total: totalIncome,
+        // 細項
+        entryItems: Object.entries(entryByType).filter(([, v]) => v > 0).map(([k, v]) => ({ label: ENTRY_LABEL[k] || k, value: v })),
+        passItems: Object.entries(passByType).filter(([, v]) => v > 0).map(([k, v]) => ({ label: k, value: v })),
       },
       payment: {
         cash: totalCash,

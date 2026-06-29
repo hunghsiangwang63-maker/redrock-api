@@ -77,16 +77,16 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     // 課程／定期票收入：統一從 transactions 撈今日已完成交易，再依type分類
     // （改用單一查詢重用既有索引 transactions(gymId, paymentStatus, paidAt)，
     //   避免為 course_enrollment / pass_purchase 各建一個從未被寫入過的舊索引）
+    // 改以認列日 recognitionDate 歸帳（課程預收期間不計入；單欄位範圍＋記憶體過濾避索引）
     const txnSnap = await db.collection('transactions')
-      .where('gymId', '==', gymId)
-      .where('paymentStatus', '==', 'completed')
-      .where('paidAt', '>=', todayStart)
-      .where('paidAt', '<=', todayEnd).get();
+      .where('recognitionDate', '>=', todayStart)
+      .where('recognitionDate', '<=', todayEnd).get();
 
     let courseIncome = 0, cashCourse = 0;
     let passIncome = 0, cashPass = 0;
     txnSnap.docs.forEach(d => {
       const data = d.data();
+      if (data.paymentStatus !== 'completed' || data.gymId !== gymId) return;
       const amount = data.totalAmount || 0;
       if (data.type === 'course') {
         courseIncome += amount;

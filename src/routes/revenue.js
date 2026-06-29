@@ -25,24 +25,33 @@ router.get('/summary',
       const weekStart = new Date(dayjs(_todayStrTW).subtract(_dow, 'day').format('YYYY-MM-DD') + 'T00:00:00+08:00');
       const monthStart = new Date(_todayStrTW.slice(0, 7) + '-01T00:00:00+08:00');
 
-      let ref = db.collection(COLLECTIONS.TRANSACTIONS)
-        .where('paymentStatus', '==', 'completed');
-      if (gymId) ref = ref.where('gymId', '==', gymId);
-
-      // 查詢起點取「本週起」與「本月起」較早者，避免月初時本週橫跨上月而漏算
+      // 改以「認列日 recognitionDate」歸帳（課程＝最後一堂課、比賽＝比賽前一天）。
+      // 用單欄位範圍查 recognitionDate（避複合索引），gymId/paymentStatus 記憶體過濾；
+      // recognitionDate 回填＝paidAt，舊資料相容。
+      const recogOf = (t) => (t.recognitionDate || t.paidAt)?.toDate?.();
       const queryStart = weekStart < monthStart ? weekStart : monthStart;
-      const dataSnap = await ref
-        .where('paidAt', '>=', queryStart)
-        .where('paidAt', '<=', todayEnd)
+      const dataSnap = await db.collection(COLLECTIONS.TRANSACTIONS)
+        .where('recognitionDate', '>=', queryStart)
+        .where('recognitionDate', '<=', todayEnd)
         .get();
+      const all = dataSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(t => t.paymentStatus === 'completed' && (!gymId || t.gymId === gymId));
 
-      const all = dataSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-      const todayTxns = all.filter(t => t.paidAt?.toDate() >= todayStart);
-      const weekTxns = all.filter(t => t.paidAt?.toDate() >= weekStart);
-      const txns = all.filter(t => t.paidAt?.toDate() >= monthStart); // 本月統計用
+      const todayTxns = all.filter(t => recogOf(t) >= todayStart);
+      const weekTxns = all.filter(t => recogOf(t) >= weekStart);
+      const txns = all.filter(t => recogOf(t) >= monthStart); // 本月統計用
 
       const sum = (arr) => arr.reduce((a, b) => a + (b.totalAmount || 0), 0);
+
+      // 預收貨款＝已收款但認列日在未來（課程/比賽；含負向退費自動抵減）
+      let deferred = 0;
+      try {
+        const defSnap = await db.collection(COLLECTIONS.TRANSACTIONS)
+          .where('recognitionDate', '>', todayEnd).get();
+        deferred = defSnap.docs.map(d => d.data())
+          .filter(t => t.paymentStatus === 'completed' && (!gymId || t.gymId === gymId))
+          .reduce((a, t) => a + (t.totalAmount || 0), 0);
+      } catch (e) {}
 
       res.json({
         today: {
@@ -51,14 +60,9 @@ router.get('/summary',
           byType: groupByType(todayTxns),
           byPayment: groupByPayment(todayTxns),
         },
-        week: {
-          total: sum(weekTxns),
-          count: weekTxns.length,
-        },
-        month: {
-          total: sum(txns),
-          count: txns.length,
-        },
+        week: { total: sum(weekTxns), count: weekTxns.length },
+        month: { total: sum(txns), count: txns.length },
+        deferred, // 預收貨款（已收未認列）
       });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
@@ -79,14 +83,13 @@ router.get('/daily',
       const startDate = dayjs().subtract(days - 1, 'day').startOf('day').toDate();
       const endDate = dayjs().endOf('day').toDate();
 
-      let ref = db.collection(COLLECTIONS.TRANSACTIONS)
-        .where('paymentStatus', '==', 'completed')
-        .where('paidAt', '>=', startDate)
-        .where('paidAt', '<=', endDate);
-      if (gymId) ref = ref.where('gymId', '==', gymId);
-
-      const snap = await ref.orderBy('paidAt', 'desc').get();
-      const txns = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // 按認列日歸帳（單欄位範圍查 recognitionDate，gymId/paymentStatus 記憶體過濾）
+      const snap = await db.collection(COLLECTIONS.TRANSACTIONS)
+        .where('recognitionDate', '>=', startDate)
+        .where('recognitionDate', '<=', endDate)
+        .get();
+      const txns = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(t => t.paymentStatus === 'completed' && (!gymId || t.gymId === gymId));
 
       // 按日期分組
       const byDate = {};
@@ -96,7 +99,7 @@ router.get('/daily',
       }
 
       txns.forEach(t => {
-        const date = dayjs(t.paidAt.toDate()).format('YYYY-MM-DD');
+        const date = dayjs((t.recognitionDate || t.paidAt).toDate()).format('YYYY-MM-DD');
         if (byDate[date]) {
           byDate[date].total += t.totalAmount || 0;
           byDate[date].count += 1;
@@ -123,16 +126,18 @@ router.get('/transactions',
       const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
       const { dateFrom, dateTo, type, paymentMethod, limit = 50, offset = 0 } = req.query;
 
-      let ref = db.collection(COLLECTIONS.TRANSACTIONS)
-        .where('paymentStatus', '==', 'completed');
-      if (gymId) ref = ref.where('gymId', '==', gymId);
-      if (type) ref = ref.where('type', '==', type);
-      if (paymentMethod) ref = ref.where('paymentMethod', '==', paymentMethod);
-      if (dateFrom) ref = ref.where('paidAt', '>=', new Date(dateFrom));
-      if (dateTo) ref = ref.where('paidAt', '<=', new Date(dateTo));
-
-      const snap = await ref.orderBy('paidAt', 'desc').limit(parseInt(limit)).get();
-      const transactions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // 明細以認列日呈現（與報表一致）。單欄位範圍查 recognitionDate，其餘記憶體過濾
+      let q = db.collection(COLLECTIONS.TRANSACTIONS);
+      if (dateFrom) q = q.where('recognitionDate', '>=', new Date(dateFrom));
+      if (dateTo) q = q.where('recognitionDate', '<=', new Date(dateTo));
+      const snap = (dateFrom || dateTo)
+        ? await q.get()
+        : await q.orderBy('recognitionDate', 'desc').limit(parseInt(limit) * 3).get();
+      let transactions = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(t => t.paymentStatus === 'completed' && (!gymId || t.gymId === gymId)
+          && (!type || t.type === type) && (!paymentMethod || t.paymentMethod === paymentMethod));
+      transactions.sort((a, b) => ((b.recognitionDate || b.paidAt)?.toMillis?.() || 0) - ((a.recognitionDate || a.paidAt)?.toMillis?.() || 0));
+      transactions = transactions.slice(0, parseInt(limit));
 
       res.json({ transactions, count: transactions.length });
     } catch (err) {
@@ -204,30 +209,31 @@ router.get('/export-csv',
       const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
       const { dateFrom, dateTo } = req.query;
 
-      let ref = db.collection(COLLECTIONS.TRANSACTIONS)
-        .where('paymentStatus', '==', 'completed');
-      if (gymId) ref = ref.where('gymId', '==', gymId);
-      if (dateFrom) ref = ref.where('paidAt', '>=', new Date(dateFrom));
-      if (dateTo) ref = ref.where('paidAt', '<=', new Date(dateTo));
-
-      const snap = await ref.orderBy('paidAt', 'desc').get();
-      const txns = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // 以認列日匯出（與報表一致）
+      let q = db.collection(COLLECTIONS.TRANSACTIONS);
+      if (dateFrom) q = q.where('recognitionDate', '>=', new Date(dateFrom));
+      if (dateTo) q = q.where('recognitionDate', '<=', new Date(dateTo));
+      const snap = (dateFrom || dateTo) ? await q.get() : await q.orderBy('recognitionDate', 'desc').get();
+      const txns = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(t => t.paymentStatus === 'completed' && (!gymId || t.gymId === gymId))
+        .sort((a, b) => ((b.recognitionDate || b.paidAt)?.toMillis?.() || 0) - ((a.recognitionDate || a.paidAt)?.toMillis?.() || 0));
 
       const TYPE_LABEL = {
-        checkin: '入場', pass: '定期票', course: '課程',
-        product: '商品', competition: '比賽', single_entry_ticket: '單次入場券',
+        checkin: '入場', pass: '定期票', course: '課程', course_refund: '課程退費',
+        product: '商品', competition: '比賽', competition_refund: '比賽退費',
+        single_entry_ticket: '單次入場券', refund: '退款',
       };
       const PAYMENT_LABEL = {
         cash: '現金', linepay: 'Line Pay', jkopay: '街口支付',
-        taiwanpay: '台灣Pay', ecpay_atm: 'ATM轉帳',
+        taiwanpay: '台灣Pay', ecpay_atm: 'ATM轉帳', refund: '退款', transfer: '轉帳',
       };
 
       const rows = [
-        ['收據編號', '日期', '時間', '類型', '付款方式', '金額', '會員ID'].join(','),
+        ['收據編號', '認列日', '時間', '類型', '付款方式', '金額', '會員ID'].join(','),
         ...txns.map(t => [
           t.receiptNo || t.id,
-          dayjs(t.paidAt.toDate()).format('YYYY-MM-DD'),
-          dayjs(t.paidAt.toDate()).format('HH:mm'),
+          dayjs((t.recognitionDate || t.paidAt).toDate()).format('YYYY-MM-DD'),
+          dayjs((t.recognitionDate || t.paidAt).toDate()).format('HH:mm'),
           TYPE_LABEL[t.type] || t.type,
           PAYMENT_LABEL[t.paymentMethod] || t.paymentMethod,
           t.totalAmount || 0,

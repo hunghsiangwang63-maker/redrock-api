@@ -348,6 +348,9 @@ router.post('/registrations/:regId/confirm-payment',
           paidConfirmedByName: req.staff.name,
           updatedAt: new Date(),
         });
+      // 記營收（預收，認列在比賽前一天）
+      try { await competitionService.recordCompetitionRevenue({ db, regId: req.params.regId, sign: 1, staffId: req.staff.id, staffName: req.staff.name }); }
+      catch (e) { console.error('比賽記帳失敗', e.message); }
       res.json({ success: true, message: '已確認收款' });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
@@ -370,6 +373,9 @@ router.post('/registrations/:regId/refund',
           status: 'cancelled',
           updatedAt: new Date(),
         });
+      // 記負向交易（退費，認列在比賽前一天）
+      try { await competitionService.recordCompetitionRevenue({ db, regId: req.params.regId, sign: -1, refund: true, staffId: req.staff.id, staffName: req.staff.name }); }
+      catch (e) { console.error('比賽退費記帳失敗', e.message); }
       res.json({ success: true, message: '退費已處理' });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }

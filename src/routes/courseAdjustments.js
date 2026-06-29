@@ -176,9 +176,14 @@ router.post('/requests/:id/approve',
           memberId: request.memberId,
           reason: `退費申請核准（退款 NT$${finalRefund}）`,
         });
-        // 記負向交易（退款），記帳失敗不阻擋核准
+        // 記負向交易（退款），記帳失敗不阻擋核准。認列日＝該課程最後一堂課（與報名費同時結算）
         if (finalRefund > 0) {
           try {
+            let recognitionDate = null;
+            try {
+              const cd = await db.collection('courses').doc(request.courseId).get();
+              if (cd.exists) { const c = cd.data(); recognitionDate = c.endDate || c.unlimitedPracticeEnd || null; }
+            } catch (e) {}
             await recordTransaction(db, {
               gymId: request.gymId || null,
               type: 'course_refund',
@@ -190,6 +195,7 @@ router.post('/requests/:id/approve',
               notes: `課程退費（${request.courseName || ''}）`,
               staffId: req.staff.id,
               staffName: req.staff.name,
+              recognitionDate,
             });
           } catch (e) { console.error('退費記帳失敗', e.message); }
         }

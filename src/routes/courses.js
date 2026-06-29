@@ -646,6 +646,10 @@ router.post('/:courseId/enroll-all',
       // 線上付款 deferPayment 時改由付款 callback 記帳，避免重複記帳）
       if (fee > 0 && !req.body.deferPayment) {
         const { recordTransaction } = require('../utils/revenueLedger');
+        // 預收貨款：營收認列在最後一堂課（course.endDate；無則用無限練習迄日/最後場次日）
+        const recognitionDate = course.endDate
+          || course.unlimitedPracticeEnd
+          || (futureSessions.length ? futureSessions[futureSessions.length - 1].date : null);
         await recordTransaction(db, {
           gymId: futureSessions[0].gymId || gymId,
           type: 'course',
@@ -657,6 +661,7 @@ router.post('/:courseId/enroll-all',
           notes: `課程報名：${course.name}（整堂課，共${futureSessions.length}場）`,
           staffId: req.staff?.id || null,
           staffName: req.staff?.name || '',
+          recognitionDate,
         });
       }
 

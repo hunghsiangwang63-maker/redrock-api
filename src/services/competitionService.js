@@ -383,10 +383,48 @@ const getMemberRegistrations = async (memberId) => {
     .sort((a, b) => (b.registeredAt?._seconds || b.createdAt?._seconds || 0) - (a.registeredAt?._seconds || a.createdAt?._seconds || 0));
 };
 
+// 比賽營收記帳（認列在「比賽前一天」＝eventDate−1）。收款冪等（revenueRecorded），退費記負向。
+// 供 confirm-payment / refund / 轉帳確認 三條路徑共用，避免重複記帳。
+const recordCompetitionRevenue = async ({ db, regId, sign = 1, refund = false, staffId = null, staffName = '' }) => {
+  if (!db) db = getDb();
+  const { recordTransaction } = require('../utils/revenueLedger');
+  const regRef = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(regId);
+  const regSnap = await regRef.get();
+  if (!regSnap.exists) return;
+  const reg = regSnap.data();
+  if (sign > 0 && reg.revenueRecorded) return; // 冪等：收款只記一次
+  const amount = sign > 0
+    ? (reg.paidAmount || reg.registrationFee || 0)
+    : (reg.refundAmount || reg.paidAmount || reg.registrationFee || 0);
+  if (!amount || amount <= 0) return;
+  let recognitionDate = null, gymId = reg.gymId || null;
+  try {
+    const cSnap = await db.collection(COLLECTIONS.COMPETITIONS).doc(reg.competitionId).get();
+    if (cSnap.exists) {
+      const c = cSnap.data();
+      gymId = gymId || c.gymId || null;
+      if (c.eventDate) recognitionDate = dayjs(c.eventDate).subtract(1, 'day').format('YYYY-MM-DD');
+    }
+  } catch (e) {}
+  await recordTransaction(db, {
+    gymId,
+    type: refund ? 'competition_refund' : 'competition',
+    totalAmount: sign * Math.abs(amount),
+    paymentMethod: refund ? 'refund' : (reg.paymentMethod || 'transfer'),
+    memberId: reg.memberId || null,
+    memberName: reg.memberName || '',
+    relatedId: regId,
+    notes: `${refund ? '比賽退費' : '比賽報名'}：${reg.competitionName || ''}`,
+    staffId, staffName, recognitionDate,
+  });
+  if (sign > 0) await regRef.update({ revenueRecorded: true });
+};
+
 module.exports = {
   SCORING_SYSTEMS,
   createCompetition, updateCompetition, getCompetitions, getCompetition,
   registerForCompetition, signParentCompetitionWaiver,
   sendWebhook, retryWebhook, promoteNextWaitlist,
   getCompetitionRegistrations, getMemberRegistrations,
+  recordCompetitionRevenue,
 };

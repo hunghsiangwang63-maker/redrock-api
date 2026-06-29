@@ -28,10 +28,15 @@ async function recordTransaction(db, {
   staffName = '',
   entryFee = null,
   shoesPrice = null,
+  recognitionDate = null, // 營收認列日（課程＝最後一堂課、比賽＝比賽前一天）；未指定＝即時認列(=paidAt)
 }) {
   if (!db) db = getDb();
   const now = new Date();
   const receiptNo = `${type.toUpperCase().slice(0, 3)}${now.getTime()}`;
+  // recognitionDate 可傳 Date 或 'YYYY-MM-DD' 字串；一律存成 Timestamp。未指定→即時認列＝now
+  let recogAt = now;
+  if (recognitionDate instanceof Date) recogAt = recognitionDate;
+  else if (typeof recognitionDate === 'string' && recognitionDate) recogAt = new Date(recognitionDate + 'T00:00:00+08:00');
   const txn = {
     gymId,
     type,
@@ -46,6 +51,7 @@ async function recordTransaction(db, {
     receiptNo,
     paymentStatus: 'completed',
     paidAt: now,
+    recognitionDate: recogAt,   // 報表/日結改以此歸帳（預收期間 recognitionDate 在未來）
     createdAt: now,
     ...(entryFee !== null ? { entryFee } : {}),
     ...(shoesPrice !== null ? { shoesPrice } : {}),

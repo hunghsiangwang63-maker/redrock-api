@@ -120,6 +120,9 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
         await db.collection('competitionRegistrations').doc(t.refId).update({
           paymentStatus: 'confirmed', paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,
         });
+        // 記比賽營收（預收，認列在比賽前一天）；helper 冪等
+        try { await require('../services/competitionService').recordCompetitionRevenue({ db, regId: t.refId, sign: 1, staffId: by, staffName: byName }); }
+        catch (e) { console.error('比賽轉帳記帳失敗', e.message); }
       } else if (t.orderType === 'rental' && t.refId) {
         await db.collection('equipmentRentals').doc(t.refId).update({
           paymentStatus: 'confirmed', status: 'active', confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,

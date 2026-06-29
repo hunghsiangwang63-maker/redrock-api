@@ -208,6 +208,13 @@ const checkFallTest = async (memberId) => {
   };
 };
 
+// ── 是否已簽署墜落測驗同意書（與「是否通過」不同；體驗券入場僅需簽署）──
+const hasFallTestSignature = async (memberId) => {
+  const db = getDb();
+  const snap = await db.collection('fallTestSignatures').where('memberId', '==', memberId).limit(1).get();
+  return !snap.empty;
+};
+
 // ── 墜落測驗遞延：每入場2次延長1年 ──────────────────────────────
 const tryExtendFallTest = async (memberId, checkInId) => {
   const db = getDb();
@@ -315,12 +322,26 @@ const verifyEntry = async (memberId, gymId) => {
   // 2. 墜落測驗檢查
   const fallTest = await checkFallTest(memberId);
   if (!fallTest.passed) {
-    return {
-      allowed: false, status: 'blocked',
-      reason: fallTest.reason === 'never_tested' ? 'fall_test_required' : 'fall_test_expired',
-      message: fallTest.reason === 'never_tested' ? '尚未通過安全墜落測驗' : `墜落測驗已於 ${fallTest.expiredAt} 到期，請重新測驗`,
-      member: { id: member.id, name: member.name, phone: member.phone },
-    };
+    // 例外：持「當日有效體驗券」者，未通過墜測也可入場，但仍須完成 waiver(上方已查) + 簽署墜落測驗同意書
+    const hasExpTicket = (await getValidSingleEntryTickets(memberId)).some(t => t.ticketType === 'experience');
+    if (hasExpTicket) {
+      const signed = await hasFallTestSignature(memberId);
+      if (!signed) {
+        return {
+          allowed: false, status: 'blocked', reason: 'fall_test_consent_required',
+          message: '請先簽署墜落測驗同意書（體驗課程可未通過墜測入場，但須簽署同意書）',
+          member: { id: member.id, name: member.name, phone: member.phone },
+        };
+      }
+      // 有簽署 → 放行（持體驗券，未通過墜測也可入場）
+    } else {
+      return {
+        allowed: false, status: 'blocked',
+        reason: fallTest.reason === 'never_tested' ? 'fall_test_required' : 'fall_test_expired',
+        message: fallTest.reason === 'never_tested' ? '尚未通過安全墜落測驗' : `墜落測驗已於 ${fallTest.expiredAt} 到期，請重新測驗`,
+        member: { id: member.id, name: member.name, phone: member.phone },
+      };
+    }
   }
 
   // 2.5 分期付款逾期檢查
@@ -550,7 +571,19 @@ const createPendingCheckIn = async ({
   if (!waiver.complete) throw { code: 'WAIVER_REQUIRED', message: 'Waiver 尚未完成' };
 
   const fallTest = await checkFallTest(memberId);
-  if (!fallTest.passed) throw { code: 'FALL_TEST_REQUIRED', message: '墜落測驗未通過或已到期' };
+  if (!fallTest.passed) {
+    // 體驗券入場：未通過墜測也可產生 QR，但須簽署墜落測驗同意書
+    let isExpTicketEntry = false;
+    if (entryType === 'single_entry_ticket' && singleEntryTicketId) {
+      const td = await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(singleEntryTicketId).get();
+      isExpTicketEntry = td.exists && td.data().ticketType === 'experience';
+    }
+    if (isExpTicketEntry) {
+      if (!(await hasFallTestSignature(memberId))) throw { code: 'FALL_TEST_CONSENT_REQUIRED', message: '請先簽署墜落測驗同意書' };
+    } else {
+      throw { code: 'FALL_TEST_REQUIRED', message: '墜落測驗未通過或已到期' };
+    }
+  }
 
   // 黑卡/單次入場券：QR 階段只驗證可用性，「不」預扣。
   // 實際扣點延後到 confirmCheckIn（確認入場才扣）→ 產生 QR 但未入場不會扣卡/鎖券。

@@ -174,7 +174,10 @@ async function syncExperienceTickets(db, booking, staff, allowInitialIssue) {
     }
     if (toVoid) await batch.commit();
   }
-  return { issued, voided, total: target };
+  // 回寫「已發放張數」到預約（供前端按鈕切換為「已發放入場券」）
+  const ticketsIssued = currentTotal + issued - voided;
+  await db.collection('experienceBookings').doc(booking.id).update({ ticketsIssued, ticketsIssuedAt: now, updatedAt: now });
+  return { issued, voided, total: target, ticketsIssued };
 }
 
 async function voidExperienceTickets(db, bookingId, reason) {

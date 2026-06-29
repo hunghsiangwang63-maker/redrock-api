@@ -88,7 +88,21 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此轉帳紀錄' });
     const t = doc.data();
+    if (t.status === 'confirmed') return res.json({ message: '已確認收款' }); // 冪等：避免重複確認
     const now = new Date();
+
+    // 硬化：確認收款前先檢查連動訂單是否存在，避免「轉帳已標確認、訂單卻沒開通」
+    const ORDER_COLL = {
+      experience: 'experienceBookings', course: 'courseEnrollments',
+      competition: 'competitionRegistrations', rental: 'equipmentRentals', team_member: 'teamApplications',
+    };
+    if (t.orderType && t.refId && ORDER_COLL[t.orderType]) {
+      const orderSnap = await db.collection(ORDER_COLL[t.orderType]).doc(t.refId).get();
+      if (!orderSnap.exists) {
+        return res.status(404).json({ error: 'ORDER_NOT_FOUND', message: '查無對應的訂單（可能已刪除），無法確認收款。如需處理請改用「退回」。' });
+      }
+    }
+
     await ref.update({
       status: 'confirmed', confirmedBy: req.staff.id,
       confirmedAt: now, updatedAt: now, notes: req.body.notes || '',

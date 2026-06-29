@@ -137,6 +137,9 @@ router.post('/applications/:id/confirm-payment', authenticate, requireManagerOrS
   try {
     const db = getDb();
     const ref = db.collection('teamApplications').doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此攀岩隊入隊申請（可能已刪除）' });
+    if (snap.data().paymentStatus === 'confirmed') return res.json({ success: true, message: '已確認收款' }); // 冪等
     await ref.update({
       paymentStatus: 'confirmed',
       status: 'active',

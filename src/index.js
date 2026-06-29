@@ -73,7 +73,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     env: process.env.NODE_ENV,
-    version: '1.4.3-transfer-bankname-exp-modal',
+    version: '1.4.4-confirm-order-guard',
   });
 });
 

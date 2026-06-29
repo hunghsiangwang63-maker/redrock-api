@@ -528,15 +528,15 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
     }
   }
 
-  // 整期請假次數上限
-  const maxLeaves = course.maxLeaves ?? 2;
+  // 請假次數上限：整期＝課程 maxLeaves；插班＝管理員個別填寫的 maxLeavesAllowed（覆蓋課程預設）
+  const maxLeaves = enrollment.maxLeavesAllowed ?? course.maxLeaves ?? 2;
   const usedLeaves = await db.collection(ENROLLMENT_COLLECTION)
     .where('memberId', '==', memberId)
     .where('courseId', '==', enrollment.courseId)
     .where('status', '==', 'leave')
     .get().then(s => s.size);
   if (usedLeaves >= maxLeaves) {
-    throw { code: 'MAX_LEAVES_EXCEEDED', message: `已達整期請假上限（${maxLeaves} 次）` };
+    throw { code: 'MAX_LEAVES_EXCEEDED', message: `已達請假上限（${maxLeaves} 次）` };
   }
 
   const now = new Date();
@@ -866,10 +866,28 @@ const getMemberEnrollments = async (memberId) => {
   const attendanceMap = {};
   attendanceSnap.docs.forEach(d => { attendanceMap[d.data().sessionId] = d.data().status; });
 
-  return enrollments.map(e => ({
-    ...e,
-    attendanceStatus: attendanceMap[e.sessionId] || null,
+  // 各課程的「可請假次數上限」與「已用次數」，供會員端課程卡顯示剩餘
+  const courseIds = [...new Set(enrollments.map(e => e.courseId).filter(Boolean))];
+  const courseMaxLeaves = {};
+  await Promise.all(courseIds.map(async cid => {
+    const cd = await db.collection(COURSE_COLLECTION).doc(cid).get();
+    courseMaxLeaves[cid] = cd.exists ? (cd.data().maxLeaves ?? 2) : 2;
   }));
+  const usedByCourse = {};
+  enrollments.forEach(e => { if (e.status === 'leave') usedByCourse[e.courseId] = (usedByCourse[e.courseId] || 0) + 1; });
+
+  return enrollments.map(e => {
+    // 插班學員 maxLeavesAllowed 覆蓋；否則用課程整期預設
+    const leaveLimit = e.maxLeavesAllowed ?? courseMaxLeaves[e.courseId] ?? 2;
+    const leaveUsed = usedByCourse[e.courseId] || 0;
+    return {
+      ...e,
+      attendanceStatus: attendanceMap[e.sessionId] || null,
+      leaveLimit,
+      leaveUsed,
+      leaveRemaining: Math.max(0, leaveLimit - leaveUsed),
+    };
+  });
 };
 
 // ── 查詢會員補課資格 ──────────────────────────────────────────────

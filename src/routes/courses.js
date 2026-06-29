@@ -527,6 +527,7 @@ router.get('/:courseId/enrollments',
           date: e.date || '',
           startTime: e.startTime || '',
           fee: e.fee || 0,
+          maxLeavesAllowed: e.maxLeavesAllowed ?? null,  // 插班個別可請假次數（null=用課程整期預設）
         };
       });
       // Sort by enrolledAt desc
@@ -537,6 +538,32 @@ router.get('/:courseId/enrollments',
       });
       res.json({ enrollments, total: enrollments.length });
     } catch(err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
+// PUT /courses/:courseId/members/:memberId/max-leaves - 管理員為（插班）學員個別填寫可請假次數
+// 整期＝課程 maxLeaves（課程設定）；此端點覆蓋單一學員（套用到該員此課所有報名場次）
+router.put('/:courseId/members/:memberId/max-leaves',
+  authenticate, checkPermission('courses.manage'),
+  async (req, res) => {
+    try {
+      const db = require('../config/firebase').getDb();
+      const { courseId, memberId } = req.params;
+      const raw = req.body.maxLeavesAllowed;
+      // 傳 null/空 = 清除覆蓋（回到課程整期預設）
+      const value = (raw === null || raw === '' || raw === undefined) ? null : parseInt(raw, 10);
+      if (value !== null && (isNaN(value) || value < 0)) {
+        return res.status(400).json({ error: 'INVALID_VALUE', message: '可請假次數需為 0 或正整數' });
+      }
+      const snap = await db.collection('courseEnrollments')
+        .where('courseId', '==', courseId).where('memberId', '==', memberId).get();
+      if (snap.empty) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此學員報名' });
+      const now = new Date();
+      const batch = db.batch();
+      snap.docs.forEach(d => batch.update(d.ref, { maxLeavesAllowed: value, updatedAt: now }));
+      await batch.commit();
+      res.json({ success: true, maxLeavesAllowed: value, updated: snap.size, message: value === null ? '已清除，回到課程整期預設' : `已設定可請假 ${value} 次` });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );
 

@@ -129,12 +129,13 @@ router.get('/', authenticate, async (req, res) => {
       const snap2 = await ref2.get();
       snap2.forEach(d => {
         const r = d.data();
-        if (r.pickupDate === today) {
+        // 從訂單確認起一直顯示到取件日（含當日）
+        if (r.pickupDate && r.pickupDate >= today) {
           tasks.push({
             id: `rental_pickup_${d.id}`, type: 'rental_pickup', targetId: d.id,
-            title: '器材今日取件',
-            desc: `${r.memberName} — ${r.items?.map(i=>`${i.name}×${i.quantity}`).join('、')}`,
-            date: today, createdAt: Date.now()/1000,
+            title: r.pickupDate === today ? '器材今日取件' : '器材待取件',
+            desc: `${r.memberName} — ${r.items?.map(i=>`${i.name}×${i.quantity}`).join('、')} · 取件 ${r.pickupDate}`,
+            date: r.pickupDate, createdAt: Date.now()/1000,
             gymId: r.gymId, memberName: r.memberName,
             link: '/staff/rentals',
           });
@@ -148,12 +149,13 @@ router.get('/', authenticate, async (req, res) => {
       const snap3 = await ref3.get();
       snap3.forEach(d => {
         const r = d.data();
-        if (r.returnDate === today) {
+        // 從取件後一直顯示到歸還日（含當日）
+        if (r.returnDate && r.returnDate >= today) {
           tasks.push({
             id: `rental_return_${d.id}`, type: 'rental_return', targetId: d.id,
-            title: '器材今日歸還',
-            desc: `${r.memberName} — ${r.items?.map(i=>`${i.name}×${i.quantity}`).join('、')}`,
-            date: today, createdAt: Date.now()/1000,
+            title: r.returnDate === today ? '器材今日歸還' : '器材待歸還',
+            desc: `${r.memberName} — ${r.items?.map(i=>`${i.name}×${i.quantity}`).join('、')} · 歸還 ${r.returnDate}`,
+            date: r.returnDate, createdAt: Date.now()/1000,
             gymId: r.gymId, memberName: r.memberName,
             link: '/staff/rentals',
             record: { id: d.id, ...r },
@@ -162,21 +164,24 @@ router.get('/', authenticate, async (req, res) => {
       });
     } catch(e) {}
 
-    // 7. 體驗課程預約 - 待確認
+    // 7. 體驗課程預約：待確認 + 已確認，從預約起一直顯示到體驗日（含當日）
     try {
-      let ref = db.collection('experienceBookings').where('status', '==', 'pending');
-      if (gymId) ref = ref.where('gymId', '==', gymId);
+      let ref = gymId ? db.collection('experienceBookings').where('gymId', '==', gymId) : db.collection('experienceBookings');
       const snap = await ref.get();
       snap.forEach(d => {
         const r = d.data();
         if (transferRefIds.has(d.id)) return; // 已有轉帳待確認 → 走轉帳確認段，避免雙列
+        if (!['pending', 'confirmed'].includes(r.status)) return; // 只顯示待確認/已確認
+        if (r.bookingDate && r.bookingDate < today) return;        // 過了體驗日不再顯示
+        const confirmed = r.status === 'confirmed';
         tasks.push({
           id: `exp_${d.id}`, type: 'experience', targetId: d.id,
-          title: '體驗課程預約申請',
+          title: confirmed ? '體驗預約（已確認）' : '體驗課程預約申請',
           desc: `${r.contactName} — ${r.bookingDate} ${r.bookingTime || ''} · ${r.numParticipants}人 NT$${r.totalFee}`,
-          date: r.createdAt?._seconds ? new Date(r.createdAt._seconds*1000).toISOString().slice(0,10) : today,
+          date: r.bookingDate || (r.createdAt?._seconds ? new Date(r.createdAt._seconds*1000).toISOString().slice(0,10) : today),
           createdAt: r.createdAt?._seconds || 0,
           gymId: r.gymId, memberName: r.contactName,
+          confirmed,
           link: '/staff/experience',
         });
       });

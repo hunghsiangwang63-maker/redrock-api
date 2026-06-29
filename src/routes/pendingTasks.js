@@ -183,6 +183,7 @@ router.get('/', authenticate, async (req, res) => {
           gymId: r.gymId, memberName: r.contactName,
           confirmed,
           link: '/staff/experience',
+          record: { id: d.id, ...r },
         });
       });
     } catch(e) {}

@@ -21,7 +21,7 @@ router.post('/upload', authenticateAny, upload.single('screenshot'), async (req,
     const id = uuidv4();
     const {
       memberName, gymId, enrollmentId, courseId, courseName, amount,
-      orderType, refId, orderName, bankLastFive, paymentDate,
+      orderType, refId, orderName, bankLastFive, bankName, paymentDate,
     } = req.body;
     // 會員 token 一律用自己的 id，避免偽造他人 memberId
     const memberId = req.member?.id || req.body.memberId;
@@ -58,6 +58,7 @@ router.post('/upload', authenticateAny, upload.single('screenshot'), async (req,
       paymentMethod: 'transfer',
       screenshotUrl: url, screenshotPath: fileName,   // 無截圖則為 null
       bankLastFive: last5 || null,
+      bankName: (bankName || '').trim() || null,
       paymentDate: paymentDate || null,
       status: 'pending',
       submittedAt: now, createdAt: now, updatedAt: now,

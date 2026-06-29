@@ -166,7 +166,9 @@ const getValidSingleEntryTickets = async (memberId) => {
     .where('status', '==', 'active')
     .where('expiresAt', '>=', today)
     .get();
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  // 體驗入場券限「validDate 當天」使用；一般單次券無 validDate 不受限
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .filter(t => !t.validDate || t.validDate === today);
 };
 
 // ── 墜落測驗：查詢 + 遞延邏輯 ───────────────────────────────────

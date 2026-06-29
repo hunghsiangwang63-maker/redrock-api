@@ -122,8 +122,102 @@ router.post('/:id/cancel', authenticate, async (req, res) => {
     await db.collection('experienceBookings').doc(req.params.id).update({
       status:'cancelled', cancelReason:req.body.reason||'', cancelledAt:new Date(), updatedAt:new Date(),
     });
-    res.json({ success:true });
+    // 退費/取消 → 該預約所有「未使用」體驗入場券作廢（含已轉出未用）；已使用不動
+    const voided = await voidExperienceTickets(db, req.params.id, '體驗退費/取消');
+    res.json({ success:true, voidedTickets: voided });
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
+});
+
+// ── 體驗入場券：發放/同步（員工手動）與作廢 helper ──────────────────
+const { v4: _uuid } = require('uuid');
+const EXP_TICKET_COLL = 'singleEntryTickets';
+
+// 依 numParticipants 同步體驗入場券數量。allowInitialIssue=true 才允許從 0 發放；
+// 否則只在「已發過券」時同步（加人補發 active、減人作廢多餘 active；不動 used）。
+async function syncExperienceTickets(db, booking, staff, allowInitialIssue) {
+  const target = booking.numParticipants || (booking.participants || []).length || 0;
+  const snap = await db.collection(EXP_TICKET_COLL).where('experienceBookingId', '==', booking.id).get();
+  const tickets = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const active = tickets.filter(t => t.status === 'active');
+  const usedCount = tickets.filter(t => t.status === 'used').length;
+  const currentTotal = active.length + usedCount;
+  if (currentTotal === 0 && !allowInitialIssue) return { issued: 0, voided: 0, total: currentTotal };
+  const now = new Date();
+  const todayTW = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+  let issued = 0, voided = 0;
+  if (target > currentTotal) {
+    const batch = db.batch();
+    for (let i = 0; i < target - currentTotal; i++) {
+      const id = _uuid();
+      batch.set(db.collection(EXP_TICKET_COLL).doc(id), {
+        id, memberId: booking.memberId || null, memberName: booking.contactName || '',
+        originalMemberId: booking.memberId || null, gymId: booking.gymId || null,
+        ticketType: 'experience', validDate: booking.bookingDate || null, experienceBookingId: booking.id,
+        issuedAt: todayTW, expiresAt: booking.bookingDate || todayTW,
+        amount: 0, paymentMethod: 'free', status: 'active',
+        approvalDeadline: null, approvedAt: now, approvedBy: staff?.id || null,
+        cancelledAt: null, cancelledBy: null, cancelReason: null,
+        transferHistory: [], usedAt: null, usedCheckInId: null,
+        soldByStaffId: staff?.id || null, soldByStaffName: staff?.name || '',
+        notes: `體驗入場券：${booking.courseType || ''} ${booking.bookingDate || ''}`,
+        createdAt: now, updatedAt: now,
+      });
+      issued++;
+    }
+    await batch.commit();
+  } else if (target < currentTotal) {
+    const toVoid = Math.min(currentTotal - target, active.length);
+    const batch = db.batch();
+    for (let i = 0; i < toVoid; i++) {
+      batch.update(db.collection(EXP_TICKET_COLL).doc(active[i].id), { status: 'cancelled', cancelledAt: now, cancelReason: '參加人數調整', updatedAt: now });
+      voided++;
+    }
+    if (toVoid) await batch.commit();
+  }
+  return { issued, voided, total: target };
+}
+
+async function voidExperienceTickets(db, bookingId, reason) {
+  const snap = await db.collection(EXP_TICKET_COLL).where('experienceBookingId', '==', bookingId).get();
+  const batch = db.batch(); let n = 0;
+  snap.docs.forEach(d => {
+    if (d.data().status === 'active') { // 只作廢未使用；已 used 不動
+      batch.update(d.ref, { status: 'cancelled', cancelledAt: new Date(), cancelReason: reason || '體驗取消', updatedAt: new Date() });
+      n++;
+    }
+  });
+  if (n) await batch.commit();
+  return n;
+}
+
+// ── POST /experience-bookings/:id/issue-tickets - 發放體驗入場券（員工手動）──
+router.post('/:id/issue-tickets', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('experienceBookings').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
+    const b = { id: doc.id, ...doc.data() };
+    if (b.status === 'cancelled') return res.status(400).json({ error: 'CANCELLED', message: '此預約已取消，無法發放' });
+    if (b.status !== 'confirmed') return res.status(400).json({ error: 'NOT_CONFIRMED', message: '請先確認收款再發放入場券' });
+    const r = await syncExperienceTickets(db, b, req.staff, true);
+    res.json({ success: true, ...r, message: r.issued > 0 ? `已發放 ${r.issued} 張體驗入場券` : '已是最新（無需補發）' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── PUT /experience-bookings/:id/participants - 編輯參加人員（連動票券）──
+router.put('/:id/participants', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection('experienceBookings').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
+    const participants = Array.isArray(req.body.participants) ? req.body.participants : [];
+    await ref.update({ participants, numParticipants: participants.length, updatedAt: new Date() });
+    const b = { id: doc.id, ...doc.data(), participants, numParticipants: participants.length };
+    // 已發過券才連動（加人補發/減人作廢未用票）
+    const r = await syncExperienceTickets(db, b, req.staff, false);
+    res.json({ success: true, numParticipants: participants.length, ...r });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
 // ── GET /experience-bookings/download - 下載 XLS 名單 ─────────────

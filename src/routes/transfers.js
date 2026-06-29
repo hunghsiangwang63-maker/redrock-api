@@ -115,6 +115,7 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
           status: 'confirmed', confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
         });
       } else if (t.orderType === 'course' && t.refId) {
+        // 課程營收已於報名時(courses.js enroll, deferPayment=false)記入(認列＝最後一堂課)，此處僅標記付款確認
         await db.collection('courseEnrollments').doc(t.refId).update({ paymentConfirmed: true, updatedAt: now });
       } else if (t.orderType === 'competition' && t.refId) {
         await db.collection('competitionRegistrations').doc(t.refId).update({

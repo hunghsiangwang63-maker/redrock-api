@@ -229,6 +229,7 @@ router.get('/', authenticate, async (req, res) => {
           createdAt: t.createdAt?._seconds || t.issuedAt?._seconds || 0,
           gymId: t.gymId, memberName: t.memberName,
           link: '/staff/passes?tab=tickets',
+          record: { id: d.id, ...t },
         });
       });
     } catch(e) {}

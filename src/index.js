@@ -73,7 +73,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     env: process.env.NODE_ENV,
-    version: '1.8.1-exp-ticket-issued-label',
+    version: '1.8.2-pending-exp-issued',
   });
 });
 

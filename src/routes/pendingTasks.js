@@ -174,14 +174,17 @@ router.get('/', authenticate, async (req, res) => {
         if (!['pending', 'confirmed'].includes(r.status)) return; // 只顯示待確認/已確認
         if (r.bookingDate && r.bookingDate < today) return;        // 過了體驗日不再顯示
         const confirmed = r.status === 'confirmed';
+        const ticketsIssued = r.ticketsIssued || 0;
         tasks.push({
           id: `exp_${d.id}`, type: 'experience', targetId: d.id,
-          title: confirmed ? '體驗預約（已確認）' : '體驗課程預約申請',
+          title: confirmed
+            ? (ticketsIssued > 0 ? '體驗預約（已確認）（已發放入場券）' : '體驗預約（已確認）')
+            : '體驗課程預約申請',
           desc: `${r.contactName} — ${r.bookingDate} ${r.bookingTime || ''} · ${r.numParticipants}人 NT$${r.totalFee}`,
           date: r.bookingDate || (r.createdAt?._seconds ? new Date(r.createdAt._seconds*1000).toISOString().slice(0,10) : today),
           createdAt: r.createdAt?._seconds || 0,
           gymId: r.gymId, memberName: r.contactName,
-          confirmed,
+          confirmed, ticketsIssued,
           link: '/staff/experience',
           record: { id: d.id, ...r },
         });

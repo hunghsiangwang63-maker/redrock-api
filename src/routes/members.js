@@ -105,11 +105,12 @@ router.post('/my/children',
 router.get('/reports/active-passes', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    const today = dayjs().format('YYYY-MM-DD');
+    const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期（與入場資格判定同源）
     const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
     const snap = await db.collection(COLLECTIONS.MEMBER_PASSES).where('status', '==', 'active').get();
     let passes = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => (p.endDate || '') >= today);
-    if (gymId) passes = passes.filter(p => p.scope === 'all' || p.gymId === gymId || p.targetGymId === gymId);
+    // 與入場資格 getValidPasses 同源：全館票(scope='shared')任館可用；單館票看 targetGymId
+    if (gymId) passes = passes.filter(p => p.scope === 'shared' || p.targetGymId === gymId);
     const groups = {};
     passes.forEach(p => {
       const key = p.passTypeId || p.passTypeName || 'other';
@@ -127,7 +128,7 @@ router.get('/reports/active-passes', authenticate, async (req, res) => {
 router.get('/reports/active-course-students', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    const today = dayjs().format('YYYY-MM-DD');
+    const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期（與課程入館資格同源）
     const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
     const courseSnap = await db.collection('courses').get();
     let courses = courseSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.status !== 'cancelled');

@@ -69,10 +69,25 @@ const syncCompAthlete = async (competition, registration) => {
   if (!isCompScoring(competition)) return { webhookStatus: 'skipped', webhookError: '非計分系統賽事' };
   const cdb = getCompDb();
   if (!cdb) return { webhookStatus: 'skipped', webhookError: '計分系統未設定金鑰（COMP_FIREBASE_SA）' };
-  if (!competition.compDocId) return { webhookStatus: 'failed', webhookError: '計分系統賽事尚未建立（請先開放賽事）' };
+  if (!competition.compDocId) return { webhookStatus: 'failed', webhookError: '計分系統賽事尚未建立（請先開始對接）' };
   try {
-    await cdb.collection('competitions').doc(competition.compDocId)
-      .update({ [`athletes.${registration.id}`]: mapAthlete(competition, registration) });
+    const ref = cdb.collection('competitions').doc(competition.compDocId);
+    const key = registration.id;
+    const ath = mapAthlete(competition, registration);
+    const existing = (await ref.get()).data()?.athletes?.[key];
+    if (existing) {
+      // 已存在 → 只更新 RedRock 欄位(姓名/組別/性別/隊伍)，保留計分系統那邊排的 bib/order 與已進階的 round
+      await ref.update({
+        [`athletes.${key}.name`]: ath.name,
+        [`athletes.${key}.catIdx`]: ath.catIdx,
+        [`athletes.${key}.gender`]: ath.gender,
+        [`athletes.${key}.team`]: ath.team,
+        [`athletes.${key}.origId`]: ath.origId,
+      });
+    } else {
+      // 新選手 → 完整寫入(含 bib:'' / order:0 / round:'Q' 預設，由計分系統那邊再排)
+      await ref.update({ [`athletes.${key}`]: ath });
+    }
     return { webhookStatus: 'sent', webhookSentAt: new Date(), webhookError: null };
   } catch (e) {
     return { webhookStatus: 'failed', webhookError: e.message };

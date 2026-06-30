@@ -1,3 +1,7 @@
+// 全系統時間一律台灣時間（Railway 預設 UTC）：影響 dayjs()/new Date() 本地方法/setHours/startOf 等。
+// 須在任何 Date/dayjs 使用前設定。明確 +8 補償(Date.now()+8h→toISOString、'T..+08:00')屬 epoch/ISO，與此無關、不會雙重位移。
+process.env.TZ = process.env.TZ || 'Asia/Taipei';
+
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -73,7 +77,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     env: process.env.NODE_ENV,
-    version: '1.12.3-reg-deadline-tz',
+    version: '1.13.0-tz-taipei-global',
   });
 });
 

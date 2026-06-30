@@ -35,6 +35,11 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       .orderBy('date', 'desc')
       .limit(1).get();
     const prevBalance = prevSnap.empty ? 0 : (prevSnap.docs[0].data().closingCashBalance || 0);
+    // 發票起始號＝前一天結算的最後一張發票號碼 +1（前端可手動修改）
+    const prevInvoiceLast = prevSnap.empty ? '' : String(prevSnap.docs[0].data().invoiceLastNumber || '');
+    const suggestedInvoiceStart = /^\d+$/.test(prevInvoiceLast)
+      ? String(Number(prevInvoiceLast) + 1).padStart(prevInvoiceLast.length, '0')
+      : '';
 
     // 統計今日五大類收入
     const todayStart = dayjs().startOf('day').toDate();
@@ -140,6 +145,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       actualCashBalance: null,
       denominations: { d1:0, d5:0, d10:0, d50:0, d100:0, d500:0, d1000:0 },
       invoiceLastNumber: '',
+      suggestedInvoiceStart,   // 前一天最後發票號+1（前端帶入，可改）
       difference: null,
       status: 'draft',
     };
@@ -163,7 +169,8 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
       return res.status(400).json({ error: 'ALREADY_SETTLED', message: '今日已結帳' });
 
     const { income, payment, deductions, denominations, invoiceLastNumber, notes,
-      invoiceStartNumber, invoiceVoidNumbers, cardOrangeFirst, cardFullFirst, checkinCount } = req.body;
+      invoiceStartNumber, invoiceVoidNumbers, cardOrangeFirst, cardFullFirst, checkinCount,
+      incomeManual, paymentManual } = req.body;  // 轉換期手動輸入並列（系統值與手動值都存）
 
     // 計算實際現金
     const d = denominations || {};
@@ -178,7 +185,11 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
 
     // 計算減項總額
     const totalDeductions = (deductions || []).reduce((sum, d) => sum + (d.amount || 0), 0);
-    const expectedCash = prevBalance + (payment?.cash || 0) - totalDeductions;
+    // 手動輸入模式：現金以手動值為準（轉換期系統交易不完整），否則用系統算的
+    const manualCash = paymentManual && paymentManual.cash !== undefined && paymentManual.cash !== '' && paymentManual.cash !== null
+      ? Number(paymentManual.cash) || 0 : null;
+    const effectiveCash = manualCash != null ? manualCash : (payment?.cash || 0);
+    const expectedCash = prevBalance + effectiveCash - totalDeductions;
     const difference = actualCash - expectedCash;
 
     const id = uuidv4();
@@ -187,6 +198,7 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
       staffId: req.staff.id, staffName: req.staff.name,
       prevCashBalance: prevBalance,
       income, payment, deductions: deductions || [],
+      incomeManual: incomeManual || null, paymentManual: paymentManual || null,  // 轉換期手動值（兩者都存）
       denominations, actualCashBalance: actualCash,
       expectedCashBalance: expectedCash,
       closingCashBalance: actualCash,

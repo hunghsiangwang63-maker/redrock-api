@@ -561,9 +561,13 @@ router.post('/phone', authenticate, async (req, res) => {
       });
     }
 
+    // 已付費（轉換期：會員於舊系統已付，免扣新系統票券、免費放行；waiver/墜測前面仍硬擋）
+    const alreadyPaid = req.body.alreadyPaid === true;
+    if (alreadyPaid) { entryType = 'already_paid'; paymentMethod = 'already_paid'; }
+
     // 從 entryTypes 取得入場金額
     let amountPaid = 0;
-    try {
+    if (!alreadyPaid) try {
       const etDoc = await db.collection('systemSettings').doc('entryTypes').get();
       if (etDoc.exists) {
         const etData = etDoc.data().types || [];

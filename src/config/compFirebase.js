@@ -1,7 +1,7 @@
 /**
  * 紅石賽事計分系統（Redrock-comp 專案）跨專案連線層
  *
- * 賽世紀＝獨立的 Firebase 專案，與本系統(redrock-dev-a35c1)不同專案。
+ * 紅石賽事計分系統＝獨立的 Firebase 專案，與本系統(redrock-dev-a35c1)不同專案。
  * 透過第二個 Admin app 連到 Redrock-comp 的 Firestore，把「賽事 + 報名名單」直接寫過去。
  *
  * 金鑰走環境變數 COMP_FIREBASE_SA（整包 service account JSON 字串，放 Railway secret，不進版控）。
@@ -19,17 +19,17 @@ const getCompDb = () => {
   try {
     const raw = process.env.COMP_FIREBASE_SA;
     if (!raw) {
-      console.warn('[賽世紀] 未設定 COMP_FIREBASE_SA → 計分系統同步停用（待補金鑰後自動啟用）');
+      console.warn('[紅石賽事計分系統] 未設定 COMP_FIREBASE_SA → 計分系統同步停用（待補金鑰後自動啟用）');
       return null;
     }
     const sa = typeof raw === 'string' ? JSON.parse(raw) : raw;
     const existing = admin.apps.find(a => a && a.name === 'compApp');
     const app = existing || admin.initializeApp({ credential: admin.credential.cert(sa) }, 'compApp');
     compDb = app.firestore();
-    console.log(`✅ 賽世紀(Redrock-comp) Firestore 已連線（project ${sa.project_id || '?'}）`);
+    console.log(`✅ 紅石賽事計分系統(Redrock-comp) Firestore 已連線（project ${sa.project_id || '?'}）`);
     return compDb;
   } catch (e) {
-    console.error('[賽世紀] Redrock-comp 連線失敗：', e.message);
+    console.error('[紅石賽事計分系統] Redrock-comp 連線失敗：', e.message);
     return null;
   }
 };

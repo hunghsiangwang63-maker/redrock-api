@@ -74,13 +74,14 @@ const authenticate = async (req, res, next) => {
 
 // ── 限制只能透過館別電腦值班(operator) token 使用，個人帳號登入不可用 ──
 const requireStationAuth = (req, res, next) => {
-  if (req.staff?.type !== 'operator') {
-    return res.status(403).json({
-      error: 'STATION_REQUIRED',
-      message: '此功能僅限館別電腦登入並打卡值班後使用，請改用館別電腦帳號登入',
-    });
+  // 站台 operator（已打卡值班），或系統管理員 super_admin 遠端操作（自選館別、不需在本館電腦）皆可
+  if (req.staff?.type === 'operator' || req.staff?.role === 'super_admin') {
+    return next();
   }
-  next();
+  return res.status(403).json({
+    error: 'STATION_REQUIRED',
+    message: '此功能僅限館別電腦登入並打卡值班後使用，請改用館別電腦帳號登入',
+  });
 };
 
 // ── 館別電腦驗證：接受 station（電腦登入）或 operator（已打卡值班）token ──

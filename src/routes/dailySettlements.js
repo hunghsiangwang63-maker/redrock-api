@@ -17,6 +17,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
   try {
     const db = getDb();
     const gymId = req.staff?.role === 'super_admin' ? (req.query.gymId || req.staff?.gymId) : req.staff?.gymId;
+    if (!gymId) return res.status(400).json({ error: 'GYM_REQUIRED', message: '請選擇館別' });
     const today = dayjs().format('YYYY-MM-DD');
 
     // 查今日是否已結帳
@@ -152,6 +153,7 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
   try {
     const db = getDb();
     const gymId = req.staff?.role === 'super_admin' ? (req.body.gymId || req.staff?.gymId) : req.staff?.gymId;
+    if (!gymId) return res.status(400).json({ error: 'GYM_REQUIRED', message: '請選擇館別' });
     const today = dayjs().format('YYYY-MM-DD');
 
     // 確認今日未結帳

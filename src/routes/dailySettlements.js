@@ -114,6 +114,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     const settlement = {
       date: today,
       gymId,
+      checkinCount: checkinSnap.size,   // 當日 check-in 人數（自動）
       prevCashBalance: prevBalance,
       income: {
         entry: entryIncome,
@@ -159,7 +160,8 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
     if (!existSnap.empty)
       return res.status(400).json({ error: 'ALREADY_SETTLED', message: '今日已結帳' });
 
-    const { income, payment, deductions, denominations, invoiceLastNumber, notes } = req.body;
+    const { income, payment, deductions, denominations, invoiceLastNumber, notes,
+      invoiceStartNumber, invoiceVoidNumbers, cardOrangeFirst, cardFullFirst, checkinCount } = req.body;
 
     // 計算實際現金
     const d = denominations || {};
@@ -189,6 +191,12 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
       difference,
       differenceAlert: Math.abs(difference) > 200,
       invoiceLastNumber: invoiceLastNumber || '',
+      // 月銷售紀錄用：發票起訖/作廢號、票卡最前號、當日 check-in 人數
+      invoiceStartNumber: invoiceStartNumber || '',
+      invoiceVoidNumbers: invoiceVoidNumbers || '',
+      cardOrangeFirst: cardOrangeFirst || '',
+      cardFullFirst: cardFullFirst || '',
+      checkinCount: checkinCount ?? null,
       notes: notes || '',
       status: 'settled',
       settledAt: new Date(),
@@ -243,6 +251,90 @@ router.put('/:id/unlock', authenticate, checkPermission('super_admin'), async (r
       unlockedAt: new Date(),
     });
     res.json({ message: '結帳已解鎖，可重新結帳' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /daily-settlements/monthly-export?month=YYYY-MM ──────────────
+// 管理員下載「月銷售紀錄」Excel：整月每日一欄，照原版型自動帶入每日結帳
+router.get('/monthly-export', authenticate, async (req, res) => {
+  try {
+    const role = req.staff?.role;
+    if (!['super_admin', 'gym_manager'].includes(role)) {
+      return res.status(403).json({ error: 'FORBIDDEN', message: '僅管理員可下載月銷售紀錄' });
+    }
+    const db = getDb();
+    const XLSX = require('xlsx');
+    const gymId = role === 'super_admin' ? (req.query.gymId || req.staff?.gymId) : req.staff?.gymId;
+    const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : dayjs().format('YYYY-MM');
+    const start = `${month}-01`;
+    const daysInMonth = dayjs(start).daysInMonth();
+    const end = dayjs(start).endOf('month').format('YYYY-MM-DD');
+
+    // 單欄位範圍 + 記憶體過濾 gym（避複合索引）
+    const snap = await db.collection('dailySettlements').where('date', '>=', start).where('date', '<=', end).get();
+    const byDate = {};
+    snap.docs.forEach(d => { const s = d.data(); if (!gymId || s.gymId === gymId) byDate[s.date] = s; });
+
+    const WD = ['日', '一', '二', '三', '四', '五', '六'];
+    const dates = [];
+    for (let i = 1; i <= daysInMonth; i++) dates.push(dayjs(start).date(i).format('YYYY-MM-DD'));
+    const dayCols = dates.map(dt => dayjs(dt).format('M/D'));
+    const wdCols = dates.map(dt => WD[dayjs(dt).day()]);
+
+    const val = (dt, fn) => { const s = byDate[dt]; return s ? (fn(s) ?? '') : ''; };
+    const dedSum = (s, type) => { const v = (s.deductions || []).filter(x => x.type === type).reduce((a, x) => a + (Number(x.amount) || 0), 0); return v || ''; };
+    const itemVal = (s, arr, label) => { const it = (s.income?.[arr] || []).find(x => x.label === label); return it ? it.value : ''; };
+
+    // 收集整月出現過的「入場/票種」細項 label（動態列）
+    const entryLabels = [], passLabels = [];
+    dates.forEach(dt => { const s = byDate[dt]; if (!s) return;
+      (s.income?.entryItems || []).forEach(it => { if (!entryLabels.includes(it.label)) entryLabels.push(it.label); });
+      (s.income?.passItems || []).forEach(it => { if (!passLabels.includes(it.label)) passLabels.push(it.label); });
+    });
+
+    const R = (a, b, c, fn) => [a, b, c, ...dates.map(dt => fn ? val(dt, fn) : '')];
+    const aoa = [];
+    aoa.push(['項目', '', '', ...dayCols]);
+    aoa.push(['', '星期', '', ...wdCols]);
+    aoa.push(R('check-in 人數', '', '', s => s.checkinCount));
+    aoa.push(R('發票', '起始號碼', '', s => s.invoiceStartNumber));
+    aoa.push(R('', '結束號碼', '', s => s.invoiceLastNumber));
+    aoa.push(R('', '作廢號碼', '', s => s.invoiceVoidNumbers));
+    aoa.push(R('結帳報表', '實收總額', '', s => s.income?.total));
+    aoa.push(R('', '退貨總額', '', s => dedSum(s, '其他退款')));
+    aoa.push(R('票卡資訊', '優惠卡最前號', '', s => s.cardOrangeFirst));
+    aoa.push(R('', '全票最前號', '', s => s.cardFullFirst));
+    aoa.push(R('收支', '定線費', '', s => dedSum(s, '定線費')));
+    aoa.push(R('', '教練費', '', s => dedSum(s, '教練費')));
+    aoa.push(R('', '領取現金', '', s => dedSum(s, '現金領取')));
+    aoa.push(R('行動支付', '台灣Pay', '', s => s.payment?.taiwanPay));
+    aoa.push(R('', 'Line Pay', '', s => s.payment?.linePay));
+    aoa.push(R('', '街口', '', s => s.payment?.jko));
+    aoa.push(R('', '現金', '', s => s.payment?.cash));
+    aoa.push(R('收銀機應有餘額', '', '', s => s.expectedCashBalance));
+    aoa.push(['現金清點', '面額', '']);
+    [['1', 'd1'], ['5', 'd5'], ['10', 'd10'], ['50', 'd50'], ['100', 'd100'], ['500', 'd500'], ['1000', 'd1000']]
+      .forEach(([lbl, key]) => aoa.push(R('', lbl, '', s => s.denominations?.[key])));
+    aoa.push(R('', '清點總計', '', s => s.actualCashBalance));
+    aoa.push(R('差異(清點-應有)', '', '', s => s.difference));
+    aoa.push(R('說明', '', '', s => s.notes));
+    aoa.push(['品項銷售明細', '', '']);
+    entryLabels.forEach(lb => aoa.push(R('入場費', lb, '', s => itemVal(s, 'entryItems', lb))));
+    aoa.push(R('租借費', '岩鞋', '', s => s.income?.shoeRental));
+    aoa.push(R('商品販售', '商品', '', s => s.income?.product));
+    passLabels.forEach(lb => aoa.push(R('定期票', lb, '', s => itemVal(s, 'passItems', lb))));
+    aoa.push(R('教學費', '課程', '', s => s.income?.course));
+    aoa.push(R('總計', '', '', s => s.income?.total));
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 6 }, ...dates.map(() => ({ wch: 8 }))];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, month);
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const gymName = gymId === 'gym-hsinchu' ? '新竹' : gymId === 'gym-shilin' ? '士林' : '全館';
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="sales_${gymName}_${month}.xlsx"`);
+    res.send(buf);
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

@@ -73,7 +73,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     env: process.env.NODE_ENV,
-    version: '1.10.0-checkin-trend-chart',
+    version: '1.11.0-legacy-falltest-migration',
   });
 });
 

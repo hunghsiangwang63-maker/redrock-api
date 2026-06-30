@@ -66,6 +66,47 @@ const getBlockReasons = async (memberId, memberData) => {
 };
 
 // ── 建立新會員 ────────────────────────────────────────────────────
+// 舊系統墜測效期遷移：(重新)註冊時以「電話+姓名」比對 legacyFallTests，
+// 命中且效期未過、未被認領 → 在新帳號補建 passed 墜測（免重測），並標記已認領（一次性，防冒用/重複）。
+// 其餘舊資料一律不匯入，會員仍須重簽 Waiver、重填資料、重簽墜測同意書。
+const claimLegacyFallTest = async (db, memberId, member) => {
+  try {
+    if (member.isChildAccount) return null;            // 子帳號共用電話，不自動認領（避免認錯人）
+    const phone = (member.phone || '').trim();
+    const name = (member.name || '').replace(/\s/g, '');
+    if (!phone || !name) return null;
+    const snap = await db.collection('legacyFallTests').where('phone', '==', phone).get();
+    if (snap.empty) return null;
+    const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    const hit = snap.docs.find(d => {
+      const x = d.data();
+      if (x.claimed === true) return false;
+      if ((x.name || '').replace(/\s/g, '') !== name) return false;  // 姓名必須相符（防共用電話冒領）
+      const exp = String(x.fallTestExpiresAt || '').slice(0, 10);
+      return exp && exp >= today;                                     // 仍在效期內
+    });
+    if (!hit) return null;
+    const exp = String(hit.data().fallTestExpiresAt).slice(0, 10);
+    const now = new Date();
+    const ftId = uuidv4();
+    await db.collection('fallTests').doc(ftId).set({
+      id: ftId, memberId, result: 'passed',
+      testedBy: 'migration', testedByName: '舊系統轉移',
+      testedAt: now,
+      expiresAt: new Date(exp + 'T00:00:00+08:00'),
+      source: 'climbio-migrated', migratedFrom: hit.id,
+      notes: '舊系統墜測效期轉移（免重測）',
+      createdAt: now, updatedAt: now,
+    });
+    await db.collection(COLLECTIONS.MEMBERS).doc(memberId).update({
+      fallTestPassed: true, fallTestExpiresAt: new Date(exp + 'T00:00:00+08:00'), updatedAt: now,
+    });
+    await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now });
+    console.log(`[墜測遷移] ${name}/${phone} 認領舊效期至 ${exp}`);
+    return { fallTestId: ftId, expiresAt: exp };
+  } catch (e) { console.error('claimLegacyFallTest 失敗', e.message); return null; }
+};
+
 const createMember = async (memberData, staffId, options = {}) => {
   const db = getDb();
   const memberId = uuidv4();
@@ -114,6 +155,9 @@ const createMember = async (memberData, staffId, options = {}) => {
   };
 
   await db.collection(COLLECTIONS.MEMBERS).doc(memberId).set(member);
+
+  // 舊系統墜測效期自動認領（電話+姓名比對，命中即免重測）→ 在算封鎖狀態前完成，避免被誤判需墜測
+  await claimLegacyFallTest(db, memberId, member);
 
   // 計算並更新封鎖狀態
   const blockReasons = await getBlockReasons(memberId, member);
@@ -245,6 +289,7 @@ const verifyEmail = async (token) => {
 
 module.exports = {
   createMember,
+  claimLegacyFallTest,
   searchMembers,
   getMember,
   getMemberByQRCode,

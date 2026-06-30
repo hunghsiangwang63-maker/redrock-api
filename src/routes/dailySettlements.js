@@ -285,11 +285,39 @@ router.get('/monthly-export', authenticate, async (req, res) => {
     const dedSum = (s, type) => { const v = (s.deductions || []).filter(x => x.type === type).reduce((a, x) => a + (Number(x.amount) || 0), 0); return v || ''; };
     const itemVal = (s, arr, label) => { const it = (s.income?.[arr] || []).find(x => x.label === label); return it ? it.value : ''; };
 
-    // 收集整月出現過的「入場/票種」細項 label（動態列）
-    const entryLabels = [], passLabels = [];
+    // 票種細項（沿用結帳已存的 passItems）
+    const passLabels = [];
     dates.forEach(dt => { const s = byDate[dt]; if (!s) return;
-      (s.income?.entryItems || []).forEach(it => { if (!entryLabels.includes(it.label)) entryLabels.push(it.label); });
       (s.income?.passItems || []).forEach(it => { if (!passLabels.includes(it.label)) passLabels.push(it.label); });
+    });
+
+    // 入場細項「拆分」：直接從 checkIns 依「入場類型 + 是否隊員折扣」逐日彙整（畫面顯示維持合併，僅下載檔拆細）
+    const etDoc = await db.collection('systemSettings').doc('entryTypes').get();
+    const ET_NAME = {};
+    (etDoc.exists ? (etDoc.data().types || []) : []).forEach(t => { if (t.id) ET_NAME[t.id] = t.name; });
+    const ENTRY_FALLBACK = { single_ticket:'成人單次入場', student_free:'學生單次入場', child_free:'兒童單次入場', discount_card:'優惠卡入場', buy_discount_card:'購買優惠卡', pass:'定期票入場', vip:'VIP入場', course_access:'課程學員入場', black_card:'黑卡入場', single_entry_ticket:'單次入場券', bonus:'紅利入場', experience:'體驗入場' };
+    const entryName = (id) => ET_NAME[id] || ENTRY_FALLBACK[id] || id || '其他入場';
+    const ciSnap = await db.collection('checkIns')
+      .where('checkedInAt', '>=', new Date(`${start}T00:00:00+08:00`))
+      .where('checkedInAt', '<=', new Date(`${end}T23:59:59+08:00`)).get();
+    const entryGroups = {}; // key(entryType[|team]) -> { id, team, label, byDate }
+    ciSnap.docs.forEach(d => {
+      const c = d.data();
+      if (c.isCancelled) return;
+      if (gymId && c.gymId !== gymId) return;
+      if (!c.checkedInAt) return;
+      const dt = new Date(c.checkedInAt.toDate().getTime() + 8 * 3600000).toISOString().slice(0, 10);
+      const id = c.entryType || 'other';
+      const team = c.isTeamDiscount === true;
+      const key = id + (team ? '|team' : '');
+      const fee = (c.entryFee ?? c.amountPaid ?? 0);
+      if (!entryGroups[key]) entryGroups[key] = { id, team, label: entryName(id) + (team ? '（隊員9折）' : ''), byDate: {} };
+      entryGroups[key].byDate[dt] = (entryGroups[key].byDate[dt] || 0) + fee;
+    });
+    // 排序：同入場類型相鄰，隊員列接在一般列後
+    const entryKeys = Object.keys(entryGroups).sort((a, b) => {
+      const A = entryGroups[a], B = entryGroups[b];
+      return A.label.replace('（隊員9折）', '').localeCompare(B.label.replace('（隊員9折）', '')) || (A.team ? 1 : 0) - (B.team ? 1 : 0);
     });
 
     const R = (a, b, c, fn) => [a, b, c, ...dates.map(dt => fn ? val(dt, fn) : '')];
@@ -319,7 +347,7 @@ router.get('/monthly-export', authenticate, async (req, res) => {
     aoa.push(R('差異(清點-應有)', '', '', s => s.difference));
     aoa.push(R('說明', '', '', s => s.notes));
     aoa.push(['品項銷售明細', '', '']);
-    entryLabels.forEach(lb => aoa.push(R('入場費', lb, '', s => itemVal(s, 'entryItems', lb))));
+    entryKeys.forEach(k => { const g = entryGroups[k]; aoa.push(['入場費', g.label, '', ...dates.map(dt => g.byDate[dt] || '')]); });
     aoa.push(R('租借費', '岩鞋', '', s => s.income?.shoeRental));
     aoa.push(R('商品販售', '商品', '', s => s.income?.product));
     passLabels.forEach(lb => aoa.push(R('定期票', lb, '', s => itemVal(s, 'passItems', lb))));

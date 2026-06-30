@@ -73,7 +73,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     env: process.env.NODE_ENV,
-    version: '1.9.0-monthly-sales-export',
+    version: '1.9.1-entry-split',
   });
 });
 

@@ -61,21 +61,34 @@ const createCompetition = async ({ name, description, gymId, registrationStart, 
     createdBy: staffId, createdAt: now, updatedAt: now,
   };
   await db.collection(COLLECTIONS.COMPETITIONS).doc(id).set(competition);
-  await syncToScoringOnOpen(db, competition);   // 開放即連動建到計分系統
   return competition;
 };
 
-// 賽事開放 + scoringSystem=計分系統v2 → 在 Redrock-comp 建/更新賽事文件，回存 compDocId
-const syncToScoringOnOpen = async (db, competition) => {
-  if (competition.status !== 'open' || competition.scoringSystem !== 'competition_management_v2') return;
-  try {
-    const { syncCompEvent } = require('./competitionSyncService');
-    const ev = await syncCompEvent(competition);
-    if (ev.compDocId && ev.compDocId !== competition.compDocId) {
-      await db.collection(COLLECTIONS.COMPETITIONS).doc(competition.id).update({ compDocId: ev.compDocId });
-      competition.compDocId = ev.compDocId;
-    }
-  } catch (e) { console.error('[計分系統] 建賽事失敗', e.message); }
+// 管理員手動「開始與計分系統對接」：建/取得計分系統賽事 + 啟用同步 + 把目前所有正取名單推過去
+const startScoringSync = async (competitionId) => {
+  const db = getDb();
+  const { syncCompEvent, syncCompAthlete, isCompScoring } = require('./competitionSyncService');
+  const ref = db.collection(COLLECTIONS.COMPETITIONS).doc(competitionId);
+  const doc = await ref.get();
+  if (!doc.exists) throw { code: 'NOT_FOUND', message: '找不到此賽事' };
+  let competition = { id: competitionId, ...doc.data() };
+  if (!isCompScoring(competition)) throw { code: 'NOT_COMP_SCORING', message: '此賽事的計分系統不是「紅石賽事管理 V2」，無法對接' };
+  const ev = await syncCompEvent(competition);
+  if (ev.status === 'skipped') throw { code: 'COMP_NOT_CONFIGURED', message: ev.reason || '計分系統尚未設定金鑰' };
+  const compDocId = ev.compDocId;
+  await ref.update({ compDocId, scoringSyncEnabled: true, scoringSyncStartedAt: new Date() });
+  competition = { ...competition, compDocId, scoringSyncEnabled: true };
+  // 推送目前所有正取報名（之後新報名會即時同步）
+  const regs = await getCompetitionRegistrations(competitionId);
+  let synced = 0, failed = 0, totalConfirmed = 0;
+  for (const reg of regs) {
+    if (reg.status !== 'confirmed') continue;
+    totalConfirmed++;
+    const r = await syncCompAthlete(competition, reg);
+    await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(reg.id).update({ webhookStatus: r.webhookStatus, webhookSentAt: r.webhookSentAt || null, webhookError: r.webhookError || null });
+    if (r.webhookStatus === 'sent') synced++; else failed++;
+  }
+  return { compDocId, synced, failed, totalConfirmed };
 };
 
 const updateCompetition = async (competitionId, updates) => {
@@ -95,7 +108,11 @@ const updateCompetition = async (competitionId, updates) => {
 
   await ref.update(payload);
   const merged = { id: competitionId, ...doc.data(), ...payload };
-  await syncToScoringOnOpen(db, merged);   // 改為開放（或已開放更新賽事名）→ 連動計分系統
+  // 已啟用對接的賽事改名 → 同步更新計分系統賽事名（不重建、不蓋設定）
+  if (merged.scoringSyncEnabled && merged.scoringSystem === 'competition_management_v2' && merged.compDocId && updates.name) {
+    try { const { syncCompEvent } = require('./competitionSyncService'); await syncCompEvent(merged); }
+    catch (e) { console.error('[計分系統] 更新賽事名失敗', e.message); }
+  }
   return merged;
 };
 
@@ -311,6 +328,10 @@ const sendWebhook = async (registrationId) => {
   // 計分系統 v2（紅石賽事計分系統 / Redrock-comp）：跨專案直寫 Firestore，不走 HTTP webhook
   const { isCompScoring, syncCompEvent, syncCompAthlete } = require('./competitionSyncService');
   if (isCompScoring(competition)) {
+    if (!competition.scoringSyncEnabled) {   // 管理員尚未按「開始與計分系統對接」→ 暫不推送
+      await ref.update({ webhookStatus: 'skipped', webhookError: '尚未開始與計分系統對接（管理員未啟用）' });
+      return;
+    }
     let comp = competition;
     if (!comp.compDocId) {                       // 賽事尚未建到計分系統 → 先建（懶建立）
       const ev = await syncCompEvent(comp);
@@ -456,7 +477,7 @@ module.exports = {
   SCORING_SYSTEMS,
   createCompetition, updateCompetition, getCompetitions, getCompetition,
   registerForCompetition, signParentCompetitionWaiver,
-  sendWebhook, retryWebhook, promoteNextWaitlist,
+  sendWebhook, retryWebhook, promoteNextWaitlist, startScoringSync,
   getCompetitionRegistrations, getMemberRegistrations,
   recordCompetitionRevenue,
 };

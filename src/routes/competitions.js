@@ -104,6 +104,17 @@ router.post('/registrations/:id/retry-webhook', authenticate, checkPermission('c
   }
 });
 
+// ── POST /competitions/:id/sync-scoring - 管理員開始與計分系統對接（建賽事+推送全部正取名單）──
+router.post('/:id/sync-scoring', authenticate, checkPermission('competitions.manage'), async (req, res) => {
+  try {
+    const result = await competitionService.startScoringSync(req.params.id);
+    res.json({ ...result, message: `已開始對接：賽事已建立，推送 ${result.synced}/${result.totalConfirmed} 位正取選手${result.failed ? `（${result.failed} 筆失敗）` : ''}` });
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 // ══════════════════════════════════════════════════════
 // 報名（會員端）
 // ══════════════════════════════════════════════════════

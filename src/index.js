@@ -73,7 +73,7 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     env: process.env.NODE_ENV,
-    version: '1.12.2-comp-merge-preserve',
+    version: '1.12.3-reg-deadline-tz',
   });
 });
 

@@ -154,9 +154,13 @@ const registerForCompetition = async ({
   if (competition.status !== 'open') {
     throw { code: 'REGISTRATION_CLOSED', message: '此賽事目前未開放報名' };
   }
-  const today = dayjs().format('YYYY-MM-DD');
+  // 用台灣日期(UTC+8)判截止，避免伺服器 UTC 讓「截止日隔天 00:00–08:00」仍可報名
+  const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
   if (competition.registrationEnd && today > competition.registrationEnd) {
     throw { code: 'REGISTRATION_ENDED', message: '報名期限已截止' };
+  }
+  if (competition.registrationStart && today < competition.registrationStart) {
+    throw { code: 'REGISTRATION_NOT_STARTED', message: '報名尚未開始' };
   }
   if (!competition.divisions.some(d => d.id === divisionId)) {
     throw { code: 'INVALID_DIVISION', message: '組別不正確' };

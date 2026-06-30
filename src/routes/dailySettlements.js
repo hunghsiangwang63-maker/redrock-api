@@ -366,4 +366,69 @@ router.get('/monthly-export', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /daily-settlements/invoice-export?year=YYYY&bimonth=1..6 ──────
+// 管理員下載「統一發票明細表（FOR 記帳士）」：每兩個月一期，逐日列發票資料
+const GYM_TAX = {
+  'gym-hsinchu': { taxId: '87549069', bizName: '紅石攀岩有限公司新竹館' },
+  'gym-shilin':  { taxId: '',         bizName: '紅石攀岩有限公司士林館' },
+};
+router.get('/invoice-export', authenticate, async (req, res) => {
+  try {
+    const role = req.staff?.role;
+    if (!['super_admin', 'gym_manager'].includes(role)) {
+      return res.status(403).json({ error: 'FORBIDDEN', message: '僅管理員可下載' });
+    }
+    const db = getDb();
+    const XLSX = require('xlsx');
+    const gymId = role === 'super_admin' ? (req.query.gymId || req.staff?.gymId) : req.staff?.gymId;
+    const year = parseInt(req.query.year, 10) || dayjs().year();
+    const bimonth = Math.min(6, Math.max(1, parseInt(req.query.bimonth, 10) || 1));
+    const m1 = (bimonth - 1) * 2 + 1, m2 = m1 + 1;
+    const start = `${year}-${String(m1).padStart(2, '0')}-01`;
+    const end = dayjs(`${year}-${String(m2).padStart(2, '0')}-01`).endOf('month').format('YYYY-MM-DD');
+    const track = (req.query.track || '').trim();
+    const def = GYM_TAX[gymId] || { taxId: '', bizName: '紅石攀岩有限公司' };
+    const taxId = req.query.taxId || def.taxId || '';
+    const bizName = req.query.bizName || def.bizName;
+
+    const snap = await db.collection('dailySettlements').where('date', '>=', start).where('date', '<=', end).get();
+    const byDate = {};
+    snap.docs.forEach(d => { const s = d.data(); if (!gymId || s.gymId === gymId) byDate[s.date] = s; });
+
+    const WD = ['日', '一', '二', '三', '四', '五', '六'];
+    const rocYear = year - 1911;
+    const aoa = [];
+    aoa.push(['', '', '', '營業人使用二聯式收銀機統一發票明細表']);
+    aoa.push(['', '', '', '中 華 民 國', '', `${rocYear}年`, `${m1}/${m2}月`]);
+    aoa.push(['統一編號', '', '', taxId]);
+    aoa.push(['營業人名稱', '', '', bizName]);
+    aoa.push(['發票字軌', '', '', track]);
+    aoa.push(['開立日期', '星期', '交易客次', '開立發票起號', '開立發票迄號', '發票總金額', '作廢發票號碼', '集點卡最前號', '優惠卡最前號', '全票最前號']);
+
+    let d = dayjs(start); const last = dayjs(end);
+    while (d.isBefore(last.add(1, 'day'))) {
+      const dt = d.format('YYYY-MM-DD'); const s = byDate[dt];
+      const st = s?.invoiceStartNumber || '', en = s?.invoiceLastNumber || '';
+      const cnt = (/^\d+$/.test(String(st)) && /^\d+$/.test(String(en))) ? (parseInt(en, 10) - parseInt(st, 10) + 1) : '';
+      aoa.push([
+        d.format('YYYY/MM/DD'), WD[d.day()], s ? cnt : '',
+        st, en, s ? (s.income?.total ?? '') : '', s?.invoiceVoidNumbers || '',
+        '', s?.cardOrangeFirst || '', s?.cardFullFirst || '',
+      ]);
+      d = d.add(1, 'day');
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 12 }, { wch: 5 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+    const wb = XLSX.utils.book_new();
+    const sheetName = `${year}${String(m1).padStart(2, '0')}${String(m2).padStart(2, '0')}`;
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const gymName = gymId === 'gym-hsinchu' ? '新竹' : gymId === 'gym-shilin' ? '士林' : '全館';
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="invoice_${gymName}_${sheetName}.xlsx"`);
+    res.send(buf);
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 module.exports = router;

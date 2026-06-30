@@ -321,8 +321,13 @@ router.post('/registrations/:regId/cancel',
         updatedAt: new Date(),
       });
 
-      // 若釋出的是正取名額，遞補下一位候補（並對已完成簽署的遞補者推送 webhook）
+      // 若釋出的是正取名額：① 計分系統移除該選手 ② 遞補下一位候補（遞補者完成簽署會自動推送計分系統）
       if (reg.status === 'confirmed') {
+        try {
+          const comp = (await db.collection(COLLECTIONS.COMPETITIONS).doc(reg.competitionId).get()).data();
+          const { isCompScoring, removeCompAthlete } = require('../services/competitionSyncService');
+          if (isCompScoring(comp)) await removeCompAthlete(comp, req.params.regId);
+        } catch (e) { console.error('[計分系統] 取消同步失敗', e.message); }
         try { await competitionService.promoteNextWaitlist(reg.competitionId, reg.divisionId); }
         catch (e) { console.error('比賽候補遞補失敗:', e.message); }
       }

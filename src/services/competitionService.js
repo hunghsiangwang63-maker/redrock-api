@@ -61,7 +61,21 @@ const createCompetition = async ({ name, description, gymId, registrationStart, 
     createdBy: staffId, createdAt: now, updatedAt: now,
   };
   await db.collection(COLLECTIONS.COMPETITIONS).doc(id).set(competition);
+  await syncToScoringOnOpen(db, competition);   // 開放即連動建到計分系統
   return competition;
+};
+
+// 賽事開放 + scoringSystem=計分系統v2 → 在 Redrock-comp 建/更新賽事文件，回存 compDocId
+const syncToScoringOnOpen = async (db, competition) => {
+  if (competition.status !== 'open' || competition.scoringSystem !== 'competition_management_v2') return;
+  try {
+    const { syncCompEvent } = require('./competitionSyncService');
+    const ev = await syncCompEvent(competition);
+    if (ev.compDocId && ev.compDocId !== competition.compDocId) {
+      await db.collection(COLLECTIONS.COMPETITIONS).doc(competition.id).update({ compDocId: ev.compDocId });
+      competition.compDocId = ev.compDocId;
+    }
+  } catch (e) { console.error('[計分系統] 建賽事失敗', e.message); }
 };
 
 const updateCompetition = async (competitionId, updates) => {
@@ -80,7 +94,9 @@ const updateCompetition = async (competitionId, updates) => {
   allowed.forEach(f => { if (updates[f] !== undefined) payload[f] = updates[f]; });
 
   await ref.update(payload);
-  return { id: competitionId, ...doc.data(), ...payload };
+  const merged = { id: competitionId, ...doc.data(), ...payload };
+  await syncToScoringOnOpen(db, merged);   // 改為開放（或已開放更新賽事名）→ 連動計分系統
+  return merged;
 };
 
 const getCompetitions = async (status) => {
@@ -291,6 +307,22 @@ const sendWebhook = async (registrationId) => {
   }
 
   const competition = await getCompetition(registration.competitionId);
+
+  // 計分系統 v2（紅石賽事計分系統 / Redrock-comp）：跨專案直寫 Firestore，不走 HTTP webhook
+  const { isCompScoring, syncCompEvent, syncCompAthlete } = require('./competitionSyncService');
+  if (isCompScoring(competition)) {
+    let comp = competition;
+    if (!comp.compDocId) {                       // 賽事尚未建到計分系統 → 先建（懶建立）
+      const ev = await syncCompEvent(comp);
+      if (ev.compDocId) {
+        await db.collection(COLLECTIONS.COMPETITIONS).doc(comp.id).update({ compDocId: ev.compDocId });
+        comp = { ...comp, compDocId: ev.compDocId };
+      }
+    }
+    const r = await syncCompAthlete(comp, registration);
+    await ref.update({ webhookStatus: r.webhookStatus, webhookSentAt: r.webhookSentAt || null, webhookError: r.webhookError || null });
+    return;
+  }
 
   if (!competition.webhookUrl) {
     await ref.update({ webhookStatus: 'skipped', webhookError: '此賽事尚未設定計分系統webhook網址' });

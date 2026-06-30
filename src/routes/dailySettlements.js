@@ -183,13 +183,13 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
       .orderBy('date', 'desc').limit(1).get();
     const prevBalance = prevSnap.empty ? 0 : (prevSnap.docs[0].data().closingCashBalance || 0);
 
-    // 計算減項總額
-    const totalDeductions = (deductions || []).reduce((sum, d) => sum + (d.amount || 0), 0);
+    // 計算加減項淨額：sign '+' 加入抽屜（預期上升）、'-' 取出（預期下降）；舊資料無 sign 視為 '-'（減）
+    const netAdjust = (deductions || []).reduce((sum, d) => sum + ((d.sign === '+' ? 1 : -1) * (Number(d.amount) || 0)), 0);
     // 手動輸入模式：現金以手動值為準（轉換期系統交易不完整），否則用系統算的
     const manualCash = paymentManual && paymentManual.cash !== undefined && paymentManual.cash !== '' && paymentManual.cash !== null
       ? Number(paymentManual.cash) || 0 : null;
     const effectiveCash = manualCash != null ? manualCash : (payment?.cash || 0);
-    const expectedCash = prevBalance + effectiveCash - totalDeductions;
+    const expectedCash = prevBalance + effectiveCash + netAdjust;
     const difference = actualCash - expectedCash;
 
     const id = uuidv4();

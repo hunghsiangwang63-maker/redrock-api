@@ -426,6 +426,47 @@ router.get('/today',
   }
 );
 
+// ── GET /checkin/monthly-daily-counts?gymId=&month=YYYY-MM ────────────
+// 入場頁折線圖：本月與上月「每日入場數」（依台灣日期、排除取消）
+router.get('/monthly-daily-counts', authenticate, checkPermission('checkin.read'), async (req, res) => {
+  try {
+    const { getDb } = require('../config/firebase');
+    const db = getDb();
+    const dayjs = require('dayjs');
+    const gymId = req.query.gymId || (req.staff.role === 'super_admin' ? null : req.staff.gymId);
+    const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 7);
+    const curStart = `${month}-01`;
+    const prevMonth = dayjs(curStart).subtract(1, 'month').format('YYYY-MM');
+    const prevStart = `${prevMonth}-01`;
+    const curEnd = dayjs(curStart).endOf('month').format('YYYY-MM-DD');
+
+    // 單欄位範圍（checkedInAt）＋記憶體過濾 gym/取消，避複合索引
+    const snap = await db.collection('checkIns')
+      .where('checkedInAt', '>=', new Date(`${prevStart}T00:00:00+08:00`))
+      .where('checkedInAt', '<=', new Date(`${curEnd}T23:59:59+08:00`)).get();
+    const countMap = {};
+    snap.docs.forEach(d => {
+      const r = d.data();
+      if (r.isCancelled === true || r.status === 'cancelled') return;
+      if (gymId && r.gymId !== gymId) return;
+      if (!r.checkedInAt) return;
+      const dt = new Date(r.checkedInAt.toDate().getTime() + 8 * 3600000).toISOString().slice(0, 10);
+      countMap[dt] = (countMap[dt] || 0) + 1;
+    });
+    const dCur = dayjs(curStart).daysInMonth(), dPrev = dayjs(prevStart).daysInMonth();
+    const pad = n => String(n).padStart(2, '0');
+    const data = [];
+    for (let day = 1; day <= Math.max(dCur, dPrev); day++) {
+      data.push({
+        day,
+        current: day <= dCur ? (countMap[`${month}-${pad(day)}`] || 0) : null,
+        previous: day <= dPrev ? (countMap[`${prevMonth}-${pad(day)}`] || 0) : null,
+      });
+    }
+    res.json({ month, prevMonth, curLabel: dayjs(curStart).format('M月'), prevLabel: dayjs(prevStart).format('M月'), data });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /checkin/history ─────────────────────────────────────────
 router.get('/history',
   authenticateAny,

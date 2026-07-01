@@ -14,6 +14,18 @@ const COLLECTION_PENDING = 'deviceVerifications';
 const toDate = (v) => (v?.toDate ? v.toDate() : v);
 const generateCode = () => String(Math.floor(100000 + Math.random() * 900000));
 
+// ── 裝置綁定總開關（可逆；systemSettings/security.deviceBindingEnabled）──
+// 預設 true（強制綁定）；設為 false 可暫時停用裝置驗證（測試期），改回 true 即恢復。
+// 讀取失敗一律回 true（安全預設：寧可強制、不誤放行）。super_admin 另有豁免、不受此開關影響。
+const isDeviceBindingEnabled = async () => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('systemSettings').doc('security').get();
+    if (doc.exists && doc.data().deviceBindingEnabled === false) return false;
+    return true;
+  } catch (e) { return true; }
+};
+
 // ── 檢查裝置是否已授權 ────────────────────────────────────────────
 const isDeviceTrusted = async (accountType, accountId, deviceToken) => {
   if (!deviceToken) return false;
@@ -118,6 +130,6 @@ const rejectDeviceVerification = async (verificationId, rejectedByLabel) => {
 };
 
 module.exports = {
-  isDeviceTrusted, createDeviceVerification, verifyDeviceOtp,
+  isDeviceTrusted, isDeviceBindingEnabled, createDeviceVerification, verifyDeviceOtp,
   approveDeviceVerification, rejectDeviceVerification,
 };

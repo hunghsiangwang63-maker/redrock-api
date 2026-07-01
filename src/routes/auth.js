@@ -56,9 +56,9 @@ router.post('/staff/login',
         return res.status(401).json({ error: 'INVALID_CREDENTIALS', message: '帳號或密碼錯誤' });
       }
 
-      // 裝置綁定檢查（super_admin 例外，避免無人能核准第一台裝置）
-      if (staff.role !== 'super_admin') {
-        const deviceAuthService = require('../services/deviceAuthService');
+      // 裝置綁定檢查（super_admin 例外；並可經 systemSettings/security.deviceBindingEnabled 暫時停用）
+      const deviceAuthService = require('../services/deviceAuthService');
+      if (staff.role !== 'super_admin' && await deviceAuthService.isDeviceBindingEnabled()) {
         const trusted = await deviceAuthService.isDeviceTrusted('staff', staffDoc.id, req.body.deviceToken);
         if (!trusted) {
           const { verificationId } = await deviceAuthService.createDeviceVerification({

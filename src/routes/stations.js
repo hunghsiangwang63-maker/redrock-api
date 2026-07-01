@@ -46,21 +46,23 @@ router.post('/login',
       const valid = await bcrypt.compare(password, station.passwordHash);
       if (!valid) return res.status(401).json({ error: 'INVALID_CREDENTIALS', message: '帳號或密碼錯誤' });
 
-      // 裝置綁定檢查
+      // 裝置綁定檢查（可經 systemSettings/security.deviceBindingEnabled 暫時停用）
       const deviceAuthService = require('../services/deviceAuthService');
-      const trusted = await deviceAuthService.isDeviceTrusted('station', doc.id, req.body.deviceToken);
-      if (!trusted) {
-        const { verificationId } = await deviceAuthService.createDeviceVerification({
-          accountType: 'station', accountId: doc.id,
-          accountName: station.name, accountEmail: station.notificationEmail || station.email,
-          deviceToken: req.body.deviceToken,
-          deviceLabel: req.headers['user-agent'] || '',
-        });
-        return res.status(403).json({
-          error: 'DEVICE_VERIFICATION_REQUIRED',
-          verificationId,
-          message: '此電腦尚未授權，已發送驗證碼至館別電腦Email，或請聯絡管理員審核此裝置',
-        });
+      if (await deviceAuthService.isDeviceBindingEnabled()) {
+        const trusted = await deviceAuthService.isDeviceTrusted('station', doc.id, req.body.deviceToken);
+        if (!trusted) {
+          const { verificationId } = await deviceAuthService.createDeviceVerification({
+            accountType: 'station', accountId: doc.id,
+            accountName: station.name, accountEmail: station.notificationEmail || station.email,
+            deviceToken: req.body.deviceToken,
+            deviceLabel: req.headers['user-agent'] || '',
+          });
+          return res.status(403).json({
+            error: 'DEVICE_VERIFICATION_REQUIRED',
+            verificationId,
+            message: '此電腦尚未授權，已發送驗證碼至館別電腦Email，或請聯絡管理員審核此裝置',
+          });
+        }
       }
 
       await doc.ref.update({ lastLoginAt: new Date() });

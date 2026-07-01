@@ -65,6 +65,10 @@ router.post('/types',
         price: parseInt(req.body.price),
         durationDays: parseInt(req.body.durationDays),
         credits: req.body.credits ? parseInt(req.body.credits) : null,
+        // 分期規則（此票種可分期）：購買時會員可選一次付清或分期
+        installment: (req.body.installment && req.body.installment.enabled)
+          ? { enabled: true, periods: (req.body.installment.periods || []).map(p => ({ percent: Number(p.percent) || 0, dueOffsetDays: Number(p.dueOffsetDays) || 0 })) }
+          : { enabled: false, periods: [] },
         isActive: true,
         createdAt: now, updatedAt: now,
       };
@@ -99,6 +103,12 @@ router.put('/types/:id',
           updates[f] = (f === 'price' || f === 'durationDays' || f === 'credits') ? parseInt(req.body[f]) : req.body[f];
         }
       });
+      if (req.body.installment !== undefined) {
+        const inst = req.body.installment;
+        updates.installment = (inst && inst.enabled)
+          ? { enabled: true, periods: (inst.periods || []).map(p => ({ percent: Number(p.percent) || 0, dueOffsetDays: Number(p.dueOffsetDays) || 0 })) }
+          : { enabled: false, periods: [] };
+      }
       updates.updatedAt = new Date();
 
       await ref.update(updates);
@@ -168,8 +178,24 @@ router.post('/',
       };
       await db.collection(COLLECTIONS.MEMBER_PASSES).doc(passId).set(pass);
 
-      // 記錄交易（線上付款 deferPayment 時略過，改由付款 callback 記，避免重複）
-      if (passType.price > 0 && !req.body.deferPayment) {
+      // 分期：票種有開分期規則且會員選「分期」→ 建立分期計畫（各期收款日即時認列），第一期簽約當下收
+      const usePassInstallment = passType.installment?.enabled && req.body.paymentPlan === 'installment' && !req.body.deferPayment;
+      let passPlan = null;
+      if (passType.price > 0 && usePassInstallment) {
+        const installmentService = require('../services/installmentService');
+        const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+        const periods = installmentService.buildPeriodsFromConfig(passType.installment, passType.price, today);
+        if (periods) {
+          passPlan = await installmentService.createInstallmentPlan({
+            memberId: req.body.memberId, memberName: req.body.memberName || '',
+            gymId: req.staff.gymId, relatedType: 'pass', relatedId: passId, itemName: passType.name,
+            recognitionDate: null, installments: periods,
+            firstPaymentMethod: req.body.paymentMethod || 'cash', staffId: req.staff.id, staffName: req.staff.name,
+          });
+        }
+      }
+      // 記錄交易（一次付清；分期改由計畫逐期記帳，此處略過；deferPayment 由付款 callback 記）
+      if (passType.price > 0 && !req.body.deferPayment && !passPlan) {
         const { recordTransaction } = require('../utils/revenueLedger');
         await recordTransaction(db, {
           gymId: req.staff.gymId,
@@ -185,7 +211,7 @@ router.post('/',
         });
       }
 
-      res.status(201).json({ pass, message: '定期票建立成功' });
+      res.status(201).json({ pass, installmentPlan: passPlan, message: '定期票建立成功' });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }

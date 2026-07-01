@@ -13,6 +13,23 @@ const { v4: uuidv4 } = require('uuid');
 
 const VALID_PAYMENT_METHODS = ['linepay', 'jkopay', 'taiwanpay', 'transfer', 'cash'];
 
+// ── 由「課程/票種的分期規則」+ 總價 + 起始日 產出各期 {amount,dueDate} ──
+// config = { enabled, periods:[{ percent, dueOffsetDays }] }；percent 為佔總價比例(合計≈100)，
+// 金額四捨五入、最後一期吸收餘數以確保合計＝總價；到期日＝起始日 + dueOffsetDays。
+const buildPeriodsFromConfig = (config, totalPrice, startDateStr) => {
+  const dayjs = require('dayjs');
+  const periods = (config?.periods || []).filter(p => (Number(p.percent) || 0) > 0);
+  if (periods.length < 2 || !(totalPrice > 0)) return null;
+  const start = startDateStr || new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+  let allocated = 0;
+  return periods.map((p, i) => {
+    const isLast = i === periods.length - 1;
+    const amount = isLast ? (totalPrice - allocated) : Math.round(totalPrice * (Number(p.percent) || 0) / 100);
+    allocated += amount;
+    return { amount, dueDate: dayjs(start).add(Number(p.dueOffsetDays) || 0, 'day').format('YYYY-MM-DD') };
+  });
+};
+
 // ── 分期繳款記帳 ──────────────────────────────────────────────────
 // 每期繳款記一筆 transactions（進營收/結算）。認列日：
 //   課程＝預收，認列在最後一堂（plan.recognitionDate）；定期票＝收款日即時（recognitionDate=null→paidAt）
@@ -264,6 +281,7 @@ const getAllInstallmentPlans = async (status) => {
 };
 
 module.exports = {
+  buildPeriodsFromConfig,
   createInstallmentPlan,
   markInstallmentPaid,
   runOverdueCheck,

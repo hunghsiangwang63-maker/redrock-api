@@ -200,34 +200,33 @@ router.post('/sessions/:sessionId/enroll',
         }
       } catch (deferErr) { /* 遞延申請建立失敗不影響報名主流程 */ }
 
-      // ── 插班分期串接：feeInfo.installment(剩餘>4堂分兩期) → 建立分期計畫 ──
-      // 第一期簽約當下收（自動記帳），第二期到期日+1月；課程營收認列在最後一堂
+      // ── 插班分期：課程有開分期規則且會員選「分期」→ 依規則(比例)建立分期計畫 ──
+      // 以插班實收費用(feeInfo.fee)為總額；第一期簽約當下收、記帳認列課程最後一堂
       let installmentPlan = null;
       try {
-        if (result.feeInfo?.installment && !result.isWaitlist) {
+        if (req.body.paymentPlan === 'installment' && !result.isWaitlist && result.feeInfo?.fee > 0) {
           const db2 = require('../config/firebase').getDb();
           const { COLLECTIONS } = require('../config/firebase');
           const sDoc = await db2.collection('courseSessions').doc(req.params.sessionId).get();
           const c = sDoc.exists ? (await db2.collection(COLLECTIONS.COURSES || 'courses').doc(sDoc.data().courseId).get()).data() : null;
-          const mDoc = await db2.collection(COLLECTIONS.MEMBERS).doc(req.body.memberId).get();
-          const dayjs = require('dayjs');
-          const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
-          installmentPlan = await require('../services/installmentService').createInstallmentPlan({
-            memberId: req.body.memberId,
-            memberName: mDoc.exists ? (mDoc.data().name || '') : '',
-            gymId: req.staff?.gymId || req.body.gymId || c?.gymId || null,
-            relatedType: 'course',
-            relatedId: sDoc.exists ? sDoc.data().courseId : req.params.courseId,
-            itemName: c?.name || '課程插班',
-            recognitionDate: c?.endDate || c?.unlimitedPracticeEnd || null,
-            installments: [
-              { amount: result.feeInfo.firstPayment, dueDate: today },
-              { amount: result.feeInfo.secondPayment, dueDate: dayjs(today).add(1, 'month').format('YYYY-MM-DD') },
-            ],
-            firstPaymentMethod: req.body.paymentMethod || 'cash',
-            staffId: req.staff?.id || null,
-            staffName: req.staff?.name || '',
-          });
+          if (c?.installment?.enabled) {
+            const installmentService = require('../services/installmentService');
+            const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+            const periods = installmentService.buildPeriodsFromConfig(c.installment, result.feeInfo.fee, today);
+            if (periods) {
+              const mDoc = await db2.collection(COLLECTIONS.MEMBERS).doc(req.body.memberId).get();
+              installmentPlan = await installmentService.createInstallmentPlan({
+                memberId: req.body.memberId,
+                memberName: mDoc.exists ? (mDoc.data().name || '') : '',
+                gymId: req.staff?.gymId || req.body.gymId || c?.gymId || null,
+                relatedType: 'course', relatedId: sDoc.data().courseId, itemName: c?.name || '課程插班',
+                recognitionDate: c?.endDate || c?.unlimitedPracticeEnd || null,
+                installments: periods,
+                firstPaymentMethod: req.body.paymentMethod || 'cash',
+                staffId: req.staff?.id || null, staffName: req.staff?.name || '',
+              });
+            }
+          }
         }
       } catch (planErr) { console.error('[分期串接] 插班分期計畫建立失敗', planErr.message); }
 
@@ -521,6 +520,13 @@ router.put('/:courseId',
       ];
       const updates = { updatedAt: new Date() };
       allowedFields.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+      // 分期規則
+      if (req.body.installment !== undefined) {
+        const inst = req.body.installment;
+        updates.installment = (inst && inst.enabled)
+          ? { enabled: true, periods: (inst.periods || []).map(p => ({ percent: Number(p.percent) || 0, dueOffsetDays: Number(p.dueOffsetDays) || 0 })) }
+          : { enabled: false, periods: [] };
+      }
 
       await db.collection('courses').doc(req.params.courseId).update(updates);
       res.json({ message: '課程已更新', updates });
@@ -700,14 +706,30 @@ router.post('/:courseId/enroll-all',
 
       await batch.commit();
 
-      // 記錄交易（整堂課費用記在第一個場次上，僅在有實收費用且非延後付款時記錄；
-      // 線上付款 deferPayment 時改由付款 callback 記帳，避免重複記帳）
-      if (fee > 0 && !req.body.deferPayment) {
+      // 營收認列在最後一堂課（course.endDate；無則用無限練習迄日/最後場次日）
+      const courseRecognitionDate = course.endDate
+        || course.unlimitedPracticeEnd
+        || (futureSessions.length ? futureSessions[futureSessions.length - 1].date : null);
+      // 分期：課程有開分期規則且會員選「分期」→ 建立分期計畫（第一期簽約當下收，各期記帳認列最後一堂）
+      const useCourseInstallment = course.installment?.enabled && req.body.paymentPlan === 'installment' && !req.body.deferPayment;
+      let coursePlan = null;
+      if (fee > 0 && useCourseInstallment) {
+        const installmentService = require('../services/installmentService');
+        const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+        const periods = installmentService.buildPeriodsFromConfig(course.installment, fee, today);
+        if (periods) {
+          coursePlan = await installmentService.createInstallmentPlan({
+            memberId, memberName: req.member?.name || req.body.memberName || '',
+            gymId: futureSessions[0].gymId || gymId,
+            relatedType: 'course', relatedId: courseId, itemName: course.name,
+            recognitionDate: courseRecognitionDate, installments: periods,
+            firstPaymentMethod: paymentMethod, staffId: req.staff?.id || null, staffName: req.staff?.name || '',
+          });
+        }
+      }
+      // 記錄交易（一次付清；分期改由計畫逐期記帳，此處略過；deferPayment 由付款 callback 記）
+      if (fee > 0 && !req.body.deferPayment && !coursePlan) {
         const { recordTransaction } = require('../utils/revenueLedger');
-        // 預收貨款：營收認列在最後一堂課（course.endDate；無則用無限練習迄日/最後場次日）
-        const recognitionDate = course.endDate
-          || course.unlimitedPracticeEnd
-          || (futureSessions.length ? futureSessions[futureSessions.length - 1].date : null);
         await recordTransaction(db, {
           gymId: futureSessions[0].gymId || gymId,
           type: 'course',
@@ -719,12 +741,13 @@ router.post('/:courseId/enroll-all',
           notes: `課程報名：${course.name}（整堂課，共${futureSessions.length}場）`,
           staffId: req.staff?.id || null,
           staffName: req.staff?.name || '',
-          recognitionDate,
+          recognitionDate: courseRecognitionDate,
         });
       }
 
       res.status(201).json({
         enrollmentId: firstEnrollmentId,
+        installmentPlan: coursePlan,
         message: isTeam && discountResult.discount > 0
           ? `報名成功，已加入 ${futureSessions.length} 個場次（已套用攀岩隊員折扣，折抵 NT$${discountResult.discount}）`
           : `報名成功，已加入 ${futureSessions.length} 個場次`,

@@ -29,6 +29,7 @@ router.post('/',
       const plan = await installmentService.createInstallmentPlan({
         ...req.body,
         staffId: req.staff.id,
+        staffName: req.staff.name,
       });
       res.status(201).json({ plan, message: '分期付款計畫已建立' });
     } catch (err) {
@@ -53,6 +54,7 @@ router.post('/:planId/pay',
         seq: parseInt(req.body.seq),
         paymentMethod: req.body.paymentMethod,
         staffId: req.staff.id,
+        staffName: req.staff.name,
       });
       res.json({
         message: result.allPaid ? '已完成最後一期繳款，分期計畫結清' : '已標記此期繳款完成',

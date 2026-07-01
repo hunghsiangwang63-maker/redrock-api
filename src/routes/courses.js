@@ -200,7 +200,38 @@ router.post('/sessions/:sessionId/enroll',
         }
       } catch (deferErr) { /* 遞延申請建立失敗不影響報名主流程 */ }
 
-      res.status(result.isWaitlist ? 200 : 201).json({ ...result, deferralRequest });
+      // ── 插班分期串接：feeInfo.installment(剩餘>4堂分兩期) → 建立分期計畫 ──
+      // 第一期簽約當下收（自動記帳），第二期到期日+1月；課程營收認列在最後一堂
+      let installmentPlan = null;
+      try {
+        if (result.feeInfo?.installment && !result.isWaitlist) {
+          const db2 = require('../config/firebase').getDb();
+          const { COLLECTIONS } = require('../config/firebase');
+          const sDoc = await db2.collection('courseSessions').doc(req.params.sessionId).get();
+          const c = sDoc.exists ? (await db2.collection(COLLECTIONS.COURSES || 'courses').doc(sDoc.data().courseId).get()).data() : null;
+          const mDoc = await db2.collection(COLLECTIONS.MEMBERS).doc(req.body.memberId).get();
+          const dayjs = require('dayjs');
+          const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+          installmentPlan = await require('../services/installmentService').createInstallmentPlan({
+            memberId: req.body.memberId,
+            memberName: mDoc.exists ? (mDoc.data().name || '') : '',
+            gymId: req.staff?.gymId || req.body.gymId || c?.gymId || null,
+            relatedType: 'course',
+            relatedId: sDoc.exists ? sDoc.data().courseId : req.params.courseId,
+            itemName: c?.name || '課程插班',
+            recognitionDate: c?.endDate || c?.unlimitedPracticeEnd || null,
+            installments: [
+              { amount: result.feeInfo.firstPayment, dueDate: today },
+              { amount: result.feeInfo.secondPayment, dueDate: dayjs(today).add(1, 'month').format('YYYY-MM-DD') },
+            ],
+            firstPaymentMethod: req.body.paymentMethod || 'cash',
+            staffId: req.staff?.id || null,
+            staffName: req.staff?.name || '',
+          });
+        }
+      } catch (planErr) { console.error('[分期串接] 插班分期計畫建立失敗', planErr.message); }
+
+      res.status(result.isWaitlist ? 200 : 201).json({ ...result, deferralRequest, installmentPlan });
     } catch (err) {
       if (err.code) return res.status(400).json(err);
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

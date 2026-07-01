@@ -79,7 +79,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '1.14.1-settlement-adjustments',
+    version: '1.15.0-installment-revenue',
   });
 });
 
@@ -103,6 +103,25 @@ if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`🏔  RedRock API Server running on port ${PORT}`);
   });
+
+  // ── 每日排程（台灣 09:00）：分期逾期檢查 + 到期/逾期提醒 ──
+  // 無外部 cron：每小時檢查一次，以台灣日期防重複（單一 instance 假設）。TZ=Asia/Taipei 故 getHours()=台灣時。
+  let lastInstallmentRunDate = null;
+  const runDailyInstallmentJobs = async () => {
+    try {
+      const installmentService = require('./services/installmentService');
+      const ov = await installmentService.runOverdueCheck();
+      const rm = await installmentService.sendInstallmentReminders();
+      console.log(`[分期排程] 逾期 ${ov.overdueCount} 筆；會員提醒 ${rm.reminderSent || 0}、逾期通知 ${rm.overdueSent || 0}、管理員預警 ${rm.adminNotified || 0}`);
+    } catch (e) { console.error('[分期排程] 失敗', e.message); }
+  };
+  setInterval(() => {
+    const dateStr = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    if (new Date().getHours() === 9 && lastInstallmentRunDate !== dateStr) {
+      lastInstallmentRunDate = dateStr;
+      runDailyInstallmentJobs();
+    }
+  }, 60 * 60 * 1000);
 }
 
 module.exports = app;

@@ -13,8 +13,29 @@ const { v4: uuidv4 } = require('uuid');
 
 const VALID_PAYMENT_METHODS = ['linepay', 'jkopay', 'taiwanpay', 'transfer', 'cash'];
 
+// ── 分期繳款記帳 ──────────────────────────────────────────────────
+// 每期繳款記一筆 transactions（進營收/結算）。認列日：
+//   課程＝預收，認列在最後一堂（plan.recognitionDate）；定期票＝收款日即時（recognitionDate=null→paidAt）
+const recordInstallmentRevenue = async (db, plan, period, paymentMethod, staffId = null, staffName = '') => {
+  if (!plan.gymId) return null;   // 無館別不記（避免壞報表）；舊 manual 計畫可能無 gymId
+  const { recordTransaction } = require('../utils/revenueLedger');
+  const recognitionDate = plan.relatedType === 'course' ? (plan.recognitionDate || null) : null;
+  return recordTransaction(db, {
+    gymId: plan.gymId,
+    type: plan.relatedType,        // 'course' | 'pass'（沿用 revenue 既有歸類）
+    totalAmount: period.amount,
+    paymentMethod: paymentMethod || 'cash',
+    memberId: plan.memberId,
+    memberName: plan.memberName || '',
+    relatedId: plan.relatedId || plan.id,
+    notes: `分期-${plan.itemName}（第${period.seq}/${(plan.installments || []).length}期）`,
+    staffId, staffName,
+    recognitionDate,
+  });
+};
+
 // ── 建立分期付款計畫 ──────────────────────────────────────────────
-const createInstallmentPlan = async ({ memberId, memberName, relatedType, relatedId, itemName, installments, staffId }) => {
+const createInstallmentPlan = async ({ memberId, memberName, gymId, relatedType, relatedId, itemName, recognitionDate, installments, firstPaymentMethod, staffId, staffName }) => {
   if (!['course', 'pass'].includes(relatedType)) {
     throw { code: 'INVALID_TYPE', message: 'relatedType 必須為 course 或 pass' };
   }
@@ -31,32 +52,46 @@ const createInstallmentPlan = async ({ memberId, memberName, relatedType, relate
   const now = new Date();
   const totalAmount = installments.reduce((sum, i) => sum + i.amount, 0);
 
+  const periods = installments.map((i, idx) => ({
+    seq: idx + 1,
+    amount: i.amount,
+    dueDate: i.dueDate,
+    status: 'pending',
+    paidAt: null,
+    paymentMethod: null,
+    note: i.note || '',
+  }));
+  // 第一期自動收款（簽約當下收頭款）
+  if (firstPaymentMethod) {
+    periods[0] = { ...periods[0], status: 'paid', paidAt: now, paymentMethod: firstPaymentMethod, paidBy: staffId || null };
+  }
+
   const plan = {
     id: planId,
     memberId, memberName,
+    gymId: gymId || null,
     relatedType, relatedId, itemName,
+    // 課程＝最後一堂認列；定期票＝收款日即時（不存 recognitionDate）
+    recognitionDate: relatedType === 'course' ? (recognitionDate || null) : null,
     totalAmount,
-    installments: installments.map((i, idx) => ({
-      seq: idx + 1,
-      amount: i.amount,
-      dueDate: i.dueDate,
-      status: idx === 0 ? 'pending' : 'pending', // 第一期通常當下立即收款，由前端呼叫 markPaid 標記
-      paidAt: null,
-      paymentMethod: null,
-      note: i.note || '',
-    })),
-    status: 'active',
+    installments: periods,
+    status: periods.every(p => p.status === 'paid') ? 'completed' : 'active',
     createdBy: staffId,
     createdAt: now,
     updatedAt: now,
   };
 
   await db.collection(COLLECTIONS.INSTALLMENT_PLANS).doc(planId).set(plan);
+  // 第一期營收記帳
+  if (firstPaymentMethod) {
+    try { await recordInstallmentRevenue(db, plan, periods[0], firstPaymentMethod, staffId, staffName); }
+    catch (e) { console.error('[分期] 第一期記帳失敗', e.message); }
+  }
   return plan;
 };
 
 // ── 標記某期已繳款 ────────────────────────────────────────────────
-const markInstallmentPaid = async ({ planId, seq, paymentMethod, staffId }) => {
+const markInstallmentPaid = async ({ planId, seq, paymentMethod, staffId, staffName }) => {
   if (!VALID_PAYMENT_METHODS.includes(paymentMethod)) {
     throw { code: 'INVALID_PAYMENT_METHOD', message: '付款方式不正確' };
   }
@@ -86,6 +121,12 @@ const markInstallmentPaid = async ({ planId, seq, paymentMethod, staffId }) => {
     status: allPaid ? 'completed' : (stillOverdue ? 'overdue' : 'active'),
     updatedAt: now,
   });
+
+  // 本期繳款記帳（進營收/結算）：課程認列最後一堂、定期票收款日
+  try {
+    const paidPeriod = updatedInstallments.find(i => i.seq === seq);
+    await recordInstallmentRevenue(db, { ...plan, installments: updatedInstallments }, paidPeriod, paymentMethod, staffId, staffName);
+  } catch (e) { console.error('[分期] 繳款記帳失敗', e.message); }
 
   return { allPaid, plan: { ...plan, installments: updatedInstallments } };
 };

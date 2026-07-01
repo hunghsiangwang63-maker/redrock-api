@@ -110,6 +110,18 @@ router.put('/:id', authenticate, checkPermission('products.manage'), async (req,
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── DELETE /products/:id/permanent - 永久刪除（僅管理員 super_admin / gym_manager）──
+router.delete('/:id/permanent', authenticate, checkPermission('products.manage'), async (req, res) => {
+  try {
+    if (!['super_admin', 'gym_manager'].includes(req.staff?.role)) {
+      return res.status(403).json({ error: 'FORBIDDEN', message: '僅管理員可永久刪除商品' });
+    }
+    const db = getDb();
+    await db.collection('products').doc(req.params.id).delete();
+    res.json({ message: '商品已永久刪除' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── DELETE /products/:id ──────────────────────────────────────────
 router.delete('/:id', authenticate, checkPermission('products.manage'), async (req, res) => {
   try {

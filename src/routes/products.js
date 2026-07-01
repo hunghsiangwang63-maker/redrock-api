@@ -39,8 +39,9 @@ router.get('/', authenticate, async (req, res) => {
   try {
     const db = getDb();
     const gymId = req.query.gymId || req.staff?.gymId;
-    // 商品是全館共用，但庫存按館別顯示
-    let ref = db.collection('products').where('isActive', '==', true);
+    // 商品是全館共用，但庫存按館別顯示。?inactive=1 → 只回已停用商品（供「重新啟用」）
+    const wantInactive = req.query.inactive === '1' || req.query.inactive === 'true';
+    let ref = db.collection('products').where('isActive', '==', !wantInactive);
     const snap = await ref.get();
     const products = snap.docs.map(d => {
       const p = { id: d.id, ...d.data() };

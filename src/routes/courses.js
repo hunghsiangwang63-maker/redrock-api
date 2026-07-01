@@ -222,7 +222,7 @@ router.post('/sessions/:sessionId/enroll',
                 relatedType: 'course', relatedId: sDoc.data().courseId, itemName: c?.name || '課程插班',
                 recognitionDate: c?.endDate || c?.unlimitedPracticeEnd || null,
                 installments: periods,
-                firstPaymentMethod: req.body.paymentMethod || 'cash',
+                firstPaymentMethod: req.member ? null : (req.body.paymentMethod || 'cash'),
                 staffId: req.staff?.id || null, staffName: req.staff?.name || '',
               });
             }
@@ -723,7 +723,9 @@ router.post('/:courseId/enroll-all',
             gymId: futureSessions[0].gymId || gymId,
             relatedType: 'course', relatedId: courseId, itemName: course.name,
             recognitionDate: courseRecognitionDate, installments: periods,
-            firstPaymentMethod: paymentMethod, staffId: req.staff?.id || null, staffName: req.staff?.name || '',
+            // 員工櫃檯：頭款當下收（自動記帳）；會員自助：第一期留 pending（待轉帳確認後由員工標記）
+            firstPaymentMethod: req.member ? null : paymentMethod,
+            staffId: req.staff?.id || null, staffName: req.staff?.name || '',
           });
         }
       }

@@ -43,8 +43,18 @@ router.post('/login',
 
       if (!station.isActive) return res.status(401).json({ error: 'STATION_INACTIVE', message: '此電腦帳號已停用' });
 
+      // 逐帳號登入鎖定（放寬門檻，見 utils/loginLock）
+      const loginLock = require('../utils/loginLock');
+      const lock = loginLock.checkLocked(station);
+      if (lock.locked) return res.status(429).json({ error: 'ACCOUNT_LOCKED', message: `密碼錯誤次數過多，帳號已鎖定，請 ${lock.mins} 分鐘後再試` });
+
       const valid = await bcrypt.compare(password, station.passwordHash);
-      if (!valid) return res.status(401).json({ error: 'INVALID_CREDENTIALS', message: '帳號或密碼錯誤' });
+      if (!valid) {
+        const r = await loginLock.registerFail('stations', doc.id, station);
+        if (r.locked) return res.status(429).json({ error: 'ACCOUNT_LOCKED', message: `密碼錯誤次數過多，帳號鎖定 ${r.mins} 分鐘` });
+        return res.status(401).json({ error: 'INVALID_CREDENTIALS', message: `帳號或密碼錯誤（剩餘 ${r.remaining} 次）` });
+      }
+      await loginLock.clearFail('stations', doc.id);
 
       // 裝置綁定檢查（可經 systemSettings/security.deviceBindingEnabled 暫時停用）
       const deviceAuthService = require('../services/deviceAuthService');
@@ -113,8 +123,18 @@ router.post('/shift/clockin',
 
       if (!staff.isActive) return res.status(401).json({ error: 'STAFF_INACTIVE', message: '帳號已停用' });
 
+      // 逐帳號登入鎖定（與員工登入同源，放寬門檻）
+      const loginLock = require('../utils/loginLock');
+      const lock = loginLock.checkLocked(staff);
+      if (lock.locked) return res.status(429).json({ error: 'ACCOUNT_LOCKED', message: `密碼錯誤次數過多，帳號已鎖定，請 ${lock.mins} 分鐘後再試` });
+
       const valid = await bcrypt.compare(password, staff.passwordHash);
-      if (!valid) return res.status(401).json({ error: 'INVALID_CREDENTIALS', message: '帳號或密碼錯誤' });
+      if (!valid) {
+        const r = await loginLock.registerFail('staff', staffDoc.id, staff);
+        if (r.locked) return res.status(429).json({ error: 'ACCOUNT_LOCKED', message: `密碼錯誤次數過多，帳號鎖定 ${r.mins} 分鐘` });
+        return res.status(401).json({ error: 'INVALID_CREDENTIALS', message: `帳號或密碼錯誤（剩餘 ${r.remaining} 次）` });
+      }
+      await loginLock.clearFail('staff', staffDoc.id);
 
       const now = new Date();
 

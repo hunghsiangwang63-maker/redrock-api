@@ -49,12 +49,22 @@ router.post('/staff/login',
         return res.status(401).json({ error: 'STAFF_INACTIVE', message: '帳號已停用，請聯絡管理員' });
       }
 
+      // 逐帳號登入鎖定（放寬門檻，見 utils/loginLock）
+      const loginLock = require('../utils/loginLock');
+      const lock = loginLock.checkLocked(staff);
+      if (lock.locked) {
+        return res.status(429).json({ error: 'ACCOUNT_LOCKED', message: `密碼錯誤次數過多，帳號已鎖定，請 ${lock.mins} 分鐘後再試` });
+      }
+
       // 驗證密碼（實際使用 bcrypt）
       const bcrypt = require('bcryptjs');
       const valid = await bcrypt.compare(password, staff.passwordHash);
       if (!valid) {
-        return res.status(401).json({ error: 'INVALID_CREDENTIALS', message: '帳號或密碼錯誤' });
+        const r = await loginLock.registerFail(COLLECTIONS.STAFF, staffDoc.id, staff);
+        if (r.locked) return res.status(429).json({ error: 'ACCOUNT_LOCKED', message: `密碼錯誤次數過多，帳號鎖定 ${r.mins} 分鐘` });
+        return res.status(401).json({ error: 'INVALID_CREDENTIALS', message: `帳號或密碼錯誤（剩餘 ${r.remaining} 次）` });
       }
+      await loginLock.clearFail(COLLECTIONS.STAFF, staffDoc.id);
 
       // 裝置綁定檢查（super_admin 例外；並可經 systemSettings/security.deviceBindingEnabled 暫時停用）
       const deviceAuthService = require('../services/deviceAuthService');

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { body, param, validationResult } = require('express-validator');
-const { authenticate, authenticateAny, checkPermission, auditLog } = require('../middleware/auth');
+const { authenticate, authenticateAny, authenticateMember, checkPermission, auditLog } = require('../middleware/auth');
 const discountCardService = require('../services/discountCardService');
 const legacyDiscountCardService = require('../services/legacyDiscountCardService');
 const legacyCardService = require('../services/legacyCardService');
@@ -61,17 +61,19 @@ router.post('/discount/:id/transfer-preview',
   }
 );
 
+// 移轉改兩段式：發起→暫扣＋建 pending（受贈者於會員 App 接收；24h 未接收自動回沖）
 router.post('/discount/:id/transfer',
   authenticate, checkPermission('products.sell'), auditLog('discount_card.transfer'),
-  [body('toMemberId').notEmpty(), body('credits').isInt({ min: 1 }), body('confirmedExpiry').equals('true').withMessage('請確認到期日')],
+  [body('toMemberId').notEmpty(), body('credits').isInt({ min: 1 })],
   validate,
   async (req, res) => {
     try {
-      const result = await discountCardService.transferDiscountCard({
-        fromCardId: req.params.id, toMemberId: req.body.toMemberId,
-        credits: parseInt(req.body.credits), staffId: req.staff.id,
+      const cardTransferService = require('../services/cardTransferService');
+      const t = await cardTransferService.initiateTransfer({
+        cardType: 'discount', fromCardId: req.params.id, toMemberId: req.body.toMemberId,
+        credits: parseInt(req.body.credits), initiatedBy: req.staff.id, initiatedByType: 'staff',
       });
-      res.json({ ...result, message: `成功移轉 ${req.body.credits} 次（到期日 ${result.expiresAt} 不變）` });
+      res.json({ transfer: t, message: `已送出移轉 ${t.credits} 次給 ${t.toMemberName}，待對方於會員 App 接收（24 小時內未接收將自動回沖）` });
     } catch (err) { res.status(err.code ? 400 : 500).json(err.code ? err : { error: 'SERVER_ERROR', message: err.message }); }
   }
 );
@@ -163,23 +165,56 @@ router.post('/black/:id/transfer-preview',
   }
 );
 
+// 移轉改兩段式：發起→暫扣＋建 pending（受贈者於會員 App 接收；24h 未接收自動回沖）
 router.post('/black/:id/transfer',
   authenticate, checkPermission('products.sell'), auditLog('black_card.transfer'),
-  [body('toMemberId').notEmpty(), body('credits').isInt({ min: 1 }), body('confirmedExpiry').equals('true').withMessage('請確認到期日')],
+  [body('toMemberId').notEmpty(), body('credits').isInt({ min: 1 })],
   validate,
   async (req, res) => {
     try {
-      const result = await legacyCardService.transferBlackCard({
-        fromCardId: req.params.id, toMemberId: req.body.toMemberId,
-        credits: parseInt(req.body.credits), staffId: req.staff.id,
+      const cardTransferService = require('../services/cardTransferService');
+      const t = await cardTransferService.initiateTransfer({
+        cardType: 'black', fromCardId: req.params.id, toMemberId: req.body.toMemberId,
+        credits: parseInt(req.body.credits), initiatedBy: req.staff.id, initiatedByType: 'staff',
       });
-      const msg = result.isFirstTransfer
-        ? `成功移轉 ${req.body.credits} 次（首次移轉，到期日設為 ${result.expiresAt}）`
-        : `成功移轉 ${req.body.credits} 次（到期日 ${result.expiresAt} 不延長）`;
-      res.json({ ...result, message: msg });
+      res.json({ transfer: t, message: `已送出移轉 ${t.credits} 次給 ${t.toMemberName}，待對方於會員 App 接收（24 小時內未接收將自動回沖）` });
     } catch (err) { res.status(err.code ? 400 : 500).json(err.code ? err : { error: 'SERVER_ERROR', message: err.message }); }
   }
 );
+
+// ══════════════════════════════════════════════════════
+// 卡片移轉（兩段式）：接收（會員）/ 取消（員工）/ 清單
+// ══════════════════════════════════════════════════════
+// 受贈者待接收清單（會員 App）
+router.get('/transfers/incoming', authenticateMember, async (req, res) => {
+  try { res.json({ transfers: await require('../services/cardTransferService').getIncoming(req.member.id) }); }
+  catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+// 受贈者接收（會員 App）
+router.post('/transfers/:id/accept', authenticateMember, async (req, res) => {
+  try {
+    const r = await require('../services/cardTransferService').acceptTransfer(req.params.id, req.member.id);
+    res.json({ ...r, message: '已接收，次數已入卡' });
+  } catch (err) { res.status(err.code ? 400 : 500).json(err.code ? err : { error: 'SERVER_ERROR', message: err.message }); }
+});
+// 取消移轉中（贈送者本人於會員 App，或員工代為）→ 立即回沖
+router.post('/transfers/:id/cancel', authenticateAny, auditLog('card_transfer.cancel'), async (req, res) => {
+  try {
+    const opts = req.member ? { byMemberId: req.member.id } : {}; // 會員需為贈送者本人；員工不限
+    await require('../services/cardTransferService').cancelTransfer(req.params.id, opts);
+    res.json({ message: '已取消移轉，次數已回沖' });
+  } catch (err) { res.status(err.code ? 400 : 500).json(err.code ? err : { error: 'SERVER_ERROR', message: err.message }); }
+});
+// 贈送者本人的「移轉中」清單（會員 App）
+router.get('/transfers/outgoing', authenticateMember, async (req, res) => {
+  try { res.json({ transfers: await require('../services/cardTransferService').getPendingByFromMember(req.member.id) }); }
+  catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+// 某會員發出中的移轉（員工端顯示「移轉中」）
+router.get('/transfers/outgoing/:memberId', authenticateAny, async (req, res) => {
+  try { res.json({ transfers: await require('../services/cardTransferService').getPendingByFromMember(req.params.memberId) }); }
+  catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
 
 // ══════════════════════════════════════════════════════
 // 紅利

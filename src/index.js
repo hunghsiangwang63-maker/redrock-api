@@ -101,7 +101,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '1.25.0-discount-card-bind',
+    version: '1.26.0-card-transfer-2phase',
   });
 });
 
@@ -137,12 +137,20 @@ if (require.main === module) {
       console.log(`[分期排程] 逾期 ${ov.overdueCount} 筆；會員提醒 ${rm.reminderSent || 0}、逾期通知 ${rm.overdueSent || 0}、管理員預警 ${rm.adminNotified || 0}`);
     } catch (e) { console.error('[分期排程] 失敗', e.message); }
   };
+  // 卡片移轉逾期回沖：每小時掃描（24h 未接收 → 次數回沖來源）
+  const runCardTransferExpiry = async () => {
+    try {
+      const n = await require('./services/cardTransferService').revertExpired();
+      if (n > 0) console.log(`[卡片移轉] 逾期自動回沖 ${n} 筆`);
+    } catch (e) { console.error('[卡片移轉] 回沖失敗', e.message); }
+  };
   setInterval(() => {
     const dateStr = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
     if (new Date().getHours() === 9 && lastInstallmentRunDate !== dateStr) {
       lastInstallmentRunDate = dateStr;
       runDailyInstallmentJobs();
     }
+    runCardTransferExpiry(); // 每小時掃一次逾期移轉
   }, 60 * 60 * 1000);
 }
 

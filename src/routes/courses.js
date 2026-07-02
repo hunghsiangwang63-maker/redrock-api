@@ -451,8 +451,8 @@ router.delete('/:courseId',
           subject: `【紅石攀岩】課程取消通知：${courseName}`,
           html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
             <h2 style="color:#8B1A1A">課程取消通知</h2>
-            <p>親愛的 ${m.name}，</p>
-            <p>很抱歉通知您，您報名的課程 <strong>「${courseName}」</strong> 已取消。</p>
+            <p>親愛的 ${emailService.esc(m.name)}，</p>
+            <p>很抱歉通知您，您報名的課程 <strong>「${emailService.esc(courseName)}」</strong> 已取消。</p>
             <div style="background:#FBF5F5;border-radius:8px;padding:16px;margin:16px 0;color:#666;font-size:13px">
               退費將由館方人工處理，如有疑問請聯繫館方。
             </div>

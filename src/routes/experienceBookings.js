@@ -3,6 +3,7 @@ const router = express.Router();
 const { authenticate, authenticateAny } = require('../middleware/auth');
 const { getDb, getStorage } = require('../config/firebase');
 const XLSX = require('xlsx');
+const { sanitizeSheet } = require('../utils/xlsxSafe');
 const emailService = require('../services/emailService');
 
 const COURSE_TYPES = [
@@ -266,7 +267,7 @@ router.get('/download', authenticate, async (req, res) => {
 
     if (rows.length===0) rows.push({ '場館':'無資料','預約日期':'','預約時間':'','課程類型':'','總人數':'','狀態':'','聯絡人':'','聯絡電話':'','序號':'','參加者姓名':'','身分證字號':'','生日（民國）':'','國籍':'','費用':'','匯款末五碼':'','備註':'' });
 
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const ws = sanitizeSheet(XLSX.utils.json_to_sheet(rows));
     // 欄位寬度
     ws['!cols'] = [8,12,10,12,8,8,10,12,6,12,14,12,8,8,12,14].map(w=>({wch:w}));
 
@@ -362,7 +363,7 @@ function buildInsuranceXlsBuffer(bookings) {
 
     const makeSheet = (rows) => {
       const data = [headers, ...rows.map(r => [r.name, r.idNumber, r.birthday, '', '', '', '', '', '', '', '', '', '', ''])];
-      return XLSX.utils.aoa_to_sheet(data);
+      return sanitizeSheet(XLSX.utils.aoa_to_sheet(data));
     };
 
     const wb = XLSX.utils.book_new();
@@ -431,7 +432,7 @@ router.post('/:id/send-insurance-email', authenticate, async (req, res) => {
 
     const result = await emailService.sendEmail({
       to, subject: title,
-      html: `<div style="font-family:sans-serif;white-space:pre-wrap;font-size:14px">${body}</div>`,
+      html: `<div style="font-family:sans-serif;white-space:pre-wrap;font-size:14px">${emailService.esc(body)}</div>`,
       text: body,
       attachments: [{ filename: fileName, content: buf.toString('base64') }],
     });

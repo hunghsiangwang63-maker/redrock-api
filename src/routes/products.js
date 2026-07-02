@@ -11,7 +11,7 @@ const { getDb } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 const { isActiveTeamMember, applyTeamDiscount } = require('../services/teamMemberService');
 const { getMember } = require('../services/memberService');
 
@@ -380,7 +380,7 @@ router.get('/export', authenticate, async (req, res) => {
         });
       });
     });
-    const ws = XLSX.utils.json_to_sheet(rows);
+    const ws = require('../utils/xlsxSafe').sanitizeSheet(XLSX.utils.json_to_sheet(rows));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '庫存');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });

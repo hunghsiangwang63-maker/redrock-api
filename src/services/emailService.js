@@ -8,6 +8,11 @@ const FROM_EMAIL = process.env.FROM_EMAIL || 'noreply@redrocktaiwan.com';
 const FROM_NAME = '紅石攀岩 RedRock';
 const CLIENT_URL = process.env.CLIENT_URL || 'https://app.redrocktaiwan.com';
 
+// HTML 跳脫：避免使用者可控字串（姓名/課程名/項目名等）注入 HTML 進信件內容
+const esc = (s) => String(s ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
+
 /**
  * 核心發信函式
  */
@@ -64,7 +69,7 @@ const sendEmailVerification = async (memberId, email, name) => {
     html: `
       <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
         <h2 style="color:#8B1A1A">紅石攀岩 RedRock</h2>
-        <p>親愛的 ${name}，</p>
+        <p>親愛的 ${esc(name)}，</p>
         <p>感謝您註冊紅石攀岩會員！請點擊下方按鈕完成 Email 驗證：</p>
         <a href="${verifyUrl}" style="display:inline-block;margin:20px 0;padding:12px 28px;background:#8B1A1A;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold">
           ✉ 驗證 Email
@@ -83,13 +88,13 @@ const sendCourseNotification = async (memberEmail, memberName, courseName, sessi
     html: `
       <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
         <h2 style="color:#8B1A1A">課程提醒</h2>
-        <p>親愛的 ${memberName}，</p>
+        <p>親愛的 ${esc(memberName)}，</p>
         <p>您有一堂課程即將開始：</p>
         <div style="background:#FBF5F5;border-radius:8px;padding:16px;margin:16px 0">
-          <div><strong>課程：</strong>${courseName}</div>
-          <div><strong>日期：</strong>${sessionDate}</div>
-          <div><strong>時間：</strong>${sessionTime}</div>
-          <div><strong>場館：</strong>${gymName}</div>
+          <div><strong>課程：</strong>${esc(courseName)}</div>
+          <div><strong>日期：</strong>${esc(sessionDate)}</div>
+          <div><strong>時間：</strong>${esc(sessionTime)}</div>
+          <div><strong>場館：</strong>${esc(gymName)}</div>
         </div>
         <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
       </div>
@@ -105,12 +110,12 @@ const sendInstallmentReminder = async (memberEmail, memberName, itemName, amount
     html: `
       <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
         <h2 style="color:#8B1A1A">分期付款提醒</h2>
-        <p>親愛的 ${memberName}，</p>
+        <p>親愛的 ${esc(memberName)}，</p>
         <p>您有一筆分期付款即將到期：</p>
         <div style="background:#FBF5F5;border-radius:8px;padding:16px;margin:16px 0">
-          <div><strong>項目：</strong>${itemName}</div>
-          <div><strong>金額：</strong>NT$${amount}</div>
-          <div><strong>到期日：</strong>${dueDate}</div>
+          <div><strong>項目：</strong>${esc(itemName)}</div>
+          <div><strong>金額：</strong>NT$${esc(amount)}</div>
+          <div><strong>到期日：</strong>${esc(dueDate)}</div>
         </div>
         <p>請至館方完成繳款，謝謝。</p>
         <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
@@ -122,7 +127,7 @@ const sendInstallmentReminder = async (memberEmail, memberName, itemName, amount
 // ── 分期逾期管理員通知 ────────────────────────────────────────────
 const sendInstallmentOverdueAlert = async (adminEmail, overdueList) => {
   const rows = overdueList.map(o =>
-    `<tr><td style="padding:6px">${o.memberName}</td><td style="padding:6px">${o.itemName}</td><td style="padding:6px">NT$${o.amount}</td><td style="padding:6px">${o.dueDate}</td></tr>`
+    `<tr><td style="padding:6px">${esc(o.memberName)}</td><td style="padding:6px">${esc(o.itemName)}</td><td style="padding:6px">NT$${esc(o.amount)}</td><td style="padding:6px">${esc(o.dueDate)}</td></tr>`
   ).join('');
   return sendEmail({
     to: adminEmail,
@@ -153,13 +158,13 @@ const sendExperienceBookingConfirmation = async (memberEmail, memberName, bookin
     html: `
       <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
         <h2 style="color:#8B1A1A">體驗課程預約確認</h2>
-        <p>親愛的 ${memberName}，</p>
+        <p>親愛的 ${esc(memberName)}，</p>
         <p>您的體驗課程預約已確認收款！</p>
         <div style="background:#E6F4EB;border-radius:8px;padding:16px;margin:16px 0">
-          <div><strong>日期：</strong>${booking.bookingDate}</div>
-          <div><strong>時間：</strong>${booking.bookingTime}</div>
+          <div><strong>日期：</strong>${esc(booking.bookingDate)}</div>
+          <div><strong>時間：</strong>${esc(booking.bookingTime)}</div>
           <div><strong>場館：</strong>${booking.gymId === 'gym-hsinchu' ? '新竹館' : '士林館'}</div>
-          <div><strong>人數：</strong>${booking.numParticipants} 人</div>
+          <div><strong>人數：</strong>${esc(booking.numParticipants)} 人</div>
         </div>
         <p>期待與您見面！如有疑問請聯繫館方。</p>
         <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
@@ -177,8 +182,8 @@ const sendParentWaiverLink = async (memberId, memberName, parentEmail, parentNam
     html: `
       <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
         <h2 style="color:#8B1A1A">紅石攀岩 RedRock</h2>
-        <p>${parentName || '家長'} 您好，</p>
-        <p>未成年會員 <strong>${memberName}</strong> 已完成風險自負同意書簽署，需法定代理人（家長）一同簽署才能生效。</p>
+        <p>${esc(parentName || '家長')} 您好，</p>
+        <p>未成年會員 <strong>${esc(memberName)}</strong> 已完成風險自負同意書簽署，需法定代理人（家長）一同簽署才能生效。</p>
         <a href="${url}" style="display:inline-block;margin:20px 0;padding:12px 28px;background:#8B1A1A;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold">前往簽署</a>
         <p style="color:#999;font-size:12px">此連結 72 小時內有效。若非本人操作請忽略此信。</p>
       </div>
@@ -193,6 +198,7 @@ const sendInstallmentReminders = async () => {
 };
 
 module.exports = {
+  esc, // HTML 跳脫（供各路由組信件時共用）
   sendEmail,
   sendEmailVerification,
   sendCourseNotification,

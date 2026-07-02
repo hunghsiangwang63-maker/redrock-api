@@ -280,7 +280,7 @@ router.get('/members/download', authenticate, requireManagerOrStation, async (re
       '申請時間': r.createdAt?._seconds ? new Date(r.createdAt._seconds * 1000).toLocaleString('zh-TW') : '',
     }));
 
-    const ws = XLSX.utils.json_to_sheet(data);
+    const ws = require('../utils/xlsxSafe').sanitizeSheet(XLSX.utils.json_to_sheet(data));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, `${year}年度`);
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });

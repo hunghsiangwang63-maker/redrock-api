@@ -368,7 +368,7 @@ router.get('/monthly-export', authenticate, async (req, res) => {
     aoa.push(R('教學費', '課程', '', s => s.income?.course));
     aoa.push(R('總計', '', '', s => s.income?.total));
 
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const ws = require('../utils/xlsxSafe').sanitizeSheet(XLSX.utils.aoa_to_sheet(aoa));
     ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 6 }, ...dates.map(() => ({ wch: 8 }))];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, month);
@@ -432,7 +432,7 @@ router.get('/invoice-export', authenticate, async (req, res) => {
       d = d.add(1, 'day');
     }
 
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const ws = require('../utils/xlsxSafe').sanitizeSheet(XLSX.utils.aoa_to_sheet(aoa));
     ws['!cols'] = [{ wch: 12 }, { wch: 5 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
     const wb = XLSX.utils.book_new();
     const sheetName = `${year}${String(m1).padStart(2, '0')}${String(m2).padStart(2, '0')}`;

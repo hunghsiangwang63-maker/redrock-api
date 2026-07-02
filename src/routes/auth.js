@@ -277,7 +277,7 @@ router.post('/member/forgot-password',
           subject: '【紅石攀岩】密碼重設連結',
           html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
             <h2 style="color:#8B1A1A">紅石攀岩 RedRock</h2>
-            <p>親愛的 ${doc.data().name}，</p>
+            <p>親愛的 ${emailService.esc(doc.data().name)}，</p>
             <p>您申請了密碼重設，請點擊下方按鈕設定新密碼：</p>
             <a href="${resetUrl}" style="display:inline-block;margin:20px 0;padding:12px 28px;background:#8B1A1A;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold">🔑 重設密碼</a>
             <p style="color:#999;font-size:12px">此連結 24 小時內有效。若非本人操作請忽略此信。</p>

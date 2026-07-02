@@ -27,8 +27,11 @@ router.get('/reasons', authenticateAny, (req, res) => {
 router.post('/evidence', authenticateAny, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'NO_FILE', message: '請選擇檔案' });
+    // 只允許圖片/PDF；副檔名與 contentType 由 MIME 白名單決定（不採信使用者檔名，避免上傳 .html/.exe 等公開檔案）
+    const MIME_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'application/pdf': 'pdf' };
+    const ext = MIME_EXT[req.file.mimetype];
+    if (!ext) return res.status(400).json({ error: 'UNSUPPORTED_TYPE', message: '僅支援 JPG / PNG / WEBP / PDF' });
     const bucket = getStorage().bucket();
-    const ext = (req.file.originalname.split('.').pop() || 'pdf').toLowerCase();
     const fileName = `pass-requests/evidence_${uuidv4()}.${ext}`;
     const file = bucket.file(fileName);
     await file.save(req.file.buffer, { contentType: req.file.mimetype });

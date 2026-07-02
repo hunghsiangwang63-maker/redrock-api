@@ -28,10 +28,14 @@ const validate = (req, res, next) => {
 router.get('/types', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
+    const isSuper = req.staff.role === 'super_admin';
+    const gymId = isSuper ? req.query.gymId : req.staff.gymId;
     const snapshot = await db.collection(COLLECTIONS.PASS_TYPES).where('isActive', '==', true).get();
-    const types = snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
-      .filter(t => !t.gymId || t.gymId === gymId);
+    let types = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+    // super_admin 選「全館」（未帶 gymId）→ 回全部；否則只留 全館通用 + 該館單館票種
+    if (!(isSuper && !gymId)) {
+      types = types.filter(t => !t.gymId || t.gymId === gymId);
+    }
     res.json({ passTypes: types });
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

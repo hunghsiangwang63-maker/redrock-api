@@ -183,7 +183,7 @@ router.post('/shift/clockin',
         stationId,
         shiftId: shiftRef.id,
         type: 'operator',
-      }, '8h');
+      }, '16h'); // 值班 token 效期 16 小時（打卡後結帳時窗放寬）
 
       res.json({
         operatorToken,

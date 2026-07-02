@@ -24,7 +24,11 @@ const initFirebase = () => {
 };
 
 const getDb = () => {
-  if (!db) db = admin.firestore();
+  if (!db) {
+    db = admin.firestore();
+    // 忽略 undefined 欄位（避免某欄位為 undefined 時整筆 set/update 拋錯造成寫入失敗/資料不一致）
+    try { db.settings({ ignoreUndefinedProperties: true }); } catch (e) { /* 已套用則略過 */ }
+  }
   return db;
 };
 

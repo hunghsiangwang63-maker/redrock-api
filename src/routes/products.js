@@ -258,7 +258,7 @@ router.post('/sell', authenticate, auditLog('product.sell'), async (req, res) =>
       saleItems.push({
         productId: item.productId, productName: product.name, brand: product.brand,
         variantId: item.variantId, size: variant.size, color: variant.color,
-        price: variant.price, promoPrice: variant.promoPrice, unitPrice,
+        price: variant.price, promoPrice: variant.promoPrice ?? null, unitPrice,
         quantity: item.quantity, subtotal,
         teamDiscountApplied: discountResult.applied, teamDiscountAmount: discountResult.discount,
       });

@@ -253,7 +253,7 @@ const getMemberDiscountCards = async (memberId) => {
     .get();
 
   const today = dayjs();
-  return snap.docs
+  const cards = snap.docs
     .map(d => ({ id: d.id, ...d.data() }))
     .filter(c => today.isBefore(dayjs(c.expiresAt.toDate())))
     .map(c => ({
@@ -262,6 +262,17 @@ const getMemberDiscountCards = async (memberId) => {
       daysLeft: dayjs(c.expiresAt.toDate()).diff(today, 'day'),
       isExpiringSoon: dayjs(c.expiresAt.toDate()).diff(today, 'day') <= EXPIRY_WARNING_DAYS,
     }));
+
+  // 移轉取得的卡：用完後紅利歸「原購買者」（非持卡人），標註 + 帶原購買者姓名
+  const memberService = require('./memberService');
+  for (const c of cards) {
+    if (c.originalOwnerMemberId && c.originalOwnerMemberId !== c.ownerMemberId) {
+      c.bonusToOriginalOwner = true;
+      try { const o = await memberService.getMember(c.originalOwnerMemberId); c.originalOwnerName = o?.name || null; }
+      catch { c.originalOwnerName = null; }
+    }
+  }
+  return cards;
 };
 
 const getValidDiscountCards = async (memberId) => {

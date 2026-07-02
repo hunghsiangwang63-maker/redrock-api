@@ -414,9 +414,10 @@ const verifyEntry = async (memberId, gymId) => {
   const singleEntryTickets = await getValidSingleEntryTickets(memberId);
   const bonuses = await require('./bonusService').getMemberBonuses(memberId);
 
-  // 折扣券入場 8 折基準（原價依會員身份）；兒童不適用折扣券
+  // 折扣券入場 8 折基準（原價依會員身份）；有效隊員再疊加 9 折；兒童不適用折扣券
   const discountOriginalPrice = await getOriginalEntryPrice(memberType);
-  const discountCardPrice = Math.round(discountOriginalPrice * DISCOUNT_CARD_RATE);
+  let discountCardPrice = Math.round(discountOriginalPrice * DISCOUNT_CARD_RATE);
+  if (isTeam && discountOriginalPrice >= TEAM_DISCOUNT_MIN_AMOUNT) discountCardPrice = Math.round(discountCardPrice * PRICES.team_discount_rate);
   const canUseDiscountCard = memberType !== 'child' && discountCards.length > 0;
 
   // 付費入場類型：與員工端同源，依 systemSettings/entryTypes 動態顯示
@@ -626,7 +627,7 @@ const createPendingCheckIn = async ({
     }
   }
 
-  // 後端權威：使用優惠折扣券 = 所選身分(baseEntryType)原價的 8 折。不與隊員折扣疊加。
+  // 後端權威：使用優惠折扣券 = 所選身分(baseEntryType)原價 8 折；有效隊員再疊加隊員 9 折。
   if (entryType === 'discount_card') {
     let base;
     if (baseEntryType) {
@@ -636,8 +637,15 @@ const createPendingCheckIn = async ({
       base = await getOriginalEntryPrice(memberType);
     }
     finalOriginal = base;
-    finalAmount = Math.round(base * DISCOUNT_CARD_RATE);
-    finalTeam = false;
+    let amt = Math.round(base * DISCOUNT_CARD_RATE);            // 優惠券 8 折
+    const isTeam = isActiveTeamMember(member);
+    if (isTeam && base >= TEAM_DISCOUNT_MIN_AMOUNT) {
+      amt = Math.round(amt * PRICES.team_discount_rate);        // 再疊加隊員 9 折
+      finalTeam = true;
+    } else {
+      finalTeam = false;
+    }
+    finalAmount = amt;
   }
   // 紅利入場為免費
   if (entryType === 'bonus') {

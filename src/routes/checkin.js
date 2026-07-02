@@ -244,7 +244,9 @@ router.get('/eligibility/:memberId', authenticate, async (req, res) => {
       instruments: {
         discountCard: {
           available: memberType !== 'child' && discountCards.length > 0,
-          rate: 0.8,
+          // 有效隊員：優惠券 8 折再疊加隊員 9 折＝0.72（前端以 basePrice×rate 顯示，與後端實收一致）
+          rate: require('../services/teamMemberService').isActiveTeamMember(member) ? 0.72 : 0.8,
+          teamStacked: require('../services/teamMemberService').isActiveTeamMember(member),
           cards: discountCards.map(c => ({ id: c.id, remainingCredits: c.remainingCredits })),
         },
         blackCard: { available: blackCards.length > 0, cards: blackCards.map(c => ({ id: c.id, remainingCredits: c.remainingCredits })) },

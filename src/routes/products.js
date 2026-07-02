@@ -17,12 +17,14 @@ const { getMember } = require('../services/memberService');
 
 // 取得指定館的庫存
 const getGymStock = (variant, gymId) => {
+  if (gymId === 'warehouse') return variant.warehouseStock ?? 0; // 倉庫（中央庫存）
   if (variant.gymStock && gymId) return variant.gymStock[gymId] ?? 0;
   return variant.stock ?? 0; // fallback 舊資料
 };
 
-// 設定指定館的庫存（回傳新 variant）
+// 設定指定館的庫存（回傳新 variant）；gymId='warehouse' 作用於倉庫庫存
 const setGymStock = (variant, gymId, qty) => {
+  if (gymId === 'warehouse') return { ...variant, warehouseStock: qty };
   const gymStock = { ...(variant.gymStock || {}) };
   if (!gymId) {
     // 無館別模式（舊相容）

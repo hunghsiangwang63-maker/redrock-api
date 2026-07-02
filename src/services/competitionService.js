@@ -365,11 +365,31 @@ const sendWebhook = async (registrationId) => {
     registeredAt: registration.registeredAt,
   };
 
+  // SSRF 防護：只允許 https 外網位址，擋內網/本機/雲端 metadata
+  const isSafeWebhookUrl = (raw) => {
+    try {
+      const u = new URL(raw);
+      if (u.protocol !== 'https:') return false;
+      const h = u.hostname.toLowerCase();
+      if (h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal')) return false;
+      if (/^(127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(h)) return false;
+      if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return false;
+      if (h === '::1' || h.startsWith('fd') || h.startsWith('fe80')) return false;
+      return true;
+    } catch (e) { return false; }
+  };
+  if (!isSafeWebhookUrl(competition.webhookUrl)) {
+    await ref.update({ webhookStatus: 'failed', webhookError: 'unsafe_webhook_url' });
+    return;
+  }
+
   try {
     const res = await fetch(competition.webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      redirect: 'error',                   // 不跟隨轉址，避免繞過白名單
+      signal: AbortSignal.timeout(5000),   // 逾時保護
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     await ref.update({ webhookStatus: 'sent', webhookSentAt: new Date(), webhookError: null });

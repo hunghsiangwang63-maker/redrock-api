@@ -1,19 +1,13 @@
 rules_version = '2';
 
+// RedRock 資料庫存取規則
+// 本系統所有讀寫一律經後端 API（Firebase Admin SDK，會繞過本規則）。
+// 前端不使用 Firebase client SDK、不直連 Firestore，因此對「客戶端直連」一律拒絕。
+// 若日後真的需要前端直連，請針對特定 collection 撰寫最小權限規則，切勿放行 if true。
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // This rule allows anyone with your Firestore database reference to view, edit,
-    // and delete all data in your Firestore database. It is useful for getting
-    // started, but it is configured to expire after 30 days because it
-    // leaves your app open to attackers. At that time, all client
-    // requests to your Firestore database will be denied.
-    //
-    // Make sure to write security rules for your app before that time, or else
-    // all client requests to your Firestore database will be denied until you Update
-    // your rules
     match /{document=**} {
-      allow read, write: if request.time < timestamp.date(2026, 7, 10);
+      allow read, write: if false;
     }
   }
 }

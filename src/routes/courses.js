@@ -49,6 +49,10 @@ router.post('/',
   validate,
   async (req, res) => {
     try {
+      // 館別隔離：非 super_admin 只能在自己館建立課程，不可用 req.body.gymId 覆蓋到他館
+      if (req.body.gymId && req.body.gymId !== req.staff.gymId && req.staff.role !== 'super_admin') {
+        return res.status(403).json({ error: 'CROSS_GYM_FORBIDDEN', message: '不可為其他館別建立課程' });
+      }
       const course = await courseService.createCourse({
         gymId: req.body.gymId || req.staff.gymId,
         staffId: req.staff.id,

@@ -309,7 +309,7 @@ router.get('/sales', authenticate, async (req, res) => {
   try {
     const db = getDb();
     const gymId = req.query.gymId || (req.staff?.role !== 'super_admin' ? req.staff?.gymId : null);
-    const days = parseInt(req.query.days) || 7;
+    const days = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 366); // clamp 1..366，避免超大範圍查詢
     const fromDate = dayjs().subtract(days, 'day').toDate();
     let ref = db.collection('productSales').where('soldAt', '>=', fromDate);
     if (gymId) ref = ref.where('gymId', '==', gymId);

@@ -55,6 +55,10 @@ router.post('/types',
       if (req.body.scope === 'single' && !req.body.targetGymId && !req.staff.gymId) {
         return res.status(400).json({ error: 'MISSING_TARGET_GYM', message: '請選擇票種適用的場館' });
       }
+      // 館別隔離：非 super_admin 不可為其他館建立單館票種
+      if (req.body.scope === 'single' && req.body.targetGymId && req.body.targetGymId !== req.staff.gymId && req.staff.role !== 'super_admin') {
+        return res.status(403).json({ error: 'CROSS_GYM_FORBIDDEN', message: '不可為其他館別建立票種' });
+      }
       const resolvedGymId = req.body.scope === 'single' ? (req.body.targetGymId || req.staff.gymId) : null;
       const passType = {
         id: typeId,

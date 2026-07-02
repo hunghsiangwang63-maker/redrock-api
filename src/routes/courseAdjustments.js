@@ -169,7 +169,10 @@ router.post('/requests/:id/approve',
       if (request.status !== 'pending') return res.status(400).json({ error: 'ALREADY_PROCESSED', message: '此申請已處理' });
 
       if (request.type === 'refund') {
-        const finalRefund = req.body.finalRefund !== undefined ? Number(req.body.finalRefund) : request.suggestedRefund;
+        let finalRefund = req.body.finalRefund !== undefined ? Number(req.body.finalRefund) : request.suggestedRefund;
+        // 退款金額 clamp：不可為負、不可超過已付金額（避免竄改／誤操作造成超額退款）
+        if (!Number.isFinite(finalRefund)) return res.status(400).json({ error: 'INVALID_REFUND', message: '退款金額無效' });
+        finalRefund = Math.max(0, Math.min(finalRefund, Number(request.paidAmount) || 0));
         // 取消該會員此課程「所有」有效報名，釋放名額並遞補候補
         const cancelled = await courseService.cancelCourseEnrollments({
           courseId: request.courseId,

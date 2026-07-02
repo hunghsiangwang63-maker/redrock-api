@@ -174,6 +174,16 @@ const createMember = async (memberData, staffId, options = {}) => {
   return member;
 };
 
+// 剝除敏感認證欄位，避免經 API 外洩（passwordHash / 重設・驗證 token / 登入鎖定狀態）
+// getMember/searchMembers 的所有消費端都不需要這些欄位；密碼重設/登入另以 phone/token 直接查詢。
+const SENSITIVE_FIELDS = ['passwordHash', 'resetPasswordToken', 'resetPasswordExpiry', 'emailVerifyToken', 'emailVerifyExpiry', 'loginFailCount', 'loginLockedUntil'];
+const sanitizeMember = (m) => {
+  if (!m) return m;
+  const out = { ...m };
+  for (const f of SENSITIVE_FIELDS) delete out[f];
+  return out;
+};
+
 // ── 搜尋會員 ─────────────────────────────────────────────────────
 const searchMembers = async ({ query, gymId, role, limit = 20, cursor }) => {
   const db = getDb();
@@ -190,11 +200,11 @@ const searchMembers = async ({ query, gymId, role, limit = 20, cursor }) => {
       m.name?.includes(query) ||
       m.phone?.includes(query) ||
       m.email?.includes(query)
-    ).slice(0, limit);
+    ).slice(0, limit).map(sanitizeMember);
   }
 
   snapshot = await ref.orderBy('createdAt', 'desc').limit(limit).get();
-  return snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+  return snapshot.docs.map(d => sanitizeMember({ id: d.id, ...d.data() }));
 };
 
 // ── 取得單一會員 ──────────────────────────────────────────────────
@@ -202,7 +212,7 @@ const getMember = async (memberId) => {
   const db = getDb();
   const doc = await db.collection(COLLECTIONS.MEMBERS).doc(memberId).get();
   if (!doc.exists) throw { code: 'MEMBER_NOT_FOUND', message: '找不到此會員' };
-  return { id: doc.id, ...doc.data() };
+  return sanitizeMember({ id: doc.id, ...doc.data() });
 };
 
 // ── 透過 QR Code ID 取得會員 ──────────────────────────────────────

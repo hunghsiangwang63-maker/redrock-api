@@ -29,6 +29,28 @@ app.use(express.json({ limit: '10mb' })); // 需要較大限制以支援 base64 
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
+// Railway 在反向代理後方：信任第一層 proxy 以取得真實 client IP（供限流正確計數）
+app.set('trust proxy', 1);
+
+// ── 限流（僅認證敏感端點，避免影響同一 IP 多員工的正常操作）──────────
+const rateLimit = require('express-rate-limit');
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 30, // 每 IP 每 15 分鐘 30 次登入嘗試（足夠正常櫃檯、擋暴力破解）
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: 'TOO_MANY_REQUESTS', message: '嘗試次數過多，請稍後再試' },
+});
+const forgotLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, max: 5, // 每 IP 每小時 5 次（防 Email 枚舉/濫發）
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: 'TOO_MANY_REQUESTS', message: '請求過於頻繁，請稍後再試' },
+});
+app.use('/auth/staff/login', authLimiter);
+app.use('/auth/member/login', authLimiter);
+app.use('/auth/device/verify-otp', authLimiter);
+app.use('/stations/login', authLimiter);
+app.use('/stations/shift/clockin', authLimiter);
+app.use('/auth/member/forgot-password', forgotLimiter);
+
 // ── Routes ────────────────────────────────────────────────────────
 app.use('/auth',         require('./routes/auth'));
 app.use('/members',      require('./routes/members'));
@@ -79,7 +101,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '1.16.0-device-binding-toggle',
+    version: '1.17.0-security-hardening',
   });
 });
 

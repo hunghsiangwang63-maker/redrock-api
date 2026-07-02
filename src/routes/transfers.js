@@ -54,7 +54,7 @@ router.post('/upload', authenticateAny, upload.single('screenshot'), async (req,
       orderName: orderName || courseName || '',
       enrollmentId: enrollmentId || null,
       courseId: courseId || null, courseName: courseName || '',
-      amount: parseInt(amount) || 0,
+      amount: Math.max(0, Math.min(parseInt(amount) || 0, 1000000)), // clamp：非負、上限 100 萬（防負數/超大值污染報表）
       paymentMethod: 'transfer',
       screenshotUrl: url, screenshotPath: fileName,   // 無截圖則為 null
       bankLastFive: last5 || null,

@@ -6,13 +6,16 @@
  */
 const { getDb } = require('../config/firebase');
 const dayjs = require('dayjs');
+const crypto = require('crypto');
 
 const OTP_EXPIRY_MINUTES = 10;
+const OTP_MAX_ATTEMPTS = 5; // OTP 錯誤嘗試上限，超過即作廢
 const COLLECTION_TRUSTED = 'trustedDevices';
 const COLLECTION_PENDING = 'deviceVerifications';
 
 const toDate = (v) => (v?.toDate ? v.toDate() : v);
-const generateCode = () => String(Math.floor(100000 + Math.random() * 900000));
+// 用加密安全亂數產生 6 位 OTP（避免 Math.random 可預測）
+const generateCode = () => String(100000 + (crypto.randomInt(0, 900000)));
 
 // ── 裝置綁定總開關（可逆；systemSettings/security.deviceBindingEnabled）──
 // 預設 true（強制綁定）；設為 false 可暫時停用裝置驗證（測試期），改回 true 即恢復。
@@ -114,7 +117,20 @@ const verifyDeviceOtp = async (verificationId, code) => {
   if (dayjs(toDate(v.otpExpiresAt)).isBefore(dayjs())) {
     throw { code: 'CODE_EXPIRED', message: '驗證碼已過期，請重新登入取得新驗證碼' };
   }
-  if (v.otpCode !== code) throw { code: 'INVALID_CODE', message: '驗證碼錯誤' };
+  // 嘗試次數上限：超過即作廢，防止 6 位數暴力猜測
+  if ((v.otpAttempts || 0) >= OTP_MAX_ATTEMPTS) {
+    await doc.ref.update({ status: 'rejected', resolvedAt: new Date(), resolvedBy: 'otp-locked' });
+    throw { code: 'TOO_MANY_ATTEMPTS', message: '驗證碼錯誤次數過多，請重新登入取得新驗證碼' };
+  }
+  // 定長比較，降低時序側信道
+  const expected = String(v.otpCode || '');
+  const given = String(code || '');
+  const match = expected.length === given.length &&
+    crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(given));
+  if (!match) {
+    await doc.ref.update({ otpAttempts: (v.otpAttempts || 0) + 1 });
+    throw { code: 'INVALID_CODE', message: '驗證碼錯誤' };
+  }
 
   return approveDeviceVerification(verificationId, 'otp');
 };

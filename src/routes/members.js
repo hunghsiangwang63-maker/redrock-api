@@ -26,7 +26,7 @@ router.get('/',
       const members = await memberService.searchMembers({
         query: q,
         gymId: req.staff.role === 'super_admin' ? gymId : req.staff.gymId,
-        limit: parseInt(limit) || 50,
+        limit: Math.min(parseInt(limit) || 50, 200), // 上限 200，避免超大 limit 造成 DoS
       });
       res.json({ members, count: members.length });
     } catch (err) {

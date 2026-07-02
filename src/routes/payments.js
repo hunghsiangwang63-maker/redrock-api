@@ -64,8 +64,9 @@ router.post('/:provider/callback', async (req, res) => {
   }
 });
 
-// ── 【mock 專用】模擬付款完成 ─────────────────────────────────────
+// ── 【mock 專用】模擬付款完成（僅非正式環境；正式環境一律 404，避免任意標記已付）──
 router.post('/mock/pay', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'NOT_FOUND' });
   try {
     const paymentId = req.body.paymentId || req.query.paymentId;
     const success = req.body.success !== false;

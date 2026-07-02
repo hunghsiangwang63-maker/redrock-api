@@ -9,7 +9,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../config/firebase');
-const { authenticate, authenticateAny, requireManagerOrStation } = require('../middleware/auth');
+const { authenticate, authenticateAny, requireManagerOrStation, checkPermission } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
@@ -89,7 +89,7 @@ router.get('/settings', async (req, res) => {
 });
 
 // ── PUT /fall-tests/settings ─────────────────────────────────────
-router.put('/settings', authenticate, async (req, res) => {
+router.put('/settings', authenticate, checkPermission('settings.manage'), async (req, res) => {
   try {
     const db = getDb();
     const { requiredCheckins, validYears, youtubeUrl, watchPercentRequired, contentZh, contentEn } = req.body;

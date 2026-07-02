@@ -125,6 +125,40 @@ router.delete('/:shiftId',
   }
 );
 
+// ── POST /schedule/clear-month - 清空某館某月所有排班 ──────────────
+router.post('/clear-month',
+  authenticate, checkPermission('schedule.manage'),
+  async (req, res) => {
+    try {
+      const gymId = resolveGymId(req, req.body.gymId);
+      const month = req.body.month;
+      if (!gymId || !month) return res.status(400).json({ error: 'MISSING_PARAM', message: '請指定場館與月份' });
+      const deleted = await scheduleService.clearMonthShifts(gymId, month);
+      res.json({ deleted, message: `已清空 ${month} 共 ${deleted} 筆排班` });
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
+// ── POST /schedule/copy-previous - 複製上月排班到本月（以星期為主）──
+router.post('/copy-previous',
+  authenticate, checkPermission('schedule.manage'),
+  async (req, res) => {
+    try {
+      const gymId = resolveGymId(req, req.body.gymId);
+      const month = req.body.month;
+      if (!gymId || !month) return res.status(400).json({ error: 'MISSING_PARAM', message: '請指定場館與月份' });
+      const result = await scheduleService.copyPreviousMonthShifts(gymId, month, req.staff.id);
+      res.json({ ...result, message: `已從 ${result.prevMonth} 複製 ${result.created} 筆排班（原 ${result.prevCount} 筆，以星期對應）` });
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // ── GET /schedule - 查詢某館某月份排班（月曆檢視，所有員工皆可查看自己館）──
 router.get('/',
   authenticate, checkPermission('schedule.read'),

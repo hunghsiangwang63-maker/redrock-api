@@ -254,6 +254,61 @@ const getMonthlyHoursSummary = async (gymId, yearMonth) => {
   return Object.values(summary).map(s => ({ ...s, totalHours: Math.round(s.totalHours * 10) / 10 }));
 };
 
+// ── 清空某館某月所有排班 ─────────────────────────────────────────
+const clearMonthShifts = async (gymId, yearMonth) => {
+  const shifts = await getMonthlyShifts(gymId, yearMonth);
+  const db = getDb();
+  for (let i = 0; i < shifts.length; i += 400) {
+    const batch = db.batch();
+    shifts.slice(i, i + 400).forEach(s => batch.delete(db.collection(COLLECTIONS.SCHEDULE_SHIFTS).doc(s.id)));
+    await batch.commit();
+  }
+  return shifts.length;
+};
+
+// ── 複製上月排班到本月（以星期為主：第 N 個某星期 → 本月第 N 個同星期）──
+const copyPreviousMonthShifts = async (gymId, targetMonth, createdBy) => {
+  const prevMonth = dayjs(`${targetMonth}-01`).subtract(1, 'month').format('YYYY-MM');
+  const prevShifts = await getMonthlyShifts(gymId, prevMonth);
+  const db = getDb();
+  const now = new Date();
+
+  // 上月某日 → 本月對應日（同星期、同「當月第幾個該星期」）
+  const targetDateFor = (prevDateStr) => {
+    const d = dayjs(prevDateStr);
+    const weekday = d.day();
+    const nth = Math.floor((d.date() - 1) / 7) + 1; // 當月第幾個此星期
+    let first = dayjs(`${targetMonth}-01`);
+    while (first.day() !== weekday) first = first.add(1, 'day');
+    const target = first.add((nth - 1) * 7, 'day');
+    return target.format('YYYY-MM') === targetMonth ? target.format('YYYY-MM-DD') : null;
+  };
+
+  const toCreate = [];
+  const seenFullDay = new Set(); // 本次複製內避免同人同日重複整天班
+  for (const s of prevShifts) {
+    const td = targetDateFor(s.date);
+    if (!td) continue; // 本月無對應日（如第 5 個星期）→ 略過
+    if (s.type === 'full_day') {
+      const key = `${s.staffId}|${td}`;
+      if (seenFullDay.has(key)) continue;
+      if (await hasExistingFullDayShift(gymId, s.staffId, td)) continue; // 本月該員已有整天班
+      seenFullDay.add(key);
+    }
+    toCreate.push({
+      id: uuidv4(), gymId, staffId: s.staffId, staffName: s.staffName, date: td,
+      type: s.type, startTime: s.startTime || null, endTime: s.endTime || null,
+      note: s.note || '', createdBy, createdAt: now, updatedAt: now,
+    });
+  }
+  for (let i = 0; i < toCreate.length; i += 400) {
+    const batch = db.batch();
+    toCreate.slice(i, i + 400).forEach(doc => batch.set(db.collection(COLLECTIONS.SCHEDULE_SHIFTS).doc(doc.id), doc));
+    await batch.commit();
+  }
+  return { created: toCreate.length, prevMonth, prevCount: prevShifts.length };
+};
+
 module.exports = {
   createShift,
   createRecurringShifts,
@@ -261,4 +316,6 @@ module.exports = {
   deleteShift,
   getMonthlyShifts,
   getMonthlyHoursSummary,
+  clearMonthShifts,
+  copyPreviousMonthShifts,
 };

@@ -180,6 +180,32 @@ router.put('/transition', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── 裝置綁定總開關（systemSettings/security.deviceBindingEnabled）──
+// GET：目前狀態（預設啟用；僅明確設 false 才停用）
+router.get('/device-binding', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('systemSettings').doc('security').get();
+    const enabled = !(doc.exists && doc.data().deviceBindingEnabled === false);
+    res.json({ enabled });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+// PUT：開啟/關閉（僅 super_admin；控制 staff/station 登入是否強制裝置驗證）
+router.put('/device-binding', authenticate, async (req, res) => {
+  if (req.staff?.role !== 'super_admin')
+    return res.status(403).json({ error: '權限不足', message: '僅系統管理員可調整裝置綁定' });
+  try {
+    const db = getDb();
+    const enabled = !!req.body.enabled;
+    await db.collection('systemSettings').doc('security').set({
+      deviceBindingEnabled: enabled,
+      updatedAt: new Date(),
+      updatedBy: req.staff.id,
+    }, { merge: true });
+    res.json({ success: true, enabled });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /settings/team-fees ─────────────────────────────────────────
 router.get('/team-fees', authenticateAny, async (req, res) => {
   try {

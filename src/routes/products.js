@@ -306,6 +306,60 @@ router.post('/sell', authenticate, auditLog('product.sell'), async (req, res) =>
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── POST /products/sales/:saleId/return - 商品退貨（整筆）──────────
+// 還原庫存 + 建立負額退貨紀錄（供結算/報表沖銷）+ 記負向交易 + 標記原銷售已退
+router.post('/sales/:saleId/return', authenticate, checkPermission('products.sell'), auditLog('product.return'), async (req, res) => {
+  try {
+    const db = getDb();
+    const saleRef = db.collection('productSales').doc(req.params.saleId);
+    const saleDoc = await saleRef.get();
+    if (!saleDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此銷售紀錄' });
+    const sale = saleDoc.data();
+    if (sale.isReturn) return res.status(400).json({ error: 'IS_RETURN', message: '此為退貨紀錄，不可再退' });
+    if (sale.returned) return res.status(400).json({ error: 'ALREADY_RETURNED', message: '此筆銷售已退貨' });
+    const now = new Date();
+    const gymId = sale.gymId;
+
+    // 還原庫存（各品項加回原銷售館別）
+    for (const item of (sale.items || [])) {
+      const ref = db.collection('products').doc(item.productId);
+      const doc = await ref.get();
+      if (!doc.exists) continue;
+      const variants = doc.data().variants.map(v =>
+        v.id === item.variantId ? setGymStock(v, gymId, getGymStock(v, gymId) + item.quantity) : v);
+      await ref.update({ variants, updatedAt: now });
+    }
+
+    // 負額退貨紀錄（結算/報表以 totalAmount 加總，負額自動沖銷；付款別沿用原單）
+    const refundId = uuidv4();
+    await db.collection('productSales').doc(refundId).set({
+      id: refundId, gymId, isReturn: true, originalSaleId: sale.id,
+      items: (sale.items || []).map(i => ({ ...i, quantity: -i.quantity, subtotal: -(i.subtotal || 0) })),
+      totalAmount: -(sale.totalAmount || 0), totalDiscount: -(sale.totalDiscount || 0),
+      isTeamMemberSale: sale.isTeamMemberSale || false,
+      memberId: sale.memberId || null, memberName: sale.memberName || '匿名',
+      paymentMethod: sale.paymentMethod || 'cash',
+      staffId: req.staff.id, staffName: req.staff.name,
+      reason: req.body.reason || '', soldAt: now, createdAt: now,
+    });
+
+    // 記負向交易（供 /revenue）
+    if ((sale.totalAmount || 0) > 0) {
+      const { recordTransaction } = require('../utils/revenueLedger');
+      await recordTransaction(db, {
+        gymId, type: 'product_refund', totalAmount: -(sale.totalAmount || 0),
+        paymentMethod: sale.paymentMethod || 'cash',
+        memberId: sale.memberId || null, memberName: sale.memberName || '匿名',
+        relatedId: refundId, notes: `商品退貨：${(sale.items || []).map(i => i.productName).join('、')}`,
+        staffId: req.staff.id, staffName: req.staff.name,
+      });
+    }
+
+    await saleRef.update({ returned: true, returnedAt: now, returnedBy: req.staff.id, returnRefId: refundId, returnReason: req.body.reason || '', updatedAt: now });
+    res.json({ message: `已退貨，退款 NT$${sale.totalAmount || 0}（庫存已還原）`, refundId });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /products/sales ───────────────────────────────────────────
 router.get('/sales', authenticate, async (req, res) => {
   try {

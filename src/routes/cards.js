@@ -185,6 +185,18 @@ router.post('/black/:id/transfer',
 // ══════════════════════════════════════════════════════
 // 卡片移轉（兩段式）：接收（會員）/ 取消（員工）/ 清單
 // ══════════════════════════════════════════════════════
+// 會員自助移轉：依電話即時帶出受贈者姓名（確認用，避免轉錯人）。僅回姓名，優先家長帳號。
+router.get('/transfers/lookup', authenticateMember, async (req, res) => {
+  try {
+    const phone = String(req.query.phone || '').trim();
+    if (!phone || phone.length < 10) return res.json({ found: false });
+    let m;
+    try { m = await require('../services/memberService').getMemberByPhone(phone); }
+    catch { return res.json({ found: false }); }
+    if (m.id === req.member.id) return res.json({ found: true, self: true, name: m.name });
+    res.json({ found: true, name: m.name });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
 // 會員自助發起移轉（會員 App）：優惠卡/黑卡，可設定次數，走兩段式（暫扣→對方接收）
 router.post('/transfers/initiate', authenticateMember, auditLog('card_transfer.initiate'), async (req, res) => {
   try {

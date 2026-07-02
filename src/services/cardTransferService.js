@@ -17,7 +17,7 @@ const ownerField = (type) => (type === 'black' ? 'memberId' : 'ownerMemberId');
 const toDate = (v) => (v?.toDate ? v.toDate() : (v?._seconds ? new Date(v._seconds * 1000) : (v ? new Date(v) : null)));
 
 // ── 發起移轉（暫扣來源、建 pending）─────────────────────────────────
-const initiateTransfer = async ({ cardType, fromCardId, toMemberId, credits, initiatedBy, initiatedByType }) => {
+const initiateTransfer = async ({ cardType, fromCardId, toMemberId, credits, initiatedBy, initiatedByType, expectedOwnerId }) => {
   const db = getDb();
   const memberService = require('./memberService');
   if (!['discount', 'black'].includes(cardType)) throw { code: 'BAD_TYPE', message: '卡別錯誤' };
@@ -29,6 +29,8 @@ const initiateTransfer = async ({ cardType, fromCardId, toMemberId, credits, ini
   if (!doc.exists) throw { code: 'CARD_NOT_FOUND', message: '找不到卡片' };
   const card = doc.data();
   const fromMemberId = card[ownerField(cardType)];
+  // 會員自助移轉：僅能移轉本人名下的卡（員工代辦不帶 expectedOwnerId）
+  if (expectedOwnerId != null && fromMemberId !== expectedOwnerId) throw { code: 'NOT_OWNER', message: '此卡片不屬於你' };
   if (fromMemberId === toMemberId) throw { code: 'SAME_MEMBER', message: '不能移轉給自己' };
   if ((card.remainingCredits || 0) < credits) throw { code: 'INSUFFICIENT_CREDITS', message: `剩餘次數不足（${card.remainingCredits} 次）` };
 

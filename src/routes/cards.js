@@ -185,6 +185,23 @@ router.post('/black/:id/transfer',
 // ══════════════════════════════════════════════════════
 // 卡片移轉（兩段式）：接收（會員）/ 取消（員工）/ 清單
 // ══════════════════════════════════════════════════════
+// 會員自助發起移轉（會員 App）：優惠卡/黑卡，可設定次數，走兩段式（暫扣→對方接收）
+router.post('/transfers/initiate', authenticateMember, auditLog('card_transfer.initiate'), async (req, res) => {
+  try {
+    const { cardType, fromCardId, toPhone, credits } = req.body;
+    if (!['discount', 'black'].includes(cardType)) return res.status(400).json({ error: 'BAD_TYPE', message: '卡別錯誤' });
+    if (!fromCardId || !toPhone) return res.status(400).json({ error: 'MISSING_FIELDS', message: '請填寫卡片與對方手機' });
+    // 解析受贈者（優先家長帳號，避開共用電話子帳號誤解析）
+    let toMember;
+    try { toMember = await require('../services/memberService').getMemberByPhone(String(toPhone).trim()); }
+    catch { return res.status(404).json({ error: 'MEMBER_NOT_FOUND', message: '找不到此手機號碼的會員' }); }
+    const t = await require('../services/cardTransferService').initiateTransfer({
+      cardType, fromCardId, toMemberId: toMember.id, credits,
+      initiatedBy: req.member.id, initiatedByType: 'member', expectedOwnerId: req.member.id,
+    });
+    res.json({ transfer: t, message: `已送出移轉 ${t.credits} 次給 ${t.toMemberName}，待對方於會員 App 接收（24 小時內未接收將自動回沖）` });
+  } catch (err) { res.status(err.code ? 400 : 500).json(err.code ? err : { error: 'SERVER_ERROR', message: err.message }); }
+});
 // 受贈者待接收清單（會員 App）
 router.get('/transfers/incoming', authenticateMember, async (req, res) => {
   try { res.json({ transfers: await require('../services/cardTransferService').getIncoming(req.member.id) }); }

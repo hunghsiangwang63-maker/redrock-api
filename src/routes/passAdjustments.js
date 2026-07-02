@@ -35,8 +35,9 @@ router.post('/evidence', authenticateAny, upload.single('file'), async (req, res
     const fileName = `pass-requests/evidence_${uuidv4()}.${ext}`;
     const file = bucket.file(fileName);
     await file.save(req.file.buffer, { contentType: req.file.mimetype });
-    await file.makePublic();
-    res.json({ url: `https://storage.googleapis.com/${bucket.name}/${fileName}` });
+    // 物件保持私有，回傳長效簽名 URL（比照 transfers 截圖；需簽章不可猜，非公開）
+    const [url] = await file.getSignedUrl({ action: 'read', expires: '2035-01-01' });
+    res.json({ url });
   } catch (err) {
     res.status(500).json({ error: 'UPLOAD_FAILED', message: err.message });
   }

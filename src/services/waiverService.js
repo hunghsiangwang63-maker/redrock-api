@@ -14,9 +14,8 @@ const uploadSignature = async (memberId, type, base64Data) => {
 
   const file = bucket.file(fileName);
   await file.save(buffer, { contentType: 'image/png' });
-  await file.makePublic();
-
-  return `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+  // 不再 makePublic：簽名屬個資，保持私有，顯示時由後端產生短效簽名 URL（見 utils/storageUrl）
+  return fileName; // 儲存物件路徑，非公開 URL
 };
 
 // ── 建立/更新 Waiver ─────────────────────────────────────────────

@@ -232,9 +232,12 @@ router.get('/:id',
         waiverSigned: liveWaiverSigned,
       }).catch(() => {});
 
+      const waiverOut = waiverDoc.exists
+        ? await require('../utils/storageUrl').signFields(waiverDoc.data(), ['memberSignatureUrl', 'parentSignatureUrl'])
+        : null;
       res.json({
         member,
-        waiver: waiverDoc.exists ? waiverDoc.data() : null,
+        waiver: waiverOut,
         latestFallTest: fallTests.empty ? null : fallTests.docs[0].data(),
         activePasses: passes.docs.map(d => ({ id: d.id, ...d.data() })),
         children: children.docs.map(d => ({ id: d.id, name: d.data().name, birthday: d.data().birthday, memberType: d.data().memberType, isChildAccount: d.data().isChildAccount !== false })),
@@ -272,6 +275,7 @@ router.get('/:id/waiver', authenticateAny, async (req, res) => {
       waiver.contentIsFallback = true; // 標註：這是現行版本，非簽署當下的逐字快照
     }
 
+    await require('../utils/storageUrl').signFields(waiver, ['memberSignatureUrl', 'parentSignatureUrl']);
     res.json({ waiver, waiverSigned: !!waiver.isComplete });
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

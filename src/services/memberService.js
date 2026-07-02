@@ -23,10 +23,9 @@ const generateQRCode = async (memberId, memberPhone) => {
 
   const file = bucket.file(fileName);
   await file.save(buffer, { contentType: 'image/png', metadata: { memberId } });
-  await file.makePublic();
-
-  const qrCodeUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
-  return { qrCodeId, qrCodeUrl };
+  // 不再 makePublic：會員 App 以 qrToken 前端即時繪製 QR，不使用此圖檔；保持私有。
+  // 若日後需顯示此圖，改用 utils/storageUrl.signedRead(qrCodePath) 產生簽名 URL。
+  return { qrCodeId, qrCodeUrl: fileName }; // 儲存物件路徑，非公開 URL
 };
 
 // ── 判斷封鎖原因 ──────────────────────────────────────────────────

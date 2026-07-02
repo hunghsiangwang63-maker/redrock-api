@@ -10,8 +10,15 @@ const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../config/firebase');
-const { authenticateStation } = require('../middleware/auth');
+const { authenticate, authenticateStation } = require('../middleware/auth');
+
+// 僅系統管理員可管理館別電腦帳號
+const requireSuperAdmin = (req, res, next) => {
+  if (req.staff?.role !== 'super_admin') return res.status(403).json({ error: 'FORBIDDEN', message: '僅系統管理員可管理館別電腦帳號' });
+  next();
+};
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -281,6 +288,81 @@ router.get('/shift/history/:stationId', authenticateStation, async (req, res) =>
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }
+});
+
+// ══════════════════════════════════════════════════════════════════
+// 館別電腦帳號管理（系統管理員）
+// ══════════════════════════════════════════════════════════════════
+
+// GET /stations - 列出所有館別電腦帳號（不含密碼）
+router.get('/', authenticate, requireSuperAdmin, async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('stations').orderBy('createdAt', 'desc').get().catch(async () => await db.collection('stations').get());
+    const stations = snap.docs.map(d => {
+      const { passwordHash, ...rest } = d.data();
+      return { id: d.id, ...rest };
+    });
+    res.json({ stations });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// POST /stations - 新增館別電腦帳號
+router.post('/',
+  authenticate, requireSuperAdmin,
+  [
+    body('name').notEmpty().withMessage('請輸入電腦帳號名稱'),
+    body('email').isEmail().withMessage('請輸入有效的登入 Email'),
+    body('password').isLength({ min: 6 }).withMessage('密碼至少 6 碼'),
+    body('gymId').notEmpty().withMessage('請選擇館別'),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const { name, email, password, gymId } = req.body;
+      // Email 不可與現有電腦帳號重複
+      const dup = await db.collection('stations').where('email', '==', email).limit(1).get();
+      if (!dup.empty) return res.status(409).json({ error: 'EMAIL_EXISTS', message: '此登入 Email 已被使用' });
+      const gymDoc = await db.collection('gyms').doc(gymId).get();
+      if (!gymDoc.exists) return res.status(400).json({ error: 'INVALID_GYM', message: '館別不存在' });
+      const passwordHash = await bcrypt.hash(password, 10);
+      const id = uuidv4();
+      await db.collection('stations').doc(id).set({
+        name, email, passwordHash, gymId,
+        gymName: gymDoc.data().name || '',
+        isActive: true, notificationEmail: req.body.notificationEmail || null,
+        createdAt: new Date(), lastLoginAt: null,
+      });
+      res.status(201).json({ id, message: '館別電腦帳號已建立' });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
+// PUT /stations/:id - 編輯（名稱/館別/啟用/選填改密碼）
+router.put('/:id', authenticate, requireSuperAdmin, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection('stations').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
+    const updates = { updatedAt: new Date() };
+    if (req.body.name !== undefined) updates.name = req.body.name;
+    if (req.body.isActive !== undefined) updates.isActive = !!req.body.isActive;
+    if (req.body.notificationEmail !== undefined) updates.notificationEmail = req.body.notificationEmail || null;
+    if (req.body.gymId) {
+      const gymDoc = await db.collection('gyms').doc(req.body.gymId).get();
+      if (!gymDoc.exists) return res.status(400).json({ error: 'INVALID_GYM', message: '館別不存在' });
+      updates.gymId = req.body.gymId;
+      updates.gymName = gymDoc.data().name || '';
+    }
+    if (req.body.password) {
+      if (String(req.body.password).length < 6) return res.status(400).json({ error: 'WEAK_PASSWORD', message: '密碼至少 6 碼' });
+      updates.passwordHash = await bcrypt.hash(req.body.password, 10);
+    }
+    await ref.update(updates);
+    res.json({ message: '已更新' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
 module.exports = router;

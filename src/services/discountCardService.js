@@ -14,6 +14,43 @@ const CARD_CREDITS = 10;
 const CARD_VALIDITY_MONTHS = 12;
 const EXPIRY_WARNING_DAYS = 30;
 
+// ── 轉入舊優惠卡（設定剩餘次數）──────────────────────────────────
+// 直接建到 discountCards（入場資格讀此集合），沿用全部既有邏輯：8折入場、移轉。
+// 轉入卡＝新的「原始卡」：totalIssuedCredits=剩餘次數、bonusTriggered=false
+// → 用完（含移轉子卡累計回本卡）即觸發紅利，與購買卡一致。
+const bindDiscountCard = async ({ memberId, remainingCredits, gymId, staffId, barcode }) => {
+  const db = getDb();
+  const cardId = uuidv4();
+  const now = new Date();
+  const expiresAt = dayjs().add(CARD_VALIDITY_MONTHS, 'month').toDate();
+  const credits = Math.max(1, parseInt(remainingCredits) || 0);
+  const card = {
+    id: cardId,
+    ownerMemberId: memberId || null,
+    originalOwnerMemberId: memberId || null,
+    purchasePrice: 0,
+    originalCredits: credits,
+    remainingCredits: credits,
+    totalIssuedCredits: credits,
+    totalUsedCredits: 0,
+    bonusTriggered: false,     // 轉入卡用完（含移轉子卡累計）觸發紅利，與購買卡一致
+    source: 'migrated',
+    barcode: barcode || null,
+    originalCardId: cardId,
+    transferHistory: [],
+    expiresAt,
+    purchasedAt: now,
+    gymId,
+    soldByStaffId: staffId,
+    paymentId: null,
+    isActive: true,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await db.collection(COLLECTION).doc(cardId).set(card);
+  return card;
+};
+
 // ── 購買新優惠卡 ──────────────────────────────────────────────────
 const purchaseDiscountCard = async ({ memberId, gymId, staffId, price, paymentId }) => {
   const db = getDb();
@@ -233,6 +270,7 @@ const getValidDiscountCards = async (memberId) => {
 
 module.exports = {
   purchaseDiscountCard,
+  bindDiscountCard,
   useDiscountCard,
   getTransferPreview,
   transferDiscountCard,

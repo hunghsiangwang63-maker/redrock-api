@@ -20,6 +20,10 @@ const EXPIRY_WARNING_DAYS = 30;
 // → 用完（含移轉子卡累計回本卡）即觸發紅利，與購買卡一致。
 const bindDiscountCard = async ({ memberId, remainingCredits, gymId, staffId, barcode }) => {
   const db = getDb();
+  if (memberId) {
+    const mDoc = await db.collection('members').doc(memberId).get();
+    if (!mDoc.exists) throw { code: 'MEMBER_NOT_FOUND', message: '找不到會員，無法綁定優惠卡' };
+  }
   const cardId = uuidv4();
   const now = new Date();
   const expiresAt = dayjs().add(CARD_VALIDITY_MONTHS, 'month').toDate();

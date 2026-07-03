@@ -48,7 +48,10 @@ router.post('/discount/bind',
         barcode: req.body.barcode || null,
       });
       res.status(201).json({ card, message: '優惠卡轉入成功' });
-    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+    } catch (err) {
+      if (err.code === 'MEMBER_NOT_FOUND') return res.status(404).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
   }
 );
 
@@ -151,6 +154,7 @@ router.post('/black/bind',
       res.status(201).json({ card, message: '黑卡綁定成功' });
     } catch (err) {
       if (err.code === 'CARD_ALREADY_BOUND') return res.status(409).json(err);
+      if (err.code === 'MEMBER_NOT_FOUND') return res.status(404).json(err);
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }
   }

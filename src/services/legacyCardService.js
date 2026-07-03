@@ -20,6 +20,11 @@ const EXPIRY_WARNING_DAYS = 30;
 const bindBlackCard = async ({ barcode, memberId, remainingCredits, gymId, staffId }) => {
   const db = getDb();
 
+  if (memberId) {
+    const mDoc = await db.collection('members').doc(memberId).get();
+    if (!mDoc.exists) throw { code: 'MEMBER_NOT_FOUND', message: '找不到會員，無法綁定黑卡' };
+  }
+
   if (barcode) {
     const existing = await db.collection(COLLECTION)
       .where('barcode', '==', barcode).limit(1).get();

@@ -15,16 +15,20 @@ const generateQRCode = async (memberId, memberPhone) => {
     color: { dark: '#8B1A1A', light: '#FFFFFF' },
   });
 
-  // 上傳至 Firebase Storage
-  const bucket = getStorage().bucket();
+  // 上傳至 Firebase Storage（非致命：此圖檔會員 App 不使用，改由 qrToken 前端即時繪製；
+  // Storage 暫時異常時不應讓「建立會員」整個失敗，僅記 log 後續可重補）
   const fileName = `qrcodes/${memberId}.png`;
-  const base64Data = qrBase64.replace(/^data:image\/png;base64,/, '');
-  const buffer = Buffer.from(base64Data, 'base64');
-
-  const file = bucket.file(fileName);
-  await file.save(buffer, { contentType: 'image/png', metadata: { memberId } });
-  // 不再 makePublic：會員 App 以 qrToken 前端即時繪製 QR，不使用此圖檔；保持私有。
-  // 若日後需顯示此圖，改用 utils/storageUrl.signedRead(qrCodePath) 產生簽名 URL。
+  try {
+    const bucket = getStorage().bucket();
+    const base64Data = qrBase64.replace(/^data:image\/png;base64,/, '');
+    const buffer = Buffer.from(base64Data, 'base64');
+    const file = bucket.file(fileName);
+    await file.save(buffer, { contentType: 'image/png', metadata: { memberId } });
+    // 不再 makePublic：會員 App 以 qrToken 前端即時繪製 QR，不使用此圖檔；保持私有。
+    // 若日後需顯示此圖，改用 utils/storageUrl.signedRead(qrCodePath) 產生簽名 URL。
+  } catch (e) {
+    console.error('[generateQRCode] Storage 上傳失敗（不阻斷建立會員）', e.message || e);
+  }
   return { qrCodeId, qrCodeUrl: fileName }; // 儲存物件路徑，非公開 URL
 };
 

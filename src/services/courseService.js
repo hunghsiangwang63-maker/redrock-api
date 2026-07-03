@@ -838,21 +838,40 @@ const getSessions = async (gymId, fromDate, toDate) => {
 
   const statsBySession = {};
   allEnrollments.forEach(e => {
-    if (!statsBySession[e.sessionId]) statsBySession[e.sessionId] = { enrolledCount: 0, leaveCount: 0, makeupCount: 0 };
-    if (e.status === 'confirmed' || e.status === 'waitlist') {
-      statsBySession[e.sessionId].enrolledCount++;
-      if (e.isMakeup) statsBySession[e.sessionId].makeupCount++;
-    } else if (e.status === 'leave') {
-      statsBySession[e.sessionId].leaveCount++;
+    if (!statsBySession[e.sessionId]) statsBySession[e.sessionId] = { enrolledCount: 0, leaveCount: 0, makeupCount: 0, trialCount: 0, regularCount: 0 };
+    const st = statsBySession[e.sessionId];
+    if (e.status === 'leave') {
+      st.leaveCount++;                     // 請假（原週課學員）
+    } else if (e.status === 'confirmed' || e.status === 'waitlist') {
+      st.enrolledCount++;                  // 沿用：confirmed + waitlist
+      if (e.isMakeup) st.makeupCount++;    // 補課
+      else if (e.isTrial) st.trialCount++; // 試上（目前無資料來源，預留 isTrial）
+      else st.regularCount++;              // 週課原報名（非補課非試上）
     }
   });
 
-  return sessions.map(s => ({
-    ...s,
-    enrolledCount: statsBySession[s.id]?.enrolledCount || 0,
-    leaveCount: statsBySession[s.id]?.leaveCount || 0,
-    makeupCount: statsBySession[s.id]?.makeupCount || 0,
-  }));
+  // 教練存在「課程」上（場次未存 instructor），批次帶出
+  const courseIds = [...new Set(sessions.map(s => s.courseId).filter(Boolean))];
+  const courseDocs = await Promise.all(courseIds.map(id => db.collection(COURSE_COLLECTION).doc(id).get()));
+  const instructorByCourse = {};
+  courseDocs.forEach(d => { if (d.exists) instructorByCourse[d.id] = d.data().instructor || ''; });
+
+  return sessions.map(s => {
+    const st = statsBySession[s.id] || { enrolledCount: 0, leaveCount: 0, makeupCount: 0, trialCount: 0, regularCount: 0 };
+    // 報名人數＝週課原報名（含請假者）；預計上課人數＝原報名−請假＋補課＋試上
+    const registeredCount = st.regularCount + st.leaveCount;
+    const expectedCount = st.regularCount + st.makeupCount + st.trialCount;
+    return {
+      ...s,
+      instructor: s.instructor || instructorByCourse[s.courseId] || '',
+      enrolledCount: st.enrolledCount,
+      leaveCount: st.leaveCount,
+      makeupCount: st.makeupCount,
+      trialCount: st.trialCount,
+      registeredCount,
+      expectedCount,
+    };
+  });
 };
 
 // ── 查詢會員報名紀錄 ──────────────────────────────────────────────

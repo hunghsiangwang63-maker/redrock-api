@@ -102,7 +102,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '1.31.0-transfer-bonus-attribution',
+    version: '1.32.0-expired-bonus-sweep',
   });
 });
 
@@ -137,6 +137,11 @@ if (require.main === module) {
       const rm = await installmentService.sendInstallmentReminders();
       console.log(`[分期排程] 逾期 ${ov.overdueCount} 筆；會員提醒 ${rm.reminderSent || 0}、逾期通知 ${rm.overdueSent || 0}、管理員預警 ${rm.adminNotified || 0}`);
     } catch (e) { console.error('[分期排程] 失敗', e.message); }
+    // 過期紅利清除（標記 inactive，保留文件）
+    try {
+      const { expiredCount } = await require('./services/bonusService').sweepExpiredBonuses();
+      if (expiredCount > 0) console.log(`[紅利排程] 過期停用 ${expiredCount} 筆`);
+    } catch (e) { console.error('[紅利排程] 過期清除失敗', e.message); }
   };
   // 卡片移轉逾期回沖：每小時掃描（24h 未接收 → 次數回沖來源）
   const runCardTransferExpiry = async () => {

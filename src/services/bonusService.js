@@ -155,6 +155,33 @@ const getBonusTransferPreview = async (bonusId) => {
   };
 };
 
+// ── 排程清除過期紅利（每日）──────────────────────────────────────
+// 將已過期、仍為 active 的未使用紅利標記為 inactive（保留文件供歷史查詢，不硬刪除）。
+// 只掃 isActive==true（已使用/已移轉皆已為 false，集合自然很小），到期判斷在 JS，免建複合索引。
+const sweepExpiredBonuses = async () => {
+  const db = getDb();
+  const now = new Date();
+  const snap = await db.collection(COLLECTION).where('isActive', '==', true).get();
+
+  const expired = snap.docs.filter(d => {
+    const b = d.data();
+    if (b.isUsed) return false;
+    const exp = b.expiresAt && b.expiresAt.toDate ? b.expiresAt.toDate() : b.expiresAt;
+    return exp && dayjs(now).isAfter(dayjs(exp));
+  });
+
+  let processed = 0;
+  for (let i = 0; i < expired.length; i += 400) {
+    const chunk = expired.slice(i, i + 400);
+    const batch = db.batch();
+    chunk.forEach(d => batch.update(d.ref, { isActive: false, expiredAt: now, updatedAt: now }));
+    await batch.commit();
+    processed += chunk.length;
+  }
+
+  return { expiredCount: processed };
+};
+
 // ── 查詢會員有效紅利 ──────────────────────────────────────────────
 const getMemberBonuses = async (memberId) => {
   const db = getDb();
@@ -182,4 +209,5 @@ module.exports = {
   transferBonus,
   getBonusTransferPreview,
   getMemberBonuses,
+  sweepExpiredBonuses,
 };

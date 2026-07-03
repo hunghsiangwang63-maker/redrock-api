@@ -12,9 +12,11 @@
  *   B. 舊優惠卡  legacyDiscountCardService  bind→用滿→移轉（含首次移轉）
  *   C. 黑卡      legacyCardService          bind→用→移轉（含首次移轉）→退回
  *   D. 入場      checkinService             紅利/黑卡 confirm 扣點 + cancel 還原
+ *   E. 課程      courseService              報名/候補→請假→補課→退費取消→插班計費
  */
 const path = require('path');
 const { v4: uuid } = require('uuid');
+const dayjs = require('dayjs');
 
 const SRC = path.join(__dirname, '..', 'src');
 
@@ -136,6 +138,9 @@ inject('services/memberService.js', {
   },
   getMemberByPhone: async () => null,
 });
+inject('services/notificationService.js', {
+  createNotification: async () => {}, notifyRoleInGym: async () => {},
+});
 
 // ── 載入真實 service ──
 const dcs = require(path.join(SRC, 'services/discountCardService.js'));
@@ -143,6 +148,7 @@ const ldcs = require(path.join(SRC, 'services/legacyDiscountCardService.js'));
 const lcs = require(path.join(SRC, 'services/legacyCardService.js'));
 const bonus = require(path.join(SRC, 'services/bonusService.js'));
 const checkin = require(path.join(SRC, 'services/checkinService.js'));
+const course = require(path.join(SRC, 'services/courseService.js'));
 const { restoreEntryCredits } = require(path.join(SRC, 'routes/cancelCheckin.js'));
 
 // ── 測試框架 ──
@@ -182,6 +188,26 @@ async function seedPending(over) {
     ...over,
   });
   return qrToken;
+}
+
+// 課程 / 場次 seeders
+const dstr = (d) => dayjs(d).format('YYYY-MM-DD');
+async function seedCourse(id, over = {}) {
+  await db.collection('courses').doc(id).set({
+    id, name: `課程${id}`, gymId: 'gym-hsinchu', price: 6000,
+    totalSessions: 8, maxLeaves: 2, leaveDeadlineHours: 2, makeupDeadlineDays: 60,
+    allowMakeup: true, categoryId: 'cat-lead', gymAccessDaysBefore: 0, gymAccessDaysAfter: 1,
+    startDate: dstr(dayjs().subtract(1, 'day')), midpointSurcharge: 1.05,
+    ...over,
+  });
+}
+async function seedSession(id, over = {}) {
+  await db.collection('courseSessions').doc(id).set({
+    id, courseId: 'C1', courseName: '課程C1', gymId: 'gym-hsinchu',
+    date: dstr(dayjs().add(10, 'day')), startTime: '10:00', endTime: '12:00',
+    maxStudents: 2, enrolledCount: 0, waitlistCount: 0, status: 'active',
+    ...over,
+  });
 }
 
 (async () => {
@@ -377,6 +403,175 @@ async function seedPending(over) {
     ok((await lcs.getBlackCardById(card.id)).remainingCredits === 4, 'confirm 後黑卡扣 1 次（剩 4）');
     await checkin.cancelCheckIn(checkIn.id, 's');
     ok((await lcs.getBlackCardById(card.id)).remainingCredits === 5, '取消後黑卡還原（剩 5）');
+  }
+
+  // ═══════════════ E. 課程（報名 / 請假 / 補課 / 退費）═══════════════
+  const getSession = async (id) => (await db.collection('courseSessions').doc(id).get()).data();
+  const getEnroll = async (memberId, sessionId) => {
+    const s = await db.collection('courseEnrollments')
+      .where('memberId', '==', memberId).where('sessionId', '==', sessionId).get();
+    return s.docs.map(d => d.data())[0] || null;
+  };
+
+  await reset();
+  section('E1 報名：未滿→confirmed、名額+1');
+  {
+    await seedCourse('C1'); await seedSession('S1', { courseId: 'C1', maxStudents: 2 });
+    const r = await course.enrollCourse({ memberId: 'A', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' });
+    ok(r.isWaitlist === false && r.enrollment.status === 'confirmed', '報名成功為 confirmed');
+    ok((await getSession('S1')).enrolledCount === 1, '場次 enrolledCount=1');
+  }
+
+  await reset();
+  section('E2 報名：額滿→waitlist、候補+1');
+  {
+    await seedCourse('C1'); await seedSession('S1', { courseId: 'C1', maxStudents: 2 });
+    await course.enrollCourse({ memberId: 'A', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' });
+    await course.enrollCourse({ memberId: 'B', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' }); // 滿 2
+    const r = await course.enrollCourse({ memberId: 'C', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' });
+    ok(r.isWaitlist === true && r.enrollment.status === 'waitlist', '第3人進候補');
+    ok((await getSession('S1')).waitlistCount === 1, '場次 waitlistCount=1');
+  }
+
+  await reset();
+  section('E3 報名：重複報名被擋');
+  {
+    await seedCourse('C1'); await seedSession('S1', { courseId: 'C1', maxStudents: 5 });
+    await course.enrollCourse({ memberId: 'A', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' });
+    const r = await expectThrow(() => course.enrollCourse({ memberId: 'A', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' }));
+    ok(r.threw && r.code === 'ALREADY_ENROLLED', '重複報名被擋', `code=${r.code}`);
+  }
+
+  await reset();
+  section('E4 請假：confirmed→leave、釋放名額、產生補課資格');
+  {
+    await seedCourse('C1'); await seedSession('S1', { courseId: 'C1', maxStudents: 3 });
+    const e = await course.enrollCourse({ memberId: 'A', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' });
+    const r = await course.requestLeave({ enrollmentId: e.enrollment.id, memberId: 'A', reason: '臨時有事' });
+    ok(!!r.makeup, '請假後產生補課資格');
+    ok((await getEnroll('A', 'S1')).status === 'leave', '報名狀態轉為 leave');
+    ok((await getSession('S1')).enrolledCount === 0, '請假後釋放名額（enrolledCount=0）');
+    ok((await course.getMemberMakeupRights('A')).length === 1, '補課資格顯示於會員');
+  }
+
+  await reset();
+  section('E5 請假：達上限被擋（maxLeaves=1）');
+  {
+    await seedCourse('C1', { maxLeaves: 1 });
+    await seedSession('S1', { courseId: 'C1', maxStudents: 5 });
+    await seedSession('S2', { courseId: 'C1', maxStudents: 5, date: dstr(dayjs().add(12, 'day')) });
+    const e1 = await course.enrollCourse({ memberId: 'A', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' });
+    const e2 = await course.enrollCourse({ memberId: 'A', sessionId: 'S2', gymId: 'gym-hsinchu', staffId: 's' });
+    await course.requestLeave({ enrollmentId: e1.enrollment.id, memberId: 'A', reason: 'x' });
+    const r = await expectThrow(() => course.requestLeave({ enrollmentId: e2.enrollment.id, memberId: 'A', reason: 'y' }));
+    ok(r.threw && r.code === 'MAX_LEAVES_EXCEEDED', '第2次請假達上限被擋', `code=${r.code}`);
+  }
+
+  await reset();
+  section('E6 請假：超過截止時間被擋（場次在過去）');
+  {
+    await seedCourse('C1');
+    await seedSession('S1', { courseId: 'C1', maxStudents: 5, date: dstr(dayjs().subtract(1, 'day')) });
+    const e = await course.enrollCourse({ memberId: 'A', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' });
+    const r = await expectThrow(() => course.requestLeave({ enrollmentId: e.enrollment.id, memberId: 'A', reason: 'x' }));
+    ok(r.threw && r.code === 'LEAVE_DEADLINE_PASSED', '逾請假截止被擋', `code=${r.code}`);
+  }
+
+  await reset();
+  section('E7 候補自動遞補：confirmed 請假→候補遞補為 confirmed');
+  {
+    await seedCourse('C1'); await seedSession('S1', { courseId: 'C1', maxStudents: 1 });
+    const eA = await course.enrollCourse({ memberId: 'A', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' }); // confirmed
+    await course.enrollCourse({ memberId: 'B', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' });          // waitlist
+    await course.requestLeave({ enrollmentId: eA.enrollment.id, memberId: 'A', reason: 'x' });
+    ok((await getEnroll('B', 'S1')).status === 'confirmed', '候補 B 自動遞補為 confirmed');
+    ok((await getSession('S1')).enrolledCount === 1 && (await getSession('S1')).waitlistCount === 0, '名額/候補數正確');
+  }
+
+  await reset();
+  section('E8 補課：請假資格→補到另一場次');
+  {
+    await seedCourse('C1');
+    await seedSession('S1', { courseId: 'C1', maxStudents: 5 });
+    await seedSession('S2', { courseId: 'C1', maxStudents: 5, date: dstr(dayjs().add(12, 'day')) });
+    const e = await course.enrollCourse({ memberId: 'A', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' });
+    await course.requestLeave({ enrollmentId: e.enrollment.id, memberId: 'A', reason: 'x' });
+    const mkId = (await course.getMemberMakeupRights('A'))[0].id;
+    const r = await course.enrollMakeup({ makeupId: mkId, memberId: 'A', targetSessionId: 'S2' });
+    ok(!!r, '補課報名成功');
+    ok((await course.getMemberMakeupRights('A')).length === 0, '補課資格已標記 used（不再顯示）');
+    ok((await getEnroll('A', 'S2')).status === 'confirmed', '補課後於 S2 為 confirmed');
+    ok((await getSession('S2')).enrolledCount === 1, 'S2 名額+1');
+  }
+
+  await reset();
+  section('E9 補課：資格過期被擋');
+  {
+    await seedCourse('C1'); await seedSession('S2', { courseId: 'C1', maxStudents: 5 });
+    await db.collection('courseMakeupRights').doc('M1').set({
+      id: 'M1', memberId: 'A', courseId: 'C1', categoryId: 'cat-lead', gymId: 'gym-hsinchu',
+      status: 'available', expiresAt: dayjs().subtract(1, 'day').toDate(),
+    });
+    const r = await expectThrow(() => course.enrollMakeup({ makeupId: 'M1', memberId: 'A', targetSessionId: 'S2' }));
+    ok(r.threw && r.code === 'MAKEUP_EXPIRED', '過期補課資格被擋', `code=${r.code}`);
+  }
+
+  await reset();
+  section('E10 補課：目標場次額滿被擋');
+  {
+    await seedCourse('C1'); await seedSession('S2', { courseId: 'C1', maxStudents: 1, enrolledCount: 1 });
+    await db.collection('courseMakeupRights').doc('M1').set({
+      id: 'M1', memberId: 'A', courseId: 'C1', categoryId: 'cat-lead', gymId: 'gym-hsinchu',
+      status: 'available', expiresAt: dayjs().add(30, 'day').toDate(),
+    });
+    const r = await expectThrow(() => course.enrollMakeup({ makeupId: 'M1', memberId: 'A', targetSessionId: 'S2' }));
+    ok(r.threw && r.code === 'SESSION_FULL', '額滿場次補課被擋', `code=${r.code}`);
+  }
+
+  await reset();
+  section('E11 補課：跨類別 / 跨館被擋');
+  {
+    await seedCourse('C1', { categoryId: 'cat-lead', gymId: 'gym-hsinchu' });
+    await seedCourse('C2', { categoryId: 'cat-boulder', gymId: 'gym-hsinchu' });
+    await seedCourse('C3', { categoryId: 'cat-lead', gymId: 'gym-shilin' });
+    await seedSession('S_cat', { courseId: 'C2', maxStudents: 5, gymId: 'gym-hsinchu' });
+    await seedSession('S_gym', { courseId: 'C3', maxStudents: 5, gymId: 'gym-shilin' });
+    const mk = () => db.collection('courseMakeupRights').doc('M1').set({
+      id: 'M1', memberId: 'A', courseId: 'C1', categoryId: 'cat-lead', gymId: 'gym-hsinchu',
+      status: 'available', expiresAt: dayjs().add(30, 'day').toDate(),
+    });
+    await mk();
+    const rCat = await expectThrow(() => course.enrollMakeup({ makeupId: 'M1', memberId: 'A', targetSessionId: 'S_cat' }));
+    ok(rCat.threw && rCat.code === 'DIFFERENT_CATEGORY', '跨類別補課被擋', `code=${rCat.code}`);
+    await mk(); // 重置為 available
+    const rGym = await expectThrow(() => course.enrollMakeup({ makeupId: 'M1', memberId: 'A', targetSessionId: 'S_gym' }));
+    ok(rGym.threw && rGym.code === 'DIFFERENT_GYM', '跨館補課被擋', `code=${rGym.code}`);
+  }
+
+  await reset();
+  section('E12 退費取消：confirmed 釋放名額並遞補候補');
+  {
+    await seedCourse('C1'); await seedSession('S1', { courseId: 'C1', maxStudents: 1 });
+    await course.enrollCourse({ memberId: 'A', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' }); // confirmed
+    await course.enrollCourse({ memberId: 'B', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' }); // waitlist
+    const cancelled = await course.cancelCourseEnrollments({ courseId: 'C1', memberId: 'A', reason: '退費' });
+    ok(cancelled === 1, '取消 1 筆報名');
+    ok((await getEnroll('A', 'S1')).status === 'cancelled', 'A 報名轉為 cancelled');
+    ok((await getEnroll('B', 'S1')).status === 'confirmed', '候補 B 遞補為 confirmed');
+    ok((await getSession('S1')).enrolledCount === 1, '名額釋放後由候補補上（=1）');
+  }
+
+  await reset();
+  section('E13 插班計費：完課過半→照比例計費（ratio=0.5）');
+  {
+    await seedCourse('C1', { price: 8000, totalSessions: 8 });
+    // 4 堂已過（date < 目標場次），目標場次在未來
+    for (let i = 0; i < 4; i++) await seedSession(`P${i}`, { courseId: 'C1', date: dstr(dayjs().subtract(20 - i, 'day')) });
+    await seedSession('S1', { courseId: 'C1', maxStudents: 5, date: dstr(dayjs().add(10, 'day')) });
+    const r = await course.enrollCourse({ memberId: 'A', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' });
+    ok(r.feeInfo.remaining === 4 && r.feeInfo.fee === 4000,
+      '剩 4 堂、費用=8000×0.5=4000', `remaining=${r.feeInfo.remaining} fee=${r.feeInfo.fee}`);
+    ok(r.feeInfo.installment === false, '4 堂不分期');
   }
 
   // ── 總結 ──

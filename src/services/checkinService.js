@@ -603,6 +603,11 @@ const createPendingCheckIn = async ({
     if (!ticketDoc.exists || ticketDoc.data().status !== 'active') {
       throw { code: 'TICKET_INVALID', message: '單次入場券無效' };
     }
+    // 擁有權：券必須屬於入場者本人（家長代子時 memberId 已解析為子會員；轉贈後
+    // memberId 已更新為受贈者，故仍成立）。防止帶他人的有效券入場。
+    if (ticketDoc.data().memberId && ticketDoc.data().memberId !== memberId) {
+      throw { code: 'TICKET_NOT_OWNED', message: '此單次入場券不屬於此會員' };
+    }
     if (dayjs().isAfter(dayjs(ticketDoc.data().expiresAt))) {
       throw { code: 'TICKET_EXPIRED', message: '單次入場券已過期' };
     }

@@ -39,17 +39,35 @@ router.post('/', authenticateAny, async (req, res) => {
       if (course.allowTrial !== true) return res.status(400).json({ code:'TRIAL_NOT_ALLOWED', message:'此課程未開放試上' });
       if ((session.enrolledCount||0) >= (session.maxStudents||0)) return res.status(400).json({ code:'SESSION_FULL', message:'此場次已額滿，無法試上' });
       if (req.body.consentSigned !== true) return res.status(400).json({ code:'CONSENT_REQUIRED', message:'請先簽署免責同意書' });
+      // 家長代子帳號報名試上：綁定到子會員（驗證擁有權，比照 /checkin/qr/create）。
+      // booking / 名單 / 單日券的 memberId 皆綁子會員，入場時子帳號才拿得到自己的券。
+      let trialMemberId = memberId;
+      let trialName = contactName || req.member?.name || '';
+      let trialEmail = contactEmail || req.member?.email || '';
+      let trialPhone = contactPhone || req.member?.phone || '';
+      if (req.body.childMemberId && req.body.childMemberId !== memberId) {
+        const childDoc = await db.collection('members').doc(req.body.childMemberId).get();
+        if (!childDoc.exists || childDoc.data().parentMemberId !== memberId) {
+          return res.status(403).json({ code:'FORBIDDEN', message:'只能為自己或自己的子會員報名試上' });
+        }
+        const child = childDoc.data();
+        trialMemberId = req.body.childMemberId;
+        trialName = contactName || child.name || '';
+        trialEmail = contactEmail || child.email || req.member?.email || '';
+        trialPhone = contactPhone || child.phone || req.member?.phone || '';
+      }
+
       const trialFee = course.trialPrice || 0;
       const id = `trial_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
       await db.collection('experienceBookings').doc(id).set({
-        id, memberId, gymId: session.gymId, kind: 'trial',
+        id, memberId: trialMemberId, bookedByMemberId: memberId, gymId: session.gymId, kind: 'trial',
         trialCourseId: session.courseId, trialSessionId: req.body.trialSessionId, courseName: session.courseName,
         bookingDate: session.date, bookingTime: `${session.startTime||''}~${session.endTime||''}`,
         courseType: 'trial',
-        contactName: contactName || req.member?.name || '',
-        contactEmail: contactEmail || req.member?.email || '',
-        contactPhone: contactPhone || req.member?.phone || '',
-        participants: [{ name: contactName || req.member?.name || '' }],
+        contactName: trialName,
+        contactEmail: trialEmail,
+        contactPhone: trialPhone,
+        participants: [{ name: trialName }],
         numParticipants: 1,
         totalFee: trialFee,
         paymentDate: paymentDate||null, bankLastFive: bankLastFive||null, paymentMethod: req.body.paymentMethod || 'transfer',

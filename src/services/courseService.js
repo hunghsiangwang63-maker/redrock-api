@@ -63,6 +63,9 @@ const createCourse = async ({ gymId, staffId, data }) => {
     // 補課規則
     allowMakeup: data.allowMakeup !== false,
     makeupDeadlineDays: data.makeupDeadlineDays || 60,  // 課程結束後幾天內補課
+    // 試上規則（週課開放試上：會員可於「體驗課程」報名單堂試上，另收試上費、免保險）
+    allowTrial: data.allowTrial === true,
+    trialPrice: data.trialPrice || 0,
     // 上課星期（週課用）0=日 1=一 ... 6=六
     weekdays: data.weekdays || [],
     // 插班加成（剩餘堂數低於一半時）
@@ -874,6 +877,36 @@ const getSessions = async (gymId, fromDate, toDate) => {
   });
 };
 
+// ── 開放試上的週課近期場次（會員「體驗課程」頁列出）─────────────────
+// 回傳每個可試上場次：課名/教練/日期時間/試上費/剩餘名額/是否額滿。
+const getTrialSessions = async (gymId, fromDate, toDate) => {
+  const db = getDb();
+  let cq = db.collection(COURSE_COLLECTION);
+  if (gymId) cq = cq.where('gymId', '==', gymId);
+  const courseSnap = await cq.get();
+  const trialCourses = {};
+  courseSnap.docs.forEach(d => {
+    const c = d.data();
+    if (c.allowTrial === true && c.status !== 'cancelled') {
+      trialCourses[d.id] = { trialPrice: c.trialPrice || 0, courseName: c.name, instructor: c.instructor || '' };
+    }
+  });
+  if (Object.keys(trialCourses).length === 0) return [];
+
+  const from = fromDate || new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+  const to = toDate || dayjs(from).add(60, 'day').format('YYYY-MM-DD');
+  const sessions = await getSessions(gymId, from, to);
+  return sessions
+    // 額滿（含補課佔滿）自動排除→不提供試上選項；試上佔名額
+    .filter(s => trialCourses[s.courseId] && s.status !== 'cancelled'
+      && (s.enrolledCount || 0) < (s.maxStudents || 0))
+    .map(s => ({
+      ...s,
+      trialPrice: trialCourses[s.courseId].trialPrice,
+      remaining: Math.max(0, (s.maxStudents || 0) - (s.enrolledCount || 0)),
+    }));
+};
+
 // ── 查詢會員報名紀錄 ──────────────────────────────────────────────
 const getMemberEnrollments = async (memberId) => {
   const db = getDb();
@@ -946,6 +979,7 @@ module.exports = {
   getSessionRoster,
   getCourses,
   getSessions,
+  getTrialSessions,
   getMemberEnrollments,
   getMemberMakeupRights,
 };

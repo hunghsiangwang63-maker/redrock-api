@@ -78,6 +78,15 @@ router.get('/sessions', authenticateAny, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// GET /courses/trial-sessions - 開放試上的週課近期場次（會員「體驗課程」頁）
+router.get('/trial-sessions', authenticateAny, async (req, res) => {
+  try {
+    const gymId = req.query.gymId || req.staff?.gymId;
+    const sessions = await courseService.getTrialSessions(gymId, req.query.from, req.query.to);
+    res.json({ sessions });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // POST /courses/:courseId/sessions - 建立場次
 router.post('/:courseId/sessions',
   authenticate, checkPermission('courses.manage'), auditLog('session.create'),
@@ -523,6 +532,7 @@ router.put('/:courseId',
         'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',
         'unlimitedPracticeStart', 'unlimitedPracticeEnd',
+        'allowTrial', 'trialPrice',
       ];
       const updates = { updatedAt: new Date() };
       allowedFields.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });

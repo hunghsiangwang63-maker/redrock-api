@@ -877,6 +877,58 @@ const getSessions = async (gymId, fromDate, toDate) => {
   });
 };
 
+// ── 試上報名：將會員加入某場次名單（isTrial，佔名額）──────────────────
+// 輕量版（不含分期/插班費計算）；計入預計上課、佔名額；防止重複試上同一場。
+const enrollTrial = async ({ memberId, memberName, sessionId, gymId, trialFee, bookingId, staffId }) => {
+  const db = getDb();
+  const now = new Date();
+  const sessionDoc = await db.collection(SESSION_COLLECTION).doc(sessionId).get();
+  if (!sessionDoc.exists) throw { code: 'SESSION_NOT_FOUND', message: '找不到試上場次' };
+  const session = sessionDoc.data();
+
+  const dup = await db.collection(ENROLLMENT_COLLECTION)
+    .where('memberId', '==', memberId).where('sessionId', '==', sessionId)
+    .where('status', 'in', ['confirmed', 'waitlist']).get();
+  if (!dup.empty) throw { code: 'ALREADY_ENROLLED', message: '此會員已在該場次名單中' };
+
+  const isFull = (session.enrolledCount || 0) >= (session.maxStudents || 0);
+  const enrollmentId = uuidv4();
+  const enrollment = {
+    id: enrollmentId, memberId, memberName: memberName || '',
+    sessionId, courseId: session.courseId, courseName: session.courseName, gymId: gymId || session.gymId,
+    date: session.date, startTime: session.startTime, endTime: session.endTime,
+    status: isFull ? 'waitlist' : 'confirmed',
+    waitlistPosition: isFull ? (session.waitlistCount || 0) + 1 : null,
+    isTrial: true, trialFee: trialFee || 0,
+    experienceBookingId: bookingId || null,
+    paymentStatus: 'paid',
+    enrolledBy: staffId || memberId, enrolledAt: now, createdAt: now, updatedAt: now,
+  };
+  await db.collection(ENROLLMENT_COLLECTION).doc(enrollmentId).set(enrollment);
+  await db.collection(SESSION_COLLECTION).doc(sessionId).update(
+    isFull ? { waitlistCount: (session.waitlistCount || 0) + 1, updatedAt: now }
+           : { enrolledCount: (session.enrolledCount || 0) + 1, updatedAt: now });
+  return { enrollmentId, sessionId, status: enrollment.status };
+};
+
+// ── 取消試上名單（退費/取消預約時）：移除名單並釋放名額 ───────────────
+const removeTrialEnrollment = async (enrollmentId) => {
+  const db = getDb();
+  const now = new Date();
+  const ref = db.collection(ENROLLMENT_COLLECTION).doc(enrollmentId);
+  const doc = await ref.get();
+  if (!doc.exists) return { removed: false };
+  const e = doc.data();
+  await ref.update({ status: 'cancelled', cancelledAt: now, updatedAt: now });
+  const sDoc = await db.collection(SESSION_COLLECTION).doc(e.sessionId).get();
+  if (sDoc.exists) {
+    const s = sDoc.data();
+    if (e.status === 'confirmed') await sDoc.ref.update({ enrolledCount: Math.max(0, (s.enrolledCount || 0) - 1), updatedAt: now });
+    else if (e.status === 'waitlist') await sDoc.ref.update({ waitlistCount: Math.max(0, (s.waitlistCount || 0) - 1), updatedAt: now });
+  }
+  return { removed: true };
+};
+
 // ── 開放試上的週課近期場次（會員「體驗課程」頁列出）─────────────────
 // 回傳每個可試上場次：課名/教練/日期時間/試上費/剩餘名額/是否額滿。
 const getTrialSessions = async (gymId, fromDate, toDate) => {
@@ -980,6 +1032,8 @@ module.exports = {
   getCourses,
   getSessions,
   getTrialSessions,
+  enrollTrial,
+  removeTrialEnrollment,
   getMemberEnrollments,
   getMemberMakeupRights,
 };

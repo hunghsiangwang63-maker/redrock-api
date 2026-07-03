@@ -28,6 +28,38 @@ router.post('/', authenticateAny, async (req, res) => {
       totalFee, paymentDate, bankLastFive, notes,
     } = req.body;
 
+    // ── 試上：綁定週課場次（另收試上費、免保險、佔名額）───────────────
+    if (req.body.trialSessionId) {
+      if (!memberId) return res.status(401).json({ code:'UNAUTHORIZED', message:'請先登入會員' });
+      const sDoc = await db.collection('courseSessions').doc(req.body.trialSessionId).get();
+      if (!sDoc.exists) return res.status(404).json({ code:'SESSION_NOT_FOUND', message:'找不到試上場次' });
+      const session = sDoc.data();
+      const cDoc = await db.collection('courses').doc(session.courseId).get();
+      const course = cDoc.exists ? cDoc.data() : {};
+      if (course.allowTrial !== true) return res.status(400).json({ code:'TRIAL_NOT_ALLOWED', message:'此課程未開放試上' });
+      if ((session.enrolledCount||0) >= (session.maxStudents||0)) return res.status(400).json({ code:'SESSION_FULL', message:'此場次已額滿，無法試上' });
+      if (req.body.consentSigned !== true) return res.status(400).json({ code:'CONSENT_REQUIRED', message:'請先簽署免責同意書' });
+      const trialFee = course.trialPrice || 0;
+      const id = `trial_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+      await db.collection('experienceBookings').doc(id).set({
+        id, memberId, gymId: session.gymId, kind: 'trial',
+        trialCourseId: session.courseId, trialSessionId: req.body.trialSessionId, courseName: session.courseName,
+        bookingDate: session.date, bookingTime: `${session.startTime||''}~${session.endTime||''}`,
+        courseType: 'trial',
+        contactName: contactName || req.member?.name || '',
+        contactEmail: contactEmail || req.member?.email || '',
+        contactPhone: contactPhone || req.member?.phone || '',
+        participants: [{ name: contactName || req.member?.name || '' }],
+        numParticipants: 1,
+        totalFee: trialFee,
+        paymentDate: paymentDate||null, bankLastFive: bankLastFive||null, paymentMethod: req.body.paymentMethod || 'transfer',
+        consentSigned: true, needsInsurance: false,
+        notes: notes||'',
+        status: 'pending', createdAt: new Date(), updatedAt: new Date(),
+      });
+      return res.status(201).json({ success:true, id, isTrial:true, totalFee: trialFee, message:'試上預約已送出，請完成付款' });
+    }
+
     if (!gymId) return res.status(400).json({ code:'MISSING_GYM', message:'請選擇場館' });
     if (!bookingDate) return res.status(400).json({ code:'MISSING_DATE', message:'請填寫體驗日期' });
     if (!participants?.length) return res.status(400).json({ code:'MISSING_PARTICIPANTS', message:'請填寫參加人員資料' });
@@ -264,6 +296,32 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
     if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
     const booking = { id: doc.id, ...doc.data() };
 
+    // ── 試上預約：確認收款→加入該場次名單（isTrial，佔名額），不建課/排班 ──
+    if (booking.kind === 'trial') {
+      if (booking.trialEnrollmentId) return res.json({ success:true, isTrial:true, message:'已確認收款（已在名單中）' });
+      let trialResult;
+      try {
+        trialResult = await courseService.enrollTrial({
+          memberId: booking.memberId, memberName: booking.contactName,
+          sessionId: booking.trialSessionId, gymId: booking.gymId,
+          trialFee: booking.totalFee, bookingId: booking.id, staffId: req.staff.id,
+        });
+      } catch (e) {
+        return res.status(400).json({ error: 'TRIAL_ENROLL_FAILED', message: e.message || e.code });
+      }
+      await ref.update({
+        status: 'confirmed', confirmedBy: req.staff.id, confirmedByName: req.staff.name,
+        confirmedAt: new Date(), updatedAt: new Date(), trialEnrollmentId: trialResult.enrollmentId,
+      });
+      if (booking.contactEmail) {
+        emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking).catch(e => console.error('[Email]', e.message));
+      }
+      return res.json({
+        success: true, isTrial: true, ...trialResult,
+        message: trialResult.status === 'waitlist' ? '已確認收款（場次已滿，列入候補）' : '已確認收款，已加入試上名單',
+      });
+    }
+
     const coachId = req.body.coachId || null;
     const coachName = (req.body.coachName || '').trim();
 
@@ -324,6 +382,10 @@ router.post('/:id/cancel', authenticate, async (req, res) => {
     });
     // 退費/取消 → 該預約所有「未使用」體驗入場券作廢（含已轉出未用）；已使用不動
     const voided = await voidExperienceTickets(db, req.params.id, '體驗退費/取消');
+    // 試上預約：移除該場次試上名單並釋放名額
+    if (booking.kind === 'trial' && booking.trialEnrollmentId) {
+      await courseService.removeTrialEnrollment(booking.trialEnrollmentId).catch(e => console.error('[試上取消] 移除名單失敗', e.message || e.code));
+    }
     // 清理自動建立的課程/場次/教練排班（若當初有指定教練排課）
     const cleanup = await cleanupExperienceCourseAndSchedule(db, booking, req.staff);
     res.json({ success:true, voidedTickets: voided, cleanup });

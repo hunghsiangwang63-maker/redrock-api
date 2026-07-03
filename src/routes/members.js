@@ -6,6 +6,8 @@ const memberService = require('../services/memberService');
 const waiverService = require('../services/waiverService');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
+const XLSX = require('xlsx');
+const { sanitizeSheet } = require('../utils/xlsxSafe');
 
 // ── 驗證錯誤處理 ──────────────────────────────────────────────────
 const validate = (req, res, next) => {
@@ -163,6 +165,78 @@ router.get('/reports/active-course-students', authenticate, async (req, res) => 
     res.json({ courses: out, total: out.reduce((s, c) => s + c.count, 0) });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
+
+// ── GET /members/download - 下載會員名單（XLSX，含最後兩次入場時間；管理員）──
+// 注意：此路由必須在 GET /:id 之前，否則會被 /:id 攔截。
+router.get('/download',
+  authenticate,
+  checkPermission('members.read'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      // 場館範圍：super_admin 可指定 gymId（不指定＝全部館）；其他角色鎖自己館
+      const effectiveGymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
+      let ref = db.collection(COLLECTIONS.MEMBERS);
+      if (effectiveGymId) ref = ref.where('gymId', '==', effectiveGymId);
+      const snap = await ref.get();
+      const members = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // 台北時間字串（Firestore Timestamp / {_seconds} / Date 皆可）
+      const fmtTs = (ts) => {
+        if (!ts) return '';
+        const ms = ts._seconds != null ? ts._seconds * 1000
+          : (typeof ts.toDate === 'function' ? ts.toDate().getTime() : new Date(ts).getTime());
+        if (!ms || isNaN(ms)) return '';
+        return new Date(ms + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ');
+      };
+
+      // 每位會員最後兩次入場時間：以 memberId 撈其 checkIns（單欄等值，免 composite index），
+      // 記憶體排序後取最近兩筆。分批並行避免一次發太多查詢。
+      const lastVisits = {};
+      for (let i = 0; i < members.length; i += 50) {
+        const chunk = members.slice(i, i + 50);
+        await Promise.all(chunk.map(async m => {
+          const vs = await db.collection(COLLECTIONS.CHECK_INS).where('memberId', '==', m.id).get();
+          const times = vs.docs.map(d => d.data().checkedInAt).filter(Boolean)
+            .map(t => (t._seconds != null ? t._seconds * 1000 : (t.toDate ? t.toDate().getTime() : new Date(t).getTime())))
+            .filter(ms => ms && !isNaN(ms))
+            .sort((a, b) => b - a);
+          lastVisits[m.id] = times.slice(0, 2);
+        }));
+      }
+
+      const gymLabel = (g) => g === 'gym-hsinchu' ? '新竹館' : g === 'gym-shilin' ? '士林館' : (g || '');
+      members.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant'));
+      const rows = members.map(m => ({
+        '會員ID': m.id,
+        '姓名': m.name || '',
+        '電話': m.phone || '',
+        'Email': m.email || '',
+        '生日': m.birthday || '',
+        '性別': m.gender || '',
+        '子帳號': m.isChildAccount ? '是' : '',
+        '家長ID': m.parentMemberId || '',
+        '場館': gymLabel(m.gymId),
+        '註冊來源': m.registeredBy || '',
+        '狀態': m.isBlocked ? '封鎖' : '正常',
+        '最近入場': fmtTs((lastVisits[m.id] || [])[0]),
+        '前次入場': fmtTs((lastVisits[m.id] || [])[1]),
+      }));
+      if (rows.length === 0) rows.push({ '會員ID': '無資料', '姓名': '', '電話': '', 'Email': '', '生日': '', '性別': '', '子帳號': '', '家長ID': '', '場館': '', '註冊來源': '', '狀態': '', '最近入場': '', '前次入場': '' });
+
+      const ws = sanitizeSheet(XLSX.utils.json_to_sheet(rows));
+      ws['!cols'] = [24, 10, 12, 22, 12, 6, 6, 24, 8, 10, 8, 18, 18].map(w => ({ wch: w }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, '會員名單');
+      const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+      const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="members_${today}.xlsx"`);
+      res.send(buf);
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
 
 // ── GET /members/:id - 取得單一會員 ─────────────────────────────
 router.get('/:id',
@@ -440,6 +514,41 @@ router.put('/:id',
 
       await db.collection(COLLECTIONS.MEMBERS).doc(req.params.id).update(updates);
       res.json({ message: '更新成功' });
+    } catch (err) {
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
+// ── DELETE /members/:id - 刪除會員（僅管理員；一併刪其子帳號）─────────
+// 只刪會員檔案本身與其子帳號；入場/交易/票券/報名等歷史紀錄保留（內含 memberId 快照，供對帳）。
+router.delete('/:id',
+  authenticate,
+  checkPermission('members.delete'),
+  auditLog('member.delete'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const ref = db.collection(COLLECTIONS.MEMBERS).doc(req.params.id);
+      const doc = await ref.get();
+      if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此會員' });
+
+      // 一併刪除其子帳號（子帳號無法脫離家長獨立存在）
+      const childSnap = await db.collection(COLLECTIONS.MEMBERS)
+        .where('parentMemberId', '==', req.params.id).get();
+      const deletedChildren = childSnap.docs.map(d => ({ id: d.id, name: d.data().name }));
+
+      const batch = db.batch();
+      childSnap.docs.forEach(d => batch.delete(d.ref));
+      batch.delete(ref);
+      await batch.commit();
+
+      res.json({
+        success: true,
+        deleted: { id: req.params.id, name: doc.data().name || '' },
+        deletedChildren,
+        note: '已刪除會員與其子帳號；入場/交易/票券等歷史紀錄保留',
+      });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }

@@ -130,11 +130,12 @@ const transferBlackCard = async ({ fromCardId, toMemberId, credits, staffId }) =
   const now = new Date();
   const newCardId = uuidv4();
 
-  // 決定接受方到期日
+  // 決定接受方到期日（正規化成原生 Date：繼承時 fromCard.expiresAt 是 Firestore
+  // Timestamp（有 .toDate()），首次移轉時為 null → 用新算出的 Date。統一供寫入與回傳格式化。）
   let expiresAt;
   if (fromCard.expiresAt) {
     // 已有到期日 → 繼承，不延長
-    expiresAt = fromCard.expiresAt;
+    expiresAt = fromCard.expiresAt.toDate();
   } else {
     // 原始卡首次移轉 → 設定1年
     expiresAt = dayjs().add(TRANSFER_VALIDITY_MONTHS, 'month').toDate();
@@ -175,7 +176,7 @@ const transferBlackCard = async ({ fromCardId, toMemberId, credits, staffId }) =
   return {
     fromCard: { ...fromCard, remainingCredits: newFromCredits },
     newCard,
-    expiresAt: dayjs(expiresAt.toDate()).format('YYYY-MM-DD'),
+    expiresAt: dayjs(expiresAt).format('YYYY-MM-DD'),
     isFirstTransfer: !fromCard.expiresAt,
   };
 };

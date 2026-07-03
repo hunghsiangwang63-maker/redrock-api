@@ -166,8 +166,10 @@ const transferLegacyDiscountCard = async ({ fromCardId, toMemberId, credits, sta
   const newCardId = uuidv4();
 
   // 與黑卡相同：首次移轉設定1年，之後繼承
+  // 正規化成原生 Date：繼承時 fromCard.expiresAt 是 Firestore Timestamp（有 .toDate()），
+  // 首次移轉時為 null → 用新算出的 Date。統一成 Date 供下方寫入與回傳格式化使用。
   const expiresAt = fromCard.expiresAt
-    ? fromCard.expiresAt
+    ? fromCard.expiresAt.toDate()
     : dayjs().add(TRANSFER_VALIDITY_MONTHS, 'month').toDate();
 
   const newCard = {
@@ -210,7 +212,7 @@ const transferLegacyDiscountCard = async ({ fromCardId, toMemberId, credits, sta
   return {
     fromCard: { ...fromCard, remainingCredits: newFromCredits },
     newCard,
-    expiresAt: dayjs(expiresAt.toDate()).format('YYYY-MM-DD'),
+    expiresAt: dayjs(expiresAt).format('YYYY-MM-DD'),
     isFirstTransfer: !fromCard.expiresAt,
   };
 };

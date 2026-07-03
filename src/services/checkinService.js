@@ -875,9 +875,15 @@ const cancelCheckIn = async (checkInId, staffId, force = false) => {
 
   const now = new Date();
 
-  // 退回票券
+  // 退回票券（黑卡/單次券/折扣卡/購卡入場/紅利）— 須與 cancelCheckin.js 的 restoreEntryCredits 一致
   if (checkIn.entryType === 'black_card' && checkIn.blackCardId) {
     await refundBlackCard(checkIn.blackCardId); // legacyBlackCards：與扣點同源
+  } else if (checkIn.entryType === 'bonus' && checkIn.bonusId) {
+    // 紅利入場取消 → 還原紅利（否則會員的免費入場永久消失）
+    const bonusDoc = await db.collection('discountBonuses').doc(checkIn.bonusId).get();
+    if (bonusDoc.exists) {
+      await bonusDoc.ref.update({ isUsed: false, isActive: true, usedAt: null, usedAtGymId: null, updatedAt: now });
+    }
   } else if (checkIn.entryType === 'single_entry_ticket' && checkIn.singleEntryTicketId) {
     await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(checkIn.singleEntryTicketId).update({
       status: 'active',

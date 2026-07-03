@@ -32,8 +32,8 @@ router.get('/', authenticateAny, async (req, res) => {
   try {
     const gymId = req.query.gymId || req.staff?.gymId;
     let courses = await courseService.getCourses(gymId);
-    // 會員端不顯示已取消課程，僅工作人員端可見（含已取消標籤）
-    if (req.member) courses = courses.filter(c => c.status !== 'cancelled');
+    // 會員端不顯示已取消課程與體驗課程（source:experience 由確認體驗預約自動建立，不開放報名）
+    if (req.member) courses = courses.filter(c => c.status !== 'cancelled' && c.source !== 'experience');
     res.json({ courses });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
@@ -71,7 +71,9 @@ router.post('/',
 router.get('/sessions', authenticateAny, async (req, res) => {
   try {
     const gymId = req.query.gymId || req.staff?.gymId;
-    const sessions = await courseService.getSessions(gymId, req.query.fromDate || req.query.from, req.query.toDate || req.query.to);
+    let sessions = await courseService.getSessions(gymId, req.query.fromDate || req.query.from, req.query.toDate || req.query.to);
+    // 會員端過濾體驗課程場次（不出現在報名/課表；會員自己的體驗另由 /experience-bookings/my 顯示）
+    if (req.member) sessions = sessions.filter(s => s.source !== 'experience');
     res.json({ sessions });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

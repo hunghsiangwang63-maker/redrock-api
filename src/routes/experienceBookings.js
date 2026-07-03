@@ -1,10 +1,13 @@
 const express = require('express');
 const router = express.Router();
+const dayjs = require('dayjs');
 const { authenticate, authenticateAny } = require('../middleware/auth');
 const { getDb, getStorage } = require('../config/firebase');
 const XLSX = require('xlsx');
 const { sanitizeSheet } = require('../utils/xlsxSafe');
 const emailService = require('../services/emailService');
+const courseService = require('../services/courseService');
+const scheduleService = require('../services/scheduleService');
 
 const COURSE_TYPES = [
   { id:'general',   label:'抱石體驗課程',          priceMap:{ 1:975, 2:875, 3:875, '4-5':825, '6-8':775, '9-12':775 } },
@@ -96,23 +99,133 @@ router.get('/my', authenticateAny, async (req, res) => {
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
 });
 
-// ── POST /experience-bookings/:id/confirm - 確認收款 ───────────────
+// ── 解析預約時間字串 → { startTime, endTime } ─────────────────────
+// 預約時間為自由文字（如 "16:00-17:30"、"14:00"、"下午兩點"）。
+// 抓得到兩個時刻→視為起訖；只有一個→以該時刻起、+2 小時為迄；抓不到→null（改用整天班）。
+function parseBookingTime(bookingTime) {
+  const matches = String(bookingTime || '').match(/(\d{1,2}):(\d{2})/g) || [];
+  const norm = (t) => { const [h, m] = t.split(':'); return `${String(parseInt(h, 10)).padStart(2, '0')}:${m}`; };
+  if (matches.length >= 2) {
+    const start = norm(matches[0]), end = norm(matches[1]);
+    return start < end ? { startTime: start, endTime: end } : { startTime: start, endTime: null };
+  }
+  if (matches.length === 1) {
+    const start = norm(matches[0]);
+    return { startTime: start, endTime: dayjs(`2000-01-01T${start}`).add(2, 'hour').format('HH:mm') };
+  }
+  return { startTime: null, endTime: null };
+}
+
+async function courseTypeLabel(db, courseType) {
+  const doc = await db.collection('systemSettings').doc('experienceCourses').get();
+  const s = doc.exists ? doc.data() : defaultSettings();
+  const ct = (s.courseTypes || []).find(c => c.id === courseType);
+  return ct?.label || courseType || '體驗課程';
+}
+
+// ── 確認體驗預約時：建立課程 + 場次 + 教練當日排班 ───────────────────
+// 課程/場次皆標記 source:'experience'，供會員端過濾（不出現在報名目錄）。
+async function addExperienceToCourseAndSchedule(db, booking, staff, coachId, coachName) {
+  const gymId = booking.gymId;
+  const label = await courseTypeLabel(db, booking.courseType);
+  const numPeople = booking.numParticipants || (booking.participants || []).length || 1;
+  const { startTime, endTime } = parseBookingTime(booking.bookingTime);
+  const name = `體驗課程・${label}・${booking.contactName || ''}`.trim();
+
+  // 1) 建立課程（工作坊）
+  const course = await courseService.createCourse({
+    gymId, staffId: staff?.id || null,
+    data: {
+      name, description: `體驗課程預約（${numPeople} 人）`,
+      type: 'workshop', category: 'experience',
+      instructor: coachName || '',
+      startDate: booking.bookingDate, endDate: booking.bookingDate,
+      startTime, endTime,
+      maxStudents: numPeople, price: booking.totalFee || 0, totalSessions: 1,
+    },
+  });
+  await db.collection('courses').doc(course.id).update({
+    source: 'experience', experienceBookingId: booking.id,
+    coachId: coachId || null, coachName: coachName || '',
+  });
+
+  // 2) 建立場次
+  const session = await courseService.createSession({
+    courseId: course.id, gymId, staffId: staff?.id || null,
+    data: {
+      date: booking.bookingDate, startTime: startTime || '', endTime: endTime || '',
+      maxStudents: numPeople,
+      note: `體驗課程・教練：${coachName || '—'}・${numPeople} 人`,
+    },
+  });
+  await db.collection('courseSessions').doc(session.id).update({
+    source: 'experience', experienceBookingId: booking.id,
+    instructor: coachName || '', coachId: coachId || null,
+  });
+
+  // 3) 排班行事曆：指派教練當日班表（重複整天班等狀況不阻斷主流程）
+  let scheduleShiftId = null;
+  try {
+    const staffIdForShift = coachId || `expcoach_${String(coachName || 'coach').replace(/\s+/g, '')}`;
+    const useCustom = !!(startTime && endTime && startTime < endTime);
+    const shift = await scheduleService.createShift({
+      gymId, staffId: staffIdForShift, staffName: coachName || '教練',
+      date: booking.bookingDate,
+      type: useCustom ? 'custom' : 'full_day',
+      startTime: useCustom ? startTime : null,
+      endTime: useCustom ? endTime : null,
+      note: `體驗課程・${label}・${numPeople} 人`,
+      createdBy: staff?.id || null,
+    });
+    scheduleShiftId = shift.id;
+  } catch (e) {
+    console.error('[體驗排班] 建立班表失敗（不阻斷）', e.message || e.code);
+  }
+
+  return { courseId: course.id, sessionId: session.id, scheduleShiftId };
+}
+
+// ── POST /experience-bookings/:id/confirm - 確認收款（可指定教練→排課/排班）──
 router.post('/:id/confirm', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    const doc = await db.collection('experienceBookings').doc(req.params.id).get();
-    await db.collection('experienceBookings').doc(req.params.id).update({
-      status:'confirmed', confirmedBy:req.staff.id, confirmedByName:req.staff.name, confirmedAt:new Date(), updatedAt:new Date(),
-    });
-    // 發送確認信
-    if (doc.exists) {
-      const b = doc.data();
-      if (b.contactEmail) {
-        const emailService = require('../services/emailService');
-        emailService.sendExperienceBookingConfirmation(b.contactEmail, b.contactName, b).catch(e => console.error('[Email]', e.message));
+    const ref = db.collection('experienceBookings').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
+    const booking = { id: doc.id, ...doc.data() };
+
+    const coachId = req.body.coachId || null;
+    const coachName = (req.body.coachName || '').trim();
+
+    const update = {
+      status: 'confirmed', confirmedBy: req.staff.id, confirmedByName: req.staff.name,
+      confirmedAt: new Date(), updatedAt: new Date(),
+      coachId, coachName,
+    };
+
+    // 指定教練且尚未排過課→建立課程/場次/排班（避免重複確認產生重複資料）
+    let created = null;
+    if (coachName && !booking.courseId) {
+      try {
+        created = await addExperienceToCourseAndSchedule(db, booking, req.staff, coachId, coachName);
+        Object.assign(update, {
+          courseId: created.courseId, sessionId: created.sessionId, scheduleShiftId: created.scheduleShiftId,
+        });
+      } catch (e) {
+        return res.status(500).json({ error: 'COURSE_CREATE_FAILED', message: '排課/排班失敗：' + (e.message || e.code) });
       }
     }
-    res.json({ success:true, message:'已確認收款' });
+
+    await ref.update(update);
+
+    // 發送確認信
+    if (booking.contactEmail) {
+      emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking).catch(e => console.error('[Email]', e.message));
+    }
+    res.json({
+      success: true, coachName, ...(created || {}),
+      message: coachName ? '已確認收款，並加入課程與教練排班' : '已確認收款',
+    });
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
 });
 

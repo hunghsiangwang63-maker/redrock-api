@@ -159,6 +159,26 @@ router.post('/copy-previous',
   }
 );
 
+// ── GET /schedule/my-upcoming - 登入員工本人近 N 日排班（待辦頁用，僅回自己）──
+// 前端傳 from/to（YYYY-MM-DD，用使用者本地時區計算）；站台/值班帳號無對應排班→回空陣列。
+router.get('/my-upcoming',
+  authenticate,
+  async (req, res) => {
+    try {
+      const staffId = req.staff?.id;
+      if (!staffId) return res.json({ shifts: [] });
+      const { from, to } = req.query;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(to || '')) {
+        return res.status(400).json({ error: 'BAD_RANGE', message: '需提供 from/to（YYYY-MM-DD）' });
+      }
+      const shifts = await scheduleService.getUpcomingShiftsForStaff(staffId, from, to);
+      res.json({ shifts });
+    } catch (err) {
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // ── GET /schedule - 查詢某館某月份排班（月曆檢視，所有員工皆可查看自己館）──
 router.get('/',
   authenticate, checkPermission('schedule.read'),

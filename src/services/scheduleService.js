@@ -220,6 +220,16 @@ const getMonthlyShifts = async (gymId, yearMonth) => {
     .sort((a, b) => a.date.localeCompare(b.date));
 };
 
+// ── 取得某員工在 [fromDate, toDate]（含）內的自己排班（員工本人待辦頁用）──
+const getUpcomingShiftsForStaff = async (staffId, fromDate, toDate) => {
+  const db = getDb();
+  const snap = await db.collection(COLLECTIONS.SCHEDULE_SHIFTS)
+    .where('staffId', '==', staffId).get();
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .filter(s => s.date >= fromDate && s.date <= toDate)
+    .sort((a, b) => a.date.localeCompare(b.date) || String(a.startTime || '').localeCompare(String(b.startTime || '')));
+};
+
 // ── 計算某館某月份每位員工的工時統計 ─────────────────────────────────
 const getMonthlyHoursSummary = async (gymId, yearMonth) => {
   const shifts = await getMonthlyShifts(gymId, yearMonth);
@@ -315,6 +325,7 @@ module.exports = {
   updateShift,
   deleteShift,
   getMonthlyShifts,
+  getUpcomingShiftsForStaff,
   getMonthlyHoursSummary,
   clearMonthShifts,
   copyPreviousMonthShifts,

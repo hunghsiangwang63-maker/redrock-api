@@ -971,6 +971,34 @@ const setSessionSubstitute = async ({ sessionId, coachId, coachName, reason, sta
   return { sessionId, instructor: coachName, originalInstructor };
 };
 
+// ── 取消該場次代班：還原原教練 + 通知 ───────────────────────────────
+const clearSessionSubstitute = async ({ sessionId, staff }) => {
+  const db = getDb();
+  const now = new Date();
+  const sRef = db.collection(SESSION_COLLECTION).doc(sessionId);
+  const sDoc = await sRef.get();
+  if (!sDoc.exists) throw { code: 'SESSION_NOT_FOUND', message: '找不到場次' };
+  const session = sDoc.data();
+  if (!session.isSubstitute) return { sessionId, instructor: session.instructor || '', alreadyCleared: true };
+  const original = session.originalInstructor || '';
+
+  // 還原：instructor 設回原教練（空字串→getSessions 自動 fallback 課程 instructor）
+  await sRef.update({
+    instructor: original, coachId: null, isSubstitute: false,
+    originalInstructor: null, substituteReason: null,
+    substitutedBy: null, substitutedAt: null, updatedAt: now,
+  });
+
+  const timeStr = `${session.startTime || ''}${session.endTime ? '~' + session.endTime : ''}`;
+  const title = '課程代班取消';
+  const body = `${session.courseName}（${session.date} ${timeStr}）代班已取消，恢復原教練${original ? `：${original}` : ''}`;
+  try {
+    await notifyRoleInGym({ gymId: session.gymId, role: 'gym_manager', type: 'course_substitute_cancel', title, body, referenceId: sessionId, referenceType: 'courseSession' });
+  } catch (e) { console.error('[代班取消通知] 失敗（不阻斷）', e.message || e.code); }
+
+  return { sessionId, instructor: original };
+};
+
 // ── 開放試上的週課近期場次（會員「體驗課程」頁列出）─────────────────
 // 回傳每個可試上場次：課名/教練/日期時間/試上費/剩餘名額/是否額滿。
 const getTrialSessions = async (gymId, fromDate, toDate) => {
@@ -1077,6 +1105,7 @@ module.exports = {
   enrollTrial,
   removeTrialEnrollment,
   setSessionSubstitute,
+  clearSessionSubstitute,
   getMemberEnrollments,
   getMemberMakeupRights,
 };

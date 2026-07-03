@@ -419,6 +419,20 @@ router.put('/sessions/:sessionId/substitute',
   }
 );
 
+// ── DELETE /courses/sessions/:sessionId/substitute - 取消代班（還原原教練）──
+router.delete('/sessions/:sessionId/substitute',
+  authenticate, checkPermission('courses.manage'),
+  async (req, res) => {
+    try {
+      const result = await courseService.clearSessionSubstitute({ sessionId: req.params.sessionId, staff: req.staff });
+      res.json({ success: true, ...result, message: '已取消代班，恢復原教練' });
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 
 // DELETE /courses/:courseId - 刪除課程（含所有場次）
 router.delete('/:courseId',

@@ -1,4 +1,4 @@
-const { getDb, getStorage, COLLECTIONS } = require('../config/firebase');
+const { getDb, COLLECTIONS } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const QRCode = require('qrcode');
 const dayjs = require('dayjs');
@@ -8,28 +8,17 @@ const generateQRCode = async (memberId, memberPhone) => {
   const qrCodeId = `RR-${memberId.slice(0, 8).toUpperCase()}`;
   const qrData = JSON.stringify({ type: 'member', id: memberId, qrCodeId });
 
-  // 產生 base64 QR Code 圖片
+  // 產生 base64 QR Code 圖片，直接內嵌回傳（不再上傳 Firebase Storage）：
+  //  - 入場實際走動態 qrToken（會員 App 前端即時繪製），此靜態圖僅作身分 QR。
+  //  - 無人以路徑/簽名 URL 讀取此圖；直接存 base64 data URI，與 seed 舊會員一致，
+  //    並移除 Storage 依賴（避免 Storage 異常時卡死建立會員）。
   const qrBase64 = await QRCode.toDataURL(qrData, {
     width: 300,
     margin: 2,
     color: { dark: '#8B1A1A', light: '#FFFFFF' },
   });
 
-  // 上傳至 Firebase Storage（非致命：此圖檔會員 App 不使用，改由 qrToken 前端即時繪製；
-  // Storage 暫時異常時不應讓「建立會員」整個失敗，僅記 log 後續可重補）
-  const fileName = `qrcodes/${memberId}.png`;
-  try {
-    const bucket = getStorage().bucket();
-    const base64Data = qrBase64.replace(/^data:image\/png;base64,/, '');
-    const buffer = Buffer.from(base64Data, 'base64');
-    const file = bucket.file(fileName);
-    await file.save(buffer, { contentType: 'image/png', metadata: { memberId } });
-    // 不再 makePublic：會員 App 以 qrToken 前端即時繪製 QR，不使用此圖檔；保持私有。
-    // 若日後需顯示此圖，改用 utils/storageUrl.signedRead(qrCodePath) 產生簽名 URL。
-  } catch (e) {
-    console.error('[generateQRCode] Storage 上傳失敗（不阻斷建立會員）', e.message || e);
-  }
-  return { qrCodeId, qrCodeUrl: fileName }; // 儲存物件路徑，非公開 URL
+  return { qrCodeId, qrCodeUrl: qrBase64 }; // qrCodeUrl 現為 base64 data URI（欄位名沿用）
 };
 
 // ── 判斷封鎖原因 ──────────────────────────────────────────────────

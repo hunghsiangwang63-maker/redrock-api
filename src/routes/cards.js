@@ -38,7 +38,7 @@ router.post('/discount/purchase',
 // 轉入舊優惠卡（設定剩餘次數，比照黑卡綁定；建到 discountCards 故入場即可用）
 router.post('/discount/bind',
   authenticate, checkPermission('products.sell'), auditLog('discount_card.bind'),
-  [body('memberId').notEmpty(), body('remainingCredits').isInt({ min: 1 })], validate,
+  [body('memberId').notEmpty(), body('remainingCredits').isInt({ min: 1, max: 10 })], validate,
   async (req, res) => {
     try {
       const card = await discountCardService.bindDiscountCard({

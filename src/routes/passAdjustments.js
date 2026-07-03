@@ -257,7 +257,7 @@ router.get('/analytics', authenticate, async (req, res) => {
     const [passSnap, discountSnap, blackSnap, ticketSnap, bonusSnap] = await Promise.all([
       db.collection(COLLECTIONS.MEMBER_PASSES).get(),
       db.collection('discountCards').get(),
-      db.collection('blackCards').get(),
+      db.collection('legacyBlackCards').get(),
       db.collection('singleEntryTickets').get(),
       db.collection('memberBonuses').get(),
     ]);
@@ -279,29 +279,38 @@ router.get('/analytics', authenticate, async (req, res) => {
       else passStats.byType[t].active++;
     });
 
-    // 優惠卡
-    const discounts = discountSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-    const discountStats = {
-      total: discounts.length,
-      active: discounts.filter(c => c.status === 'active').length,
-      fullyUsed: discounts.filter(c => c.remainingCredits === 0).length,
-      expired: discounts.filter(c => c.status === 'expired').length,
-      totalCreditsIssued: discounts.reduce((s,c) => s + (c.totalCredits||10), 0),
-      totalCreditsUsed: discounts.reduce((s,c) => s + ((c.totalCredits||10)-(c.remainingCredits||0)), 0),
-      totalCreditsRemaining: discounts.reduce((s,c) => s + (c.remainingCredits||0), 0),
+    // 卡片統計共用工具（卡上以 isActive/expiresAt 判定，非 status 欄位）
+    const nowMs = Date.now();
+    const tsMs = (ts) => ts?._seconds != null ? ts._seconds * 1000
+      : (typeof ts?.toDate === 'function' ? ts.toDate().getTime() : null);
+    const isExpired = (c) => { const ms = tsMs(c.expiresAt); return ms != null && ms < nowMs; };
+    const isActiveCard = (c) => c.isActive === true && (c.remainingCredits || 0) > 0 && !isExpired(c);
+    // 已發行次數：僅原始卡（移轉子卡的 originalCredits 會重複計算），預設格數 fallback
+    const issuedOf = (arr, fallback) => arr
+      .filter(c => c.source !== 'transferred')
+      .reduce((s, c) => s + (c.originalCredits ?? fallback), 0);
+    const cardStats = (arr, fallback) => {
+      const total = arr.length;
+      const totalCreditsIssued = issuedOf(arr, fallback);
+      const totalCreditsRemaining = arr.reduce((s, c) => s + (c.remainingCredits || 0), 0);
+      return {
+        total,
+        active: arr.filter(isActiveCard).length,
+        fullyUsed: arr.filter(c => (c.remainingCredits || 0) === 0).length,
+        expired: arr.filter(isExpired).length,
+        totalCreditsIssued,
+        totalCreditsUsed: Math.max(0, totalCreditsIssued - totalCreditsRemaining),
+        totalCreditsRemaining,
+      };
     };
 
-    // 黑卡
+    // 優惠卡（discountCards：ownerMemberId、預設 10 格）
+    const discounts = discountSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const discountStats = cardStats(discounts, 10);
+
+    // 黑卡（legacyBlackCards：memberId、預設 12 格、原始卡 expiresAt 可為 null=無期限）
     const blacks = blackSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-    const blackStats = {
-      total: blacks.length,
-      active: blacks.filter(c => c.status === 'active').length,
-      fullyUsed: blacks.filter(c => c.remainingCredits === 0).length,
-      expired: blacks.filter(c => c.status === 'expired').length,
-      totalCreditsIssued: blacks.reduce((s,c) => s + (c.totalCredits||12), 0),
-      totalCreditsUsed: blacks.reduce((s,c) => s + ((c.totalCredits||12)-(c.remainingCredits||0)), 0),
-      totalCreditsRemaining: blacks.reduce((s,c) => s + (c.remainingCredits||0), 0),
-    };
+    const blackStats = cardStats(blacks, 12);
 
     // 單日券
     const tickets = ticketSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -344,19 +353,47 @@ router.get('/analytics/download', authenticate, async (req, res) => {
         const status = p.status==='cancelled'?'已取消':p.endDate<today?'已過期':p.status==='active'?'有效':'其他';
         return [i+1, `"${p.memberName||''}"`, `"${p.passTypeName||''}"`, status, p.startDate||'', p.endDate||'', p.gymId||'', `"${p.note||''}"`].join(',');
       });
-    } else if (type === 'discounts') {
-      const snap = await db.collection('discountCards').get();
-      headers = ['序號','會員姓名','手機','狀態','剩餘次數','總次數','到期日','購買日'];
-      rows = snap.docs.map((d,i) => {
-        const c = d.data();
-        return [i+1, `"${c.memberName||''}"`, c.memberPhone||'', c.status||'', c.remainingCredits??'', c.totalCredits||10, c.expiryDate||'', c.purchasedAt?._seconds?new Date(c.purchasedAt._seconds*1000).toLocaleDateString('zh-TW'):''].join(',');
-      });
-    } else if (type === 'blacks') {
-      const snap = await db.collection('blackCards').get();
-      headers = ['序號','會員姓名','手機','狀態','剩餘次數','總次數','卡號'];
-      rows = snap.docs.map((d,i) => {
-        const c = d.data();
-        return [i+1, `"${c.memberName||''}"`, c.memberPhone||'', c.status||'', c.remainingCredits??'', c.totalCredits||12, c.cardNumber||d.id].join(',');
+    } else if (type === 'discounts' || type === 'blacks') {
+      // 優惠卡存於 discountCards（ownerMemberId），黑卡存於 legacyBlackCards（memberId）。
+      // 卡上未存姓名/電話 → 依 memberId 解析；卡號存於 barcode。
+      const isBlack = type === 'blacks';
+      const snap = await db.collection(isBlack ? 'legacyBlackCards' : 'discountCards').get();
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const idOf = (c) => isBlack ? c.memberId : c.ownerMemberId;
+
+      const uniqIds = [...new Set(docs.map(idOf).filter(Boolean))];
+      const nameMap = {};
+      for (let i = 0; i < uniqIds.length; i += 50) {
+        await Promise.all(uniqIds.slice(i, i + 50).map(async id => {
+          const md = await db.collection(COLLECTIONS.MEMBERS).doc(id).get();
+          if (md.exists) { const m = md.data(); nameMap[id] = { name: m.name || '', phone: m.phone || '' }; }
+        }));
+      }
+
+      const tsMs = (ts) => ts?._seconds != null ? ts._seconds * 1000
+        : (typeof ts?.toDate === 'function' ? ts.toDate().getTime() : (ts ? new Date(ts).getTime() : null));
+      const fmtDate = (ts) => { const ms = tsMs(ts); return ms ? new Date(ms + 8 * 3600000).toISOString().slice(0, 10) : ''; };
+      const gymLabel = (g) => g === 'gym-hsinchu' ? '新竹館' : g === 'gym-shilin' ? '士林館' : (g || '');
+      const csv = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const nowMs = Date.now();
+
+      headers = ['序號','會員姓名','手機','卡號','狀態','剩餘格數','原始格數','已用格數',
+        ...(isBlack ? [] : ['紅利已送']), '到期日','綁定日','館別'];
+      rows = docs.map((c, i) => {
+        const nm = nameMap[idOf(c)] || {};
+        const remaining = c.remainingCredits ?? 0;
+        const original = c.originalCredits ?? (isBlack ? 12 : 10);
+        const expMs = tsMs(c.expiresAt);
+        const status = remaining <= 0 ? '已用完'
+          : (expMs != null && expMs < nowMs) ? '已過期'
+          : c.isActive === false ? '已停用' : '有效';
+        return [
+          i + 1, csv(nm.name), csv(nm.phone), csv(c.barcode || ''), status,
+          remaining, original, Math.max(0, original - remaining),
+          ...(isBlack ? [] : [c.bonusTriggered ? '是' : '否']),
+          expMs != null ? fmtDate(c.expiresAt) : '無期限',
+          fmtDate(c.boundAt || c.purchasedAt), gymLabel(c.gymId),
+        ].join(',');
       });
     } else if (type === 'tickets') {
       const snap = await db.collection('singleEntryTickets').get();

@@ -23,7 +23,7 @@ const bindDiscountCard = async ({ memberId, remainingCredits, gymId, staffId, ba
   const cardId = uuidv4();
   const now = new Date();
   const expiresAt = dayjs().add(CARD_VALIDITY_MONTHS, 'month').toDate();
-  const credits = Math.max(1, parseInt(remainingCredits) || 0);
+  const credits = Math.min(Math.max(1, parseInt(remainingCredits) || 0), CARD_CREDITS); // 上限 10 格
   const card = {
     id: cardId,
     ownerMemberId: memberId || null,

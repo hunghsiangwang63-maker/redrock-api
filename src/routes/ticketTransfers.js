@@ -44,10 +44,23 @@ router.post('/request', authenticateAny, async (req, res) => {
     if (!ticketType || !ticketId || !targetPhone)
       return res.status(400).json({ error: 'MISSING_FIELDS', message: '請填寫票券類型、票券ID和對方手機' });
 
-    // 查詢對方會員（親子共用電話：優先家長帳號，避開子帳號誤解析，與 cards.js 轉移一致）
+    // 決定收件人：
+    //  - 有帶 toMemberId（前端從家庭成員清單挑選，可指定子女）→ 驗證該會員電話 == targetPhone（同一家共用電話）
+    //  - 未帶 → 沿用家長優先（getMemberByPhone），避開共用電話子帳號誤解析
+    // 這讓「體驗券轉給指定子帳號上課使用」成立，同時擁有權維持嚴格（券歸實際入場者）。
     let target;
-    try { target = await memberService.getMemberByPhone(String(targetPhone).trim()); }
-    catch { return res.status(404).json({ error: 'MEMBER_NOT_FOUND', message: '找不到此手機號碼的會員' }); }
+    if (req.body.toMemberId) {
+      const doc = await db.collection('members').doc(String(req.body.toMemberId)).get();
+      if (!doc.exists) return res.status(404).json({ error: 'MEMBER_NOT_FOUND', message: '找不到指定的收件會員' });
+      target = { id: doc.id, ...doc.data() };
+      if (String(target.phone || '').trim() !== String(targetPhone).trim())
+        return res.status(400).json({ error: 'PHONE_MISMATCH', message: '指定的收件會員與手機號碼不符' });
+    } else {
+      try { target = await memberService.getMemberByPhone(String(targetPhone).trim()); }
+      catch { return res.status(404).json({ error: 'MEMBER_NOT_FOUND', message: '找不到此手機號碼的會員' }); }
+    }
+    if (target.id === requesterId)
+      return res.status(400).json({ error: 'SELF_TRANSFER', message: '不能移轉給自己' });
 
     // 確認票券屬於申請人
     const collectionMap = {
@@ -187,6 +200,24 @@ router.get('/pending', authenticateAny, async (req, res) => {
       .orderBy('createdAt', 'desc')
       .get();
     res.json({ transfers: snap.docs.map(d => ({ id: d.id, ...d.data() })) });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /ticket-transfers/recipients?phone= ───────────────────────
+// 回傳該手機下的所有會員（家長 + 共用電話的子女），供轉出方挑選實際收件人。
+// 讓「體驗券轉給指定子女」成為可能（子帳號無獨立電話，只能由此清單選）。
+router.get('/recipients', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const phone = String(req.query.phone || '').trim();
+    if (!phone || phone.length < 10) return res.json({ recipients: [] });
+    const snap = await db.collection('members').where('phone', '==', phone).get();
+    const requesterId = req.member?.id || req.staff?.id;
+    const recipients = snap.docs
+      .map(d => ({ id: d.id, name: d.data().name, isChildAccount: !!d.data().isChildAccount }))
+      .filter(m => m.id !== requesterId)                       // 不列自己
+      .sort((a, b) => (a.isChildAccount ? 1 : 0) - (b.isChildAccount ? 1 : 0)); // 家長排前
+    res.json({ recipients });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

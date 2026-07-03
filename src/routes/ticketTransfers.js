@@ -34,6 +34,15 @@ const TRANSFER_RULES = {
   single_entry: (card) => ({ expiresAt: card.expiresAt }),
 };
 
+// 收件授權：本人，或「家長代其子女」處理（子帳號無法自行登入，須由家長 accept/reject）
+async function actorCanActFor(db, req, toMemberId) {
+  const actorId = req.member?.id || req.staff?.id;
+  if (toMemberId === actorId) return true;
+  if (!req.member?.id) return false;
+  const doc = await db.collection('members').doc(toMemberId).get();
+  return doc.exists && doc.data().parentMemberId === req.member.id;
+}
+
 // ── POST /ticket-transfers/request ──────────────────────────────
 router.post('/request', authenticateAny, async (req, res) => {
   try {
@@ -117,7 +126,7 @@ router.post('/:id/accept', authenticateAny, async (req, res) => {
     const transfer = (await db.collection('ticketTransfers').doc(req.params.id).get()).data();
     if (!transfer) return res.status(404).json({ error: 'NOT_FOUND' });
     if (transfer.status !== 'pending') return res.status(400).json({ error: 'ALREADY_PROCESSED' });
-    if (transfer.toMemberId !== (req.member?.id || req.staff?.id))
+    if (!(await actorCanActFor(db, req, transfer.toMemberId)))
       return res.status(403).json({ error: 'NOT_TARGET' });
 
     const collectionMap = {
@@ -169,7 +178,7 @@ router.post('/:id/reject', authenticateAny, async (req, res) => {
     const transfer = (await db.collection('ticketTransfers').doc(req.params.id).get()).data();
     if (!transfer) return res.status(404).json({ error: 'NOT_FOUND' });
     if (transfer.status !== 'pending') return res.status(400).json({ error: 'ALREADY_PROCESSED' });
-    if (transfer.toMemberId !== (req.member?.id || req.staff?.id))
+    if (!(await actorCanActFor(db, req, transfer.toMemberId)))
       return res.status(403).json({ error: 'NOT_TARGET' });
 
     await db.collection('ticketTransfers').doc(req.params.id).update({
@@ -194,12 +203,20 @@ router.get('/pending', authenticateAny, async (req, res) => {
   try {
     const db = getDb();
     const memberId = req.member?.id || req.staff?.id;
+    // 一併納入「本人子女」被指定的待接收轉移（子帳號無法自行登入，由家長處理）
+    let ids = [memberId];
+    if (req.member?.id) {
+      const kids = await db.collection('members')
+        .where('parentMemberId', '==', req.member.id).where('isChildAccount', '==', true).get();
+      ids = ids.concat(kids.docs.map(d => d.id)).slice(0, 10); // Firestore 'in' 上限 10
+    }
     const snap = await db.collection('ticketTransfers')
-      .where('toMemberId', '==', memberId)
+      .where('toMemberId', 'in', ids)
       .where('status', '==', 'pending')
-      .orderBy('createdAt', 'desc')
       .get();
-    res.json({ transfers: snap.docs.map(d => ({ id: d.id, ...d.data() })) });
+    const transfers = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?._seconds || 0) - (a.createdAt?._seconds || 0));
+    res.json({ transfers });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

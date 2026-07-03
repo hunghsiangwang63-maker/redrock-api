@@ -185,7 +185,77 @@ async function addExperienceToCourseAndSchedule(db, booking, staff, coachId, coa
   return { courseId: course.id, sessionId: session.id, scheduleShiftId };
 }
 
-// ── POST /experience-bookings/:id/confirm - 確認收款（可指定教練→排課/排班）──
+// ── 重新指派教練：同步既有課程/場次 + 換教練排班（保證三邊一致）──────
+// 用於已排課後改教練。updateShift 無法改教練，故刪舊班→建新班。
+async function reassignExperienceCoach(db, booking, staff, coachId, coachName) {
+  const label = await courseTypeLabel(db, booking.courseType);
+  const numPeople = booking.numParticipants || (booking.participants || []).length || 1;
+  const { startTime, endTime } = parseBookingTime(booking.bookingTime);
+
+  // 1) 更新課程教練
+  if (booking.courseId) {
+    await db.collection('courses').doc(booking.courseId).update({
+      instructor: coachName || '', coachId: coachId || null, coachName: coachName || '',
+      updatedAt: new Date(),
+    });
+  }
+  // 2) 更新場次教練
+  if (booking.sessionId) {
+    await db.collection('courseSessions').doc(booking.sessionId).update({
+      instructor: coachName || '', coachId: coachId || null,
+      note: `體驗課程・教練：${coachName || '—'}・${numPeople} 人`,
+      updatedAt: new Date(),
+    });
+  }
+  // 3) 換教練排班：刪舊班→建新班（任一步失敗只記 log，不阻斷）
+  let scheduleShiftId = booking.scheduleShiftId || null;
+  if (booking.scheduleShiftId) {
+    try { await scheduleService.deleteShift(booking.scheduleShiftId); scheduleShiftId = null; }
+    catch (e) { console.error('[體驗改教練] 刪舊班失敗（續建新班）', e.message || e.code); }
+  }
+  try {
+    const staffIdForShift = coachId || `expcoach_${String(coachName || 'coach').replace(/\s+/g, '')}`;
+    const useCustom = !!(startTime && endTime && startTime < endTime);
+    const shift = await scheduleService.createShift({
+      gymId: booking.gymId, staffId: staffIdForShift, staffName: coachName || '教練',
+      date: booking.bookingDate,
+      type: useCustom ? 'custom' : 'full_day',
+      startTime: useCustom ? startTime : null,
+      endTime: useCustom ? endTime : null,
+      note: `體驗課程・${label}・${numPeople} 人`,
+      createdBy: staff?.id || null,
+    });
+    scheduleShiftId = shift.id;
+  } catch (e) {
+    console.error('[體驗改教練] 建新班失敗（不阻斷）', e.message || e.code);
+  }
+
+  return { scheduleShiftId };
+}
+
+// ── 取消體驗：清理自動建立的課程/場次/教練排班（不阻斷退券主流程）──────
+async function cleanupExperienceCourseAndSchedule(db, booking, staff) {
+  const result = { courseCancelled: false, sessionCancelled: false, shiftDeleted: false };
+  if (booking.sessionId) {
+    try {
+      await courseService.updateSession({ sessionId: booking.sessionId, staffId: staff?.id || null, data: { status: 'cancelled' } });
+      result.sessionCancelled = true;
+    } catch (e) { console.error('[體驗取消] 取消場次失敗', e.message || e.code); }
+  }
+  if (booking.courseId) {
+    try {
+      await db.collection('courses').doc(booking.courseId).update({ status: 'cancelled', updatedAt: new Date() });
+      result.courseCancelled = true;
+    } catch (e) { console.error('[體驗取消] 取消課程失敗', e.message || e.code); }
+  }
+  if (booking.scheduleShiftId) {
+    try { await scheduleService.deleteShift(booking.scheduleShiftId); result.shiftDeleted = true; }
+    catch (e) { console.error('[體驗取消] 刪教練班失敗', e.message || e.code); }
+  }
+  return result;
+}
+
+// ── POST /experience-bookings/:id/confirm - 確認收款（可指定教練→排課/排班/改教練）──
 router.post('/:id/confirm', authenticate, async (req, res) => {
   try {
     const db = getDb();
@@ -200,20 +270,29 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
     const update = {
       status: 'confirmed', confirmedBy: req.staff.id, confirmedByName: req.staff.name,
       confirmedAt: new Date(), updatedAt: new Date(),
-      coachId, coachName,
     };
 
-    // 指定教練且尚未排過課→建立課程/場次/排班（避免重複確認產生重複資料）
-    let created = null;
-    if (coachName && !booking.courseId) {
-      try {
+    // 教練處理（僅在有帶 coachName 時動教練相關欄位，避免覆蓋成空值造成 desync）：
+    //   1) 尚未排課 → 建立課程/場次/排班
+    //   2) 已排課且教練變更 → 同步既有課程/場次 + 換教練排班
+    //   3) 同一教練重複確認 → 只更新收款欄位
+    let created = null, reassigned = null;
+    const coachChanged = coachName !== (booking.coachName || '') || (coachId || null) !== (booking.coachId || null);
+    try {
+      if (coachName && !booking.courseId) {
         created = await addExperienceToCourseAndSchedule(db, booking, req.staff, coachId, coachName);
         Object.assign(update, {
+          coachId, coachName,
           courseId: created.courseId, sessionId: created.sessionId, scheduleShiftId: created.scheduleShiftId,
         });
-      } catch (e) {
-        return res.status(500).json({ error: 'COURSE_CREATE_FAILED', message: '排課/排班失敗：' + (e.message || e.code) });
+      } else if (coachName && booking.courseId && coachChanged) {
+        reassigned = await reassignExperienceCoach(db, booking, req.staff, coachId, coachName);
+        Object.assign(update, { coachId, coachName, scheduleShiftId: reassigned.scheduleShiftId });
+      } else if (coachName) {
+        Object.assign(update, { coachId, coachName });
       }
+    } catch (e) {
+      return res.status(500).json({ error: 'COURSE_CREATE_FAILED', message: '排課/排班失敗：' + (e.message || e.code) });
     }
 
     await ref.update(update);
@@ -223,8 +302,10 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
       emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking).catch(e => console.error('[Email]', e.message));
     }
     res.json({
-      success: true, coachName, ...(created || {}),
-      message: coachName ? '已確認收款，並加入課程與教練排班' : '已確認收款',
+      success: true, coachName, ...(created || {}), ...(reassigned || {}),
+      message: reassigned ? '已更新教練與排班'
+        : created ? '已確認收款，並加入課程與教練排班'
+        : '已確認收款',
     });
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
 });
@@ -233,12 +314,19 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
 router.post('/:id/cancel', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    await db.collection('experienceBookings').doc(req.params.id).update({
+    const ref = db.collection('experienceBookings').doc(req.params.id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
+    const booking = { id: snap.id, ...snap.data() };
+
+    await ref.update({
       status:'cancelled', cancelReason:req.body.reason||'', cancelledAt:new Date(), updatedAt:new Date(),
     });
     // 退費/取消 → 該預約所有「未使用」體驗入場券作廢（含已轉出未用）；已使用不動
     const voided = await voidExperienceTickets(db, req.params.id, '體驗退費/取消');
-    res.json({ success:true, voidedTickets: voided });
+    // 清理自動建立的課程/場次/教練排班（若當初有指定教練排課）
+    const cleanup = await cleanupExperienceCourseAndSchedule(db, booking, req.staff);
+    res.json({ success:true, voidedTickets: voided, cleanup });
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
 });
 

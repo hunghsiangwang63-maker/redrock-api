@@ -12,6 +12,7 @@
  */
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const { getMember } = require('./memberService');
+const { createNotification, notifyRoleInGym } = require('./notificationService');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
@@ -929,6 +930,47 @@ const removeTrialEnrollment = async (enrollmentId) => {
   return { removed: true };
 };
 
+// ── 設定某場次代班教練（覆寫該堂 instructor + 記錄原教練 + 通知）──────
+// 兩邊月曆自動顯示：getSessions 優先用 session.instructor。
+const setSessionSubstitute = async ({ sessionId, coachId, coachName, reason, staff }) => {
+  const db = getDb();
+  const now = new Date();
+  const sRef = db.collection(SESSION_COLLECTION).doc(sessionId);
+  const sDoc = await sRef.get();
+  if (!sDoc.exists) throw { code: 'SESSION_NOT_FOUND', message: '找不到場次' };
+  const session = sDoc.data();
+
+  // 原教練：優先沿用已記錄的 originalInstructor；否則場次現有 instructor；再否則課程 instructor
+  let originalInstructor = session.originalInstructor;
+  if (originalInstructor === undefined || originalInstructor === null) {
+    if (session.instructor) originalInstructor = session.instructor;
+    else {
+      const cDoc = await db.collection(COURSE_COLLECTION).doc(session.courseId).get();
+      originalInstructor = cDoc.exists ? (cDoc.data().instructor || '') : '';
+    }
+  }
+
+  await sRef.update({
+    instructor: coachName, coachId: coachId || null,
+    isSubstitute: true, originalInstructor, substituteReason: reason || '',
+    substitutedBy: staff?.id || null, substitutedAt: now, updatedAt: now,
+  });
+
+  // 待辦提醒：通知代班教練本人 + 館管理員
+  const timeStr = `${session.startTime || ''}${session.endTime ? '~' + session.endTime : ''}`;
+  const title = '課程代班通知';
+  const body = `${session.courseName}（${session.date} ${timeStr}）由 ${coachName} 代班`
+    + `${originalInstructor ? `（原教練：${originalInstructor}）` : ''}${reason ? `，原因：${reason}` : ''}`;
+  try {
+    if (coachId) {
+      await createNotification({ gymId: session.gymId, targetStaffId: coachId, type: 'course_substitute', title, body, referenceId: sessionId, referenceType: 'courseSession' });
+    }
+    await notifyRoleInGym({ gymId: session.gymId, role: 'gym_manager', type: 'course_substitute', title, body, referenceId: sessionId, referenceType: 'courseSession' });
+  } catch (e) { console.error('[代班通知] 失敗（不阻斷）', e.message || e.code); }
+
+  return { sessionId, instructor: coachName, originalInstructor };
+};
+
 // ── 開放試上的週課近期場次（會員「體驗課程」頁列出）─────────────────
 // 回傳每個可試上場次：課名/教練/日期時間/試上費/剩餘名額/是否額滿。
 const getTrialSessions = async (gymId, fromDate, toDate) => {
@@ -1034,6 +1076,7 @@ module.exports = {
   getTrialSessions,
   enrollTrial,
   removeTrialEnrollment,
+  setSessionSubstitute,
   getMemberEnrollments,
   getMemberMakeupRights,
 };

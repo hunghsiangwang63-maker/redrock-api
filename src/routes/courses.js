@@ -399,6 +399,26 @@ router.put('/sessions/:sessionId',
   }
 );
 
+// ── PUT /courses/sessions/:sessionId/substitute - 設定該堂代班教練（更新月曆+待辦提醒）──
+router.put('/sessions/:sessionId/substitute',
+  authenticate, checkPermission('courses.manage'),
+  async (req, res) => {
+    try {
+      const coachName = (req.body.coachName || '').trim();
+      if (!coachName) return res.status(400).json({ code: 'MISSING_COACH', message: '請指定代班教練' });
+      const result = await courseService.setSessionSubstitute({
+        sessionId: req.params.sessionId,
+        coachId: req.body.coachId || null,
+        coachName, reason: req.body.reason || '', staff: req.staff,
+      });
+      res.json({ success: true, ...result, message: '已設定代班教練並發送待辦提醒' });
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 
 // DELETE /courses/:courseId - 刪除課程（含所有場次）
 router.delete('/:courseId',

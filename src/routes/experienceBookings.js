@@ -1,3 +1,4 @@
+const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const dayjs = require('dayjs');
@@ -425,7 +426,7 @@ async function syncExperienceTickets(db, booking, staff, allowInitialIssue) {
   const currentTotal = active.length + usedCount;
   if (currentTotal === 0 && !allowInitialIssue) return { issued: 0, voided: 0, total: currentTotal };
   const now = new Date();
-  const todayTW = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+  const todayTW = taiwanToday();
   let issued = 0, voided = 0;
   if (target > currentTotal) {
     const batch = db.batch();
@@ -556,7 +557,7 @@ router.get('/download', authenticate, async (req, res) => {
     XLSX.utils.book_append_sheet(wb, ws, '體驗課程名單');
     const buf = XLSX.write(wb, { type:'buffer', bookType:'xlsx' });
 
-    const today = new Date(Date.now()+8*3600000).toISOString().slice(0,10);
+    const today = taiwanToday();
     res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition',`attachment; filename="experience_bookings_${today}.xlsx"`);
     res.send(buf);
@@ -677,7 +678,7 @@ router.get('/insurance-download', authenticate, async (req, res) => {
       if (to)   bookings = bookings.filter(b => b.bookingDate <= to);
     }
     const buf = buildInsuranceXlsBuffer(bookings);
-    const today = new Date(Date.now() + 8*3600000).toISOString().slice(0, 10).replace(/-/g, '');
+    const today = taiwanToday().replace(/-/g, '');
     res.setHeader('Content-Type', 'application/vnd.ms-excel');
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(`旅平險名冊_${today}.xls`)}`);
     res.send(buf);

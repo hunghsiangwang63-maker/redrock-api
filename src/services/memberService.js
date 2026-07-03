@@ -1,3 +1,4 @@
+const { taiwanToday } = require('../utils/taiwanDate');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const QRCode = require('qrcode');
@@ -69,7 +70,7 @@ const claimLegacyFallTest = async (db, memberId, member) => {
     if (!phone || !name) return null;
     const snap = await db.collection('legacyFallTests').where('phone', '==', phone).get();
     if (snap.empty) return null;
-    const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    const today = taiwanToday();
     const hit = snap.docs.find(d => {
       const x = d.data();
       if (x.claimed === true) return false;

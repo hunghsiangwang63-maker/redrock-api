@@ -10,6 +10,7 @@ const express = require('express');
 const router = express.Router();
 const { getDb } = require('../config/firebase');
 const { authenticate, authenticateAny, requireManagerOrStation, checkPermission } = require('../middleware/auth');
+const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
@@ -124,12 +125,10 @@ router.post('/sign', authenticateAny, async (req, res) => {
     // 支援家長代替子會員簽署：body 可帶 targetMemberId
     let memberId = req.member?.id || req.body.memberId;
     if (req.body.targetMemberId && req.member && req.body.targetMemberId !== req.member.id) {
-      const targetSnap = await db.collection('members').doc(req.body.targetMemberId).get();
-      if (!targetSnap.exists) return res.status(404).json({ error: 'MEMBER_NOT_FOUND' });
-      const target = targetSnap.data();
-      if (!target.isChildAccount || target.parentMemberId !== req.member.id) {
-        return res.status(403).json({ error: 'FORBIDDEN', message: '只能代替自己的子會員簽署' });
-      }
+      const deny = await checkMemberOwnership(req.member, req.body.targetMemberId, {
+        onMissing: 404, message: '只能代替自己的子會員簽署',
+      });
+      if (deny) return res.status(deny.status).json(deny.body);
       memberId = req.body.targetMemberId;
     }
     const { signatureData, watchPercent, agreedParagraphs, guardianSignatureData, guardianName } = req.body;

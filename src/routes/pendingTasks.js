@@ -1,3 +1,4 @@
+const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth');
@@ -9,7 +10,7 @@ router.get('/', authenticate, async (req, res) => {
   try {
     const db = getDb();
     const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
-    const today = new Date(Date.now() + 8*3600000).toISOString().slice(0,10);
+    const today = taiwanToday();
 
     const tasks = [];
 

@@ -5,6 +5,8 @@ const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const { authenticate, authenticateAny, checkPermission } = require('../middleware/auth');
+const { checkMemberOwnership } = require('../utils/memberOwnership');
+const { getDb, COLLECTIONS } = require('../config/firebase');
 const competitionService = require('../services/competitionService');
 
 const validate = (req, res, next) => {
@@ -53,8 +55,7 @@ router.delete('/:id',
   authenticate, checkPermission('competitions.manage'),
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
-      const { COLLECTIONS } = require('../config/firebase');
+      const db = getDb();
       await db.collection(COLLECTIONS.COMPETITIONS).doc(req.params.id).delete();
       res.json({ success: true, message: '比賽已刪除' });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
@@ -133,21 +134,13 @@ router.post('/:id/register',
       if (!memberId) return res.status(400).json({ error: 'MISSING_MEMBER' });
 
       // 驗證：會員只能為自己或子會員報名
-      if (req.member && memberId !== req.member.id) {
-        const db = require('../config/firebase').getDb();
-        const { COLLECTIONS } = require('../config/firebase');
-        const targetSnap = await db.collection(COLLECTIONS.MEMBERS).doc(memberId).get();
-        if (!targetSnap.exists) return res.status(404).json({ error: 'MEMBER_NOT_FOUND' });
-        const target = targetSnap.data();
-        if (!target.isChildAccount || target.parentMemberId !== req.member.id) {
-          return res.status(403).json({ error: 'FORBIDDEN', message: '只能為自己或子會員報名' });
-        }
-      }
+      const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 404 });
+      if (deny) return res.status(deny.status).json(deny.body);
 
       // 取報名對象的真實生日（服務端據此計算兒童費率，不信任前端傳值）
       let registrantBirthday = null;
       try {
-        const _mDoc = await require('../config/firebase').getDb().collection('members').doc(memberId).get();
+        const _mDoc = await getDb().collection('members').doc(memberId).get();
         if (_mDoc.exists) registrantBirthday = _mDoc.data().birthday || null;
       } catch (e) {}
 
@@ -208,7 +201,7 @@ router.get('/registrations/member/:memberId', authenticateAny, async (req, res) 
 // ── GET/POST /competitions/waiver/parent/:token - 家長遠端簽署比賽聲明書 ──
 router.get('/waiver/parent/:token', async (req, res) => {
   try {
-    const db = require('../config/firebase').getDb();
+    const db = getDb();
     const snap = await db.collection('competitionRegistrations')
       .where('parentSignToken', '==', req.params.token).limit(1).get();
     if (snap.empty) return res.status(404).json({ error: 'INVALID_TOKEN', message: '連結無效或已過期' });
@@ -246,8 +239,7 @@ router.get('/:id/registrations/download',
   authenticate, checkPermission('competitions.manage'),
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
-      const { COLLECTIONS } = require('../config/firebase');
+      const db = getDb();
       const snap = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations')
         .where('competitionId', '==', req.params.id)
         .get();
@@ -308,8 +300,7 @@ router.post('/registrations/:regId/cancel',
   authenticateAny,
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
-      const { COLLECTIONS } = require('../config/firebase');
+      const db = getDb();
       const regDoc = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(req.params.regId).get();
       if (!regDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名記錄' });
       const reg = regDoc.data();
@@ -353,8 +344,7 @@ router.post('/registrations/:regId/confirm-payment',
   authenticate, checkPermission('competitions.manage'),
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
-      const { COLLECTIONS } = require('../config/firebase');
+      const db = getDb();
       await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations')
         .doc(req.params.regId).update({
           paymentStatus: 'confirmed',
@@ -377,8 +367,7 @@ router.post('/registrations/:regId/refund',
   authenticate, checkPermission('competitions.manage'),
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
-      const { COLLECTIONS } = require('../config/firebase');
+      const db = getDb();
       await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations')
         .doc(req.params.regId).update({
           paymentStatus: 'refunded',

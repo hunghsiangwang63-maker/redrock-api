@@ -10,12 +10,15 @@
  * 出席     POST /courses/sessions/:sessionId/attendance
  * 名單     GET  /courses/sessions/:sessionId/roster
  */
+const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const { authenticate, authenticateAny, authenticateMember, checkPermission, auditLog } = require('../middleware/auth');
+const { checkMemberOwnership } = require('../utils/memberOwnership');
 const courseService = require('../services/courseService');
 const { createWeeklySessions, updateSession } = courseService;
+const { getDb, COLLECTIONS } = require('../config/firebase');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -138,19 +141,8 @@ router.post('/sessions/:sessionId/enroll',
   async (req, res) => {
     try {
       // 驗證：會員只能為自己或子會員報名
-      if (req.member) {
-        const targetMemberId = req.body.memberId;
-        if (targetMemberId !== req.member.id) {
-          const db = require('../config/firebase').getDb();
-          const { COLLECTIONS } = require('../config/firebase');
-          const targetSnap = await db.collection(COLLECTIONS.MEMBERS).doc(targetMemberId).get();
-          if (!targetSnap.exists) return res.status(404).json({ error: 'MEMBER_NOT_FOUND' });
-          const target = targetSnap.data();
-          if (!target.isChildAccount || target.parentMemberId !== req.member.id) {
-            return res.status(403).json({ error: 'FORBIDDEN', message: '只能為自己或子會員報名' });
-          }
-        }
-      }
+      const deny = await checkMemberOwnership(req.member, req.body.memberId, { onMissing: 404 });
+      if (deny) return res.status(deny.status).json(deny.body);
       const result = await courseService.enrollCourse({
         memberId: req.body.memberId,
         sessionId: req.params.sessionId,
@@ -170,8 +162,7 @@ router.post('/sessions/:sessionId/enroll',
       // ── 課程練習期遞延：若課程有無限練習期，且會員有有效定期票，自動建立遞延申請 ──
       let deferralRequest = null;
       try {
-        const db = require('../config/firebase').getDb();
-        const { COLLECTIONS } = require('../config/firebase');
+        const db = getDb();
 
         // 取得課程資訊
         const sessionDoc = await db.collection('courseSessions').doc(req.params.sessionId).get();
@@ -182,7 +173,7 @@ router.post('/sessions/:sessionId/enroll',
           const practiceEnd = course?.unlimitedPracticeEnd;
 
           if (practiceEnd && !result.isWaitlist) {
-            const today = new Date(Date.now() + 8*3600000).toISOString().slice(0,10);
+            const today = taiwanToday();
             // 找會員有效定期票
             const passSnap = await db.collection(COLLECTIONS.MEMBER_PASSES).where('memberId', '==', req.body.memberId).where('status', '==', 'active').get();
             const validPasses = passSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => p.endDate >= today && p.endDate < practiceEnd);
@@ -220,13 +211,12 @@ router.post('/sessions/:sessionId/enroll',
       let installmentPlan = null;
       try {
         if (req.body.paymentPlan === 'installment' && !result.isWaitlist && result.feeInfo?.fee > 0) {
-          const db2 = require('../config/firebase').getDb();
-          const { COLLECTIONS } = require('../config/firebase');
+          const db2 = getDb();
           const sDoc = await db2.collection('courseSessions').doc(req.params.sessionId).get();
           const c = sDoc.exists ? (await db2.collection(COLLECTIONS.COURSES || 'courses').doc(sDoc.data().courseId).get()).data() : null;
           if (c?.installment?.enabled) {
             const installmentService = require('../services/installmentService');
-            const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+            const today = taiwanToday();
             const periods = installmentService.buildPeriodsFromConfig(c.installment, result.feeInfo.fee, today);
             if (periods) {
               const mDoc = await db2.collection(COLLECTIONS.MEMBERS).doc(req.body.memberId).get();
@@ -264,18 +254,9 @@ router.post('/enrollments/:enrollmentId/leave',
   async (req, res) => {
     try {
       let memberId = req.body.memberId || req.member?.id;
-      // 驗證：會員只能為自己或子會員報名
-      if (req.member && memberId !== req.member.id) {
-        const db = require('../config/firebase').getDb();
-        const { COLLECTIONS } = require('../config/firebase');
-        const targetSnap = await db.collection(COLLECTIONS.MEMBERS).doc(memberId).get();
-        if (targetSnap.exists) {
-          const target = targetSnap.data();
-          if (!target.isChildAccount || target.parentMemberId !== req.member.id) {
-            return res.status(403).json({ error: 'FORBIDDEN', message: '只能為自己或子會員報名' });
-          }
-        }
-      }
+      // 驗證：會員只能為自己或子會員報名（查無會員時沿用原行為：放行交由後續服務處理）
+      const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 'allow' });
+      if (deny) return res.status(deny.status).json(deny.body);
       const result = await courseService.requestLeave({
         enrollmentId: req.params.enrollmentId,
         memberId,
@@ -439,13 +420,13 @@ router.delete('/:courseId',
   authenticate, checkPermission('courses.manage'),
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
+      const db = getDb();
       const dayjs = require('dayjs');
       const courseId = req.params.courseId;
       const now = new Date();
 
       // 取消所有尚未開始的場次（已開始/已結束的場次保留歷史紀錄）
-      const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期
+      const today = taiwanToday(); // 台灣日期
       const sessionsSnap = await db.collection('courseSessions')
         .where('courseId', '==', courseId)
         .where('date', '>=', today)
@@ -519,7 +500,7 @@ router.delete('/:courseId/permanent',
   authenticate, checkPermission('courses.manage'),
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
+      const db = getDb();
       const courseId = req.params.courseId;
 
       // 防呆：僅「開放中」課程要求先取消；已取消的課程可直接永久刪除
@@ -559,7 +540,7 @@ router.put('/:courseId',
   authenticate, checkPermission('courses.manage'), auditLog('course.update'),
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
+      const db = getDb();
       const allowedFields = [
         'name', 'description', 'price', 'maxStudents', 'instructor',
         'startDate', 'endDate', 'startTime', 'endTime', 'weekdays',
@@ -593,7 +574,7 @@ router.get('/:courseId/enrollments',
   authenticate, checkPermission('courses.view'),
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
+      const db = getDb();
       const { courseId } = req.params;
       const snap = await db.collection('courseEnrollments')
         .where('courseId', '==', courseId)
@@ -634,7 +615,7 @@ router.put('/:courseId/members/:memberId/max-leaves',
   authenticate, checkPermission('courses.manage'),
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
+      const db = getDb();
       const { courseId, memberId } = req.params;
       const raw = req.body.maxLeavesAllowed;
       // 傳 null/空 = 清除覆蓋（回到課程整期預設）
@@ -659,7 +640,7 @@ router.post('/:courseId/enroll-all',
   authenticateAny,
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
+      const db = getDb();
       const courseId = req.params.courseId;
       const memberId = req.body.memberId || req.member?.id;
       const gymId = req.body.gymId || req.staff?.gymId || null;
@@ -667,14 +648,9 @@ router.post('/:courseId/enroll-all',
 
       if (!memberId) return res.status(400).json({ error: 'MISSING_MEMBER' });
 
-      // 會員只能為自己或子會員整期報名（防帶他人 memberId）
-      if (req.member && memberId !== req.member.id) {
-        const targetDoc = await db.collection('members').doc(memberId).get();
-        const target = targetDoc.exists ? targetDoc.data() : null;
-        if (!target || !target.isChildAccount || target.parentMemberId !== req.member.id) {
-          return res.status(403).json({ error: 'FORBIDDEN', message: '只能為自己或子會員報名' });
-        }
-      }
+      // 會員只能為自己或子會員整期報名（防帶他人 memberId；查無會員視為無權）
+      const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
+      if (deny) return res.status(deny.status).json(deny.body);
 
       // 取得課程所有未取消場次
       const sessionsSnap = await db.collection('courseSessions')
@@ -682,7 +658,7 @@ router.post('/:courseId/enroll-all',
         .where('status', '==', 'scheduled')
         .get();
 
-      const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期
+      const today = taiwanToday(); // 台灣日期
       const futureSessions = sessionsSnap.docs
         .map(d => ({ id: d.id, ...d.data() }))
         .filter(s => s.date >= today)
@@ -765,7 +741,7 @@ router.post('/:courseId/enroll-all',
       let coursePlan = null;
       if (fee > 0 && useCourseInstallment) {
         const installmentService = require('../services/installmentService');
-        const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+        const today = taiwanToday();
         const periods = installmentService.buildPeriodsFromConfig(course.installment, fee, today);
         if (periods) {
           coursePlan = await installmentService.createInstallmentPlan({

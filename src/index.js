@@ -3,6 +3,7 @@
 process.env.TZ = process.env.TZ || 'Asia/Taipei';
 
 require('dotenv').config();
+const { taiwanToday } = require('./utils/taiwanDate');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -145,7 +146,7 @@ if (require.main === module) {
     } catch (e) { console.error('[卡片移轉] 回沖失敗', e.message); }
   };
   setInterval(() => {
-    const dateStr = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    const dateStr = taiwanToday();
     if (new Date().getHours() === 9 && lastInstallmentRunDate !== dateStr) {
       lastInstallmentRunDate = dateStr;
       runDailyInstallmentJobs();

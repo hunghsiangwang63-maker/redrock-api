@@ -9,6 +9,7 @@
  * - 計分系統二選一：rating_system 或 competition_management_v2，建賽事時指定
  * - webhookUrl 若未設定，僅記錄為 skipped，不會報錯，待對方提供網址後可直接補上啟用
  */
+const { taiwanToday } = require('../utils/taiwanDate');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
@@ -155,7 +156,7 @@ const registerForCompetition = async ({
     throw { code: 'REGISTRATION_CLOSED', message: '此賽事目前未開放報名' };
   }
   // 用台灣日期(UTC+8)判截止，避免伺服器 UTC 讓「截止日隔天 00:00–08:00」仍可報名
-  const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+  const today = taiwanToday();
   if (competition.registrationEnd && today > competition.registrationEnd) {
     throw { code: 'REGISTRATION_ENDED', message: '報名期限已截止' };
   }
@@ -184,7 +185,7 @@ const registerForCompetition = async ({
 
   // 計算費用
   const fees = competition.fees || {};
-  const todayStr = new Date(Date.now() + 8*3600000).toISOString().slice(0,10);
+  const todayStr = taiwanToday();
   const isEarlyBird = competition.earlyBirdDeadline && todayStr <= competition.earlyBirdDeadline;
   const childAgeLimit = fees.childAgeLimit || 15;
   const age = birthday ? dayjs().diff(dayjs(birthday), 'year') : null;

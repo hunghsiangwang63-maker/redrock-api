@@ -1,9 +1,11 @@
+const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const { body, param, query, validationResult } = require('express-validator');
 const { authenticate, authenticateAny, checkPermission, requireSameGym, auditLog, requireManagerOrStation } = require('../middleware/auth');
 const memberService = require('../services/memberService');
 const waiverService = require('../services/waiverService');
+const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
 const XLSX = require('xlsx');
@@ -42,8 +44,7 @@ router.get('/my/children', authenticateAny, async (req, res) => {
   try {
     const memberId = req.member?.id;
     if (!memberId) return res.status(401).json({ error: 'UNAUTHORIZED' });
-    const db = require('../config/firebase').getDb();
-    const { COLLECTIONS } = require('../config/firebase');
+    const db = getDb();
     const snap = await db.collection(COLLECTIONS.MEMBERS)
       .where('parentMemberId', '==', memberId)
       .where('isChildAccount', '==', true)
@@ -77,8 +78,7 @@ router.post('/my/children',
         return res.status(400).json({ code: 'AGE_RESTRICTION', message: '家庭成員僅限未滿 18 歲，滿 18 歲請註冊正式會員' });
       }
 
-      const db = require('../config/firebase').getDb();
-      const { COLLECTIONS } = require('../config/firebase');
+      const db = getDb();
       const existing = await db.collection(COLLECTIONS.MEMBERS)
         .where('parentMemberId', '==', memberId)
         .where('isChildAccount', '==', true)
@@ -107,7 +107,7 @@ router.post('/my/children',
 router.get('/reports/active-passes', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期（與入場資格判定同源）
+    const today = taiwanToday(); // 台灣日期（與入場資格判定同源）
     const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
     const snap = await db.collection(COLLECTIONS.MEMBER_PASSES).where('status', '==', 'active').get();
     let passes = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => (p.endDate || '') >= today);
@@ -130,7 +130,7 @@ router.get('/reports/active-passes', authenticate, async (req, res) => {
 router.get('/reports/active-course-students', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期（與課程入館資格同源）
+    const today = taiwanToday(); // 台灣日期（與課程入館資格同源）
     const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
     const courseSnap = await db.collection('courses').get();
     let courses = courseSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.status !== 'cancelled');
@@ -230,7 +230,7 @@ router.get('/download',
       XLSX.utils.book_append_sheet(wb, ws, '會員名單');
       const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 
-      const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+      const today = taiwanToday();
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename="members_${today}.xlsx"`);
       res.send(buf);
@@ -366,12 +366,10 @@ router.post('/:id/waiver/sign',
     try {
       const memberId = req.params.id;
       // 會員只能簽自己的，或代簽自己的子會員；工作人員可代簽任何會員
-      if (req.member && req.member.id !== memberId) {
-        const member = await memberService.getMember(memberId);
-        if (!member.isChildAccount || member.parentMemberId !== req.member.id) {
-          return res.status(403).json({ error: 'FORBIDDEN', message: '只能簽署自己或子會員的聲明書' });
-        }
-      }
+      const deny = await checkMemberOwnership(req.member, memberId, {
+        onMissing: 404, message: '只能簽署自己或子會員的聲明書',
+      });
+      if (deny) return res.status(deny.status).json(deny.body);
 
       const member = await memberService.getMember(memberId);
       const { signatureData, parentEmail: rawParentEmail, parentName, parentPhone, parentRelation } = req.body;
@@ -479,8 +477,7 @@ router.post('/self-register',
       }, null);
 
       // 存入 passwordHash
-      const db = require('../config/firebase').getDb();
-      const { COLLECTIONS } = require('../config/firebase');
+      const db = getDb();
       await db.collection(COLLECTIONS.MEMBERS).doc(member.id).update({ passwordHash });
 
       // 發送 Email 驗證信

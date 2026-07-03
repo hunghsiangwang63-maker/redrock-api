@@ -1,3 +1,4 @@
+const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
@@ -55,7 +56,7 @@ router.post('/enrollments/:enrollmentId/refund-request',
       // 已付金額：彙總所有報名的 paidAmount，若皆為 0 則退而求其次用 enrollmentFee（避免抓到非持費那筆算成 0）
       const paidAmount = all.reduce((s, e) => s + (e.paidAmount || 0), 0)
         || all.reduce((s, e) => s + (e.enrollmentFee || 0), 0);
-      const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期
+      const today = taiwanToday(); // 台灣日期
       const courseStartDate = course?.startDate || null;
       const perSessionDeduction = course?.perSessionDeduction ?? 850; // 每堂扣除金額，預設850
       const handlingFeeRate = course?.handlingFeeRate ?? 0.05; // 手續費率，預設5%
@@ -210,7 +211,7 @@ router.post('/requests/:id/approve',
       }
 
       if (request.type === 'pause') {
-        const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期
+        const today = taiwanToday(); // 台灣日期
         const now = new Date();
         // 暫停該會員此課程「所有未來」有效報名
         const snap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
@@ -294,8 +295,7 @@ module.exports = router;
 // ── GET /course-adjustments/member/:memberId - 查詢會員申請紀錄 ──
 router.get('/member/:memberId', authenticateAny, async (req, res) => {
   try {
-    const db = require('../config/firebase').getDb();
-    const { COLLECTIONS } = require('../config/firebase');
+    const db = getDb();
     const { memberId } = req.params;
     // 會員只能查自己的
     if (req.member && req.member.id !== memberId) {

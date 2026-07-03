@@ -1,6 +1,7 @@
 /**
  * 定期票 + 單次入場券路由
  */
+const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
@@ -191,7 +192,7 @@ router.post('/',
       let passPlan = null;
       if (passType.price > 0 && usePassInstallment) {
         const installmentService = require('../services/installmentService');
-        const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+        const today = taiwanToday();
         const periods = installmentService.buildPeriodsFromConfig(passType.installment, passType.price, today);
         if (periods) {
           passPlan = await installmentService.createInstallmentPlan({

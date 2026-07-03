@@ -3,6 +3,7 @@
  * 驗票順序：VIP → 定期券 → 課程入館 → 優惠卡 → 黑卡 → 單次入場券 → 無票
  * 新增：VIP、單次入場券、兒童/學生身份、墜落測驗2年+遞延、QR code流程、10分鐘取消
  */
+const { taiwanToday } = require('../utils/taiwanDate');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const { getMember } = require('./memberService');
 const { getValidDiscountCards, useDiscountCard } = require('./discountCardService');
@@ -76,7 +77,7 @@ const getEntryTypePrice = async (entryTypeId, fallback) => {
 // ── 取得有效定期票 ───────────────────────────────────────────────
 const getValidPasses = async (memberId, gymId) => {
   const db = getDb();
-  const today = new Date(Date.now() + 8*3600000).toISOString().slice(0,10);
+  const today = taiwanToday();
   const snap = await db.collection(COLLECTIONS.MEMBER_PASSES)
     .where('memberId', '==', memberId)
     .where('status', '==', 'active')
@@ -90,7 +91,7 @@ const getValidPasses = async (memberId, gymId) => {
 // ── 取得課程入館權益 ─────────────────────────────────────────────
 const getCourseAccess = async (memberId) => {
   const db = getDb();
-  const today = new Date(Date.now() + 8*3600000).toISOString().slice(0,10);
+  const today = taiwanToday();
 
   // 找出此會員所有「未取消、未暫停」的報名紀錄
   const enrollSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
@@ -160,7 +161,7 @@ const checkVip = async (memberId) => {
 // ── 取得有效單次入場券 ───────────────────────────────────────────
 const getValidSingleEntryTickets = async (memberId) => {
   const db = getDb();
-  const today = new Date(Date.now() + 8*3600000).toISOString().slice(0,10);
+  const today = taiwanToday();
   const snap = await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS)
     .where('memberId', '==', memberId)
     .where('status', '==', 'active')

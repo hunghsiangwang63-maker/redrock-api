@@ -7,6 +7,7 @@
  * - 收款方式：linepay / jkopay / taiwanpay / transfer / cash（館方人工記帳，非自動扣款）
  * - 逾期未繳當期款項 → 暫停入場資格，並寄送Email提醒/逾期通知
  */
+const { taiwanToday } = require('../utils/taiwanDate');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
 const { v4: uuidv4 } = require('uuid');
@@ -20,7 +21,7 @@ const buildPeriodsFromConfig = (config, totalPrice, startDateStr) => {
   const dayjs = require('dayjs');
   const periods = (config?.periods || []).filter(p => (Number(p.percent) || 0) > 0);
   if (periods.length < 2 || !(totalPrice > 0)) return null;
-  const start = startDateStr || new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+  const start = startDateStr || taiwanToday();
   let allocated = 0;
   return periods.map((p, i) => {
     const isLast = i === periods.length - 1;

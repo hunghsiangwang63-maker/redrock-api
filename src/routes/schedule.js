@@ -6,6 +6,7 @@ const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const { authenticate, checkPermission } = require('../middleware/auth');
 const scheduleService = require('../services/scheduleService');
+const { getDb } = require('../config/firebase');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -218,7 +219,7 @@ router.get('/staff-list',
     try {
       const gymId = resolveGymId(req, req.query.gymId);
       if (!gymId) return res.status(400).json({ error: 'MISSING_GYM', message: '請指定場館' });
-      const db = require('../config/firebase').getDb();
+      const db = getDb();
       const snap = await db.collection('staff')
         .where('gymId', '==', gymId)
         .where('isActive', '==', true)
@@ -237,7 +238,7 @@ router.get('/settings/:gymId',
   authenticate,
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
+      const db = getDb();
       const doc = await db.collection('systemSettings').doc('scheduleHours_' + req.params.gymId).get();
       const defaultHours = { 0:11, 1:9, 2:9, 3:9, 4:9, 5:9, 6:12 };
       const settings = doc.exists ? doc.data() : { gymId: req.params.gymId, standardHours: defaultHours };
@@ -251,7 +252,7 @@ router.put('/settings/:gymId',
   authenticate, checkPermission('settings.manage'),
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
+      const db = getDb();
       const { standardHours } = req.body;
       await db.collection('systemSettings').doc('scheduleHours_' + req.params.gymId).set({
         gymId: req.params.gymId,

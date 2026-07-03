@@ -1,13 +1,14 @@
 /**
  * 定期票異動管理路由（編輯/展延/退費/轉讓/年假批次展延）
  */
+const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const { body, validationResult } = require('express-validator');
 const { authenticate, authenticateAny, requireManagerOrStation } = require('../middleware/auth');
 const passAdjustmentService = require('../services/passAdjustmentService');
-const { getStorage } = require('../config/firebase');
+const { getStorage, getDb, COLLECTIONS } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -132,8 +133,7 @@ router.post('/requests/:id/approve',
   authenticate, requireManagerOrStation,
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
-      const { COLLECTIONS } = require('../config/firebase');
+      const db = getDb();
       // 申請可能在 passRequests（展延/退費/轉讓）或 passAdjustments（課程練習期遞延），兩處都找
       let reqRef = db.collection(COLLECTIONS.PASS_REQUESTS).doc(req.params.id);
       let reqDoc = await reqRef.get();
@@ -220,8 +220,7 @@ router.get('/holiday-history',
   authenticate, requireManagerOrStation,
   async (req, res) => {
     try {
-      const db = require('../config/firebase').getDb();
-      const { COLLECTIONS } = require('../config/firebase');
+      const db = getDb();
       const snap = await db.collection(COLLECTIONS.PASS_ADJUSTMENTS)
         .where('type', '==', 'holiday_batch')
         .get();
@@ -252,9 +251,8 @@ module.exports = router;
 // ── GET /pass-adjustments/analytics - 票券統計（管理員）──
 router.get('/analytics', authenticate, async (req, res) => {
   try {
-    const db = require('../config/firebase').getDb();
-    const { COLLECTIONS } = require('../config/firebase');
-    const today = new Date(Date.now() + 8*3600000).toISOString().slice(0,10);
+    const db = getDb();
+    const today = taiwanToday();
 
     const [passSnap, discountSnap, blackSnap, ticketSnap, bonusSnap] = await Promise.all([
       db.collection(COLLECTIONS.MEMBER_PASSES).get(),
@@ -332,10 +330,9 @@ router.get('/analytics', authenticate, async (req, res) => {
 // ── GET /pass-adjustments/analytics/download - 下載詳細資料 CSV ──
 router.get('/analytics/download', authenticate, async (req, res) => {
   try {
-    const db = require('../config/firebase').getDb();
-    const { COLLECTIONS } = require('../config/firebase');
+    const db = getDb();
     const { type } = req.query; // passes | discounts | blacks | tickets | bonuses
-    const today = new Date(Date.now() + 8*3600000).toISOString().slice(0,10);
+    const today = taiwanToday();
 
     let rows = [], headers = [], csvRows = [];
 

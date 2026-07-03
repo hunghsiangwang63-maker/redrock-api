@@ -10,6 +10,7 @@
  * - 出席簽到
  * - 課程入館權益自動產生
  */
+const { taiwanToday } = require('../utils/taiwanDate');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const { getMember } = require('./memberService');
 const { createNotification, notifyRoleInGym } = require('./notificationService');
@@ -627,7 +628,7 @@ const promoteWaitlist = async (sessionId) => {
 const cancelCourseEnrollments = async ({ courseId, memberId, reason }) => {
   const db = getDb();
   const now = new Date();
-  const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期
+  const today = taiwanToday(); // 台灣日期
   const snap = await db.collection(ENROLLMENT_COLLECTION)
     .where('courseId', '==', courseId)
     .where('memberId', '==', memberId)
@@ -784,7 +785,7 @@ const getSessionRoster = async (sessionId) => {
 // ── 課程狀態標籤（報名中/即將開始/進行中/已滿/已結束/已取消）──────
 const computeStatusLabel = (course, enrolledCount) => {
   if (course.status === 'cancelled') return 'cancelled';
-  const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // 台灣日期
+  const today = taiwanToday(); // 台灣日期
   if (course.endDate && today > course.endDate) return 'ended';
   if (course.startDate && today >= course.startDate) return 'ongoing';
   if (enrolledCount >= (course.maxStudents || Infinity)) return 'full';
@@ -822,7 +823,7 @@ const getSessions = async (gymId, fromDate, toDate) => {
   let ref = db.collection(SESSION_COLLECTION);
   if (gymId) ref = ref.where('gymId', '==', gymId);
   ref = ref
-    .where('date', '>=', fromDate || new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10))
+    .where('date', '>=', fromDate || taiwanToday())
     .where('date', '<=', toDate || dayjs().add(30, 'day').format('YYYY-MM-DD'));
   const snap = await ref.get();
   const sessions = snap.docs.map(d => ({ id: d.id, ...d.data() }))
@@ -1015,7 +1016,7 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
   });
   if (Object.keys(trialCourses).length === 0) return [];
 
-  const from = fromDate || new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+  const from = fromDate || taiwanToday();
   const to = toDate || dayjs(from).add(60, 'day').format('YYYY-MM-DD');
   const sessions = await getSessions(gymId, from, to);
   return sessions

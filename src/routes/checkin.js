@@ -1,12 +1,14 @@
 /**
  * 入場登記路由 v2
  */
+const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const { authenticate, authenticateAny, checkPermission } = require('../middleware/auth');
 const checkinService = require('../services/checkinService');
 const memberService = require('../services/memberService');
+const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
 
 const validate = (req, res, next) => {
@@ -190,7 +192,7 @@ router.post('/record',
 // ── GET /checkin/eligibility/:memberId - 查詢會員入場類型資格（手機入場篩選用）──
 router.get('/eligibility/:memberId', authenticate, async (req, res) => {
   try {
-    const db = require('../config/firebase').getDb();
+    const db = getDb();
     const memberDoc = await db.collection('members').doc(req.params.memberId).get();
     if (!memberDoc.exists) return res.status(404).json({ message: '會員不存在' });
     const member = memberDoc.data();
@@ -207,7 +209,7 @@ router.get('/eligibility/:memberId', authenticate, async (req, res) => {
     const vip = vipFromCollection || (vipFromMemberType ? { note: member.vipNote || '' } : null);
 
     // 查詢有效定期票
-    const today = new Date(Date.now() + 8*3600000).toISOString().slice(0,10);
+    const today = taiwanToday();
     const passSnap = await db.collection('memberPasses')
       .where('memberId', '==', req.params.memberId)
       .where('status', '==', 'active')
@@ -263,7 +265,7 @@ router.get('/eligibility/:memberId', authenticate, async (req, res) => {
 // 重用 createPendingCheckIn + confirmCheckIn 的結算邏輯（金額後端權威、票券扣除、營收、墜測遞延）
 router.post('/direct', authenticate, async (req, res) => {
   try {
-    const db = require('../config/firebase').getDb();
+    const db = getDb();
     const {
       memberId, gymId, entryType, baseEntryType,
       discountCardId, blackCardId, singleEntryTicketId, bonusId,
@@ -273,7 +275,7 @@ router.post('/direct', authenticate, async (req, res) => {
     const effGym = req.staff?.role === 'super_admin' ? gymId : (req.staff?.gymId || gymId);
 
     // 同日同館重複入場檢查
-    const todayStr = new Date(Date.now() + 8*3600000).toISOString().slice(0, 10);
+    const todayStr = taiwanToday();
     const dup = await db.collection('checkIns')
       .where('memberId', '==', memberId).where('gymId', '==', effGym)
       .where('isCancelled', '==', false)
@@ -300,7 +302,7 @@ router.get('/today-course-students', authenticate, async (req, res) => {
   try {
     const { gymId } = req.query;
     if (!gymId) return res.status(400).json({ message: '缺少場館資訊' });
-    const db = require('../config/firebase').getDb();
+    const db = getDb();
     const today = dayjs().format('YYYY-MM-DD');
 
     // 今日該館所有場次
@@ -327,7 +329,7 @@ router.get('/today-course-students', authenticate, async (req, res) => {
     if (enrollments.length === 0) return res.json({ students: [] });
 
     // 今日已入場名單（用於標註禁止重複點選）；以台灣時間午夜為界
-    const todayStr0 = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    const todayStr0 = taiwanToday();
     const todayStart = new Date(todayStr0 + 'T00:00:00+08:00');
     const checkedInSnap = await db.collection('checkIns')
       .where('gymId', '==', gymId)
@@ -366,10 +368,9 @@ router.get('/today',
   checkPermission('checkin.read'),
   async (req, res) => {
     try {
-      const { getDb } = require('../config/firebase');
       const db = getDb();
       // 「今日」以台灣時間(UTC+8)午夜為界（伺服器為 UTC，不可用 setHours 否則跨日不清空）
-      const todayStr = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+      const todayStr = taiwanToday();
       const today = new Date(todayStr + 'T00:00:00+08:00');
 
       // 個人帳號登入(非館別電腦值班、非管理層)完全看不到今日統計，僅館別電腦值班/各館管理員/總管理員可見
@@ -432,7 +433,6 @@ router.get('/today',
 // 入場頁折線圖：本月與上月「每日入場數」（依台灣日期、排除取消）
 router.get('/monthly-daily-counts', authenticate, checkPermission('checkin.read'), async (req, res) => {
   try {
-    const { getDb } = require('../config/firebase');
     const db = getDb();
     const dayjs = require('dayjs');
     const gymId = req.query.gymId || (req.staff.role === 'super_admin' ? null : req.staff.gymId);
@@ -474,7 +474,6 @@ router.get('/history',
   authenticateAny,
   async (req, res) => {
     try {
-      const { getDb, COLLECTIONS } = require('../config/firebase');
       const db = getDb();
 
       // 會員只能查自己的；員工可查指定館別
@@ -514,7 +513,6 @@ router.get('/history',
 router.post('/phone', authenticate, async (req, res) => {
   try {
     let { memberId, gymId, entryType, paymentMethod, childName, parentMemberId } = req.body;
-    const { getDb } = require('../config/firebase');
     const db = getDb();
 
     // 子會員入場：無獨立 id，用 parentId+childName 當識別
@@ -531,7 +529,7 @@ router.post('/phone', authenticate, async (req, res) => {
     const memberName = childName ? `${member.name}（${childName}）` : member.name;
 
     // 同日同館只能入場一次（用isCancelled而非status，才能同時擋下QR入場與電話入場）；台灣時間午夜為界
-    const todayStr = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    const todayStr = taiwanToday();
     const today = new Date(todayStr + 'T00:00:00+08:00');
     const existing = await db.collection('checkIns')
       .where('memberId', '==', memberId)

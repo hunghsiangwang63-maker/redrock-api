@@ -11,6 +11,7 @@ const { getDb } = require('../config/firebase');
 const { authenticateAny } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
+const memberService = require('../services/memberService');
 
 // 移轉規則
 const TRANSFER_RULES = {
@@ -43,11 +44,10 @@ router.post('/request', authenticateAny, async (req, res) => {
     if (!ticketType || !ticketId || !targetPhone)
       return res.status(400).json({ error: 'MISSING_FIELDS', message: '請填寫票券類型、票券ID和對方手機' });
 
-    // 查詢對方會員
-    const targetSnap = await db.collection('members').where('phone', '==', targetPhone).limit(1).get();
-    if (targetSnap.empty)
-      return res.status(404).json({ error: 'MEMBER_NOT_FOUND', message: '找不到此手機號碼的會員' });
-    const target = { id: targetSnap.docs[0].id, ...targetSnap.docs[0].data() };
+    // 查詢對方會員（親子共用電話：優先家長帳號，避開子帳號誤解析，與 cards.js 轉移一致）
+    let target;
+    try { target = await memberService.getMemberByPhone(String(targetPhone).trim()); }
+    catch { return res.status(404).json({ error: 'MEMBER_NOT_FOUND', message: '找不到此手機號碼的會員' }); }
 
     // 確認票券屬於申請人
     const collectionMap = {

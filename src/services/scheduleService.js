@@ -164,7 +164,7 @@ const createShift = async ({ gymId, staffId, staffName, date, type, startTime, e
 };
 
 // ── 更新排班 ──────────────────────────────────────────────────────
-const updateShift = async (shiftId, { date, type, startTime, endTime, note }) => {
+const updateShift = async (shiftId, { staffId, staffName, date, type, startTime, endTime, note }) => {
   const db = getDb();
   const ref = db.collection(COLLECTIONS.SCHEDULE_SHIFTS).doc(shiftId);
   const doc = await ref.get();
@@ -178,11 +178,14 @@ const updateShift = async (shiftId, { date, type, startTime, endTime, note }) =>
     throw { code: 'INVALID_TIME_RANGE', message: '結束時間必須晚於開始時間' };
   }
   const finalDate = date !== undefined ? date : doc.data().date;
-  if (finalType === 'full_day' && await hasExistingFullDayShift(doc.data().gymId, doc.data().staffId, finalDate, shiftId)) {
+  const finalStaffId = staffId !== undefined ? staffId : doc.data().staffId;
+  if (finalType === 'full_day' && await hasExistingFullDayShift(doc.data().gymId, finalStaffId, finalDate, shiftId)) {
     throw { code: 'DUPLICATE_FULL_DAY', message: '此員工當天已有一筆整天班，同一人同一天最多一筆整天班' };
   }
 
   const updates = { updatedAt: new Date() };
+  if (staffId !== undefined) updates.staffId = staffId;
+  if (staffName !== undefined) updates.staffName = staffName;
   if (date !== undefined) updates.date = date;
   if (type !== undefined) {
     updates.type = type;

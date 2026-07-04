@@ -50,6 +50,7 @@ const COLLECTIONS = {
   MEMBER_PASSES: 'memberPasses',
   CHECK_INS: 'checkIns',
   FALL_TESTS: 'fallTests',
+  FALL_TEST_BOOKINGS: 'fallTestBookings',
   STAFF: 'staff',
   COURSES: 'courses',
   COURSE_SESSIONS: 'courseSessions',

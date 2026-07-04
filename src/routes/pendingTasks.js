@@ -238,6 +238,26 @@ router.get('/', authenticate, async (req, res) => {
       });
     } catch(e) {}
 
+    // 11. 墜落測驗排測 - 待安排（會員自助排測 → 站台現場測驗）
+    try {
+      let ref = db.collection('fallTestBookings').where('status', '==', 'pending');
+      if (gymId) ref = ref.where('gymId', '==', gymId);
+      const snap = await ref.get();
+      snap.forEach(d => {
+        const b = d.data();
+        tasks.push({
+          id: `falltest_${d.id}`, type: 'fall_test_pending', targetId: d.id,
+          title: '墜落測驗待安排',
+          desc: `${b.memberName || ''}`,
+          date: b.createdAt?._seconds ? new Date(b.createdAt._seconds*1000).toISOString().slice(0,10) : today,
+          createdAt: b.createdAt?._seconds || 0,
+          gymId: b.gymId, memberName: b.memberName, memberId: b.memberId,
+          link: '/staff/pending-tasks',
+          record: { id: d.id, ...b },
+        });
+      });
+    } catch(e) {}
+
     // 最終排序（最新在前）
     tasks.sort((a, b) => b.createdAt - a.createdAt);
 

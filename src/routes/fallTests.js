@@ -11,6 +11,7 @@ const router = express.Router();
 const { getDb } = require('../config/firebase');
 const { authenticate, authenticateAny, requireManagerOrStation, checkPermission } = require('../middleware/auth');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
+const { recordFallTestResult } = require('../services/fallTestService');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
@@ -165,53 +166,16 @@ router.post('/sign', authenticateAny, async (req, res) => {
 // 工作人員標記測驗結果
 router.post('/', authenticate, async (req, res) => {
   try {
-    const db = getDb();
     const { memberId, result, notes } = req.body;
-    if (!memberId || !result) return res.status(400).json({ error: 'MISSING_FIELDS' });
-
-    // 未簽署同意書不可登記通過
-    if (result === 'passed') {
-      const sigSnap = await db.collection('fallTestSignatures')
-        .where('memberId', '==', memberId)
-        .limit(1)
-        .get();
-      if (sigSnap.empty) {
-        return res.status(400).json({
-          error: 'SIGNATURE_REQUIRED',
-          message: '此會員尚未簽署墜落測驗同意書，無法登記為通過',
-        });
-      }
-    }
-
-    const settings = await getFallTestSettings(db);
-    const now = dayjs();
-    const expiresAt = now.add(settings.validYears, 'year').toDate();
-
-    const testId = uuidv4();
-    const test = {
-      id: testId,
-      memberId,
-      result, // 'passed' | 'failed'
-      testedBy: req.staff.id,
-      testedByName: req.staff.name,
-      testedAt: now.toDate(),
-      expiresAt: result === 'passed' ? expiresAt : null,
-      notes: notes || '',
-    };
-    await db.collection('fallTests').doc(testId).set(test);
-
-    // 更新會員狀態
-    if (result === 'passed') {
-      await db.collection('members').doc(memberId).update({
-        fallTestPassed: true,
-        fallTestExpiresAt: expiresAt,
-        blockReasons: [], // 清除 fall_test_required
-        updatedAt: new Date(),
-      });
-    }
-
+    const test = await recordFallTestResult({
+      memberId, result, notes,
+      staffId: req.staff.id, staffName: req.staff.name,
+    });
     res.status(201).json({ test, message: result === 'passed' ? '測驗通過！' : '測驗未通過' });
-  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
 });
 
 // ── POST /fall-tests/:testId/extend ──────────────────────────────

@@ -87,6 +87,7 @@ app.use('/revenue',      require('./routes/revenue'));
 app.use('/ticket-transfers', require('./routes/ticketTransfers'));
 app.use('/daily-settlements', require('./routes/dailySettlements'));
 app.use('/fall-tests',   require('./routes/fallTests'));
+app.use('/fall-test-bookings', require('./routes/fallTestBookings'));
 app.use('/cancel-checkins', require('./routes/cancelCheckin'));
 // app.use('/gyms',      require('./routes/gyms'));
 // app.use('/staff',     require('./routes/staff'));
@@ -102,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '1.32.0-expired-bonus-sweep',
+    version: '1.33.0-falltest-booking',
   });
 });
 

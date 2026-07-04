@@ -88,8 +88,12 @@ const computePaidEntryAmount = async (entryType, member, opts = {}) => {
     ? (etDoc.data().types || []).find(x => x.id === entryType && x.active !== false)
     : null;
   if (!t || typeof t.price !== 'number') return null;
-  const isTeam = isActiveTeamMember(member);
   const originalAmount = t.price;
+  // 兒童：不適用折扣卡、也不會是隊員 → 一律原價，任何折扣都不套（權威擋，涵蓋電話入場與 QR 自助）
+  if (entryType === 'child_free') {
+    return { amount: originalAmount, originalAmount, isTeamDiscount: false, legacyDiscount: false };
+  }
+  const isTeam = isActiveTeamMember(member);
   const teamEligible = isTeam && originalAmount >= TEAM_DISCOUNT_MIN_AMOUNT;
   let amount = originalAmount;
   if (opts.legacyDiscountCard) amount = Math.round(amount * DISCOUNT_CARD_RATE); // 舊折扣卡 8 折

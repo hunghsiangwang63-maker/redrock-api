@@ -74,6 +74,29 @@
 
 ---
 
+## 階段 4 — 站台掃 QR 確認入場（`confirmCheckIn`）
+
+會員 QR 產生後（前置關卡與金額已定），櫃檯掃描跑 `confirmCheckIn(qrToken, staffId)` —— **扣點與記帳都發生在這一步**。
+
+1. **驗 QR**：不存在 → `QR_NOT_FOUND`；狀態非 pending → `QR_INVALID_STATUS`；過 30 分效期 → `QR_EXPIRED`。
+2. **先扣點（孤兒防護）**：依 `entryType` 先扣卡／券／紅利／建卡，**失敗即 throw、不建入場紀錄** → 杜絕「有入場、沒扣點」孤兒記錄。黑卡／單次券刻意延後到此刻才扣（產生 QR 但未確認入場 → 不扣卡、不鎖券）。
+
+   | entryType | 動作 |
+   |---|---|
+   | `buy_discount_card` | 建一張新優惠卡（`purchaseDiscountCard`） |
+   | `discount_card` | 扣一格（`useDiscountCard`） |
+   | `black_card` | 扣一點（`useBlackCard`） |
+   | `single_entry_ticket` | **重驗後**標記 `used`（防兩張 QR 重複用同券；無效／過期 → throw） |
+   | `bonus` | 用掉紅利（`useBonus`） |
+
+3. **建入場紀錄**：寫入 `checkIns`，`amountPaid = 入場費 + 岩鞋 + 粉袋`。
+4. **收尾**：pending → `confirmed`（回填 `confirmedBy`／`checkInId`）；`tryExtendFallTest` 遞延墜落測驗效期。
+5. **記營收**：`amountPaid > 0` 才寫 `recordTransaction(type: checkin)`（記 `entryFee`／`shoesPrice`），回填 `transactionId`；免費入場（0 元）不寫營收。
+
+**取消入場**：`cancelCheckIn` 入場後 10 分鐘內可取消（super_admin 可 `force`），連帶**還原**已扣的卡／券／紅利（`restoreEntryCredits`）。
+
+---
+
 ## 三條入場路徑
 
 同一套資格與金額邏輯，兩種進入方式。差別在**扣點時機**與**站台專屬能力**。

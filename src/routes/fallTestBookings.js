@@ -146,6 +146,32 @@ router.delete('/:id', authenticateMember, async (req, res) => {
   }
 });
 
+// ── POST /fall-test-bookings/:id/return ──────────────────────────
+// 站台/員工「退回申請」：把單子退回會員（不登記測驗結果），會員需重新申請。
+router.post('/:id/return', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const { reason } = req.body;
+    const ref = db.collection(COL).doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
+    const b = doc.data();
+    if (b.status !== 'pending') {
+      return res.status(400).json({ error: 'NOT_PENDING', message: '此排測已處理' });
+    }
+    await ref.update({
+      status: 'returned',
+      returnedBy: req.staff.id,
+      returnedByName: req.staff.name,
+      returnedAt: new Date(),
+      returnReason: reason || '',
+    });
+    res.json({ message: '已退回申請，會員需重新安排墜落測驗' });
+  } catch (err) {
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 // ── POST /fall-test-bookings/:id/complete ────────────────────────
 // 站台/員工登記測驗結果。站台值班(operator) token 含 staffId，可通過 authenticate。
 router.post('/:id/complete', authenticate, async (req, res) => {

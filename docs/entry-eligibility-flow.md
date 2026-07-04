@@ -23,6 +23,8 @@
 
 **墜測例外（體驗券）**：持「**當日有效體驗券**」者未通過墜測也可入場，但須先簽墜落測驗同意書；未簽 → 擋下 `fall_test_consent_required`，簽了即續行。
 
+> ⚠ **非入場關卡**：`email_unverified` 這個 blockReason 各入場關卡**都沒讀**，Email 未驗證只在**登入**被擋（見 `1.36.0`）；入場流程不因 Email 未驗證而擋。
+
 ---
 
 ## 階段 1 — 免費入場資格（由上而下，第一個命中即放行）
@@ -121,6 +123,15 @@
 | **站台電話搜尋**<br>`POST /checkin/phone` | 員工搜會員電話，純付費入場（未選卡／券工具） | 沿用前置關卡結果；直接建立入場 | `computePaidEntryAmount`（可帶 `legacyDiscountCard` 旗標） | 即時建立入場紀錄；此路徑本就不走卡／券工具 | **已付費放行**、**舊折扣卡 8 折**、隊員 9 折 |
 
 **共用核心**：`verifyEntry`（關卡 0 + 免費資格 + 付費選項）與 `computePaidEntryAmount`（折扣疊加、兒童例外）三路徑**同源一份**。
+
+### 站台資格查詢 · `GET /checkin/eligibility/:memberId`
+
+櫃檯手機入場頁的資格查詢——撐起「先選身分、再選票券」的兩段 UI。回傳會員資格旗標 + 可用票券，員工據此挑方式後走**站台直接**或 **QR 確認**。
+
+- **身分／關卡狀態**：`memberType` · `waiverSigned` · `fallTestPassed`(+`fallTestReason`) · `isVip` · `hasValidPass` · `hasCourseAccess`。
+- **可用票券 `instruments`**：`discountCard`（兒童不適用；有效隊員疊加顯示 `rate 0.72`）· `blackCard` · `bonus` · `singleEntryTicket`。
+
+> ⚠ **平行複製（維護風險）**：此端點**沒有呼叫 `verifyEntry`**，而是就地重算一份資格（與會員自助 `/verify` 是**兩份實作**）。註解雖寫「與 verifyEntry 一致」，但 `entryTypes`／折扣規則改動時**兩邊須各自同步**，否則站台與會員自助顯示會不一致。
 
 ### 快速入場（今日課程學員名單）· `GET /checkin/today-course-students`
 

@@ -4,7 +4,7 @@
 > 金額 / 場館一律後端計算，不信前端傳值。
 >
 > **來源**：`src/services/checkinService.js`（`verifyEntry` / `computePaidEntryAmount` / `createPendingCheckIn` / `confirmCheckIn`）、`src/routes/checkin.js`（`/checkin/phone`）。
-> 互動流程圖（Artifact）：https://claude.ai/code/artifact/4b09e686-b99a-46b8-a69d-cfd05e11c2bf
+> 互動流程圖（Artifact）：https://claude.ai/code/artifact/e89aabbf-7daf-4b78-a830-d6fa2c326c9d
 
 會員／站台入場時，後端 `verifyEntry` 依序跑三段：**前置關卡**（任一不過即擋下）→ **免費資格**（由上而下命中即放行）→ **付費入場**（選身分價 + 付款工具）。
 

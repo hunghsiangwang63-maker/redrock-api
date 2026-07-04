@@ -75,11 +75,13 @@ const getEntryTypePrice = async (entryTypeId, fallback) => {
 };
 
 // ── 付費入場金額（唯一權威來源）─────────────────────────────────
-// 依 entryTypes 設定計算付費入場金額，並套用有效隊員 9 折。
+// 依 entryTypes 設定計算付費入場金額，套用（可選）舊折扣卡 8 折 + 有效隊員 9 折。
 // QR 自助入場（createPendingCheckIn）與站台電話入場（/checkin/phone）共用此邏輯，
 // 折扣規則只有一份，避免站台漏帶隊員折扣。
+// opts.legacyDiscountCard=true → 先套 8 折（舊實體折扣卡，轉換期用），有效隊員再疊 9 折。
+// 隊員 9 折的門檻一律以「原價 >= TEAM_DISCOUNT_MIN_AMOUNT」判斷（與 discount_card 疊加規則一致）。
 // 找不到對應的付費入場類型時回 null，由呼叫端沿用自身 fallback。
-const computePaidEntryAmount = async (entryType, member) => {
+const computePaidEntryAmount = async (entryType, member, opts = {}) => {
   const db = getDb();
   const etDoc = await db.collection('systemSettings').doc('entryTypes').get();
   const t = etDoc.exists
@@ -88,9 +90,15 @@ const computePaidEntryAmount = async (entryType, member) => {
   if (!t || typeof t.price !== 'number') return null;
   const isTeam = isActiveTeamMember(member);
   const originalAmount = t.price;
-  const amount = isTeam && t.price >= TEAM_DISCOUNT_MIN_AMOUNT
-    ? Math.round(t.price * PRICES.team_discount_rate) : t.price;
-  return { amount, originalAmount, isTeamDiscount: amount < originalAmount };
+  const teamEligible = isTeam && originalAmount >= TEAM_DISCOUNT_MIN_AMOUNT;
+  let amount = originalAmount;
+  if (opts.legacyDiscountCard) amount = Math.round(amount * DISCOUNT_CARD_RATE); // 舊折扣卡 8 折
+  if (teamEligible) amount = Math.round(amount * PRICES.team_discount_rate);      // 有效隊員再疊 9 折
+  return {
+    amount, originalAmount,
+    isTeamDiscount: teamEligible,
+    legacyDiscount: !!opts.legacyDiscountCard,
+  };
 };
 
 // ── 取得有效定期票 ───────────────────────────────────────────────

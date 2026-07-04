@@ -156,9 +156,10 @@ router.get('/transition', authenticate, async (req, res) => {
     const db = getDb();
     const doc = await db.collection('systemSettings').doc('transitionSettings').get();
     res.json(doc.exists ? doc.data() : {
-      settlementManualInput: false,    // 結帳：所有項目手動輸入與系統值並列
-      settlementShowCardNumbers: true, // 結帳：顯示優惠卡/全票最前號碼（之後拿掉）
-      checkinAlreadyPaid: false,       // 入場電話搜尋：『已付費』直接放行選項
+      settlementManualInput: false,     // 結帳：所有項目手動輸入與系統值並列
+      settlementShowCardNumbers: true,  // 結帳：顯示優惠卡/全票最前號碼（之後拿掉）
+      checkinAlreadyPaid: false,        // 入場電話搜尋：『已付費』直接放行選項
+      checkinLegacyDiscountCard: false, // 入場電話搜尋：可手動套『舊折扣卡 8 折』（持實體舊卡未轉入者）
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
@@ -169,11 +170,12 @@ router.put('/transition', authenticate, async (req, res) => {
     return res.status(403).json({ error: '權限不足' });
   try {
     const db = getDb();
-    const { settlementManualInput, settlementShowCardNumbers, checkinAlreadyPaid } = req.body;
+    const { settlementManualInput, settlementShowCardNumbers, checkinAlreadyPaid, checkinLegacyDiscountCard } = req.body;
     await db.collection('systemSettings').doc('transitionSettings').set({
       settlementManualInput: !!settlementManualInput,
       settlementShowCardNumbers: !!settlementShowCardNumbers,
       checkinAlreadyPaid: !!checkinAlreadyPaid,
+      checkinLegacyDiscountCard: !!checkinLegacyDiscountCard,
       updatedAt: new Date(),
     });
     res.json({ success: true });

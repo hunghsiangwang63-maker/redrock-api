@@ -561,21 +561,32 @@ router.post('/phone', authenticate, async (req, res) => {
       });
     }
 
-    // 已付費（轉換期：會員於舊系統已付，免扣新系統票券、免費放行；waiver/墜測前面仍硬擋）
+    // 已付費（轉換期：會員於舊系統已「付入場費」→ 入場費記 0；但加購岩鞋/粉袋仍須另收；waiver/墜測前面仍硬擋）
     const alreadyPaid = req.body.alreadyPaid === true;
-    if (alreadyPaid) { entryType = 'already_paid'; paymentMethod = 'already_paid'; }
+    if (alreadyPaid) entryType = 'already_paid';
 
-    // 從 entryTypes 取得入場金額（權威計算，含有效隊員 9 折；與 QR 自助入場共用同一邏輯，
-    // 避免站台電話入場漏帶隊員折扣）
+    // 舊折扣卡 8 折（轉換期）：持實體舊折扣卡、未轉入新優惠卡者，員工可手動套 8 折（有效隊員再疊 9 折）。
+    // 權威：須後端轉換期開關 checkinLegacyDiscountCard 開啟才生效，不單信前端旗標。
+    let useLegacyDiscount = false;
+    if (req.body.legacyDiscountCard === true && !alreadyPaid) {
+      try {
+        const ts = await db.collection('systemSettings').doc('transitionSettings').get();
+        useLegacyDiscount = !!(ts.exists && ts.data().checkinLegacyDiscountCard);
+      } catch {}
+    }
+
+    // 從 entryTypes 取得入場金額（權威計算，含舊折扣卡 8 折 + 有效隊員 9 折；與 QR 自助入場共用同一邏輯）
     let amountPaid = 0;
     let entryOriginal = 0;
     let isTeamDiscount = false;
+    let legacyDiscount = false;
     if (!alreadyPaid) try {
-      const computed = await checkinService.computePaidEntryAmount(entryType, member);
+      const computed = await checkinService.computePaidEntryAmount(entryType, member, { legacyDiscountCard: useLegacyDiscount });
       if (computed) {
         amountPaid = computed.amount;
         entryOriginal = computed.originalAmount;
         isTeamDiscount = computed.isTeamDiscount;
+        legacyDiscount = computed.legacyDiscount;
       } else {
         amountPaid = entryType === 'single_ticket' ? 200 : 0;
         entryOriginal = amountPaid;
@@ -601,6 +612,10 @@ router.post('/phone', authenticate, async (req, res) => {
 
     const totalAmount = amountPaid + shoesPrice + chalkPrice;
 
+    // 已付費：入場費視為已付（0）。若無加購 → 付款方式記「已付費」（純放行）；
+    // 若有加購岩鞋/粉袋 → 加購金額以員工實際收款方式（預設現金）另收，故用真實付款方式。
+    const effectivePayment = (alreadyPaid && totalAmount === 0) ? 'already_paid' : (paymentMethod || 'cash');
+
     // 子會員若已滿18歲，入場時提示工作人員該升級為正式會員
     // (前端送來的 memberId 不論家長或子會員都是真實文件id，直接檢查已查到的 member 即可)
     const needsPromotion = member.isChildAccount === true && member.birthday
@@ -609,11 +624,12 @@ router.post('/phone', authenticate, async (req, res) => {
     const checkInData = {
       memberId, memberName, gymId,
       entryType,
-      paymentMethod: paymentMethod || 'cash',
+      paymentMethod: effectivePayment,
       amountPaid: totalAmount,
       entryFee: amountPaid,
       entryOriginalFee: entryOriginal,
       isTeamDiscount,
+      legacyDiscount,
       rentShoes: !!rentShoes,
       shoesPrice: rentShoes ? shoesPrice : 0,
       rentChalk: !!rentChalk,
@@ -636,7 +652,7 @@ router.post('/phone', authenticate, async (req, res) => {
       const txn = await recordTransaction(db, {
         gymId, type: 'checkin',
         totalAmount,
-        paymentMethod: paymentMethod || 'cash',
+        paymentMethod: effectivePayment,
         memberId, memberName,
         relatedId: docRef.id,
         entryFee: amountPaid,

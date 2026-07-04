@@ -565,18 +565,22 @@ router.post('/phone', authenticate, async (req, res) => {
     const alreadyPaid = req.body.alreadyPaid === true;
     if (alreadyPaid) { entryType = 'already_paid'; paymentMethod = 'already_paid'; }
 
-    // 從 entryTypes 取得入場金額
+    // 從 entryTypes 取得入場金額（權威計算，含有效隊員 9 折；與 QR 自助入場共用同一邏輯，
+    // 避免站台電話入場漏帶隊員折扣）
     let amountPaid = 0;
+    let entryOriginal = 0;
+    let isTeamDiscount = false;
     if (!alreadyPaid) try {
-      const etDoc = await db.collection('systemSettings').doc('entryTypes').get();
-      if (etDoc.exists) {
-        const etData = etDoc.data().types || [];
-        const et = etData.find(t => t.id === entryType);
-        amountPaid = et ? (et.price || 0) : (entryType === 'single_ticket' ? 200 : 0);
+      const computed = await checkinService.computePaidEntryAmount(entryType, member);
+      if (computed) {
+        amountPaid = computed.amount;
+        entryOriginal = computed.originalAmount;
+        isTeamDiscount = computed.isTeamDiscount;
       } else {
         amountPaid = entryType === 'single_ticket' ? 200 : 0;
+        entryOriginal = amountPaid;
       }
-    } catch { amountPaid = entryType === 'single_ticket' ? 200 : 0; }
+    } catch { amountPaid = entryType === 'single_ticket' ? 200 : 0; entryOriginal = amountPaid; }
 
     // 岩鞋租借
     const { rentShoes, rentChalk } = req.body;
@@ -608,6 +612,8 @@ router.post('/phone', authenticate, async (req, res) => {
       paymentMethod: paymentMethod || 'cash',
       amountPaid: totalAmount,
       entryFee: amountPaid,
+      entryOriginalFee: entryOriginal,
+      isTeamDiscount,
       rentShoes: !!rentShoes,
       shoesPrice: rentShoes ? shoesPrice : 0,
       rentChalk: !!rentChalk,

@@ -192,6 +192,17 @@ router.post('/member/login',
         loginLockedUntil: null,
       });
 
+      // Email 未驗證的自助註冊帳號：密碼正確也不發 token，強制先完成 Email 驗證。
+      // 店員建立的帳號 emailVerified 預設 true 不受影響；共用 Email 的親子帳號各自有獨立驗證 token。
+      if (member.registeredBy === 'self' && !member.emailVerified) {
+        return res.status(403).json({
+          error: 'EMAIL_NOT_VERIFIED',
+          needsEmailVerification: true,
+          email: member.email,
+          message: '帳號尚未完成 Email 驗證，請至信箱點擊驗證連結後再登入（可要求重新寄送）',
+        });
+      }
+
       const token = signToken({
         memberId: memberDoc.id,
         type: 'member',
@@ -215,6 +226,62 @@ router.post('/member/login',
           emergencyContact: member.emergencyContact || null,
         },
         message: '登入成功',
+      });
+    } catch (err) {
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
+// ── POST /auth/member/resend-verification - 重新寄送 Email 驗證信 ──
+// 登入被 EMAIL_NOT_VERIFIED 擋下時使用；需帶密碼避免變成對外濫發入口。
+router.post('/member/resend-verification',
+  [
+    body('identifier').notEmpty().withMessage('請輸入手機號碼或 Email'),
+    body('password').notEmpty().withMessage('請輸入密碼'),
+    body('newEmail').optional({ nullable: true }).isEmail().withMessage('新 Email 格式不正確'),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const { identifier, password, newEmail } = req.body;
+
+      const field = identifier.includes('@') ? 'email' : 'phone';
+      const snapshot = await db.collection(COLLECTIONS.MEMBERS)
+        .where(field, '==', identifier).get();
+      let memberDoc;
+      if (!snapshot.empty) {
+        const docs = snapshot.docs;
+        memberDoc = docs.find(d => d.data().isChildAccount !== true) || docs[0];
+      }
+      if (!memberDoc) return res.status(401).json({ error: 'INVALID_CREDENTIALS', message: '帳號或密碼錯誤' });
+
+      const member = memberDoc.data();
+      const bcrypt = require('bcryptjs');
+      if (!member.passwordHash || !(await bcrypt.compare(password, member.passwordHash))) {
+        return res.status(401).json({ error: 'INVALID_CREDENTIALS', message: '帳號或密碼錯誤' });
+      }
+      if (member.emailVerified) {
+        return res.json({ alreadyVerified: true, message: '此帳號 Email 已完成驗證，可直接登入' });
+      }
+
+      // 允許重寄時順便修正 Email（當初打錯的情況）。共用 Email 已允許，故不做唯一性檢查。
+      let targetEmail = member.email;
+      if (newEmail && newEmail !== member.email) {
+        await db.collection(COLLECTIONS.MEMBERS).doc(memberDoc.id).update({
+          email: newEmail,
+          updatedAt: new Date(),
+        });
+        targetEmail = newEmail;
+      }
+
+      const emailService = require('../services/emailService');
+      await emailService.sendEmailVerification(memberDoc.id, targetEmail, member.name);
+      res.json({
+        message: '驗證信已重新寄出，請至信箱點擊連結完成驗證',
+        email: targetEmail,
+        ...(targetEmail !== member.email ? { emailUpdated: true } : {}),
       });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

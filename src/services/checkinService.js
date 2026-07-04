@@ -74,6 +74,25 @@ const getEntryTypePrice = async (entryTypeId, fallback) => {
   } catch (e) { return fallback; }
 };
 
+// ── 付費入場金額（唯一權威來源）─────────────────────────────────
+// 依 entryTypes 設定計算付費入場金額，並套用有效隊員 9 折。
+// QR 自助入場（createPendingCheckIn）與站台電話入場（/checkin/phone）共用此邏輯，
+// 折扣規則只有一份，避免站台漏帶隊員折扣。
+// 找不到對應的付費入場類型時回 null，由呼叫端沿用自身 fallback。
+const computePaidEntryAmount = async (entryType, member) => {
+  const db = getDb();
+  const etDoc = await db.collection('systemSettings').doc('entryTypes').get();
+  const t = etDoc.exists
+    ? (etDoc.data().types || []).find(x => x.id === entryType && x.active !== false)
+    : null;
+  if (!t || typeof t.price !== 'number') return null;
+  const isTeam = isActiveTeamMember(member);
+  const originalAmount = t.price;
+  const amount = isTeam && t.price >= TEAM_DISCOUNT_MIN_AMOUNT
+    ? Math.round(t.price * PRICES.team_discount_rate) : t.price;
+  return { amount, originalAmount, isTeamDiscount: amount < originalAmount };
+};
+
 // ── 取得有效定期票 ───────────────────────────────────────────────
 const getValidPasses = async (memberId, gymId) => {
   const db = getDb();
@@ -620,16 +639,11 @@ const createPendingCheckIn = async ({
   let finalOriginal = originalAmount || 0;
   let finalTeam = isTeamDiscount || false;
   {
-    const etDoc = await db.collection('systemSettings').doc('entryTypes').get();
-    const t = etDoc.exists
-      ? (etDoc.data().types || []).find(x => x.id === entryType && x.active !== false)
-      : null;
-    if (t && typeof t.price === 'number') {
-      const isTeam = isActiveTeamMember(member);
-      finalOriginal = t.price;
-      finalAmount = isTeam && t.price >= TEAM_DISCOUNT_MIN_AMOUNT
-        ? Math.round(t.price * PRICES.team_discount_rate) : t.price;
-      finalTeam = finalAmount < finalOriginal;
+    const computed = await computePaidEntryAmount(entryType, member);
+    if (computed) {
+      finalOriginal = computed.originalAmount;
+      finalAmount = computed.amount;
+      finalTeam = computed.isTeamDiscount;
     }
   }
 
@@ -1011,5 +1025,6 @@ module.exports = {
   checkVip,
   getValidSingleEntryTickets,
   getMemberType,
+  computePaidEntryAmount,
   PRICES,
 };

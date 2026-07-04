@@ -74,6 +74,19 @@
 
 ---
 
+## 會員自助 QR（產券 → 出示 → 掃碼預覽）
+
+會員在手機上自助完成資格確認與選方式、產生入場 QR；**家長可為自己的子會員代驗、代產券**（驗擁有權）。此段全程**只驗不扣**，扣點在階段 4。
+
+1. **驗資格** · `POST /checkin/verify`：以會員 token 為準（不用電話反查，避免親子共用電話誤判）；家長帶 `targetMemberId` 驗子女。回 `verifyEntry` 結果（見上方關卡 0／階段 1–3）。代驗非自己子女 → `403 FORBIDDEN`。
+2. **選方式**：免費資格 → 直接產券；無免費資格 → 選身分價（`entryTypeOptions`）＋要不要用票券工具（`instruments`）→ 決定 `entryType`（+ `baseEntryType` / 票券 id）。
+3. **產券** · `POST /checkin/qr/create`：`createPendingCheckIn` —— 再驗 waiver＋墜測、驗券可用性與擁有權、**後端權威重算金額**（**不預扣**）；家長可為子女產券。回 `qrToken`，手機顯示動態 QR（30 分效期）。
+4. **出示掃碼** · `POST /checkin/qr/scan`（櫃檯）：`scanQrCode` 讀出待確認入場，**只預覽、不確認、不扣點**（會員／金額／加購／`totalAmount`）。已用 → `QR_ALREADY_USED`；已取消 → `QR_CANCELLED`；過期 → `QR_EXPIRED`。
+
+預覽無誤 → 櫃檯按確認，進入 **階段 4 `confirmCheckIn`**（扣點 + 建入場 + 記帳）。
+
+---
+
 ## 階段 4 — 站台掃 QR 確認入場（`confirmCheckIn`）
 
 會員 QR 產生後（前置關卡與金額已定），櫃檯掃描跑 `confirmCheckIn(qrToken, staffId)` —— **扣點與記帳都發生在這一步**。

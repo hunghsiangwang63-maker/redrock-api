@@ -20,6 +20,17 @@ const validate = (req, res, next) => {
 const signToken = (payload, expiresIn) =>
   jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: expiresIn || process.env.JWT_EXPIRES_IN || '7d' });
 
+// ── Email 認證總開關（可逆；systemSettings/security.emailVerificationEnabled）──
+// 預設 true（自助註冊須驗證 Email 才能登入）；設 false 可暫時停用（如資料移轉/測試期），改回 true 即恢復。
+// 讀取失敗一律回 true（安全預設：寧可強制、不誤放行）。與裝置綁定共用 security doc。
+const isEmailVerificationEnabled = async () => {
+  try {
+    const doc = await getDb().collection('systemSettings').doc('security').get();
+    if (doc.exists && doc.data().emailVerificationEnabled === false) return false;
+    return true;
+  } catch (e) { return true; }
+};
+
 // ── POST /auth/staff/login - 工作人員登入 ────────────────────────
 router.post('/staff/login',
   [
@@ -194,7 +205,8 @@ router.post('/member/login',
 
       // Email 未驗證的自助註冊帳號：密碼正確也不發 token，強制先完成 Email 驗證。
       // 店員建立的帳號 emailVerified 預設 true 不受影響；共用 Email 的親子帳號各自有獨立驗證 token。
-      if (member.registeredBy === 'self' && !member.emailVerified) {
+      // 受系統管理員「Email 認證」總開關控管（關閉時暫不強制，如資料移轉/測試期）。
+      if (member.registeredBy === 'self' && !member.emailVerified && await isEmailVerificationEnabled()) {
         return res.status(403).json({
           error: 'EMAIL_NOT_VERIFIED',
           needsEmailVerification: true,

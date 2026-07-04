@@ -206,6 +206,32 @@ router.put('/device-binding', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── Email 認證總開關（systemSettings/security.emailVerificationEnabled）──
+// GET：目前狀態（預設啟用；僅明確設 false 才停用）
+router.get('/email-verification', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('systemSettings').doc('security').get();
+    const enabled = !(doc.exists && doc.data().emailVerificationEnabled === false);
+    res.json({ enabled });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+// PUT：開啟/關閉（僅 super_admin；控制自助註冊會員是否須驗證 Email 才能登入）
+router.put('/email-verification', authenticate, async (req, res) => {
+  if (req.staff?.role !== 'super_admin')
+    return res.status(403).json({ error: '權限不足', message: '僅系統管理員可調整 Email 認證' });
+  try {
+    const db = getDb();
+    const enabled = !!req.body.enabled;
+    await db.collection('systemSettings').doc('security').set({
+      emailVerificationEnabled: enabled,
+      updatedAt: new Date(),
+      updatedBy: req.staff.id,
+    }, { merge: true });
+    res.json({ success: true, enabled });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /settings/team-fees ─────────────────────────────────────────
 router.get('/team-fees', authenticateAny, async (req, res) => {
   try {

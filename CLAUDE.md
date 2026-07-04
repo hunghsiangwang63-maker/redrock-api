@@ -30,6 +30,20 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 5. 子會員（`isChildAccount`）代簽 waiver / 墜落測驗同意書直接 `isComplete: true`
 6. 金額 / 場館一律**後端權威計算**，不信前端傳值
 
+## 跨裝置工作（SSH 回 Mac mini）
+- 開發主機是 **Mac mini**；iPad / iPhone 遠端時走 **SSH 連回同一台 Mac mini**（非雲端環境）。
+- 因此操作的是**同一份實體檔案、同一個 git clone** → 天生無 git 分岔 / merge 衝突；`CLAUDE.local.md`（機密）與前端本機 build / `firebase deploy` 也都在同一台，皆可正常使用。
+- 守則：**一次只讓一個 session 在動**、**切裝置前先存檔**、**別讓兩個 session 同時寫同一檔**（編輯器層級覆蓋，與 git 無關）。
+- 背景程序（Railway 部署、firebase、`loop-test.js`、Claude session）是共用的，切裝置後仍在跑。
+- Mac mini 保持開機 + 遠端登入（sshd）；連線建議走 **Tailscale**（免公網 IP / 免開 port，比 port forwarding 安全）。
+
+### 遠端接手正在跑的工作（tmux）
+- SSH 是**另一個 session**，看不到 Mac 螢幕上那個 Terminal 的即時畫面；只看得到結果（`git status`/`git diff`、commit、log 檔、`ps aux | grep node`）。
+- 想遠端看到**即時進度並無縫接手**：一律在 **tmux** 裡工作（Claude Code 本身也跑在 tmux）。
+  - Mac 首次：`tmux new -s work`；離開直接關 Terminal，tmux 在背景續活。
+  - iPad SSH 進來：`tmux attach -t work` → 看到同一個活的 session、即時進度，直接繼續下指令。
+- ⚠️ **背景工作只在 Mac 醒著時繼續**：Mac mini 設「插電不睡」，或跑之前加 `caffeinate`（例：`caffeinate -s node scripts/loop-test.js`），避免睡眠中斷 node 程序。
+
 ## 目前進度（2026-06）
 - ✅ **竹北館 → 士林館**全面改名（前後端 + Firestore migration，已驗證）
 - ✅ **全面 bug 健檢**：修復約 43 項邏輯 bug（金流安全 / 崩潰 / 邊界），含並發超賣改 transaction、競賽候補自動遞補、營收週統計時區、墜落測驗遞延數學、站台 shift 端點認證等

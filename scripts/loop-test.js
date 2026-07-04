@@ -13,6 +13,7 @@
  *   C. 黑卡      legacyCardService          bind→用→移轉（含首次移轉）→退回
  *   D. 入場      checkinService             紅利/黑卡 confirm 扣點 + cancel 還原
  *   E. 課程      courseService              報名/候補→請假→補課→退費取消→插班計費
+ *   F. 分期      installmentService         建計畫/頭款→繳款→逾期→擋入場→補繳→結清
  */
 const path = require('path');
 const { v4: uuid } = require('uuid');
@@ -59,6 +60,7 @@ function makeDb() {
         const cur = col(cname).get(id) || {};
         col(cname).set(id, { ...cur, ...toStore(obj) });
       },
+      async delete() { col(cname).delete(id); },
     };
   }
   function query(cname, filters = [], order = null, lim = null) {
@@ -100,6 +102,7 @@ function makeDb() {
   }
   const collection = (name) => ({
     doc(id) { return docRef(name, id ?? uuid()); },
+    async add(obj) { const id = uuid(); await docRef(name, id).set(obj); return docRef(name, id); },
     where(f, op, val) { return query(name).where(f, op, val); },
     orderBy(f, dir) { return query(name).orderBy(f, dir); },
     limit(n) { return query(name).limit(n); },
@@ -107,7 +110,16 @@ function makeDb() {
   });
   return {
     collection,
-    batch() { const ops = []; return { set: () => {}, update: () => {}, async commit() {} }; },
+    // 可運作的 batch：暫存操作、commit 時逐一套用到真實 docRef（分期逾期批次等需要）
+    batch() {
+      const ops = [];
+      return {
+        set: (ref, obj) => ops.push(() => ref.set(obj)),
+        update: (ref, obj) => ops.push(() => ref.update(obj)),
+        delete: (ref) => ops.push(() => ref.delete()),
+        async commit() { for (const op of ops) await op(); },
+      };
+    },
     _store: store,
   };
 }
@@ -126,6 +138,7 @@ inject('config/firebase.js', {
     MEMBERS: 'members', WAIVERS: 'waivers', FALL_TESTS: 'fallTests',
     CHECK_INS: 'checkIns', PENDING_CHECK_INS: 'pendingCheckIns',
     SINGLE_ENTRY_TICKETS: 'singleEntryTickets', DISCOUNT_CARDS: 'discountCards',
+    INSTALLMENT_PLANS: 'installmentPlans',
   },
 });
 inject('services/emailService.js', {
@@ -149,6 +162,7 @@ const lcs = require(path.join(SRC, 'services/legacyCardService.js'));
 const bonus = require(path.join(SRC, 'services/bonusService.js'));
 const checkin = require(path.join(SRC, 'services/checkinService.js'));
 const course = require(path.join(SRC, 'services/courseService.js'));
+const inst = require(path.join(SRC, 'services/installmentService.js'));
 const { restoreEntryCredits } = require(path.join(SRC, 'routes/cancelCheckin.js'));
 
 // ── 測試框架 ──
@@ -572,6 +586,118 @@ async function seedSession(id, over = {}) {
     ok(r.feeInfo.remaining === 4 && r.feeInfo.fee === 4000,
       '剩 4 堂、費用=8000×0.5=4000', `remaining=${r.feeInfo.remaining} fee=${r.feeInfo.fee}`);
     ok(r.feeInfo.installment === false, '4 堂不分期');
+  }
+
+  // ═══════════════ F. 課程分期付款計畫 ═══════════════
+  // installmentService：建計畫→頭款→繳款→逾期→擋入場→補繳→結清
+  const mkPlan = (over = {}) => inst.createInstallmentPlan({
+    memberId: 'A', memberName: 'A', gymId: 'gym-hsinchu',
+    relatedType: 'course', relatedId: 'C1', itemName: '課程C1',
+    recognitionDate: dstr(dayjs().add(30, 'day')),
+    installments: [
+      { amount: 3000, dueDate: dstr(dayjs()) },
+      { amount: 3000, dueDate: dstr(dayjs().add(30, 'day')) },
+    ],
+    firstPaymentMethod: 'cash', staffId: 's', staffName: 'S',
+    ...over,
+  });
+
+  await reset();
+  section('F1 分期建立：頭款自動收、狀態 active、總額＝各期加總');
+  {
+    const plan = await mkPlan();
+    ok(plan.status === 'active', '建立後 status=active', `實際=${plan.status}`);
+    ok(plan.totalAmount === 6000, '總額＝各期加總（6000）', `實際=${plan.totalAmount}`);
+    ok(plan.installments[0].status === 'paid' && plan.installments[0].paymentMethod === 'cash',
+      '第1期簽約頭款自動 paid');
+    ok(plan.installments[1].status === 'pending', '第2期 pending');
+    ok(plan.recognitionDate === dstr(dayjs().add(30, 'day')), '課程認列日＝最後一堂(recognitionDate)');
+    // 頭款進帳一筆 transaction
+    const txns = (await db.collection('transactions').get()).docs.map(d => d.data());
+    ok(txns.length === 1 && txns[0].type === 'course' && txns[0].totalAmount === 3000,
+      '頭款記一筆 course 營收（3000）', `txns=${txns.length}`);
+  }
+
+  await reset();
+  section('F2 分期繳清：markPaid 最後一期→ allPaid、completed');
+  {
+    const plan = await mkPlan();
+    const r = await inst.markInstallmentPaid({ planId: plan.id, seq: 2, paymentMethod: 'cash', staffId: 's', staffName: 'S' });
+    ok(r.allPaid === true, '繳完最後一期 allPaid=true');
+    const p = (await inst.getMemberInstallmentPlans('A'))[0];
+    ok(p.status === 'completed', '結清後 status=completed', `實際=${p.status}`);
+    ok(await inst.hasOverdueInstallment('A') === false, '結清後不擋入場');
+  }
+
+  await reset();
+  section('F3 逾期：runOverdueCheck 標記過期未繳→ hasOverdueInstallment 擋入場');
+  {
+    // 第2期到期日在昨天、未繳 → 應被標為逾期
+    const plan = await mkPlan({
+      installments: [
+        { amount: 3000, dueDate: dstr(dayjs().subtract(5, 'day')) },  // 頭款已收
+        { amount: 3000, dueDate: dstr(dayjs().subtract(1, 'day')) },  // 已過到期未繳
+      ],
+    });
+    ok(await inst.hasOverdueInstallment('A') === false, '逾期批次前尚未擋入場');
+    const r = await inst.runOverdueCheck();
+    ok(r.overdueCount === 1, 'runOverdueCheck 標記 1 筆逾期', `實際=${r.overdueCount}`);
+    const p = (await inst.getMemberInstallmentPlans('A'))[0];
+    ok(p.status === 'overdue', '計畫 status=overdue');
+    ok(p.installments.find(i => i.seq === 2).status === 'overdue', '第2期 status=overdue');
+    ok(await inst.hasOverdueInstallment('A') === true, '逾期→ hasOverdueInstallment 擋入場');
+  }
+
+  await reset();
+  section('F4 補繳不解限：仍有他期逾期→維持 overdue；補齊最後一期才結清');
+  {
+    const plan = await mkPlan({
+      installments: [
+        { amount: 2000, dueDate: dstr(dayjs().subtract(5, 'day')) },  // 頭款已收
+        { amount: 2000, dueDate: dstr(dayjs().subtract(3, 'day')) },  // 逾期
+        { amount: 2000, dueDate: dstr(dayjs().subtract(1, 'day')) },  // 逾期
+      ],
+    });
+    await inst.runOverdueCheck();
+    const r2 = await inst.markInstallmentPaid({ planId: plan.id, seq: 2, paymentMethod: 'cash', staffId: 's' });
+    ok(r2.allPaid === false, '補繳第2期後尚未全清');
+    let p = (await inst.getMemberInstallmentPlans('A'))[0];
+    ok(p.status === 'overdue', '仍有第3期逾期→計畫維持 overdue（補一期不解限）');
+    ok(await inst.hasOverdueInstallment('A') === true, '補一期未解除入場限制');
+    await inst.markInstallmentPaid({ planId: plan.id, seq: 3, paymentMethod: 'cash', staffId: 's' });
+    p = (await inst.getMemberInstallmentPlans('A'))[0];
+    ok(p.status === 'completed', '補齊最後一期→ completed');
+    ok(await inst.hasOverdueInstallment('A') === false, '全繳清後解除入場限制');
+  }
+
+  await reset();
+  section('F5 分期驗證：期數/金額/重複繳/付款方式');
+  {
+    const one = await expectThrow(() => mkPlan({ installments: [{ amount: 6000, dueDate: dstr(dayjs()) }] }));
+    ok(one.threw && one.code === 'INVALID_INSTALLMENTS', '單期被擋（請走一般付款）', `code=${one.code}`);
+    const bad = await expectThrow(() => mkPlan({ installments: [{ amount: 0, dueDate: dstr(dayjs()) }, { amount: 3000, dueDate: dstr(dayjs()) }] }));
+    ok(bad.threw && bad.code === 'INVALID_AMOUNT', '每期金額須 >0');
+    const plan = await mkPlan();
+    const dup = await expectThrow(() => inst.markInstallmentPaid({ planId: plan.id, seq: 1, paymentMethod: 'cash', staffId: 's' }));
+    ok(dup.threw && dup.code === 'ALREADY_PAID', '已繳期數不可重複繳');
+    const pm = await expectThrow(() => inst.markInstallmentPaid({ planId: plan.id, seq: 2, paymentMethod: 'bitcoin', staffId: 's' }));
+    ok(pm.threw && pm.code === 'INVALID_PAYMENT_METHOD', '非法付款方式被擋');
+  }
+
+  section('F6 buildPeriodsFromConfig：比例拆分、末期吸收餘數、到期日、單期回 null');
+  {
+    const periods = inst.buildPeriodsFromConfig(
+      { enabled: true, periods: [{ percent: 30, dueOffsetDays: 0 }, { percent: 30, dueOffsetDays: 30 }, { percent: 40, dueOffsetDays: 60 }] },
+      5000, '2026-07-04');
+    ok(periods.length === 3, '產出 3 期');
+    ok(periods.reduce((s, p) => s + p.amount, 0) === 5000, '各期合計＝總額（末期吸收餘數）',
+      `實際=${periods.map(p => p.amount).join('+')}`);
+    ok(periods[0].amount === 1500 && periods[2].amount === 2000, '30%/30%/40%→1500/1500/2000');
+    ok(periods[0].dueDate === '2026-07-04' && periods[2].dueDate === '2026-09-02', '到期日＝起始日+offset');
+    ok(inst.buildPeriodsFromConfig({ enabled: true, periods: [{ percent: 100, dueOffsetDays: 0 }] }, 5000, '2026-07-04') === null,
+      '少於2期→回 null（走一般付款）');
+    ok(inst.buildPeriodsFromConfig({ enabled: true, periods: [{ percent: 50 }, { percent: 50 }] }, 0, '2026-07-04') === null,
+      '總額為0→回 null');
   }
 
   // ── 總結 ──

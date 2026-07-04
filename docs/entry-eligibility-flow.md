@@ -112,14 +112,25 @@
 
 ## 三條入場路徑
 
-同一套資格與金額邏輯，兩種進入方式。差別在**扣點時機**與**站台專屬能力**。
+同一套資格與金額邏輯，三種進入方式（會員自助 QR／站台電話／站台直接）。差別在**扣點時機**與**站台專屬能力**。
 
 | 路徑 | 觸發 | 資格判斷 | 金額計算 | 卡／券／紅利扣點時機 | 專屬能力 |
 |---|---|---|---|---|---|
 | **會員 QR 自助**<br>`createPendingCheckIn` | 會員出示動態 QR，櫃檯掃描 | 產生 QR 前**再驗一次** waiver＋墜測；驗券可用性與擁有權（**不預扣**） | `computePaidEntryAmount`；`discount_card` 走 8 折＋隊員；`bonus`＝0 | **確認才扣** — 產生 QR（30 分效期）不扣；櫃檯掃描 `confirmCheckIn` 才真正扣卡／鎖券／建卡 | — |
+| **站台直接入場**<br>`POST /checkin/direct` | 員工端一次完成，支援卡／券／黑卡／紅利工具（前端先選好） | 內部走 `createPendingCheckIn` 的完整驗證（含 waiver／墜測、擁有權） | `computePaidEntryAmount`；`discount_card` 8 折＋隊員；`bonus`＝0 | **即時扣** — 產券後**立即** `confirmCheckIn`，無 QR 中介與 30 分等待 | 同日同館防重複；無實體 QR |
 | **站台電話搜尋**<br>`POST /checkin/phone` | 員工搜會員電話，純付費入場（未選卡／券工具） | 沿用前置關卡結果；直接建立入場 | `computePaidEntryAmount`（可帶 `legacyDiscountCard` 旗標） | 即時建立入場紀錄；此路徑本就不走卡／券工具 | **已付費放行**、**舊折扣卡 8 折**、隊員 9 折 |
 
-**共用核心**：`verifyEntry`（關卡 0 + 免費資格 + 付費選項）與 `computePaidEntryAmount`（折扣疊加、兒童例外）兩路徑**同源一份**。
+**共用核心**：`verifyEntry`（關卡 0 + 免費資格 + 付費選項）與 `computePaidEntryAmount`（折扣疊加、兒童例外）三路徑**同源一份**。
+
+### 站台直接入場 · `/checkin/direct`
+
+員工端一次完成、**不產實體 QR、無會員掃碼等待**；前端已選身分價 + 卡／券工具。內部把「會員自助 QR」的產券與階段 4 的確認串成一次呼叫：
+
+1. **防重複**：同日同館重複入場檢查 → 已入場回 `400`。
+2. **產券（內部）** `createPendingCheckIn`：驗 waiver／墜測、算金額、不扣。
+3. **立即確認** `confirmCheckIn`：扣點 · 建入場 · 記帳。
+
+與階段 4 **共用同一套結算**（金額後端權威、票券／黑卡／紅利扣除、營收、墜落測驗遞延）；差別只在**沒有 QR 中介與 30 分等待**，`paymentMethod` 預設 `cash`。
 
 ### 站台電話入場專屬變形 · `/checkin/phone`
 

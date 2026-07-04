@@ -1028,7 +1028,6 @@ module.exports = {
   scanQrCode,
   confirmCheckIn,
   cancelCheckIn,
-  recordCheckIn: confirmCheckIn, // 相容舊介面
   getTodayStats,
   getValidPasses,
   getCourseAccess,

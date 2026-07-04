@@ -163,32 +163,6 @@ router.post('/cancel',
   }
 );
 
-// ── POST /checkin/record ─────────────────────────────────────────
-router.post('/record',
-  authenticate,
-  checkPermission('checkin.create'),
-  [body('memberId').notEmpty(), body('gymId').notEmpty(), body('entryType').notEmpty()],
-  validate,
-  async (req, res) => {
-    try {
-      const effectiveGymId = req.staff.role === 'super_admin' ? req.body.gymId : req.staff.gymId;
-      const checkIn = await checkinService.recordCheckIn({
-        memberId: req.body.memberId,
-        gymId: effectiveGymId,
-        staffId: req.staff.id,
-        entryType: req.body.entryType,
-        passId: req.body.passId,
-        courseEnrollmentId: req.body.courseEnrollmentId,
-        transactionId: req.body.transactionId,
-        notes: req.body.notes,
-      });
-      res.status(201).json({ checkIn, message: '入場登記成功' });
-    } catch (err) {
-      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
-    }
-  }
-);
-
 // ── GET /checkin/eligibility/:memberId - 查詢會員入場類型資格（手機入場篩選用）──
 router.get('/eligibility/:memberId', authenticate, async (req, res) => {
   try {

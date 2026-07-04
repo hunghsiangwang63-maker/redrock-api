@@ -141,6 +141,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - CLAUDE.md 開頭加指向連結。commit `fdb9dcf`→`b7c8abd`→`54a4dec`→`ffa5f1d`→`d1feaff`→`1020006`
 - ✅ **課程分期付款 loop 回歸覆蓋**：`scripts/loop-test.js` 補 F 段分期狀態機 29 條斷言（建計畫/頭款→`markInstallmentPaid`→`runOverdueCheck` 逾期→`hasOverdueInstallment` 擋入場→補一期不解限→結清；`buildPeriodsFromConfig` 比例拆分/末期吸收餘數）。配套修 mock Firestore：`batch()` 從 no-op 改可運作、collection 加 `.add()`、docRef 加 `.delete()`（既有 A–E 不受影響）。**90 斷言全綠**（原 61+29）。commit `1214330`
 - ✅ **清掉失效 legacy 端點 `POST /checkin/record`**：route 以物件參數呼叫 `recordCheckIn`（= `confirmCheckIn` 相容別名），但 `confirmCheckIn(qrToken,…)` 首參要 qrToken 字串 → 實際只回 `QR_NOT_FOUND`，**本就失效**；前端 `redrock-web` 無任何 caller。移除後端路由 + service 別名（`redrock-api` `c3e6708`，已 Railway 部署）；移除前端 dead export `recordCheckIn`（`redrock-web` `8dffdcf`，**已 push、未 firebase deploy**，純刪 dead export 不影響 runtime）
+- ✅ **站台隊員 9 折 端到端實測通過（打 Railway 正式 API）**：建【練習】隊員（簽 waiver + 墜測同意書 + 墜測 passed + 設 2026 年度隊員）→ `/checkin/phone` 純付費入場（`entryType=single_ticket`）→ **原價 300 → `entryFee 270`（×0.9）、`isTeamDiscount:true`、`amountPaid 270`**；測後清乾淨（取消入場/票券退回、移除隊員、`DELETE /members/:id`）。腳本 `scratchpad/team-discount-e2e.sh`。
+  - ⚠️ **測試憑證失效**：`CLAUDE.local.md` 的站台帳號（`redrocktaiwan.hc@gmail.com`/`redrocktaiwan@gmail.com`）與員工 `wang@redrock.app` 現皆 `INVALID_CREDENTIALS`，**僅 `admin@redrock.app` 可登入**；本次以 super_admin token 打同一 `/checkin/phone`（折扣邏輯 `computePaidEntryAmount` 與 staff 角色無關，等價驗證）。**待更新 CLAUDE.local.md 測試密碼**。
 
 ## 待辦
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
@@ -148,7 +150,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - LinePay sandbox 端到端測試 → 啟用線上付款 + 員工端 QR 前端
 - 補街口 / 台灣Pay adapter 的 API TODO（依整合手冊 / 收單銀行）
 - 資料移轉（Climbio 18,000+ 筆）
-- 站台隊員 9 折**現場端到端實測**：站台帳號登入 → 電話搜尋隊員（如阿凱）純入場 → 確認金額為 `×0.9`、`isTeamDiscount:true`（後端邏輯已上線並經 QR 路徑驗證，僅缺站台實機這一步）
+- ✅（已完成 2026-07-04 五）站台隊員 9 折端到端實測 → 見上方進度；剩**真站台帳號實機**一步待 `CLAUDE.local.md` 密碼更新後補做（後端邏輯已由 super_admin 打 `/checkin/phone` 等價驗證通過）
+- 更新 `CLAUDE.local.md` 測試密碼：站台（新竹/士林）+ 員工 `wang@redrock.app` 現皆失效，僅 `admin@redrock.app` 可登入
 - 會員端 UI 驗證：課程試上分頁 + 場次代班「（代班）」顯示（需會員帳號登入實測）
 - 「試上人數」目前僅由試上報名流程產生 `isTrial` 名單；如需員工手動加試上者，需另做 UI
 - 清理 dev Firebase 殘留測試會員：`【練習】…` 系列、`測試/測試API會員/管理員測試會員/Test1/Who` 等，以及測試用 `王大明`(0900222222)/子帳號 `小明明`；可用員工端「刪除會員」或 `DELETE /members/:id`（super_admin）清除（會一併刪子帳號、保留歷史紀錄）

@@ -5,17 +5,17 @@ const { getDb, getStorage, COLLECTIONS } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
-// ── 上傳簽名圖至 Firebase Storage ────────────────────────────────
+// ── 簽名圖：內嵌 base64 存 Firestore（消除 Firebase Storage 硬依賴）────────
+// 早期版本上傳 Firebase Storage；但 Storage 在部署環境取 token 會失敗（oauth2 token
+// 錯誤），且上傳在寫入 waiver 文件之前 → 整個簽署 throw、完全沒建 waiver 記錄，
+// 卡死新會員入場前置流程。比照會員 QR（1.x「移除 QR 上傳 Storage」）改為直接內嵌
+// base64 data URL：簽名屬個資，存 Firestore 私有文件即可，顯示時 <img> 直接吃 data URL
+// （signFields 對 data:/http 值原樣放行）。舊資料的 Storage 路徑仍由 signFields 正常簽名。
 const uploadSignature = async (memberId, type, base64Data) => {
-  const bucket = getStorage().bucket();
-  const fileName = `waivers/${memberId}_${type}_${Date.now()}.png`;
-  const imageData = base64Data.replace(/^data:image\/\w+;base64,/, '');
-  const buffer = Buffer.from(imageData, 'base64');
-
-  const file = bucket.file(fileName);
-  await file.save(buffer, { contentType: 'image/png' });
-  // 不再 makePublic：簽名屬個資，保持私有，顯示時由後端產生短效簽名 URL（見 utils/storageUrl）
-  return fileName; // 儲存物件路徑，非公開 URL
+  if (!base64Data || typeof base64Data !== 'string') return '';
+  return base64Data.startsWith('data:')
+    ? base64Data
+    : `data:image/png;base64,${base64Data.replace(/^data:image\/\w+;base64,/, '')}`;
 };
 
 // ── 建立/更新 Waiver ─────────────────────────────────────────────

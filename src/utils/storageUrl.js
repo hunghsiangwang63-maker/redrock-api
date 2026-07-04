@@ -12,6 +12,7 @@ const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 小時
 
 async function signedRead(pathOrUrl, ttlMs = DEFAULT_TTL_MS) {
   if (!pathOrUrl || typeof pathOrUrl !== 'string') return pathOrUrl || null;
+  if (pathOrUrl.startsWith('data:')) return pathOrUrl; // 內嵌 base64 → 原樣回傳（新格式）
   try {
     const bucket = getStorage().bucket();
     const pubPrefix = `https://storage.googleapis.com/${bucket.name}/`;

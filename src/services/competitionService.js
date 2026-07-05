@@ -142,7 +142,7 @@ const registerForCompetition = async ({
   competitionId, memberId, memberName, isMinor, birthday, divisionId,
   customFieldValues, signatureData, parentEmail, parentName, parentPhone, parentRelation,
   // 保險用欄位
-  idNumber, emergencyContact, emergencyPhone,
+  idNumber, emergencyContact, emergencyRelation, emergencyPhone,
   // 比賽用欄位
   height, armSpan, isHonorary,
   // 付款
@@ -218,6 +218,7 @@ const registerForCompetition = async ({
     // 保險用欄位
     idNumber: idNumber || null,
     emergencyContact: emergencyContact || null,
+    emergencyRelation: emergencyRelation || null,
     emergencyPhone: emergencyPhone || null,
     // 比賽欄位
     height: height || null,

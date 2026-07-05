@@ -161,6 +161,7 @@ router.post('/:id/register',
         // 保險用欄位
         idNumber: req.body.idNumber,
         emergencyContact: req.body.emergencyContact,
+        emergencyRelation: req.body.emergencyRelation,
         emergencyPhone: req.body.emergencyPhone,
         // 比賽欄位
         height: req.body.height,
@@ -251,7 +252,7 @@ router.get('/:id/registrations/download',
 
       const headers = [
         '序號','姓名','性別','生日','手機','Email',
-        '身分證/護照','緊急聯絡人','緊急聯絡人手機',
+        '身分證/護照','緊急聯絡人','緊急聯絡人關係','緊急聯絡人手機',
         '身高','臂展','組別','榮譽參賽','報名費',
         '付款狀態','匯款日期','匯款末五碼',
         '簽署狀態','是否候補','備註','報名時間'
@@ -270,6 +271,7 @@ router.get('/:id/registrations/download',
           r.email || '',
           `"${r.idNumber || ''}"`,
           `"${r.emergencyContact || ''}"`,
+          `"${r.emergencyRelation || ''}"`,
           r.emergencyPhone || '',
           r.height || '',
           r.armSpan || '',

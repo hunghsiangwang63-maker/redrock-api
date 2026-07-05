@@ -150,7 +150,11 @@ router.get('/member/:memberId', authenticateAny, async (req, res) => {
     const snapshot = await db.collection(COLLECTIONS.MEMBER_PASSES)
       .where('memberId', '==', req.params.memberId)
       .orderBy('createdAt', 'desc').get();
-    res.json({ passes: snapshot.docs.map(d => ({ id: d.id, ...d.data() })) });
+    // 顯示補償後到期日（臨時休館延長、公休不補）；保留 baseEndDate 供參考
+    const withEff = await require('../services/passExpiryService').attachEffectiveEndDates(
+      snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
+    );
+    res.json({ passes: withEff.map(p => ({ ...p, baseEndDate: p.endDate, endDate: p.effectiveEndDate || p.endDate })) });
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }

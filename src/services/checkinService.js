@@ -106,15 +106,21 @@ const computePaidEntryAmount = async (entryType, member, opts = {}) => {
 };
 
 // ── 取得有效定期票 ───────────────────────────────────────────────
+// endDate 改用「補償後到期日」（臨時休館延長票期，公休不補）→ 不在 Firestore 端以 endDate 預篩，
+// 改抓全部 active 後在程式碼用 effectiveEndDate 判斷（會員 active 票很少，成本可忽略）。
 const getValidPasses = async (memberId, gymId) => {
+  const passExpiryService = require('./passExpiryService');
   const db = getDb();
   const today = taiwanToday();
   const snap = await db.collection(COLLECTIONS.MEMBER_PASSES)
     .where('memberId', '==', memberId)
     .where('status', '==', 'active')
-    .where('endDate', '>=', today)
     .get();
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+  const withEff = await passExpiryService.attachEffectiveEndDates(
+    snap.docs.map(d => ({ id: d.id, ...d.data() }))
+  );
+  return withEff
+    .filter(p => (p.effectiveEndDate || p.endDate) >= today)
     .filter(p => p.scope === 'shared' || p.targetGymId === gymId)
     .filter(p => p.credits === null || p.credits > 0);
 };
@@ -414,7 +420,7 @@ const verifyEntry = async (memberId, gymId) => {
     const p = passes[0];
     return {
       allowed: true, status: 'ok', entryType: 'pass', freeEntry: true,
-      pass: { id: p.id, name: p.passTypeName, scope: p.scope, endDate: p.endDate },
+      pass: { id: p.id, name: p.passTypeName, scope: p.scope, endDate: p.effectiveEndDate || p.endDate, baseEndDate: p.endDate },
       member: memberInfo,
     };
   }

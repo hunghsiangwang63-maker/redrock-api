@@ -188,10 +188,13 @@ router.get('/eligibility/:memberId', authenticate, async (req, res) => {
       .where('memberId', '==', req.params.memberId)
       .where('status', '==', 'active')
       .get();
-    const hasValidPass = passSnap.docs.some(d => {
-      const p = d.data();
-      return p.endDate >= today && (p.scope === 'all' || p.gymId === (req.query.gymId || ''));
-    });
+    // endDate 改用臨時休館補償後的到期日（公休不補）
+    const passesEff = await require('../services/passExpiryService').attachEffectiveEndDates(
+      passSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+    );
+    const hasValidPass = passesEff.some(p =>
+      (p.effectiveEndDate || p.endDate) >= today && (p.scope === 'all' || p.gymId === (req.query.gymId || ''))
+    );
 
     // 墜落測驗狀態（櫃檯入場閘門用，與會員自助 verifyEntry 一致）
     const fallTest = await checkinService.checkFallTest(req.params.memberId);

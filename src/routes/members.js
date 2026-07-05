@@ -110,14 +110,17 @@ router.get('/reports/active-passes', authenticate, async (req, res) => {
     const today = taiwanToday(); // 台灣日期（與入場資格判定同源）
     const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
     const snap = await db.collection(COLLECTIONS.MEMBER_PASSES).where('status', '==', 'active').get();
-    let passes = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => (p.endDate || '') >= today);
+    // endDate 用臨時休館補償後的到期日（與入場資格 getValidPasses 同源）
+    let passes = (await require('../services/passExpiryService').attachEffectiveEndDates(
+      snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    )).filter(p => (p.effectiveEndDate || p.endDate || '') >= today);
     // 與入場資格 getValidPasses 同源：全館票(scope='shared')任館可用；單館票看 targetGymId
     if (gymId) passes = passes.filter(p => p.scope === 'shared' || p.targetGymId === gymId);
     const groups = {};
     passes.forEach(p => {
       const key = p.passTypeId || p.passTypeName || 'other';
       if (!groups[key]) groups[key] = { passTypeId: p.passTypeId || null, passTypeName: p.passTypeName || '定期票', members: [] };
-      groups[key].members.push({ memberId: p.memberId, memberName: p.memberName || '', startDate: p.startDate || null, endDate: p.endDate || null });
+      groups[key].members.push({ memberId: p.memberId, memberName: p.memberName || '', startDate: p.startDate || null, endDate: p.effectiveEndDate || p.endDate || null });
     });
     const passTypes = Object.values(groups)
       .map(g => ({ ...g, count: g.members.length, members: g.members.sort((a, b) => (a.endDate || '') < (b.endDate || '') ? -1 : 1) }))

@@ -235,7 +235,6 @@ router.get('/eligibility/:memberId', authenticate, async (req, res) => {
 // 重用 createPendingCheckIn + confirmCheckIn 的結算邏輯（金額後端權威、票券扣除、營收、墜測遞延）
 router.post('/direct', authenticate, async (req, res) => {
   try {
-    const db = getDb();
     const {
       memberId, gymId, entryType, baseEntryType,
       discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
@@ -244,16 +243,7 @@ router.post('/direct', authenticate, async (req, res) => {
     if (!memberId || !entryType) return res.status(400).json({ message: '缺少會員或入場類型' });
     const effGym = req.staff?.role === 'super_admin' ? gymId : (req.staff?.gymId || gymId);
 
-    // 同日同館重複入場檢查
-    const todayStr = taiwanToday();
-    const dup = await db.collection('checkIns')
-      .where('memberId', '==', memberId).where('gymId', '==', effGym)
-      .where('isCancelled', '==', false)
-      .where('checkedInAt', '>=', new Date(todayStr + 'T00:00:00+08:00'))
-      .where('checkedInAt', '<=', new Date(todayStr + 'T23:59:59+08:00'))
-      .get();
-    if (!dup.empty) return res.status(400).json({ message: '今日已入場，不可重複入場' });
-
+    // 同日重複、Waiver、墜測、分期逾期關卡由 createPendingCheckIn 的 runEntryGates 統一處理（避免多份實作漂移）
     const { qrToken } = await checkinService.createPendingCheckIn({
       memberId, gymId: effGym, entryType, baseEntryType,
       discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
@@ -501,50 +491,15 @@ router.post('/phone', authenticate, async (req, res) => {
     const member = memberDoc.data();
     const memberName = childName ? `${member.name}（${childName}）` : member.name;
 
-    // 同日同館只能入場一次（用isCancelled而非status，才能同時擋下QR入場與電話入場）；台灣時間午夜為界
-    const todayStr = taiwanToday();
-    const today = new Date(todayStr + 'T00:00:00+08:00');
-    const existing = await db.collection('checkIns')
-      .where('memberId', '==', memberId)
-      .where('gymId', '==', gymId)
-      .where('isCancelled', '==', false)
-      .where('checkedInAt', '>=', today)
-      .get();
-    if (!existing.empty) return res.status(400).json({ message: '今日已入場，不可重複入場' });
-
-    // 分期付款逾期檢查
-    const { hasOverdueInstallment } = require('../services/installmentService');
-    if (await hasOverdueInstallment(parentMemberId || memberId)) {
-      return res.status(403).json({ message: '分期付款已逾期，入場資格已暫停，請至櫃檯完成繳款' });
-    }
-
-    // Waiver 硬擋（與會員自助入場一致；子會員代簽後 isComplete:true）
-    const waiverDoc = await db.collection('waivers').doc(memberId).get();
-    if (!waiverDoc.exists || waiverDoc.data().isComplete !== true) {
-      return res.status(403).json({ message: 'Waiver 尚未完成簽署，無法入場，請先完成簽署' });
-    }
-
-    // 墜落測驗硬擋（與會員自助 verifyEntry / createPendingCheckIn 一致）
-    const fallTestCheck = await checkinService.checkFallTest(memberId);
-    if (!fallTestCheck.passed) {
-      // 例外：持「當日有效體驗券」者，未通過墜測也可入場，但仍須簽署墜落測驗同意書（與 createPendingCheckIn 一致）
-      const hasExpTicket = (await checkinService.getValidSingleEntryTickets(memberId)).some(t => t.ticketType === 'experience');
-      if (hasExpTicket) {
-        const signed = await checkinService.hasFallTestSignature(memberId);
-        if (!signed) {
-          return res.status(403).json({
-            reason: 'fall_test_consent_required',
-            message: '請先簽署墜落測驗同意書（體驗課程可未通過墜測入場，但須簽署同意書）',
-          });
-        }
-        // 有簽署 → 放行（持體驗券，未通過墜測也可入場）
-      } else {
-        return res.status(403).json({
-          message: fallTestCheck.reason === 'expired'
-            ? '墜落測驗已到期，請至服務台重新進行測驗'
-            : '尚未通過安全墜落測驗，請先至服務台完成同意書簽署及測驗',
-        });
-      }
+    // ── 關卡 0（同日重複 / Waiver / 墜測含「持有」體驗券例外 / 分期逾期）：共用 runEntryGates ──
+    // 電話為純付費路徑：墜測例外用 'owns' 語意（會員持有當日有效體驗券即豁免，須簽同意書）；
+    // 子女入場的分期逾期查家長（parentMemberId）。與會員自助 verifyEntry 同一份關卡邏輯。
+    const gate = await checkinService.runEntryGates(memberId, gymId, {
+      expTicketMode: 'owns',
+      installmentMemberId: parentMemberId || memberId,
+    });
+    if (gate.blocked) {
+      return res.status(gate.httpStatus || 403).json({ reason: gate.reason, message: gate.message });
     }
 
     // 已付費（轉換期：會員於舊系統已「付入場費」→ 入場費記 0；但加購岩鞋/粉袋仍須另收；waiver/墜測前面仍硬擋）

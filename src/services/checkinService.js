@@ -333,84 +333,125 @@ const checkWaiver = async (memberId) => {
   return { complete: true };
 };
 
-// ── 主驗票：verifyEntry ──────────────────────────────────────────
-// 用於「會員端選擇入場方式前」的資格確認
-const verifyEntry = async (memberId, gymId) => {
-  // 0. 同日重複入場檢查（使用台灣時間 UTC+8）
+// ── 關卡 0：前置關卡（單一權威來源）────────────────────────────────
+// 依序：同日同館重複入場 → Waiver → 墜落測驗（含當日體驗券例外）→ 分期逾期。
+// 供 verifyEntry / createPendingCheckIn / /checkin/phone 共用，避免三份各自實作漂移。
+// 回傳：
+//   通過 → { blocked:false, member, memberType, fallTest }
+//   擋下 → { blocked:true, reason, status, httpStatus, code, message, extra }
+//     - reason/status：verifyEntry 回傳用
+//     - httpStatus：路由 res.status() 用（already_checked_in=400，其餘=403）
+//     - code：createPendingCheckIn throw 用
+const runEntryGates = async (memberId, gymId, { skipDuplicate = false, expTicketMode = 'owns', expTicketId = null, installmentMemberId = null } = {}) => {
   const db = getDb();
-  const _TZ = 8 * 60 * 60 * 1000;
-  const _todayStrTW = new Date(Date.now() + _TZ).toISOString().slice(0, 10);
-  const todayStart = new Date(_todayStrTW + 'T00:00:00+08:00');
-  const todayEnd = new Date(_todayStrTW + 'T23:59:59+08:00');
-  const todaySnap = await db.collection(COLLECTIONS.CHECK_INS)
-    .where('memberId', '==', memberId)
-    .where('gymId', '==', gymId)
-    .where('isCancelled', '==', false)
-    .where('checkedInAt', '>=', todayStart)
-    .where('checkedInAt', '<=', todayEnd)
-    .get();
-  if (!todaySnap.empty) {
-    const existing = todaySnap.docs[0].data();
-    return {
-      allowed: false, status: 'already_checked_in',
-      reason: 'already_checked_in',
-      message: `今日已於 ${new Date(existing.checkedInAt.toDate().getTime() + 8*3600000).toISOString().slice(11,16)} 完成入場，如需重新入場請先取消`,
-      checkInId: todaySnap.docs[0].id,
-      checkedInAt: existing.checkedInAt,
-      member: { id: memberId },
-    };
-  }
-  const member = await getMember(memberId);
-  const memberType = getMemberType(member);
+  const today = taiwanToday();
 
-  // 1. waiver 檢查
-  const waiver = await checkWaiver(memberId);
-  if (!waiver.complete) {
-    const isPendingParent = waiver.reason === 'incomplete';
-    return {
-      allowed: false, status: 'blocked',
-      reason: isPendingParent ? 'parent_waiver_pending' : 'waiver_required',
-      message: isPendingParent ? '已完成簽署，等待家長/監護人完成簽署' : 'Waiver 尚未完成，請先完成簽署',
-      member: { id: member.id, name: member.name, phone: member.phone },
-    };
-  }
-
-  // 2. 墜落測驗檢查
-  const fallTest = await checkFallTest(memberId);
-  if (!fallTest.passed) {
-    // 例外：持「當日有效體驗券」者，未通過墜測也可入場，但仍須完成 waiver(上方已查) + 簽署墜落測驗同意書
-    const hasExpTicket = (await getValidSingleEntryTickets(memberId)).some(t => t.ticketType === 'experience');
-    if (hasExpTicket) {
-      const signed = await hasFallTestSignature(memberId);
-      if (!signed) {
-        return {
-          allowed: false, status: 'blocked', reason: 'fall_test_consent_required',
-          message: '請先簽署墜落測驗同意書（體驗課程可未通過墜測入場，但須簽署同意書）',
-          member: { id: member.id, name: member.name, phone: member.phone },
-        };
-      }
-      // 有簽署 → 放行（持體驗券，未通過墜測也可入場）
-    } else {
+  // 0. 同日同館重複入場
+  if (!skipDuplicate) {
+    const todaySnap = await db.collection(COLLECTIONS.CHECK_INS)
+      .where('memberId', '==', memberId)
+      .where('gymId', '==', gymId)
+      .where('isCancelled', '==', false)
+      .where('checkedInAt', '>=', new Date(today + 'T00:00:00+08:00'))
+      .where('checkedInAt', '<=', new Date(today + 'T23:59:59+08:00'))
+      .get();
+    if (!todaySnap.empty) {
+      const existing = todaySnap.docs[0].data();
+      const hhmm = new Date(existing.checkedInAt.toDate().getTime() + 8 * 3600000).toISOString().slice(11, 16);
       return {
-        allowed: false, status: 'blocked',
-        reason: fallTest.reason === 'never_tested' ? 'fall_test_required' : 'fall_test_expired',
-        message: fallTest.reason === 'never_tested' ? '尚未通過安全墜落測驗' : `墜落測驗已於 ${fallTest.expiredAt} 到期，請重新測驗`,
-        member: { id: member.id, name: member.name, phone: member.phone },
+        blocked: true, reason: 'already_checked_in', status: 'already_checked_in',
+        httpStatus: 400, code: 'ALREADY_CHECKED_IN',
+        message: `今日已於 ${hhmm} 完成入場，如需重新入場請先取消`,
+        extra: { checkInId: todaySnap.docs[0].id, checkedInAt: existing.checkedInAt },
       };
     }
   }
 
-  // 2.5 分期付款逾期檢查
-  const { hasOverdueInstallment } = require('./installmentService');
-  const overdueInstallment = await hasOverdueInstallment(memberId);
-  if (overdueInstallment) {
+  const member = await getMember(memberId);
+
+  // 1. Waiver
+  const waiver = await checkWaiver(memberId);
+  if (!waiver.complete) {
+    const isPendingParent = waiver.reason === 'incomplete';
     return {
-      allowed: false, status: 'blocked',
-      reason: 'installment_overdue',
-      message: '分期付款已逾期，入場資格已暫停，請至櫃檯完成繳款',
-      member: { id: member.id, name: member.name, phone: member.phone },
+      blocked: true, member,
+      reason: isPendingParent ? 'parent_waiver_pending' : 'waiver_required',
+      status: 'blocked', httpStatus: 403, code: 'WAIVER_REQUIRED',
+      message: isPendingParent ? '已完成簽署，等待家長/監護人完成簽署' : 'Waiver 尚未完成，請先完成簽署',
     };
   }
+
+  // 2. 墜落測驗（例外：持當日有效體驗券者未過墜測可入場，但須簽墜測同意書）
+  const fallTest = await checkFallTest(memberId);
+  if (!fallTest.passed) {
+    // 例外判定：'using'＝此次入場正在使用體驗券（createPendingCheckIn 實際入場，較嚴謹）；
+    //           'owns' ＝會員持有當日有效體驗券（verifyEntry / 電話顯示用）
+    let hasExpTicket;
+    if (expTicketMode === 'using') {
+      hasExpTicket = false;
+      if (expTicketId) {
+        const td = await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(expTicketId).get();
+        hasExpTicket = td.exists && td.data().ticketType === 'experience';
+      }
+    } else {
+      hasExpTicket = (await getValidSingleEntryTickets(memberId)).some(t => t.ticketType === 'experience');
+    }
+    if (hasExpTicket) {
+      if (!(await hasFallTestSignature(memberId))) {
+        return {
+          blocked: true, member, reason: 'fall_test_consent_required', status: 'blocked',
+          httpStatus: 403, code: 'FALL_TEST_CONSENT_REQUIRED',
+          message: '請先簽署墜落測驗同意書（體驗課程可未通過墜測入場，但須簽署同意書）',
+        };
+      }
+      // 有簽署 → 放行
+    } else {
+      const isNever = fallTest.reason === 'never_tested';
+      return {
+        blocked: true, member,
+        reason: isNever ? 'fall_test_required' : 'fall_test_expired',
+        status: 'blocked', httpStatus: 403,
+        code: isNever ? 'FALL_TEST_REQUIRED' : 'FALL_TEST_EXPIRED',
+        message: isNever ? '尚未通過安全墜落測驗' : `墜落測驗已於 ${fallTest.expiredAt} 到期，請重新測驗`,
+        extra: { expiredAt: fallTest.expiredAt || null },
+      };
+    }
+  }
+
+  // 3. 分期付款逾期（子女入場可指定查家長分期：installmentMemberId）
+  const { hasOverdueInstallment } = require('./installmentService');
+  if (await hasOverdueInstallment(installmentMemberId || memberId)) {
+    return {
+      blocked: true, member, reason: 'installment_overdue', status: 'blocked',
+      httpStatus: 403, code: 'INSTALLMENT_OVERDUE',
+      message: '分期付款已逾期，入場資格已暫停，請至櫃檯完成繳款',
+    };
+  }
+
+  return { blocked: false, member, memberType: getMemberType(member), fallTest };
+};
+
+// ── 主驗票：verifyEntry ──────────────────────────────────────────
+// 用於「會員端選擇入場方式前」的資格確認
+const verifyEntry = async (memberId, gymId) => {
+  // ── 關卡 0（同日重複 / Waiver / 墜測含體驗券例外 / 分期逾期）：共用 runEntryGates ──
+  const db = getDb();
+  const gate = await runEntryGates(memberId, gymId);
+  if (gate.blocked) {
+    const resp = { allowed: false, status: gate.status, reason: gate.reason, message: gate.message };
+    if (gate.reason === 'already_checked_in') {
+      resp.checkInId = gate.extra?.checkInId;
+      resp.checkedInAt = gate.extra?.checkedInAt;
+      resp.member = { id: memberId };
+    } else {
+      const m = gate.member;
+      resp.member = m ? { id: m.id, name: m.name, phone: m.phone } : { id: memberId };
+    }
+    return resp;
+  }
+  const member = gate.member;
+  const memberType = gate.memberType;
+  const fallTest = gate.fallTest;
 
   const memberInfo = {
     id: member.id, name: member.name, phone: member.phone,
@@ -633,30 +674,13 @@ const createPendingCheckIn = async ({
     throw { code: 'CHILD_NO_DISCOUNT_CARD', message: '兒童不適用折扣券，無法購買' };
   }
 
-  // 再次確認 waiver + 墜落測驗
-  const waiver = await checkWaiver(memberId);
-  if (!waiver.complete) throw { code: 'WAIVER_REQUIRED', message: 'Waiver 尚未完成' };
-
-  const fallTest = await checkFallTest(memberId);
-  if (!fallTest.passed) {
-    // 體驗券入場：未通過墜測也可產生 QR，但須簽署墜落測驗同意書
-    let isExpTicketEntry = false;
-    if (entryType === 'single_entry_ticket' && singleEntryTicketId) {
-      const td = await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(singleEntryTicketId).get();
-      isExpTicketEntry = td.exists && td.data().ticketType === 'experience';
-    }
-    if (isExpTicketEntry) {
-      if (!(await hasFallTestSignature(memberId))) throw { code: 'FALL_TEST_CONSENT_REQUIRED', message: '請先簽署墜落測驗同意書' };
-    } else {
-      throw { code: 'FALL_TEST_REQUIRED', message: '墜落測驗未通過或已到期' };
-    }
-  }
-
-  // 分期付款逾期（與 verifyEntry / /checkin/phone 一致；補齊 QR/direct 路徑，避免逾期會員從站台直接入場）
-  const { hasOverdueInstallment } = require('./installmentService');
-  if (await hasOverdueInstallment(memberId)) {
-    throw { code: 'INSTALLMENT_OVERDUE', message: '分期付款已逾期，入場資格已暫停，請至櫃檯完成繳款' };
-  }
+  // ── 關卡 0（同日重複 / Waiver / 墜測「使用中體驗券」例外 / 分期逾期）：共用 runEntryGates ──
+  // 墜測例外用 'using' 語意：僅當此次入場實際使用體驗券才豁免（較 verifyEntry 的「持有」嚴謹）。
+  const gate = await runEntryGates(memberId, gymId, {
+    expTicketMode: 'using',
+    expTicketId: entryType === 'single_entry_ticket' ? singleEntryTicketId : null,
+  });
+  if (gate.blocked) throw { code: gate.code, message: gate.message };
 
   // 黑卡/單次入場券：QR 階段只驗證可用性，「不」預扣。
   // 實際扣點延後到 confirmCheckIn（確認入場才扣）→ 產生 QR 但未入場不會扣卡/鎖券。
@@ -1142,6 +1166,7 @@ module.exports = {
   checkVip,
   getValidSingleEntryTickets,
   hasFallTestSignature,
+  runEntryGates,
   getMemberType,
   computePaidEntryAmount,
   PRICES,

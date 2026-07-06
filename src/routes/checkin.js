@@ -174,9 +174,8 @@ router.get('/eligibility/:memberId', authenticate, async (req, res) => {
     if (!memberDoc.exists) return res.status(404).json({ message: '會員不存在' });
     const member = memberDoc.data();
     const hasCourseAccess = (await checkinService.getCourseAccess(req.params.memberId)).length > 0;
-    // 即時查詢 Waiver 狀態
-    const waiverDoc = await db.collection('waivers').doc(req.params.memberId).get();
-    const waiverSigned = waiverDoc.exists && waiverDoc.data().isComplete === true;
+    // Waiver 狀態（與 verifyEntry 同源 checkWaiver，不另外自寫）
+    const waiverSigned = (await checkinService.checkWaiver(req.params.memberId)).complete === true;
 
     // 查詢 VIP 狀態（先查 vipMembers collection，再查 memberType 欄位）
     const { checkVip } = require('../services/checkinService');
@@ -502,8 +501,20 @@ router.post('/phone', authenticate, async (req, res) => {
       return res.status(gate.httpStatus || 403).json({ reason: gate.reason, message: gate.message });
     }
 
-    // 已付費（轉換期：會員於舊系統已「付入場費」→ 入場費記 0；但加購岩鞋/粉袋仍須另收；waiver/墜測前面仍硬擋）
+    // ── 免費資格後端權威覆核（不單信前端送的 entryType；已付費放行不覆核）──
+    // VIP / 定期票 / 課程學員 / 免費身分由 verifyEntry 權威判定：合法者結果不變；
+    // 前端送了免費類型但權威判定「非免費」者，改用權威付費類型（防白嫖，判斷更安全）。
     const alreadyPaid = req.body.alreadyPaid === true;
+    if (!alreadyPaid) {
+      const FREE_TYPES = ['vip', 'pass', 'course_access'];
+      const elig = await checkinService.verifyEntry(memberId, gymId);
+      if (elig.freeEntry && elig.entryType) {
+        entryType = elig.entryType;                     // 權威免費類型（覆寫前端值）
+      } else if (FREE_TYPES.includes(entryType)) {
+        const paidTypes = (elig.entryTypeOptions || []).map(o => o.type);
+        entryType = paidTypes[0] || 'single_ticket';    // 前端偽造免費 → 改回權威付費身分
+      }
+    }
     if (alreadyPaid) entryType = 'already_paid';
 
     // 舊折扣卡 8 折（轉換期）：持實體舊折扣卡、未轉入新優惠卡者，員工可手動套 8 折（有效隊員再疊 9 折）。

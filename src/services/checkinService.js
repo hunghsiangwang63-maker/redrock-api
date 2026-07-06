@@ -1166,6 +1166,7 @@ module.exports = {
   checkVip,
   getValidSingleEntryTickets,
   hasFallTestSignature,
+  checkWaiver,
   runEntryGates,
   getMemberType,
   computePaidEntryAmount,

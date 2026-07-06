@@ -125,6 +125,24 @@ const getValidPasses = async (memberId, gymId) => {
     .filter(p => p.credits === null || p.credits > 0);
 };
 
+// ── 入場可購買的定期票種（該館適用：雙館 shared 或該館單館票種）─────
+// 與 GET /passes/types 的館別過濾同邏輯（!t.gymId || t.gymId === gymId）。
+// 單館票種 gymId===targetGymId；雙館 shared 兩者皆 null → 不限館。
+const getBuyablePassTypes = async (gymId) => {
+  const db = getDb();
+  const snap = await db.collection(COLLECTIONS.PASS_TYPES).where('isActive', '==', true).get();
+  return snap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter(t => !t.gymId || t.gymId === gymId)
+    .map(t => ({
+      id: t.id, name: t.name, price: t.price, scope: t.scope,
+      targetGymId: t.targetGymId || null,
+      durationMonths: t.durationMonths || null,
+      durationDays: t.durationDays || null,
+      credits: t.credits ?? null,
+    }));
+};
+
 // ── 取得課程入館權益 ─────────────────────────────────────────────
 const getCourseAccess = async (memberId) => {
   const db = getDb();
@@ -451,6 +469,7 @@ const verifyEntry = async (memberId, gymId) => {
   const blackCards = await getMemberBlackCards(memberId);
   const singleEntryTickets = await getValidSingleEntryTickets(memberId);
   const bonuses = await require('./bonusService').getMemberBonuses(memberId);
+  const buyablePassTypes = await getBuyablePassTypes(gymId);   // 入場可購買的定期票種（該館適用）
 
   // 折扣券入場 8 折基準（原價依會員身份）；有效隊員再疊加 9 折；兒童不適用折扣券
   const discountOriginalPrice = await getOriginalEntryPrice(memberType);
@@ -540,6 +559,8 @@ const verifyEntry = async (memberId, gymId) => {
       },
       // 兒童不適用折扣券 → 不提供「購買」選項
       buyDiscountCard: { available: memberType !== 'child', price: PRICES.discount_card },
+      // 入場當下購買新定期票（比照購買折扣券）；單館票僅該館可買，QR 綁該館
+      buyPass: { available: buyablePassTypes.length > 0, passTypes: buyablePassTypes },
     },
     // 舊欄位（相容）：扁平清單
     availableOptions: [
@@ -598,7 +619,7 @@ const verifyEntry = async (memberId, gymId) => {
 // ── 產生待確認入場 QR code ───────────────────────────────────────
 const createPendingCheckIn = async ({
   memberId, gymId, entryType, baseEntryType,
-  passId, discountCardId, blackCardId, singleEntryTicketId, bonusId,
+  passId, discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
   paymentMethod, amount, originalAmount, isTeamDiscount,
   rentShoes, shoesPrice,
   rentChalk, chalkPrice,
@@ -698,6 +719,20 @@ const createPendingCheckIn = async ({
     finalAmount = 0;
     finalTeam = false;
   }
+  // 後端權威：購買新定期票入場——金額取票種原價、單館票僅限該館（不信前端傳值）
+  if (entryType === 'buy_pass') {
+    if (!buyPassTypeId) throw { code: 'PASS_TYPE_REQUIRED', message: '請選擇要購買的定期票種' };
+    const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(buyPassTypeId).get();
+    if (!ptDoc.exists || ptDoc.data().isActive === false) throw { code: 'PASS_TYPE_INVALID', message: '定期票種無效或已停用' };
+    const pt = ptDoc.data();
+    // 場館限制：單館票（scope!=='shared'）只能在其目標館購買入場；雙館 shared 不限
+    if (pt.scope !== 'shared' && (pt.targetGymId || pt.gymId) !== gymId) {
+      throw { code: 'PASS_GYM_MISMATCH', message: '此為單館定期票，僅限適用場館購買入場' };
+    }
+    finalOriginal = pt.price;
+    finalAmount = pt.price;
+    finalTeam = false;
+  }
 
   const qrToken = uuidv4();
   const now = new Date();
@@ -712,6 +747,7 @@ const createPendingCheckIn = async ({
     blackCardId: blackCardId || null,
     singleEntryTicketId: singleEntryTicketId || null,
     bonusId: bonusId || null,
+    buyPassTypeId: buyPassTypeId || null,
     paymentMethod: paymentMethod || null,
     amount: finalAmount,
     originalAmount: finalOriginal,
@@ -805,6 +841,25 @@ const confirmCheckIn = async (qrToken, staffId, staffName) => {
       price: pending.amount || 0,
       paymentId: checkInId,
     });
+  } else if (pending.entryType === 'buy_pass' && pending.buyPassTypeId) {
+    // 購買新定期票入場：確認收款當下開票（比照 POST /passes 建 memberPass）
+    const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(pending.buyPassTypeId).get();
+    if (!ptDoc.exists) throw { code: 'PASS_TYPE_INVALID', message: '定期票種無效' };
+    const pt = ptDoc.data();
+    const startDate = taiwanToday();
+    const endDate = pt.durationMonths
+      ? dayjs(startDate).add(pt.durationMonths, 'month').format('YYYY-MM-DD')
+      : dayjs(startDate).add(pt.durationDays || 0, 'day').format('YYYY-MM-DD');
+    const newPassId = uuidv4();
+    await db.collection(COLLECTIONS.MEMBER_PASSES).doc(newPassId).set({
+      id: newPassId, memberId: pending.memberId, gymId: pending.gymId,
+      passTypeId: pending.buyPassTypeId, passTypeName: pt.name, scope: pt.scope,
+      targetGymId: pt.targetGymId || null,
+      startDate, endDate,
+      credits: pt.credits ?? null, originalCredits: pt.credits ?? null,
+      status: 'active', paymentId: checkInId, paymentStatus: 'confirmed',
+      soldByStaffId: staffId || null, notes: '入場時購買', createdAt: now, updatedAt: now,
+    });
   } else if (pending.entryType === 'discount_card' && pending.discountCardId) {
     await useDiscountCard(pending.discountCardId, pending.gymId);
   } else if (pending.entryType === 'black_card' && pending.blackCardId) {
@@ -837,6 +892,7 @@ const confirmCheckIn = async (qrToken, staffId, staffName) => {
     blackCardId: pending.blackCardId,
     singleEntryTicketId: pending.singleEntryTicketId,
     bonusId: pending.bonusId || null,
+    buyPassTypeId: pending.buyPassTypeId || null,
     transactionId: null,
     amountPaid: pending.amount + pending.shoesPrice + (pending.chalkPrice || 0),
     paymentMethod: pending.paymentMethod,
@@ -963,6 +1019,16 @@ const cancelCheckIn = async (checkInId, staffId, force = false) => {
         cancelledAt: now,
         cancelReason: '入場取消',
         updatedAt: now,
+      });
+    }
+  } else if (checkIn.entryType === 'buy_pass') {
+    // 購買新定期票入場取消：作廢對應定期票（此入場即該票的購買點，10 分鐘內取消）
+    const passSnap = await db.collection(COLLECTIONS.MEMBER_PASSES)
+      .where('paymentId', '==', checkInId)
+      .limit(1).get();
+    if (!passSnap.empty) {
+      await passSnap.docs[0].ref.update({
+        status: 'cancelled', cancelledAt: now, cancelReason: '入場取消', updatedAt: now,
       });
     }
   }

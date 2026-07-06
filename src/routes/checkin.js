@@ -74,7 +74,7 @@ router.post('/qr/create',
     try {
       const {
         memberId, gymId, entryType, baseEntryType,
-        passId, discountCardId, blackCardId, singleEntryTicketId, bonusId,
+        passId, discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
         paymentMethod, amount, originalAmount, isTeamDiscount,
         rentShoes, shoesPrice, rentChalk, chalkPrice,
       } = req.body;
@@ -98,7 +98,7 @@ router.post('/qr/create',
       const result = await checkinService.createPendingCheckIn({
         memberId: effectiveMemberId,
         gymId: effectiveGymId,
-        entryType, baseEntryType, passId, discountCardId, blackCardId, singleEntryTicketId, bonusId,
+        entryType, baseEntryType, passId, discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
         paymentMethod, amount, originalAmount, isTeamDiscount,
         rentShoes, shoesPrice, rentChalk, chalkPrice,
       });
@@ -182,19 +182,11 @@ router.get('/eligibility/:memberId', authenticate, async (req, res) => {
     const isVip = !!(vipFromCollection || vipFromMemberType);
     const vip = vipFromCollection || (vipFromMemberType ? { note: member.vipNote || '' } : null);
 
-    // 查詢有效定期票
+    // 查詢有效定期票——與會員自助 verifyEntry 同源 getValidPasses（場館限制 shared/targetGymId
+    // + 臨時休館補償後到期日 + credits），避免與權威版欄位不一致（原用 scope==='all'/gymId 為 bug：
+    // 'all' 永不成立→雙館票被誤判無效；gymId 是售出館≠限制館 targetGymId）
     const today = taiwanToday();
-    const passSnap = await db.collection('memberPasses')
-      .where('memberId', '==', req.params.memberId)
-      .where('status', '==', 'active')
-      .get();
-    // endDate 改用臨時休館補償後的到期日（公休不補）
-    const passesEff = await require('../services/passExpiryService').attachEffectiveEndDates(
-      passSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-    );
-    const hasValidPass = passesEff.some(p =>
-      (p.effectiveEndDate || p.endDate) >= today && (p.scope === 'all' || p.gymId === (req.query.gymId || ''))
-    );
+    const hasValidPass = (await checkinService.getValidPasses(req.params.memberId, req.query.gymId || '')).length > 0;
 
     // 墜落測驗狀態（櫃檯入場閘門用，與會員自助 verifyEntry 一致）
     const fallTest = await checkinService.checkFallTest(req.params.memberId);
@@ -245,7 +237,7 @@ router.post('/direct', authenticate, async (req, res) => {
     const db = getDb();
     const {
       memberId, gymId, entryType, baseEntryType,
-      discountCardId, blackCardId, singleEntryTicketId, bonusId,
+      discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
       paymentMethod, rentShoes, rentChalk,
     } = req.body;
     if (!memberId || !entryType) return res.status(400).json({ message: '缺少會員或入場類型' });
@@ -263,7 +255,7 @@ router.post('/direct', authenticate, async (req, res) => {
 
     const { qrToken } = await checkinService.createPendingCheckIn({
       memberId, gymId: effGym, entryType, baseEntryType,
-      discountCardId, blackCardId, singleEntryTicketId, bonusId,
+      discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
       paymentMethod: paymentMethod || 'cash', rentShoes, rentChalk,
     });
     const result = await checkinService.confirmCheckIn(qrToken, req.staff.id, req.staff.name);
@@ -382,6 +374,7 @@ router.get('/today',
         black_card: '黑卡', bonus: '紅利入場', single_ticket: '單次',
         course_access: '課程學員', child_free: '兒童免費', student_free: '學生免費', other: '其他',
         pass: '定期票', discount_card: '優惠折扣券', single_entry_ticket: '單次入場券',
+        buy_discount_card: '購買優惠券', buy_pass: '購買定期票',
       };
 
       const statsByGym = targetGyms.map(gym => {

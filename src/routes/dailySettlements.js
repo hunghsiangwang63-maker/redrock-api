@@ -309,7 +309,7 @@ router.get('/monthly-export', authenticate, async (req, res) => {
     const etDoc = await db.collection('systemSettings').doc('entryTypes').get();
     const ET_NAME = {};
     (etDoc.exists ? (etDoc.data().types || []) : []).forEach(t => { if (t.id) ET_NAME[t.id] = t.name; });
-    const ENTRY_FALLBACK = { single_ticket:'成人單次入場', student_free:'學生單次入場', child_free:'兒童單次入場', discount_card:'優惠卡入場', buy_discount_card:'購買優惠卡', pass:'定期票入場', vip:'VIP入場', course_access:'課程學員入場', black_card:'黑卡入場', single_entry_ticket:'單次入場券', bonus:'紅利入場', experience:'體驗入場' };
+    const ENTRY_FALLBACK = { single_ticket:'成人單次入場', student_free:'學生單次入場', child_free:'兒童單次入場', discount_card:'優惠卡入場', buy_discount_card:'購買優惠卡', buy_pass:'購買定期票', pass:'定期票入場', vip:'VIP入場', course_access:'課程學員入場', black_card:'黑卡入場', single_entry_ticket:'單次入場券', bonus:'紅利入場', experience:'體驗入場' };
     const entryName = (id) => ET_NAME[id] || ENTRY_FALLBACK[id] || id || '其他入場';
     const ciSnap = await db.collection('checkIns')
       .where('checkedInAt', '>=', new Date(`${start}T00:00:00+08:00`))

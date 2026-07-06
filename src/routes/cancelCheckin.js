@@ -37,6 +37,12 @@ const restoreEntryCredits = async (db, checkIn) => {
     if (bonusDoc.exists) {
       await bonusDoc.ref.update({ isUsed: false, isActive: true, usedAt: null, usedAtGymId: null, updatedAt: now });
     }
+  } else if (checkIn.entryType === 'buy_pass') {
+    // 購買新定期票入場取消：作廢對應定期票（與 checkinService.cancelCheckIn 一致）
+    const passSnap = await db.collection('memberPasses').where('paymentId', '==', checkIn.id).limit(1).get();
+    if (!passSnap.empty) {
+      await passSnap.docs[0].ref.update({ status: 'cancelled', cancelledAt: now, cancelReason: '入場取消', updatedAt: now });
+    }
   }
 };
 

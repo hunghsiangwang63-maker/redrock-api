@@ -125,7 +125,8 @@ const passTypeSchema = {
   scope: 'single|shared',
   targetGymId: 'string',
   price: 'number',
-  durationDays: 'number',
+  durationDays: 'number|null',    // 曆日效期（未設月數時採用）
+  durationMonths: 'number|null',  // 月數效期（優先；一個月一個月算，7/6→10/6）
   credits: 'number|null',
   isActive: 'boolean',
   createdAt: 'Timestamp',

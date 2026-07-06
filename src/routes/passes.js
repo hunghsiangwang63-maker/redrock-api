@@ -10,6 +10,16 @@ const { getDb, COLLECTIONS } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
+// 由票種效期算到期日：優先「月數」（一個月一個月算，7/6→10/6；月底自動夾到當月最後一天，
+// 例 1/31＋1月→2/28），未設月數則沿用「天數」（曆日）。
+function computePassEndDate(startDate, passType) {
+  const start = dayjs(startDate);
+  if (passType && passType.durationMonths) {
+    return start.add(passType.durationMonths, 'month').format('YYYY-MM-DD');
+  }
+  return start.add((passType && passType.durationDays) || 0, 'day').format('YYYY-MM-DD');
+}
+
 const validate = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -49,7 +59,8 @@ router.post('/types',
     body('name').notEmpty(),
     body('scope').isIn(['single', 'shared']),
     body('price').isNumeric(),
-    body('durationDays').isInt({ min: 1 }),
+    body('durationDays').optional({ checkFalsy: true }).isInt({ min: 1 }),
+    body('durationMonths').optional({ checkFalsy: true }).isInt({ min: 1 }),
   ],
   validate,
   async (req, res) => {
@@ -59,6 +70,10 @@ router.post('/types',
       const now = new Date();
       if (req.body.scope === 'single' && !req.body.targetGymId && !req.staff.gymId) {
         return res.status(400).json({ error: 'MISSING_TARGET_GYM', message: '請選擇票種適用的場館' });
+      }
+      // 效期：月數或天數擇一（月數優先），至少要有一個
+      if (!req.body.durationMonths && !req.body.durationDays) {
+        return res.status(400).json({ error: 'MISSING_DURATION', message: '請設定效期（月數或天數擇一）' });
       }
       // 館別隔離：非 super_admin 不可為其他館建立單館票種
       if (req.body.scope === 'single' && req.body.targetGymId && req.body.targetGymId !== req.staff.gymId && req.staff.role !== 'super_admin') {
@@ -72,7 +87,8 @@ router.post('/types',
         scope: req.body.scope,
         targetGymId: resolvedGymId,
         price: parseInt(req.body.price),
-        durationDays: parseInt(req.body.durationDays),
+        durationDays: req.body.durationDays ? parseInt(req.body.durationDays) : null,
+        durationMonths: req.body.durationMonths ? parseInt(req.body.durationMonths) : null,
         credits: req.body.credits ? parseInt(req.body.credits) : null,
         // 分期規則（此票種可分期）：購買時會員可選一次付清或分期
         installment: (req.body.installment && req.body.installment.enabled)
@@ -95,7 +111,8 @@ router.put('/types/:id',
   [
     body('name').optional().notEmpty(),
     body('price').optional().isNumeric(),
-    body('durationDays').optional().isInt({ min: 1 }),
+    body('durationDays').optional({ checkFalsy: true }).isInt({ min: 1 }),
+    body('durationMonths').optional({ checkFalsy: true }).isInt({ min: 1 }),
   ],
   validate,
   async (req, res) => {
@@ -105,12 +122,14 @@ router.put('/types/:id',
       const doc = await ref.get();
       if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此票種' });
 
-      const allowed = ['name', 'price', 'durationDays', 'credits'];
+      // durationMonths / durationDays 可傳空清除（切回另一種效期計法）；數字則存數字
+      const allowed = ['name', 'price', 'durationDays', 'durationMonths', 'credits'];
       const updates = {};
       allowed.forEach(f => {
-        if (req.body[f] !== undefined) {
-          updates[f] = (f === 'price' || f === 'durationDays' || f === 'credits') ? parseInt(req.body[f]) : req.body[f];
-        }
+        if (req.body[f] === undefined) return;
+        if (f === 'name') { updates[f] = req.body[f]; return; }
+        const n = parseInt(req.body[f]);
+        updates[f] = Number.isNaN(n) ? null : n;
       });
       if (req.body.installment !== undefined) {
         const inst = req.body.installment;
@@ -176,7 +195,7 @@ router.post('/',
       const passType = passTypeDoc.data();
       const passId = uuidv4();
       const now = new Date();
-      const endDate = dayjs(req.body.startDate).add(passType.durationDays, 'day').format('YYYY-MM-DD');
+      const endDate = computePassEndDate(req.body.startDate, passType);
       const pass = {
         id: passId, memberId: req.body.memberId,
         gymId: req.staff.gymId, passTypeId: req.body.passTypeId,
@@ -249,7 +268,7 @@ router.put('/:id',
           const passType = passTypeDoc.data();
           const currentEnd = passData.endDate;
           const baseDate = dayjs(currentEnd).isAfter(dayjs()) ? currentEnd : dayjs().format('YYYY-MM-DD');
-          updates.endDate = dayjs(baseDate).add(passType.durationDays, 'day').format('YYYY-MM-DD');
+          updates.endDate = computePassEndDate(baseDate, passType);
           updates.status = 'active';
           if (passType.credits) {
             updates.credits = passType.credits;

@@ -171,6 +171,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - commit 後端 `40c4c63`（權限）＋`41f86e9`（舊卡納入）、前端 `3c69f22`。
 - E2E 腳本：`scratchpad/`（child-nobuy / buy-pass / scan-gym / perm / legacy-bind），皆打正式 API、測後清理；殘留少量 dev 孤兒卡（已刪會員），無害。
 
+## 目前進度（2026-07-06 續）— 定期票流程釐清 + 分期提醒 Email 修復
+> 應要求釐清「定期票展延/退費申請」與「分期第二期通知/收款/逾期」流程，過程中發現並修一個真 bug。後端 `/health` `1.48.0-installment-reminder-emails`。
+- 📋 **流程釐清（無異動，僅記錄）**：
+  - **展延/退費/轉讓申請**：會員 App 或櫃檯 `POST /pass-adjustments/requests`（限四種法定事由 + 上傳證明 `evidenceUrl`）→ 每張票三選一、限一次（`pass.requestUsed`）→ 管理員待辦頁 `pass_adjustment` → `requireManagerOrStation` 審核。**展延** `endDate += extensionMonths`（上限 6 月）；**退費** `netRefund = round(原價/總天數 × 剩餘天數) − 手續費 600`，票 `cancelled`、需 `hasInvoice`（**只計算不自動記帳，退款櫃檯人工**）；**轉讓**手續費 300。年假批次 `holiday-batch` 不佔個人一次額度。
+  - **分期**：`POST /passes` 帶 `paymentPlan:'installment'` → `createInstallmentPlan`（第一期簽約當下收+記帳，2…n 期 pending）。**每日台灣 09:00 in-process 排程**（`src/index.js`，每小時檢查、單一 instance）跑 `runOverdueCheck`（過期未繳→`overdue`、擋入場）+ `sendInstallmentReminders`（會員到期前 3 天提醒、逾期通知；管理員到期前 14 天站內預警）。收款 `POST /installments/:planId/pay`（`markInstallmentPaid`，補一期若仍有他期逾期則維持 `overdue`）或線上 rail 回呼；入場擋在 `verifyEntry` 關卡 2.5 `hasOverdueInstallment` → `installment_overdue`。
+- ✅ **修 bug：分期到期/逾期提醒 Email 呼叫不存在的函式**（`/health 1.48.0`；E2E 10/10）：`installmentService.sendInstallmentReminders` 呼叫 `emailService.sendInstallmentDueReminder` / `sendInstallmentOverdueNotice`，但 emailService **根本沒這兩個函式** → 排程一碰到有 email 的到期/逾期會員就 `TypeError`、整批中斷（連管理員 `notifBatch` 都沒 commit）。補上兩函式（物件參數、含期數、走 `sendEmail`/Resend）+ 寄送包 `try/catch`（單筆失敗不中斷、不標 `sentAt` 下次重試）。**逾期標記與擋入場原本就正常，只壞「通知」**。正式 API E2E：`send-reminders` 200（原 500）、`reminderSent/overdueSent/adminNotified` 各 ≥1、計畫轉 `overdue`。commit `96a02a9`（純後端）。
+- ✅ **查證：展延/退費證明文件上傳 Storage 不需改**（原疑慮誤報）：實測 `POST /pass-adjustments/evidence` 上傳 200、簽名 URL 可抓回原圖。Railway 有 `FIREBASE_PRIVATE_KEY` → `getSignedUrl` 本地簽章，**不觸發** waiver 當年失敗的 IAM oauth2。故**不改**（硬套 base64 會踩 Firestore 1MB 上限）。
+- 附帶：`cleanupOrphans.js` 孤兒集合加 `installmentPlans`。
+
 ## 維護腳本（`scripts/`）
 - **`cleanupOrphans.js`** — 清 dev 殘留：孤兒卡/券/定期票（owner 會員已不存在）+ 測試 shiftLog（`stationId` 前綴，預設 `e2e-`）。**dry-run 為預設，`--commit` 才刪**；`owner=null`（未指派）不算孤兒、不刪；憑證走 `initFirebase()`（env `FIREBASE_*` 或 `GOOGLE_APPLICATION_CREDENTIALS`）。E2E 後清殘留用。
   - 預覽：`GOOGLE_APPLICATION_CREDENTIALS=/path/sa.json node scripts/cleanupOrphans.js`

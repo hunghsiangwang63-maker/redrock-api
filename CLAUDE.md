@@ -178,7 +178,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **分期**：`POST /passes` 帶 `paymentPlan:'installment'` → `createInstallmentPlan`（第一期簽約當下收+記帳，2…n 期 pending）。**每日台灣 09:00 in-process 排程**（`src/index.js`，每小時檢查、單一 instance）跑 `runOverdueCheck`（過期未繳→`overdue`、擋入場）+ `sendInstallmentReminders`（會員到期前 3 天提醒、逾期通知；管理員到期前 14 天站內預警）。收款 `POST /installments/:planId/pay`（`markInstallmentPaid`，補一期若仍有他期逾期則維持 `overdue`）或線上 rail 回呼；入場擋在 `verifyEntry` 關卡 2.5 `hasOverdueInstallment` → `installment_overdue`。
 - ✅ **修 bug：分期到期/逾期提醒 Email 呼叫不存在的函式**（`/health 1.48.0`；E2E 10/10）：`installmentService.sendInstallmentReminders` 呼叫 `emailService.sendInstallmentDueReminder` / `sendInstallmentOverdueNotice`，但 emailService **根本沒這兩個函式** → 排程一碰到有 email 的到期/逾期會員就 `TypeError`、整批中斷（連管理員 `notifBatch` 都沒 commit）。補上兩函式（物件參數、含期數、走 `sendEmail`/Resend）+ 寄送包 `try/catch`（單筆失敗不中斷、不標 `sentAt` 下次重試）。**逾期標記與擋入場原本就正常，只壞「通知」**。正式 API E2E：`send-reminders` 200（原 500）、`reminderSent/overdueSent/adminNotified` 各 ≥1、計畫轉 `overdue`。commit `96a02a9`（純後端）。
 - ✅ **查證：展延/退費證明文件上傳 Storage 不需改**（原疑慮誤報）：實測 `POST /pass-adjustments/evidence` 上傳 200、簽名 URL 可抓回原圖。Railway 有 `FIREBASE_PRIVATE_KEY` → `getSignedUrl` 本地簽章，**不觸發** waiver 當年失敗的 IAM oauth2。故**不改**（硬套 base64 會踩 Firestore 1MB 上限）。
-- 附帶：`cleanupOrphans.js` 孤兒集合加 `installmentPlans`。
+- ✅ **展延/退費申請 E2E（打 Railway，後端 20/20 + 會員端 14/14）**：
+  - **後端流程**（admin token）：上傳證明 → 建申請 → 同票再申請擋 `REQUEST_PENDING` → 待審核清單 → 核准展延（endDate 延長、月數正確）→ 用過的票 `REQUEST_ALREADY_USED` → 退費需 `hasInvoice`（否則 `INVOICE_REQUIRED`）→ 核准退費金額算式對上（剩91天 gross 2967 − 手續費600 = net 2367）、票 `cancelled` → 拒絕後票不變且可重申請 → 缺證明 400。
+  - **會員端**（真會員 token，`POST /auth/member/login`；測試會員以 firebase-admin 注入 `passwordHash`）：會員從「我的票券」上傳證明+建申請，`memberId` 綁登入身分；**IDOR** 對他人票提申請 → `FORBIDDEN`；只能查自己申請（查他人 403）；**不能自審**（打核准端點 401，審核走 staff-only）；店員核准展延/退費結果同後端。腳本 `scratchpad/pass-request-e2e.mjs`、`pass-request-member-e2e.cjs`。
+- 附帶：`cleanupOrphans.js` 孤兒集合加 `installmentPlans`、`passRequests`。
 
 ## 維護腳本（`scripts/`）
 - **`cleanupOrphans.js`** — 清 dev 殘留：owner 會員已不存在的孤兒（優惠卡/舊優惠卡/黑卡/單次入場券/定期票/分期計畫/定期票異動申請）+ 測試 shiftLog（`stationId` 前綴，預設 `e2e-`）。**dry-run 為預設，`--commit` 才刪**；`owner=null`（未指派）不算孤兒、不刪；憑證走 `initFirebase()`（env `FIREBASE_*` 或 `GOOGLE_APPLICATION_CREDENTIALS`）。E2E 後清殘留用。

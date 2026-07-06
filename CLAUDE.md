@@ -190,6 +190,21 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **後續步驟不再殘留定期票清單**：根因是上述平鋪卡片塞在付款方式頁；下拉化後收乾淨。步驟本就分離（`shoes`/`qr` 不渲染方案清單），實機確認**付款方式頁 / 租借器材頁 / QR 頁** 頂部皆無定期票清單。
 - **瀏覽器實機驗證（redrock-member.web.app，真會員登入）**：身分頁顯示「成人入場／學生入場」無金額 → 付款頁定期票為下拉 → 一般付款 → 現金 → 器材頁 → QR 頁，各頁截圖確認無殘留。測試會員（`【練習】QR測試` 0900123789，firebase-admin 注入密碼）＋其 pending QR／waiver／墜測 已清乾淨。
 
+## 目前進度（2026-07-06 續）— 入場三路徑收斂 + 分期修正（後端 1.49→1.56）
+> 將入場三條路徑（會員 QR 自助 / 站台直接 `/checkin/direct` / 站台電話 `/checkin/phone`）收斂為單一權威關卡並補齊一致性，另修分期兩處。commit `e0b0696`→`87f203f`。多為統一/補漏/防偽造，**行為對合法輸入不變**。（此段依 git log 補記，前一輪之後由並行 session 完成。）
+- ✅ **分期修正**：
+  - `1.49` 修 `GET /installments/member` 缺 Firestore 複合索引 → 正式環境 `FAILED_PRECONDITION` 500（會員「我的分期」頁壞）→ 改只 `where` + 記憶體排序（比照 `getAllInstallmentPlans`）。commit `e0b0696`
+  - `1.50` 分期管理員站內預警由到期前 14 天改 **7 天**（會員 +3 天提醒、逾期通知不變）。commit `191f8e1`
+- ✅ **站台體驗券墜測例外 + 資格查詢權威化**：
+  - `1.51` `/checkin/phone` 補「持當日有效體驗券者未過墜測也可入場（須先簽墜測同意書，否則 `fall_test_consent_required`）」例外，與 `createPendingCheckIn` 一致；`checkinService` export `hasFallTestSignature`。commit `795c43d`
+  - `1.52` `/checkin/eligibility` 單次券改用權威 `getValidSingleEntryTickets`（原自帶查詢漏體驗券 `validDate=今日`／未帶 `ticketType`，與 `confirmCheckIn` 不一致）→ 電話搜尋當日體驗券端到端可用、回 `ticketType/validDate`。commit `6d9c345`
+- ✅ **三路徑收斂重構（A/B/C）+ 逾期補擋**（行為對合法輸入不變）：
+  - `1.53` `createPendingCheckIn` 補 `hasOverdueInstallment`——**站台直接 `/checkin/direct` 原本可讓分期逾期會員入場**（`verifyEntry`/`phone` 皆有擋），現三路徑一致擋。commit `926e42d`
+  - `1.54`（refactor C）舊折扣卡 8 折收斂進 `createPendingCheckIn`（`/qr/create`、`/direct` 亦支援；權威讀 `transitionSettings.checkinLegacyDiscountCard`、不單信旗標；pending/checkIn 加 `legacyDiscount` 欄）。commit `1774d22`
+  - `1.55`（refactor A）新增 `checkinService.runEntryGates`（同日重複／Waiver／墜測含體驗券例外／分期逾期），`verifyEntry`／`createPendingCheckIn`／`/checkin/phone` 皆改呼叫；`/direct` 移除自帶 dup 檢查。保留路徑差異（墜測例外 `owns` vs `using`、子女分期逾期以 `parentMemberId` 查家長）；副帶 QR/direct 現也做同日重複檢查。commit `5eddf9b`
+  - `1.56`（refactor B + 防白嫖）`/checkin/eligibility` waiver 布林改用共用 `checkWaiver`（export）；**`/checkin/phone` 免費資格（VIP/定期票/課程）改呼叫 `verifyEntry` 權威判定**——前端偽造免費 `entryType` 但實際非免費者改用權威付費類型（合法者不變、已付費放行不覆核）。commit `c7c07e5`
+- 📄 `docs/entry-eligibility-flow.md` 同步更新（關卡0 改單一 `runEntryGates` 含 `owns/using` 體驗券模式、風險段標「已收斂」、重構後行號）。commit `994ea54`、`87f203f`
+
 ## 維護腳本（`scripts/`）
 - **`cleanupOrphans.js`** — 清 dev 殘留：owner 會員已不存在的孤兒（優惠卡/舊優惠卡/黑卡/單次入場券/定期票/分期計畫/定期票異動申請）+ 測試 shiftLog（`stationId` 前綴，預設 `e2e-`）。**dry-run 為預設，`--commit` 才刪**；`owner=null`（未指派）不算孤兒、不刪；憑證走 `initFirebase()`（env `FIREBASE_*` 或 `GOOGLE_APPLICATION_CREDENTIALS`）。E2E 後清殘留用。
   - 預覽：`GOOGLE_APPLICATION_CREDENTIALS=/path/sa.json node scripts/cleanupOrphans.js`

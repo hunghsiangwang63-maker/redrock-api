@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '1.42.0-pass-duration-months',
+    version: '1.43.0-child-no-buy-discount-card',
   });
 });
 

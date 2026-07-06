@@ -538,19 +538,21 @@ const verifyEntry = async (memberId, gymId) => {
         available: singleEntryTickets.length > 0,
         tickets: singleEntryTickets.map(t => ({ id: t.id, expiresAt: t.expiresAt })),
       },
-      buyDiscountCard: { price: PRICES.discount_card },
+      // 兒童不適用折扣券 → 不提供「購買」選項
+      buyDiscountCard: { available: memberType !== 'child', price: PRICES.discount_card },
     },
     // 舊欄位（相容）：扁平清單
     availableOptions: [
       ...entryTypeOptions,
-      {
+      // 購買優惠折扣券入場（兒童不適用折扣券，故 child 不顯示此選項）
+      ...(memberType !== 'child' ? [{
         type: 'buy_discount_card',
         label: '購買優惠折扣券入場',
         price: PRICES.discount_card,
         note: '含本次入場＋10次八折＋紅利',
         available: true,
         requiresPayment: true,
-      },
+      }] : []),
       // 使用優惠折扣券：原價 8 折（兒童不適用，故 child 不顯示此選項）
       ...(memberType !== 'child' ? [{
         type: 'discount_card',
@@ -604,6 +606,11 @@ const createPendingCheckIn = async ({
   const db = getDb();
   const member = await getMember(memberId);
   const memberType = getMemberType(member);
+
+  // 後端權威：兒童不適用折扣券，禁止「購買優惠折扣券入場」（不信前端傳值）
+  if (entryType === 'buy_discount_card' && memberType === 'child') {
+    throw { code: 'CHILD_NO_DISCOUNT_CARD', message: '兒童不適用折扣券，無法購買' };
+  }
 
   // 再次確認 waiver + 墜落測驗
   const waiver = await checkWaiver(memberId);

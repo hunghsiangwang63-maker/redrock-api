@@ -181,7 +181,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 附帶：`cleanupOrphans.js` 孤兒集合加 `installmentPlans`。
 
 ## 維護腳本（`scripts/`）
-- **`cleanupOrphans.js`** — 清 dev 殘留：孤兒卡/券/定期票（owner 會員已不存在）+ 測試 shiftLog（`stationId` 前綴，預設 `e2e-`）。**dry-run 為預設，`--commit` 才刪**；`owner=null`（未指派）不算孤兒、不刪；憑證走 `initFirebase()`（env `FIREBASE_*` 或 `GOOGLE_APPLICATION_CREDENTIALS`）。E2E 後清殘留用。
+- **`cleanupOrphans.js`** — 清 dev 殘留：owner 會員已不存在的孤兒（優惠卡/舊優惠卡/黑卡/單次入場券/定期票/分期計畫/定期票異動申請）+ 測試 shiftLog（`stationId` 前綴，預設 `e2e-`）。**dry-run 為預設，`--commit` 才刪**；`owner=null`（未指派）不算孤兒、不刪；憑證走 `initFirebase()`（env `FIREBASE_*` 或 `GOOGLE_APPLICATION_CREDENTIALS`）。E2E 後清殘留用。
   - 預覽：`GOOGLE_APPLICATION_CREDENTIALS=/path/sa.json node scripts/cleanupOrphans.js`
   - 刪除：`… node scripts/cleanupOrphans.js --commit`
   - 選項：`--no-shifts`（只清孤兒、不動 shiftLog）、`--station-prefix=test-`（自訂測試站前綴）

@@ -652,6 +652,12 @@ const createPendingCheckIn = async ({
     }
   }
 
+  // 分期付款逾期（與 verifyEntry / /checkin/phone 一致；補齊 QR/direct 路徑，避免逾期會員從站台直接入場）
+  const { hasOverdueInstallment } = require('./installmentService');
+  if (await hasOverdueInstallment(memberId)) {
+    throw { code: 'INSTALLMENT_OVERDUE', message: '分期付款已逾期，入場資格已暫停，請至櫃檯完成繳款' };
+  }
+
   // 黑卡/單次入場券：QR 階段只驗證可用性，「不」預扣。
   // 實際扣點延後到 confirmCheckIn（確認入場才扣）→ 產生 QR 但未入場不會扣卡/鎖券。
   if (entryType === 'black_card' && blackCardId) {

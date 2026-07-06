@@ -35,7 +35,7 @@
 | 1 | 同日同館重複入場 | `already_checked_in` | `checkinService.js:345-362` | —（`/direct` 於路由自查 `checkin.js:247-255`） | `checkin.js:508-513` |
 | 2 | Waiver 未完成 | `waiver_required`（未簽）／`parent_waiver_pending`（本人簽完待家長） | `checkinService.js:366-376` | `checkinService.js:637-638` | `checkin.js:522-524` |
 | 3 | 墜落測驗未通過 | `fall_test_required`（`never_tested`）／`fall_test_expired`（`expired`）／`fall_test_consent_required`（見下） | `checkinService.js:378-401` | `checkinService.js:640-653` | `checkin.js:527-548` |
-| 4 | 分期付款逾期 | `installment_overdue` | `checkinService.js:403-413` | ❌ **未查**（見風險 §6-1） | `checkin.js:516-521` |
+| 4 | 分期付款逾期 | `installment_overdue` | `checkinService.js:403-413` | `checkinService.js:655-659` | `checkin.js:516-521` |
 
 `checkFallTest` 回傳 `reason`：`never_tested`（`checkinService.js:238`）、`expired`（`256`）。
 
@@ -119,20 +119,19 @@
 
 ## 6. 已知風險（僅列程式碼實際存在的不一致）
 
-1. **站台直接入場 `/checkin/direct` 不擋分期逾期。**
-   `createPendingCheckIn`（`checkinService.js:636-653`）只再查 waiver＋墜測，**未**呼叫 `hasOverdueInstallment`；`/direct`（`checkin.js:236`）走此路徑。而 `verifyEntry:403-413` 與 `/checkin/phone:516-521` 皆有擋 → 分期逾期會員仍可經 `/direct` 入場。
-
-2. **`/checkin/eligibility` 是 `verifyEntry` 的平行簡化實作。**
+1. **`/checkin/eligibility` 是 `verifyEntry` 的平行簡化實作。**
    `checkin.js:170` vs `checkinService.js:338`。eligibility 只回 `instruments`（discountCard/blackCard/bonus/singleEntryTicket）＋`hasValidPass`，**不回** `entryTypeOptions`／`buyPass`／`buyDiscountCard` 與免費短路邏輯；`entryTypes`／折扣規則改動須兩邊各自維護。（單次券已改為呼叫權威 `getValidSingleEntryTickets`，`checkin.js:203`。）
 
-3. **`/checkin/phone` 不獨立驗證免費資格。**
+2. **`/checkin/phone` 不獨立驗證免費資格。**
    `checkin.js:486` 依前端傳入的 `entryType` 計價；VIP／定期票／課程免費靠前端送 `entryType='vip'/'pass'/'course_access'`（`computePaidEntryAmount` 回 `null` → `amountPaid=0`，`checkin.js:566-582`）。後端未於 `/phone` 重新確認 VIP/pass/course 資格。
 
-4. **`/checkin/phone` 無法直接使用會員票券。**
+3. **`/checkin/phone` 無法直接使用會員票券。**
    `checkin.js:486` 未收 `passId`/`singleEntryTicketId`/`discountCardId`/`blackCardId`/`bonusId`；使用票券須改走 `/checkin/direct`（前端據 `instrument` 分流，`checkin.js:239-261`）。
 
-5. **舊折扣卡 8 折僅 `/checkin/phone` 支援。**
+4. **舊折扣卡 8 折僅 `/checkin/phone` 支援。**
    `legacyDiscountCard` 選項只有 `/phone` 傳入 `computePaidEntryAmount`（`checkin.js:570`）；`createPendingCheckIn:688` 呼叫時未帶 `opts` → QR／`/direct` 路徑不支援舊折扣卡 8 折。
 
-6. **同日重複入場檢查有三份獨立實作。**
+5. **同日重複入場檢查有三份獨立實作。**
    `verifyEntry`（`checkinService.js:345-362`）、`/direct`（`checkin.js:247-255`）、`/phone`（`checkin.js:508-513`）各自查詢，邏輯需手動保持一致。
+
+> 已修復（不再是風險）：`/checkin/direct`（經 `createPendingCheckIn`）原先未擋分期逾期，已於 `checkinService.js:655-659` 補上 `hasOverdueInstallment` 檢查，三條路徑現皆擋分期逾期。

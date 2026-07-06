@@ -207,6 +207,18 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📄 **文件重產（依四風險核對修復後現狀，全依程式碼行號、無推測）**：三路徑比較表補「關卡0共用 `runEntryGates`／`/phone` 免費資格後端權威／舊折扣卡8折三路徑一致／`/direct` 移除自帶 dup」、修正 `cancelCheckIn` 行號（→1000）；風險段拆成 **「已修復」**（風險 2/3/4 + eligibility 底層函式共用，附修復方式與行號）與 **「尚未修復/設計取捨」**。commit `5fa3a9d`。
   - ⚠️ **eligibility 未達「回傳全等」**：`/checkin/eligibility`（`checkin.js:205-227`）底層查詢已與 `verifyEntry` 共用（**資料一致**），但**只回布林旗標＋`instruments{discountCard/blackCard/bonus/singleEntryTicket}`**，**不含** `entryTypeOptions`/`buyPass`/`buyDiscountCard`/免費短路。定位為「全部攤開供站台挑選」投影層（不決定單一結果、由站台人員選），**誤放/誤收風險低、暫不補齊**；若要全等需另做程式碼變更。
 
+## 目前進度（2026-07-06 續）— 入場購定期票（buy_pass）支援分期付款
+> 「入場當下購買定期票」原只能一次付清，補上分期（比照 `POST /passes` 的 `usePassInstallment`）。金額後端權威、營收不雙重記帳。後端 `/health` `1.57.0-buy-pass-installment`；E2E（打 Railway，`/checkin/direct`）16/16。
+- ✅ **後端**（`checkinService.js` + `checkin.js`）：
+  - `getBuyablePassTypes` 回傳補 `installment`（前端判斷可否分期）。
+  - `createPendingCheckIn` 收 `paymentPlan` 寫進 pending（`'full'|'installment'`）；`/checkin/qr/create`、`/checkin/direct` 透傳。
+  - `confirmCheckIn` buy_pass 分支：`paymentPlan==='installment' && pt.installment.enabled && price>0` → `buildPeriodsFromConfig` + `createInstallmentPlan(relatedType:'pass', firstPaymentMethod=pending.paymentMethod)`；memberPass 記 `installmentPlanId`。
+  - **營收不雙重記帳**：分期時票價由分期計畫第一期記帳，**本次入場交易排除票價**（`checkIn.amountPaid` 與 `recordTransaction entryFee` 皆扣掉，比照 `POST /passes` 的 `!passPlan` 條件）；一次付清維持原行為（記全額）。
+  - `cancelCheckIn` buy_pass：取消一併作廢分期計畫（`status:'cancelled'`），避免孤兒欠款/逾期擋入場。
+- ✅ **會員端**（`redrock-web` `MemberQRPage`）：選定期票方案後、付款方式頁若該票種可分期 → 顯示現成 `PaymentPlanChoice`（一次付清/分期＋各期預覽），下方付款方式即「頭款（第一期）」；payload 帶 `paymentPlan`。
+- ⛔ **站台端（CheckinPage）刻意不做**：站台走 `/checkin/eligibility`（投影層、不回傳 `buyPass`，見上一段風險 1 決定），本就無 buy_pass 入口。後端 `/checkin/direct` 已支援 `buy_pass+paymentPlan`（E2E 即打此條），未來要接站台 UI 隨時可用。
+- **E2E（16/16）**：分期→`/checkin/direct` 201、`checkIn.paymentPlan=installment`、**`amountPaid=0`**（票價不重複記）、memberPass 有 `installmentPlanId`、分期計畫 3 期（第1期 paid 2534、2/3 pending、合計 7600）；一次付清→`amountPaid=7600`、無計畫。commit 後端 `e18ea4f`、前端 `2736121`。腳本 `scratchpad/buypass-installment-e2e.mjs`；殘留已 `cleanupOrphans` 清。
+
 ## 維護腳本（`scripts/`）
 - **`cleanupOrphans.js`** — 清 dev 殘留：owner 會員已不存在的孤兒（優惠卡/舊優惠卡/黑卡/單次入場券/定期票/分期計畫/定期票異動申請）+ 測試 shiftLog（`stationId` 前綴，預設 `e2e-`）。**dry-run 為預設，`--commit` 才刪**；`owner=null`（未指派）不算孤兒、不刪；憑證走 `initFirebase()`（env `FIREBASE_*` 或 `GOOGLE_APPLICATION_CREDENTIALS`）。E2E 後清殘留用。
   - 預覽：`GOOGLE_APPLICATION_CREDENTIALS=/path/sa.json node scripts/cleanupOrphans.js`

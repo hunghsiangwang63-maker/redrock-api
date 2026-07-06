@@ -620,7 +620,7 @@ const verifyEntry = async (memberId, gymId) => {
 const createPendingCheckIn = async ({
   memberId, gymId, entryType, baseEntryType,
   passId, discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
-  paymentMethod, amount, originalAmount, isTeamDiscount,
+  paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard,
   rentShoes, shoesPrice,
   rentChalk, chalkPrice,
 }) => {
@@ -690,12 +690,22 @@ const createPendingCheckIn = async ({
   let finalAmount = amount || 0;
   let finalOriginal = originalAmount || 0;
   let finalTeam = isTeamDiscount || false;
+  let finalLegacy = false;
   {
-    const computed = await computePaidEntryAmount(entryType, member);
+    // 舊折扣卡 8 折：權威以後端轉換期開關 checkinLegacyDiscountCard 為準，不單信呼叫端旗標（與 /checkin/phone 同一份邏輯）
+    let useLegacyDiscount = false;
+    if (legacyDiscountCard === true) {
+      try {
+        const ts = await db.collection('systemSettings').doc('transitionSettings').get();
+        useLegacyDiscount = !!(ts.exists && ts.data().checkinLegacyDiscountCard);
+      } catch {}
+    }
+    const computed = await computePaidEntryAmount(entryType, member, { legacyDiscountCard: useLegacyDiscount });
     if (computed) {
       finalOriginal = computed.originalAmount;
       finalAmount = computed.amount;
       finalTeam = computed.isTeamDiscount;
+      finalLegacy = !!computed.legacyDiscount;
     }
   }
 
@@ -758,6 +768,7 @@ const createPendingCheckIn = async ({
     amount: finalAmount,
     originalAmount: finalOriginal,
     isTeamDiscount: finalTeam,
+    legacyDiscount: finalLegacy,
     rentShoes: rentShoes || false,
     shoesPrice: rentShoes ? (shoesPrice || PRICES.shoes_rental) : 0,
     rentChalk: rentChalk || false,
@@ -812,6 +823,7 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     amount: pending.amount,
     originalAmount: pending.originalAmount,
     isTeamDiscount: pending.isTeamDiscount,
+    legacyDiscount: pending.legacyDiscount || false,
     rentShoes: pending.rentShoes,
     shoesPrice: pending.shoesPrice,
     rentChalk: pending.rentChalk || false,
@@ -911,6 +923,7 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     amountPaid: pending.amount + pending.shoesPrice + (pending.chalkPrice || 0),
     paymentMethod: pending.paymentMethod,
     isTeamDiscount: pending.isTeamDiscount,
+    legacyDiscount: pending.legacyDiscount || false,
     rentShoes: pending.rentShoes,
     shoesPrice: pending.shoesPrice,
     rentChalk: pending.rentChalk || false,

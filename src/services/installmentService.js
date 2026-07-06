@@ -185,14 +185,14 @@ const runOverdueCheck = async () => {
 };
 
 // ── 每日批次：寄送到期提醒（會員，到期前3天）、逾期通知（會員）、
-//             管理員提前預警（到期前14天，站內通知）────────────────
+//             管理員提前預警（到期前7天，站內通知）────────────────
 const sendInstallmentReminders = async () => {
   const db = getDb();
   const emailService = require('./emailService');
   const memberService = require('./memberService');
   const today = dayjs().format('YYYY-MM-DD');
   const memberWarningDate = dayjs().add(3, 'day').format('YYYY-MM-DD');
-  const adminWarningDate = dayjs().add(14, 'day').format('YYYY-MM-DD');
+  const adminWarningDate = dayjs().add(7, 'day').format('YYYY-MM-DD');
 
   const snap = await db.collection(COLLECTIONS.INSTALLMENT_PLANS)
     .where('status', 'in', ['active', 'overdue']).get();
@@ -210,7 +210,7 @@ const sendInstallmentReminders = async () => {
     try { member = await memberService.getMember(plan.memberId); } catch (e) { continue; }
 
     for (const i of plan.installments) {
-      // 管理員提前預警（到期前14天，站內通知，不論會員是否有Email都會發）
+      // 管理員提前預警（到期前7天，站內通知，不論會員是否有Email都會發）
       if (i.status === 'pending' && i.dueDate >= today && i.dueDate <= adminWarningDate && !i.adminNotifiedAt) {
         managers.forEach(m => {
           const notifRef = db.collection('notifications').doc();

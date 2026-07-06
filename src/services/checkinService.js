@@ -776,7 +776,7 @@ const createPendingCheckIn = async ({
 };
 
 // ── 掃描 QR code：取得入場資訊（不確認）────────────────────────
-const scanQrCode = async (qrToken) => {
+const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
   const db = getDb();
   const doc = await db.collection(COLLECTIONS.PENDING_CHECK_INS).doc(qrToken).get();
 
@@ -788,6 +788,10 @@ const scanQrCode = async (qrToken) => {
   if (pending.status === 'cancelled') throw { code: 'QR_CANCELLED', message: '此 QR Code 已取消' };
   if (dayjs().isAfter(dayjs(pending.expiresAt.toDate()))) {
     throw { code: 'QR_EXPIRED', message: 'QR Code 已過期' };
+  }
+  // 場館比對：QR 綁定產生時的場館，掃碼站台須為同館（super_admin 例外；無站台館別時不擋）
+  if (staffGymId && !isSuperAdmin && pending.gymId !== staffGymId) {
+    throw { code: 'GYM_MISMATCH', message: `此 QR 為「${GYM_NAMES[pending.gymId] || pending.gymId}」入場碼，請至該館掃碼入場` };
   }
 
   return {
@@ -815,7 +819,7 @@ const scanQrCode = async (qrToken) => {
 };
 
 // ── 確認入場（櫃檯掃描後確認）───────────────────────────────────
-const confirmCheckIn = async (qrToken, staffId, staffName) => {
+const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, isSuperAdmin = false) => {
   const db = getDb();
   const pendingRef = db.collection(COLLECTIONS.PENDING_CHECK_INS).doc(qrToken);
   const pendingDoc = await pendingRef.get();
@@ -825,6 +829,10 @@ const confirmCheckIn = async (qrToken, staffId, staffName) => {
   const pending = pendingDoc.data();
   if (pending.status !== 'pending') throw { code: 'QR_INVALID_STATUS', message: `QR Code 狀態為 ${pending.status}，無法確認` };
   if (dayjs().isAfter(dayjs(pending.expiresAt.toDate()))) throw { code: 'QR_EXPIRED', message: 'QR Code 已過期' };
+  // 權威後盾：確認入場時再次比對掃碼站台館別（與 scanQrCode 一致，防繞過掃碼直打 confirm）
+  if (staffGymId && !isSuperAdmin && pending.gymId !== staffGymId) {
+    throw { code: 'GYM_MISMATCH', message: `此 QR 為「${GYM_NAMES[pending.gymId] || pending.gymId}」入場碼，請至該館掃碼入場` };
+  }
 
   const now = new Date();
   const checkInId = uuidv4();

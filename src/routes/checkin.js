@@ -119,7 +119,8 @@ router.post('/qr/scan',
   validate,
   async (req, res) => {
     try {
-      const result = await checkinService.scanQrCode(req.body.qrToken);
+      const result = await checkinService.scanQrCode(
+        req.body.qrToken, req.staff?.gymId || null, req.staff?.role === 'super_admin');
       res.json(result);
     } catch (err) {
       if (err.code) return res.status(400).json(err);
@@ -136,7 +137,9 @@ router.post('/qr/confirm',
   validate,
   async (req, res) => {
     try {
-      const result = await checkinService.confirmCheckIn(req.body.qrToken, req.staff.id, req.staff.name);
+      const result = await checkinService.confirmCheckIn(
+        req.body.qrToken, req.staff.id, req.staff.name,
+        req.staff?.gymId || null, req.staff?.role === 'super_admin');
       res.status(201).json({ ...result, message: '入場登記成功' });
     } catch (err) {
       if (err.code) return res.status(400).json(err);
@@ -258,7 +261,9 @@ router.post('/direct', authenticate, async (req, res) => {
       discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
       paymentMethod: paymentMethod || 'cash', rentShoes, rentChalk,
     });
-    const result = await checkinService.confirmCheckIn(qrToken, req.staff.id, req.staff.name);
+    const result = await checkinService.confirmCheckIn(
+      qrToken, req.staff.id, req.staff.name,
+      req.staff?.gymId || null, req.staff?.role === 'super_admin');
     res.status(201).json(result);
   } catch (err) {
     if (err.code) return res.status(400).json(err);

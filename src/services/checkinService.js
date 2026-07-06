@@ -1122,6 +1122,7 @@ module.exports = {
   tryExtendFallTest,
   checkVip,
   getValidSingleEntryTickets,
+  hasFallTestSignature,
   getMemberType,
   computePaidEntryAmount,
   PRICES,

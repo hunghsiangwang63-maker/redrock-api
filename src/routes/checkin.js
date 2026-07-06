@@ -526,14 +526,27 @@ router.post('/phone', authenticate, async (req, res) => {
       return res.status(403).json({ message: 'Waiver 尚未完成簽署，無法入場，請先完成簽署' });
     }
 
-    // 墜落測驗硬擋（與會員自助 verifyEntry 一致）
+    // 墜落測驗硬擋（與會員自助 verifyEntry / createPendingCheckIn 一致）
     const fallTestCheck = await checkinService.checkFallTest(memberId);
     if (!fallTestCheck.passed) {
-      return res.status(403).json({
-        message: fallTestCheck.reason === 'expired'
-          ? '墜落測驗已到期，請至服務台重新進行測驗'
-          : '尚未通過安全墜落測驗，請先至服務台完成同意書簽署及測驗',
-      });
+      // 例外：持「當日有效體驗券」者，未通過墜測也可入場，但仍須簽署墜落測驗同意書（與 createPendingCheckIn 一致）
+      const hasExpTicket = (await checkinService.getValidSingleEntryTickets(memberId)).some(t => t.ticketType === 'experience');
+      if (hasExpTicket) {
+        const signed = await checkinService.hasFallTestSignature(memberId);
+        if (!signed) {
+          return res.status(403).json({
+            reason: 'fall_test_consent_required',
+            message: '請先簽署墜落測驗同意書（體驗課程可未通過墜測入場，但須簽署同意書）',
+          });
+        }
+        // 有簽署 → 放行（持體驗券，未通過墜測也可入場）
+      } else {
+        return res.status(403).json({
+          message: fallTestCheck.reason === 'expired'
+            ? '墜落測驗已到期，請至服務台重新進行測驗'
+            : '尚未通過安全墜落測驗，請先至服務台完成同意書簽署及測驗',
+        });
+      }
     }
 
     // 已付費（轉換期：會員於舊系統已「付入場費」→ 入場費記 0；但加購岩鞋/粉袋仍須另收；waiver/墜測前面仍硬擋）

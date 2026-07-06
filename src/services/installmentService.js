@@ -269,10 +269,13 @@ const hasOverdueInstallment = async (memberId) => {
 // ── 查詢會員所有分期計畫 ──────────────────────────────────────────
 const getMemberInstallmentPlans = async (memberId) => {
   const db = getDb();
+  // 不用 .orderBy('createdAt') 搭配 where（需複合索引，正式環境會 FAILED_PRECONDITION）→ 記憶體排序（同 getAllInstallmentPlans）
   const snap = await db.collection(COLLECTIONS.INSTALLMENT_PLANS)
     .where('memberId', '==', memberId)
-    .orderBy('createdAt', 'desc').get();
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    .get();
+  const plans = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  plans.sort((a, b) => (b.createdAt?._seconds || 0) - (a.createdAt?._seconds || 0));
+  return plans;
 };
 
 // ── 查詢所有分期計畫（管理端，可篩選狀態）──────────────────────────

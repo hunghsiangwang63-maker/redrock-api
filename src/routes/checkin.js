@@ -198,11 +198,9 @@ router.get('/eligibility/:memberId', authenticate, async (req, res) => {
     const discountCards = await require('../services/discountCardService').getValidDiscountCards(req.params.memberId);
     const blackCards = await require('../services/legacyCardService').getMemberBlackCards(req.params.memberId);
     const bonuses = await require('../services/bonusService').getMemberBonuses(req.params.memberId);
-    const setSnap = await db.collection('singleEntryTickets')
-      .where('memberId', '==', req.params.memberId)
-      .where('status', '==', 'active')
-      .where('expiresAt', '>=', today)
-      .get();
+    // 與入場 confirmCheckIn 權威一致：體驗券限當日 validDate、一般單次券不受限
+    // （改用 getValidSingleEntryTickets，避免電話搜尋列出不可用的票券／漏列當日體驗券）
+    const validTickets = await checkinService.getValidSingleEntryTickets(req.params.memberId);
     const memberType = member.memberType || 'general';
 
     res.json({
@@ -225,7 +223,7 @@ router.get('/eligibility/:memberId', authenticate, async (req, res) => {
         },
         blackCard: { available: blackCards.length > 0, cards: blackCards.map(c => ({ id: c.id, remainingCredits: c.remainingCredits })) },
         bonus: { available: bonuses.length > 0, bonuses: bonuses.map(b => ({ id: b.id, expiresAt: b.expiresAtFormatted })) },
-        singleEntryTicket: { available: !setSnap.empty, tickets: setSnap.docs.map(d => ({ id: d.id })) },
+        singleEntryTicket: { available: validTickets.length > 0, tickets: validTickets.map(t => ({ id: t.id, ticketType: t.ticketType || null, validDate: t.validDate || null })) },
       },
     });
   } catch (err) {

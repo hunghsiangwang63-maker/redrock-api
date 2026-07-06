@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '1.51.0-phone-falltest-exp-exception',
+    version: '1.52.0-eligibility-authoritative-tickets',
   });
 });
 

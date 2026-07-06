@@ -75,7 +75,7 @@ router.post('/qr/create',
       const {
         memberId, gymId, entryType, baseEntryType,
         passId, discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
-        paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard,
+        paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, paymentPlan,
         rentShoes, shoesPrice, rentChalk, chalkPrice,
       } = req.body;
 
@@ -99,7 +99,7 @@ router.post('/qr/create',
         memberId: effectiveMemberId,
         gymId: effectiveGymId,
         entryType, baseEntryType, passId, discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
-        paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard,
+        paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, paymentPlan,
         rentShoes, shoesPrice, rentChalk, chalkPrice,
       });
 
@@ -237,7 +237,7 @@ router.post('/direct', authenticate, async (req, res) => {
     const {
       memberId, gymId, entryType, baseEntryType,
       discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
-      paymentMethod, rentShoes, rentChalk, legacyDiscountCard,
+      paymentMethod, rentShoes, rentChalk, legacyDiscountCard, paymentPlan,
     } = req.body;
     if (!memberId || !entryType) return res.status(400).json({ message: '缺少會員或入場類型' });
     const effGym = req.staff?.role === 'super_admin' ? gymId : (req.staff?.gymId || gymId);
@@ -246,7 +246,7 @@ router.post('/direct', authenticate, async (req, res) => {
     const { qrToken } = await checkinService.createPendingCheckIn({
       memberId, gymId: effGym, entryType, baseEntryType,
       discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
-      paymentMethod: paymentMethod || 'cash', rentShoes, rentChalk, legacyDiscountCard,
+      paymentMethod: paymentMethod || 'cash', rentShoes, rentChalk, legacyDiscountCard, paymentPlan,
     });
     const result = await checkinService.confirmCheckIn(
       qrToken, req.staff.id, req.staff.name,

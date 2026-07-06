@@ -140,6 +140,7 @@ const getBuyablePassTypes = async (gymId) => {
       durationMonths: t.durationMonths || null,
       durationDays: t.durationDays || null,
       credits: t.credits ?? null,
+      installment: t.installment || { enabled: false, periods: [] }, // 讓前端知道可否分期
     }));
 };
 
@@ -661,7 +662,7 @@ const verifyEntry = async (memberId, gymId) => {
 const createPendingCheckIn = async ({
   memberId, gymId, entryType, baseEntryType,
   passId, discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
-  paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard,
+  paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, paymentPlan,
   rentShoes, shoesPrice,
   rentChalk, chalkPrice,
 }) => {
@@ -788,6 +789,7 @@ const createPendingCheckIn = async ({
     singleEntryTicketId: singleEntryTicketId || null,
     bonusId: bonusId || null,
     buyPassTypeId: buyPassTypeId || null,
+    paymentPlan: paymentPlan || 'full',           // 'full' | 'installment'（僅 buy_pass 用）
     paymentMethod: paymentMethod || null,
     amount: finalAmount,
     originalAmount: finalOriginal,
@@ -881,6 +883,7 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
 
   // ── 先處理票券/卡扣除（扣點失敗則 throw、不建立入場紀錄，避免「有入場、沒扣點」孤兒記錄）──
   // 黑卡/單次券改為「確認入場才扣」：產生 QR 但未入場 → 不扣卡、不鎖券。
+  let buyPassInstallmentApplied = false; // 分期購定期票：票價改由分期計畫逐期記帳，本次入場交易不再記票價（避免雙重記帳）
   if (pending.entryType === 'buy_discount_card') {
     // 購買折扣優惠卡入場：建立一張新優惠卡給會員
     const { purchaseDiscountCard } = require('./discountCardService');
@@ -901,6 +904,22 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
       ? dayjs(startDate).add(pt.durationMonths, 'month').format('YYYY-MM-DD')
       : dayjs(startDate).add(pt.durationDays || 0, 'day').format('YYYY-MM-DD');
     const newPassId = uuidv4();
+    // 分期？票種有開分期規則 && 會員選分期 && 有價（比照 POST /passes 的 usePassInstallment）
+    let passPlan = null;
+    if (pending.paymentPlan === 'installment' && pt.installment?.enabled && pt.price > 0) {
+      const installmentService = require('./installmentService');
+      const periods = installmentService.buildPeriodsFromConfig(pt.installment, pt.price, startDate);
+      if (periods) {
+        passPlan = await installmentService.createInstallmentPlan({
+          memberId: pending.memberId, memberName: pending.memberName || '',
+          gymId: pending.gymId, relatedType: 'pass', relatedId: newPassId, itemName: pt.name,
+          recognitionDate: null, installments: periods,
+          firstPaymentMethod: pending.paymentMethod || 'cash', staffId, staffName,
+        });
+        // 第一期營收由 createInstallmentPlan 記帳，本次入場交易不再記票價（避免雙重記帳，比照 POST /passes 的 !passPlan 條件）
+        if (passPlan) buyPassInstallmentApplied = true;
+      }
+    }
     await db.collection(COLLECTIONS.MEMBER_PASSES).doc(newPassId).set({
       id: newPassId, memberId: pending.memberId, gymId: pending.gymId,
       passTypeId: pending.buyPassTypeId, passTypeName: pt.name, scope: pt.scope,
@@ -908,6 +927,7 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
       startDate, endDate,
       credits: pt.credits ?? null, originalCredits: pt.credits ?? null,
       status: 'active', paymentId: checkInId, paymentStatus: 'confirmed',
+      installmentPlanId: passPlan?.id || null,
       soldByStaffId: staffId || null, notes: '入場時購買', createdAt: now, updatedAt: now,
     });
   } else if (pending.entryType === 'discount_card' && pending.discountCardId) {
@@ -943,8 +963,10 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     singleEntryTicketId: pending.singleEntryTicketId,
     bonusId: pending.bonusId || null,
     buyPassTypeId: pending.buyPassTypeId || null,
+    paymentPlan: pending.paymentPlan || 'full',
     transactionId: null,
-    amountPaid: pending.amount + pending.shoesPrice + (pending.chalkPrice || 0),
+    // 分期購定期票：票價由分期計畫記帳，本次入場只認列加購（岩鞋/粉袋）；一次付清照舊含票價
+    amountPaid: (buyPassInstallmentApplied ? 0 : pending.amount) + pending.shoesPrice + (pending.chalkPrice || 0),
     paymentMethod: pending.paymentMethod,
     isTeamDiscount: pending.isTeamDiscount,
     legacyDiscount: pending.legacyDiscount || false,
@@ -987,7 +1009,7 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
       relatedId: checkInId,
       staffId,
       staffName: staffName || '',
-      entryFee: pending.amount || 0,
+      entryFee: buyPassInstallmentApplied ? 0 : (pending.amount || 0), // 分期票價不在此記（由分期計畫記）
       shoesPrice: pending.shoesPrice || 0,
     });
     await db.collection(COLLECTIONS.CHECK_INS).doc(checkInId).update({ transactionId: txn.id });
@@ -1078,9 +1100,17 @@ const cancelCheckIn = async (checkInId, staffId, force = false) => {
       .where('paymentId', '==', checkInId)
       .limit(1).get();
     if (!passSnap.empty) {
-      await passSnap.docs[0].ref.update({
+      const passDoc = passSnap.docs[0];
+      await passDoc.ref.update({
         status: 'cancelled', cancelledAt: now, cancelReason: '入場取消', updatedAt: now,
       });
+      // 分期購票：一併作廢分期計畫（否則會留下「欠款/逾期擋入場」的孤兒計畫）
+      const planId = passDoc.data().installmentPlanId;
+      if (planId) {
+        await db.collection(COLLECTIONS.INSTALLMENT_PLANS).doc(planId)
+          .update({ status: 'cancelled', cancelledAt: now, cancelReason: '入場取消', updatedAt: now })
+          .catch(() => {});
+      }
     }
   }
 

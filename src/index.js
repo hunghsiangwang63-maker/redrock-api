@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '1.56.0-phone-authoritative-free',
+    version: '1.57.0-buy-pass-installment',
   });
 });
 

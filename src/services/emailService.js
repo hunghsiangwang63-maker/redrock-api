@@ -150,6 +150,52 @@ const sendInstallmentOverdueAlert = async (adminEmail, overdueList) => {
   });
 };
 
+// ── 分期：會員到期前提醒（物件參數，含期數）──────────────────────
+const sendInstallmentDueReminder = async ({ email, memberName, itemName, seq, totalSeq, amount, dueDate }) => {
+  return sendEmail({
+    to: email,
+    subject: `【紅石攀岩】分期第 ${seq}/${totalSeq} 期即將到期 - ${itemName}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">分期付款到期提醒</h2>
+        <p>親愛的 ${esc(memberName)}，</p>
+        <p>您有一筆分期付款即將到期，請於到期日前完成繳款：</p>
+        <div style="background:#FBF5F5;border-radius:8px;padding:16px;margin:16px 0">
+          <div><strong>項目：</strong>${esc(itemName)}</div>
+          <div><strong>期數：</strong>第 ${esc(seq)} / ${esc(totalSeq)} 期</div>
+          <div><strong>金額：</strong>NT$${esc(Number(amount).toLocaleString())}</div>
+          <div><strong>到期日：</strong>${esc(dueDate)}</div>
+        </div>
+        <p>逾期未繳將暫停入場資格，請至櫃檯或線上完成繳款，謝謝。</p>
+        <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+  });
+};
+
+// ── 分期：會員逾期通知（物件參數，含期數）────────────────────────
+const sendInstallmentOverdueNotice = async ({ email, memberName, itemName, seq, totalSeq, amount, dueDate }) => {
+  return sendEmail({
+    to: email,
+    subject: `【紅石攀岩】分期第 ${seq}/${totalSeq} 期已逾期 - ${itemName}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#A32D2D">分期付款逾期通知</h2>
+        <p>親愛的 ${esc(memberName)}，</p>
+        <p>您的分期付款已逾期，<strong>入場資格已暫停</strong>，請儘速完成繳款以恢復：</p>
+        <div style="background:#FCEBEB;border-radius:8px;padding:16px;margin:16px 0">
+          <div><strong>項目：</strong>${esc(itemName)}</div>
+          <div><strong>期數：</strong>第 ${esc(seq)} / ${esc(totalSeq)} 期</div>
+          <div><strong>金額：</strong>NT$${esc(Number(amount).toLocaleString())}</div>
+          <div><strong>原到期日：</strong>${esc(dueDate)}</div>
+        </div>
+        <p>請至櫃檯或線上完成繳款，繳清後即可恢復入場，謝謝。</p>
+        <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+  });
+};
+
 // ── 體驗課程確認信 ────────────────────────────────────────────────
 const sendExperienceBookingConfirmation = async (memberEmail, memberName, booking) => {
   return sendEmail({
@@ -204,6 +250,8 @@ module.exports = {
   sendCourseNotification,
   sendInstallmentReminder,
   sendInstallmentOverdueAlert,
+  sendInstallmentDueReminder,
+  sendInstallmentOverdueNotice,
   sendExperienceBookingConfirmation,
   sendInstallmentReminders,
   sendParentWaiverLink,

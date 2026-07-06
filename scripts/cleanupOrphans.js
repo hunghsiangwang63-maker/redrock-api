@@ -26,6 +26,7 @@ const ORPHAN_COLLECTIONS = [
   { name: 'legacyBlackCards', ownerField: 'memberId', label: '黑卡' },
   { name: 'singleEntryTickets', ownerField: 'memberId', label: '單次入場券' },
   { name: 'memberPasses', ownerField: 'memberId', label: '定期票' },
+  { name: 'installmentPlans', ownerField: 'memberId', label: '分期計畫' },
 ];
 
 const fmt = (ts) => (ts && ts.toDate ? ts.toDate().toISOString().slice(0, 16) : '?');

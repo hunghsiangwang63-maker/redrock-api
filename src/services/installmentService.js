@@ -226,21 +226,26 @@ const sendInstallmentReminders = async () => {
 
       if (!member.email) continue;
 
+      // 單筆 Email 失敗只記 log、不中斷整批（不標 sentAt → 下次排程重試），並確保後面 notifBatch 仍會 commit
       if (i.status === 'pending' && i.dueDate >= today && i.dueDate <= memberWarningDate && !i.reminderSentAt) {
-        await emailService.sendInstallmentDueReminder({
-          email: member.email, memberName: plan.memberName, itemName: plan.itemName,
-          seq: i.seq, totalSeq: plan.installments.length, amount: i.amount, dueDate: i.dueDate,
-        });
-        i.reminderSentAt = new Date();
-        reminderSent++;
+        try {
+          await emailService.sendInstallmentDueReminder({
+            email: member.email, memberName: plan.memberName, itemName: plan.itemName,
+            seq: i.seq, totalSeq: plan.installments.length, amount: i.amount, dueDate: i.dueDate,
+          });
+          i.reminderSentAt = new Date();
+          reminderSent++;
+        } catch (e) { console.error(`[分期提醒] 到期提醒寄送失敗 plan=${plan.id} seq=${i.seq}`, e.message); }
       }
       if (i.status === 'overdue' && !i.overdueSentAt) {
-        await emailService.sendInstallmentOverdueNotice({
-          email: member.email, memberName: plan.memberName, itemName: plan.itemName,
-          seq: i.seq, totalSeq: plan.installments.length, amount: i.amount, dueDate: i.dueDate,
-        });
-        i.overdueSentAt = new Date();
-        overdueSent++;
+        try {
+          await emailService.sendInstallmentOverdueNotice({
+            email: member.email, memberName: plan.memberName, itemName: plan.itemName,
+            seq: i.seq, totalSeq: plan.installments.length, amount: i.amount, dueDate: i.dueDate,
+          });
+          i.overdueSentAt = new Date();
+          overdueSent++;
+        } catch (e) { console.error(`[分期提醒] 逾期通知寄送失敗 plan=${plan.id} seq=${i.seq}`, e.message); }
       }
     }
     await doc.ref.update({ installments: plan.installments, updatedAt: new Date() });

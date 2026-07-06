@@ -98,8 +98,9 @@ router.get('/legacy-discount/member/:memberId', authenticateAny, async (req, res
   catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// 舊優惠卡綁定（拍照歸檔）= Group A：館別電腦(值班)或管理員；立即生效 + 揭露通知管理員
 router.post('/legacy-discount/bind',
-  authenticate, checkPermission('products.sell'), auditLog('legacy_discount_card.bind'),
+  authenticate, requireManagerOrStation, auditLog('legacy_discount_card.bind'),
   [body('memberId').notEmpty(), body('remainingCredits').isInt({ min: 1 })], validate,
   async (req, res) => {
     try {
@@ -110,6 +111,13 @@ router.post('/legacy-discount/bind',
         photoUrl: req.body.photoUrl || null,
         barcode: req.body.barcode || null,
       });
+      // 揭露到管理員通知頁（非審核，立即生效）
+      const lm = await require('../services/memberService').getMember(req.body.memberId).catch(() => null);
+      notificationService.notifyCardBindDisclosure({
+        kind: 'legacy_discount_bind', memberName: lm?.name || req.body.memberId,
+        gymId: req.staff.gymId, staffName: req.staff.name,
+        detail: `${parseInt(req.body.remainingCredits)} 次`, referenceId: card.id,
+      }).catch(e => console.error('notifyCardBindDisclosure(legacy) 失敗', e.message));
       res.status(201).json({ card, message: '舊優惠卡綁定成功' });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }

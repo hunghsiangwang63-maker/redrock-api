@@ -183,6 +183,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **會員端**（真會員 token，`POST /auth/member/login`；測試會員以 firebase-admin 注入 `passwordHash`）：會員從「我的票券」上傳證明+建申請，`memberId` 綁登入身分；**IDOR** 對他人票提申請 → `FORBIDDEN`；只能查自己申請（查他人 403）；**不能自審**（打核准端點 401，審核走 staff-only）；店員核准展延/退費結果同後端。腳本 `scratchpad/pass-request-e2e.mjs`、`pass-request-member-e2e.cjs`。
 - 附帶：`cleanupOrphans.js` 孤兒集合加 `installmentPlans`、`passRequests`。
 
+## 目前進度（2026-07-06 續）— 會員入場 QR 介面調整（純前端 `redrock-web`）
+> 三項 UI 調整，build + firebase deploy，並用真會員帳號在正式站瀏覽器實機走完整流程逐頁驗證。commit（redrock-web）`40af8f1`。
+- ✅ **身分選項只顯示名稱、不帶金額**：`MemberQRPage` `select_entry` 步驟改用 `entryIdLabel`——`single_ticket→成人入場`、`student_free→學生入場`、`child_free→兒童入場`（其餘去除「單次」字樣），並**移除該步驟的金額顯示**（金額於後續付款步驟才呈現）。
+- ✅ **購買定期票改下拉選單**：`select_method` 原本「每個票種一張卡」平鋪 → 改為單一「購買定期票入場」下拉選單（`<select>`，選取即進入付款步驟），不再把所有定期票方案堆在選擇畫面。
+- ✅ **後續步驟不再殘留定期票清單**：根因是上述平鋪卡片塞在付款方式頁；下拉化後收乾淨。步驟本就分離（`shoes`/`qr` 不渲染方案清單），實機確認**付款方式頁 / 租借器材頁 / QR 頁** 頂部皆無定期票清單。
+- **瀏覽器實機驗證（redrock-member.web.app，真會員登入）**：身分頁顯示「成人入場／學生入場」無金額 → 付款頁定期票為下拉 → 一般付款 → 現金 → 器材頁 → QR 頁，各頁截圖確認無殘留。測試會員（`【練習】QR測試` 0900123789，firebase-admin 注入密碼）＋其 pending QR／waiver／墜測 已清乾淨。
+
 ## 維護腳本（`scripts/`）
 - **`cleanupOrphans.js`** — 清 dev 殘留：owner 會員已不存在的孤兒（優惠卡/舊優惠卡/黑卡/單次入場券/定期票/分期計畫/定期票異動申請）+ 測試 shiftLog（`stationId` 前綴，預設 `e2e-`）。**dry-run 為預設，`--commit` 才刪**；`owner=null`（未指派）不算孤兒、不刪；憑證走 `initFirebase()`（env `FIREBASE_*` 或 `GOOGLE_APPLICATION_CREDENTIALS`）。E2E 後清殘留用。
   - 預覽：`GOOGLE_APPLICATION_CREDENTIALS=/path/sa.json node scripts/cleanupOrphans.js`

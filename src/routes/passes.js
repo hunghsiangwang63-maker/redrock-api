@@ -5,7 +5,7 @@ const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
-const { authenticate, authenticateAny, checkPermission, auditLog } = require('../middleware/auth');
+const { authenticate, authenticateAny, checkPermission, requireManagerOrStation, requireManager, auditLog } = require('../middleware/auth');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
@@ -179,8 +179,9 @@ router.get('/member/:memberId', authenticateAny, async (req, res) => {
   }
 });
 
+// 新增定期票給會員 = Group B：僅管理員（gym_manager / super_admin）
 router.post('/',
-  authenticate, checkPermission('passes.create'), auditLog('pass.create'),
+  authenticate, requireManager, auditLog('pass.create'),
   [
     body('memberId').notEmpty(),
     body('passTypeId').notEmpty(),
@@ -353,8 +354,9 @@ router.get('/single-entry/pending',
 );
 
 // ── POST /passes/single-entry - 發放單次入場券（需審核）──────────
+// Group A：館別電腦(值班)或管理員；發放後為 pending_approval，管理員審核才生效（已有通知）
 router.post('/single-entry',
-  authenticate, checkPermission('passes.create'),
+  authenticate, requireManagerOrStation,
   [body('memberId').notEmpty().withMessage('請指定會員')],
   validate,
   async (req, res) => {

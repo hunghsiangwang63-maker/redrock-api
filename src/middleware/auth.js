@@ -226,7 +226,18 @@ const requireManagerOrStation = (req, res, next) => {
   next();
 };
 
+// ── 限制僅管理員(super_admin/gym_manager)可用 ──
+// 與 requireManagerOrStation 不同：operator/station 值班身份、full_time/part_time 個人帳號皆擋下，
+// 只認角色。gym_manager 即使在 operator 值班模式(type==='operator')也放行（其 role 仍為 gym_manager）。
+const requireManager = (req, res, next) => {
+  if (['super_admin', 'gym_manager'].includes(req.staff?.role)) return next();
+  return res.status(403).json({
+    error: 'MANAGER_REQUIRED',
+    message: '此功能僅限管理員（館別管理員或系統管理員）使用',
+  });
+};
+
 module.exports = {
   authenticate, authenticateMember, authenticateAny,
-  checkPermission, requireSameGym, auditLog, requireStationAuth, authenticateStation, requireManagerOrStation, DEFAULT_PERMISSIONS,
+  checkPermission, requireSameGym, auditLog, requireStationAuth, authenticateStation, requireManagerOrStation, requireManager, DEFAULT_PERMISSIONS,
 };

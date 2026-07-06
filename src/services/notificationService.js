@@ -79,6 +79,18 @@ const notifySingleEntryTicketApproval = async ({ ticketId, memberName, gymId, is
   });
 };
 
+// ── 卡片綁定/轉入揭露通知（立即生效，非審核；通知管理員知悉）───────
+// kind: 'discount_bind'（轉入優惠卡）| 'black_bind'（黑卡綁定）
+const notifyCardBindDisclosure = async ({ kind, memberName, gymId, staffName, detail, referenceId }) => {
+  const label = kind === 'black_bind' ? '黑卡綁定' : '優惠卡轉入';
+  const title = `${label}揭露`;
+  const body = `${staffName || '館別電腦'} 為會員 ${memberName} 進行了${label}${detail ? `（${detail}）` : ''}。`;
+  const type = `${kind}_disclosure`;
+  const referenceType = kind === 'black_bind' ? 'blackCard' : 'discountCard';
+  await notifyRoleInGym({ gymId, role: 'gym_manager', type, title, body, referenceId: referenceId || null, referenceType });
+  await notifyRoleInGym({ gymId, role: 'super_admin', type, title, body, referenceId: referenceId || null, referenceType });
+};
+
 // ── 取得未讀通知 ────────────────────────────────────────────────
 const getUnreadNotifications = async (staffId, gymId, role) => {
   const db = getDb();
@@ -117,6 +129,7 @@ module.exports = {
   createNotification,
   notifyRoleInGym,
   notifySingleEntryTicketApproval,
+  notifyCardBindDisclosure,
   getUnreadNotifications,
   markAsRead,
   markAllAsRead,

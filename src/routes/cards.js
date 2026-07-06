@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { body, param, validationResult } = require('express-validator');
-const { authenticate, authenticateAny, authenticateMember, checkPermission, auditLog } = require('../middleware/auth');
+const { authenticate, authenticateAny, authenticateMember, checkPermission, requireManagerOrStation, requireManager, auditLog } = require('../middleware/auth');
+const notificationService = require('../services/notificationService');
 const discountCardService = require('../services/discountCardService');
 const legacyDiscountCardService = require('../services/legacyDiscountCardService');
 const legacyCardService = require('../services/legacyCardService');
@@ -21,8 +22,9 @@ router.get('/discount/member/:memberId', authenticateAny, async (req, res) => {
   catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// 新增優惠卡給會員 = Group B：僅管理員（gym_manager / super_admin）
 router.post('/discount/purchase',
-  authenticate, checkPermission('products.sell'), auditLog('discount_card.purchase'),
+  authenticate, requireManager, auditLog('discount_card.purchase'),
   [body('price').isNumeric()], validate,
   async (req, res) => {
     try {
@@ -35,9 +37,9 @@ router.post('/discount/purchase',
   }
 );
 
-// 轉入舊優惠卡（設定剩餘次數，比照黑卡綁定；建到 discountCards 故入場即可用）
+// 轉入優惠卡 = Group A：館別電腦(值班)或管理員；立即生效 + 揭露通知管理員
 router.post('/discount/bind',
-  authenticate, checkPermission('products.sell'), auditLog('discount_card.bind'),
+  authenticate, requireManagerOrStation, auditLog('discount_card.bind'),
   [body('memberId').notEmpty(), body('remainingCredits').isInt({ min: 1, max: 10 })], validate,
   async (req, res) => {
     try {
@@ -47,6 +49,13 @@ router.post('/discount/bind',
         gymId: req.staff.gymId, staffId: req.staff.id,
         barcode: req.body.barcode || null,
       });
+      // 揭露到管理員通知頁（非審核，立即生效）
+      const dm = await require('../services/memberService').getMember(req.body.memberId).catch(() => null);
+      notificationService.notifyCardBindDisclosure({
+        kind: 'discount_bind', memberName: dm?.name || req.body.memberId,
+        gymId: req.staff.gymId, staffName: req.staff.name,
+        detail: `${parseInt(req.body.remainingCredits)} 次`, referenceId: card.id,
+      }).catch(e => console.error('notifyCardBindDisclosure(discount) 失敗', e.message));
       res.status(201).json({ card, message: '優惠卡轉入成功' });
     } catch (err) {
       if (err.code === 'MEMBER_NOT_FOUND') return res.status(404).json(err);
@@ -141,8 +150,9 @@ router.get('/black/member/:memberId', authenticateAny, async (req, res) => {
   catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// 黑卡綁定 = Group A：館別電腦(值班)或管理員；立即生效 + 揭露通知管理員
 router.post('/black/bind',
-  authenticate, checkPermission('products.sell'), auditLog('black_card.bind'),
+  authenticate, requireManagerOrStation, auditLog('black_card.bind'),
   [body('memberId').notEmpty(), body('remainingCredits').isInt({ min: 1, max: 12 })], validate,
   async (req, res) => {
     try {
@@ -151,6 +161,13 @@ router.post('/black/bind',
         remainingCredits: parseInt(req.body.remainingCredits),
         gymId: req.staff.gymId, staffId: req.staff.id,
       });
+      // 揭露到管理員通知頁（非審核，立即生效）
+      const bm = await require('../services/memberService').getMember(req.body.memberId).catch(() => null);
+      notificationService.notifyCardBindDisclosure({
+        kind: 'black_bind', memberName: bm?.name || req.body.memberId,
+        gymId: req.staff.gymId, staffName: req.staff.name,
+        detail: `${parseInt(req.body.remainingCredits)} 次`, referenceId: card.id,
+      }).catch(e => console.error('notifyCardBindDisclosure(black) 失敗', e.message));
       res.status(201).json({ card, message: '黑卡綁定成功' });
     } catch (err) {
       if (err.code === 'CARD_ALREADY_BOUND') return res.status(409).json(err);

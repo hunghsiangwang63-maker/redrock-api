@@ -601,6 +601,10 @@ router.post('/phone', authenticate, requireManagerOrStation, async (req, res) =>
     // 墜落測驗遞延（電話入場路徑；失敗不阻斷入場）
     try { await checkinService.tryExtendFallTest(memberId, docRef.id); } catch (e) {}
 
+    // 入場連動：今日有已報名課程場次 → 自動標記出席（present；不覆蓋員工已標；不阻斷入場）
+    // memberId 為實際入場者（子女入場時已是子女 id，非家長）
+    await require('../services/courseService').markTodayCourseAttendanceOnEntry({ memberId, gymId, staffId: req.staff.id });
+
     if (totalAmount > 0 && !req.body.deferPayment) {
       const { recordTransaction } = require('../utils/revenueLedger');
       const txn = await recordTransaction(db, {

@@ -747,6 +747,60 @@ const markAttendance = async ({ sessionId, memberId, staffId, status = 'present'
   return { status, message: `出席狀態已更新：${status}` };
 };
 
+// ── 入場連動：今日有已報名場次 → 自動標記出席（present）────────────────
+// 由入場落點（confirmCheckIn / /checkin/phone）於建立 checkIns 後呼叫。
+// 判斷基準是「今天有已報名場次」，與 entryType 無關（課程學員也可能用定期票/VIP 入場）。
+// ⚠ 全程 try/catch、永不 throw——任何失敗都不可阻斷入場（只 console.error）。
+// ⚠ 已有出席紀錄（員工已標 present/absent/late）不覆蓋。
+const markTodayCourseAttendanceOnEntry = async ({ memberId, gymId, staffId }) => {
+  try {
+    const db = getDb();
+    const today = taiwanToday();
+
+    // 1. 該會員 confirmed 且未暫停的報名 → 取課程 id 集合
+    const enrollSnap = await db.collection(ENROLLMENT_COLLECTION)
+      .where('memberId', '==', memberId)
+      .where('status', '==', 'confirmed')
+      .get();
+    const courseIds = [...new Set(
+      enrollSnap.docs.map(d => d.data())
+        .filter(e => e.pauseStatus !== 'paused')  // 暫停中不算
+        .map(e => e.courseId).filter(Boolean)
+    )];
+    if (courseIds.length === 0) return { marked: 0 };
+
+    let marked = 0;
+    for (const courseId of courseIds) {
+      // 2. 課程須屬入場館別（避免跨館誤記）
+      const courseDoc = await db.collection(COURSE_COLLECTION).doc(courseId).get();
+      if (!courseDoc.exists) continue;
+      if (gymId && courseDoc.data().gymId !== gymId) continue;
+
+      // 3. 今日場次（date===台灣今天；跳過已取消場次）
+      const sessSnap = await db.collection(SESSION_COLLECTION)
+        .where('courseId', '==', courseId)
+        .where('date', '==', today)
+        .get();
+      for (const s of sessSnap.docs) {
+        if (s.data().status === 'cancelled') continue;
+        const sessionId = s.id;
+        // 4. 尚無出席紀錄才標 present（不覆蓋員工已標的）
+        const exist = await db.collection(ATTENDANCE_COLLECTION)
+          .where('sessionId', '==', sessionId)
+          .where('memberId', '==', memberId)
+          .limit(1).get();
+        if (!exist.empty) continue;
+        await markAttendance({ sessionId, memberId, staffId, status: 'present' });
+        marked++;
+      }
+    }
+    return { marked };
+  } catch (err) {
+    console.error('markTodayCourseAttendanceOnEntry 失敗（不阻斷入場）:', err.message);
+    return { marked: 0, error: err.message };
+  }
+};
+
 // ── 查詢場次學員名單 ──────────────────────────────────────────────
 const getSessionRoster = async (sessionId) => {
   const db = getDb();
@@ -1099,6 +1153,7 @@ module.exports = {
   cancelCourseEnrollments,
   enrollMakeup,
   markAttendance,
+  markTodayCourseAttendanceOnEntry,
   getSessionRoster,
   getCourses,
   getSessions,

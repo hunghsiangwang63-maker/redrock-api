@@ -1179,6 +1179,12 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
   // 墜落測驗遞延
   await tryExtendFallTest(pending.memberId, checkInId);
 
+  // 入場連動：今日有已報名課程場次 → 自動標記出席（present，不覆蓋員工已標；不阻斷入場）
+  // lazy require 避免與 courseService 頂層循環依賴
+  await require('./courseService').markTodayCourseAttendanceOnEntry({
+    memberId: pending.memberId, gymId: pending.gymId, staffId,
+  });
+
   // 寫入統一營收紀錄（供 revenue.js 報表與單日結帳使用）
   if (checkIn.amountPaid > 0) {
     const { recordTransaction } = require('../utils/revenueLedger');

@@ -26,7 +26,7 @@ const bindDiscountCard = async ({ memberId, remainingCredits, gymId, staffId, ba
   }
   const cardId = uuidv4();
   const now = new Date();
-  const expiresAt = dayjs().add(CARD_VALIDITY_MONTHS, 'month').toDate();
+  const expiresAt = null; // 轉入（綁定）優惠卡：無使用期限（購買入場產生的卡才有一年期限）
   const credits = Math.min(Math.max(1, parseInt(remainingCredits) || 0), CARD_CREDITS); // 上限 10 格
   const card = {
     id: cardId,
@@ -100,7 +100,7 @@ const useDiscountCard = async (cardId, gymId) => {
 
   const card = cardDoc.data();
   if (!card.isActive) throw { code: 'CARD_INACTIVE', message: '此優惠卡已停用' };
-  if (dayjs().isAfter(dayjs(card.expiresAt.toDate()))) {
+  if (card.expiresAt && dayjs().isAfter(dayjs(card.expiresAt.toDate()))) { // 無期限卡（轉入）跳過過期檢查
     throw { code: 'CARD_EXPIRED', message: '優惠卡已過期' };
   }
   if (card.remainingCredits <= 0) throw { code: 'CARD_NO_CREDITS', message: '優惠卡次數已用完' };
@@ -163,28 +163,32 @@ const getTransferPreview = async (fromCardId, toMemberId, credits) => {
     throw { code: 'INSUFFICIENT_CREDITS', message: `剩餘次數不足（${card.remainingCredits} 次）` };
   }
 
-  const expiresAt = dayjs(card.expiresAt.toDate());
-  const daysLeft = expiresAt.diff(dayjs(), 'day');
-  const isExpiringSoon = daysLeft <= EXPIRY_WARNING_DAYS;
+  const expDate = card.expiresAt ? (typeof card.expiresAt.toDate === 'function' ? card.expiresAt.toDate() : new Date(card.expiresAt)) : null;
+  const expiresAt = expDate ? dayjs(expDate) : null;          // 無期限卡 → null
+  const daysLeft = expiresAt ? expiresAt.diff(dayjs(), 'day') : null;
+  const isExpiringSoon = daysLeft != null && daysLeft <= EXPIRY_WARNING_DAYS;
+  const expFmt = expiresAt ? expiresAt.format('YYYY-MM-DD') : null;
 
   return {
     card: {
       id: card.id,
       remainingCredits: card.remainingCredits,
       creditsAfterTransfer: card.remainingCredits - credits,
-      expiresAt: expiresAt.format('YYYY-MM-DD'),
+      expiresAt: expFmt,
       daysLeft,
       isExpiringSoon,
     },
     transfer: {
       credits,
-      receiverExpiresAt: expiresAt.format('YYYY-MM-DD'), // 繼承，不延長
+      receiverExpiresAt: expFmt, // 繼承，不延長（無期限則同樣無期限）
       receiverDaysLeft: daysLeft,
       isInherited: true,
     },
-    warning: isExpiringSoon
-      ? `⚠ 此優惠卡將於 ${expiresAt.format('YYYY/MM/DD')} 到期（剩餘 ${daysLeft} 天），移轉後接受方的使用期限相同。`
-      : `移轉後接受方到期日：${expiresAt.format('YYYY/MM/DD')}（與原卡相同，不延長）`,
+    warning: !expiresAt
+      ? `此優惠卡無使用期限，移轉後接受方同樣無期限。`
+      : isExpiringSoon
+        ? `⚠ 此優惠卡將於 ${expiresAt.format('YYYY/MM/DD')} 到期（剩餘 ${daysLeft} 天），移轉後接受方的使用期限相同。`
+        : `移轉後接受方到期日：${expiresAt.format('YYYY/MM/DD')}（與原卡相同，不延長）`,
     bonusNote: `移轉後，所有次數（含移轉）全部使用完畢時，原購買者將獲得6個月免費入場紅利。`,
   };
 };
@@ -243,29 +247,37 @@ const transferDiscountCard = async ({ fromCardId, toMemberId, credits, staffId }
   return {
     fromCard: { ...fromCard, remainingCredits: newFromCredits },
     newCard,
-    expiresAt: dayjs(fromCard.expiresAt.toDate()).format('YYYY-MM-DD'),
+    expiresAt: fromCard.expiresAt
+      ? dayjs(typeof fromCard.expiresAt.toDate === 'function' ? fromCard.expiresAt.toDate() : fromCard.expiresAt).format('YYYY-MM-DD')
+      : null, // 無期限卡移轉後仍無期限
   };
 };
 
 // ── 查詢會員優惠卡 ────────────────────────────────────────────────
 const getMemberDiscountCards = async (memberId) => {
   const db = getDb();
+  // 不用 Firestore orderBy('expiresAt')：無期限卡（expiresAt=null）會被 orderBy 排除、查不到 → 記憶體排序
   const snap = await db.collection(COLLECTION)
     .where('ownerMemberId', '==', memberId)
     .where('isActive', '==', true)
-    .orderBy('expiresAt', 'asc')
     .get();
 
   const today = dayjs();
+  const asDate = (ts) => ts ? (typeof ts.toDate === 'function' ? ts.toDate() : new Date(ts)) : null;
   const cards = snap.docs
     .map(d => ({ id: d.id, ...d.data() }))
-    .filter(c => today.isBefore(dayjs(c.expiresAt.toDate())))
-    .map(c => ({
-      ...c,
-      expiresAtFormatted: dayjs(c.expiresAt.toDate()).format('YYYY-MM-DD'),
-      daysLeft: dayjs(c.expiresAt.toDate()).diff(today, 'day'),
-      isExpiringSoon: dayjs(c.expiresAt.toDate()).diff(today, 'day') <= EXPIRY_WARNING_DAYS,
-    }));
+    .filter(c => { const e = asDate(c.expiresAt); return !e || today.isBefore(dayjs(e)); }) // 無期限或未過期
+    .map(c => {
+      const e = asDate(c.expiresAt);
+      return {
+        ...c,
+        expiresAtFormatted: e ? dayjs(e).format('YYYY-MM-DD') : null,
+        daysLeft: e ? dayjs(e).diff(today, 'day') : null,
+        isExpiringSoon: e ? dayjs(e).diff(today, 'day') <= EXPIRY_WARNING_DAYS : false,
+      };
+    })
+    // 有期限的到期日近→遠優先使用，無期限的排最後
+    .sort((a, b) => (a.expiresAtFormatted || '9999-12-31').localeCompare(b.expiresAtFormatted || '9999-12-31'));
 
   // 移轉取得的卡：用完後紅利歸「原購買者」（非持卡人），標註 + 帶原購買者姓名
   const memberService = require('./memberService');

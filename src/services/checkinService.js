@@ -145,6 +145,56 @@ const getBuyablePassTypes = async (gymId) => {
     }));
 };
 
+// ── 定期票續約（會員端，到期前 14 天開放）─────────────────────────
+const RENEWAL_WINDOW_DAYS = 14;
+
+// 續約後端權威價：票種 renewalDiscount（percent=打折 / amount=折抵）套用於原價，夾在 [0, price]
+const computeRenewalPrice = (pt) => {
+  const price = pt.price || 0;
+  const rd = pt.renewalDiscount;
+  if (!rd || !['percent', 'amount'].includes(rd.mode)) return price;
+  const v = Number(rd.value) || 0;
+  if (v <= 0) return price;
+  return rd.mode === 'percent'
+    ? Math.max(0, Math.round(price * (100 - Math.min(100, v)) / 100))
+    : Math.max(0, price - v);
+};
+
+// 依票種算「續約後」新到期日：以現到期日（未到期）或今日（已過期）為基準加月數/天數
+const computeRenewedEndDate = (currentEndDate, pt) => {
+  const base = dayjs(currentEndDate).isAfter(dayjs()) ? currentEndDate : taiwanToday();
+  return pt.durationMonths
+    ? dayjs(base).add(pt.durationMonths, 'month').format('YYYY-MM-DD')
+    : dayjs(base).add(pt.durationDays || 0, 'day').format('YYYY-MM-DD');
+};
+
+// 給一張有效定期票，若到期日 ≤ 14 天則回續約資訊（含折後價 / 分期規則），否則 null
+const getRenewalInfo = async (memberPass) => {
+  const db = getDb();
+  const currentEndDate = memberPass.effectiveEndDate || memberPass.endDate;
+  const daysLeft = dayjs(currentEndDate).diff(taiwanToday(), 'day');
+  if (daysLeft > RENEWAL_WINDOW_DAYS) return null;
+  if (!memberPass.passTypeId) return null;
+  const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(memberPass.passTypeId).get();
+  if (!ptDoc.exists) return null;
+  const pt = ptDoc.data();
+  const fullPrice = pt.price || 0;
+  const renewalPrice = computeRenewalPrice(pt);
+  return {
+    passId: memberPass.id,
+    passTypeId: memberPass.passTypeId,
+    passTypeName: pt.name || memberPass.passTypeName || '定期票',
+    scope: pt.scope,
+    daysLeft,
+    currentEndDate,
+    newEndDate: computeRenewedEndDate(currentEndDate, pt),
+    fullPrice,
+    renewalPrice,
+    renewalDiscount: pt.renewalDiscount || null,
+    installment: pt.installment?.enabled ? (pt.installment || { enabled: false, periods: [] }) : { enabled: false, periods: [] },
+  };
+};
+
 // ── 取得課程入館權益 ─────────────────────────────────────────────
 const getCourseAccess = async (memberId) => {
   const db = getDb();
@@ -479,9 +529,16 @@ const verifyEntry = async (memberId, gymId) => {
   const passes = await getValidPasses(memberId, gymId);
   if (passes.length > 0) {
     const p = passes[0];
+    // 續約偵測：有效定期票中，任一張到期 ≤14 天者可於產生 QR 時一併續約（取最先偵測到者）
+    let renewal = null;
+    for (const vp of passes) {
+      renewal = await getRenewalInfo(vp);
+      if (renewal) break;
+    }
     return {
       allowed: true, status: 'ok', entryType: 'pass', freeEntry: true,
       pass: { id: p.id, name: p.passTypeName, scope: p.scope, endDate: p.effectiveEndDate || p.endDate, baseEndDate: p.endDate },
+      renewal,
       member: memberInfo,
     };
   }
@@ -666,6 +723,7 @@ const createPendingCheckIn = async ({
   paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, paymentPlan,
   rentShoes, shoesPrice,
   rentChalk, chalkPrice,
+  renewPassId, renewPaymentPlan,
 }) => {
   const db = getDb();
   const member = await getMember(memberId);
@@ -776,6 +834,30 @@ const createPendingCheckIn = async ({
     finalTeam = false;
   }
 
+  // 後端權威：續約附加（到期前 14 天）——驗票屬本人 / 到期窗 / 場館，快照折後價與新到期日
+  let renewSnapshot = null;
+  if (renewPassId) {
+    const rpDoc = await db.collection(COLLECTIONS.MEMBER_PASSES).doc(renewPassId).get();
+    if (!rpDoc.exists) throw { code: 'RENEW_PASS_NOT_FOUND', message: '要續約的定期票不存在' };
+    const rp = { id: rpDoc.id, ...rpDoc.data() };
+    if (rp.memberId !== memberId) throw { code: 'RENEW_PASS_NOT_OWNED', message: '此定期票不屬於此會員' };
+    if (rp.status !== 'active') throw { code: 'RENEW_PASS_INACTIVE', message: '此定期票非有效狀態，無法續約' };
+    // 單館票僅限其適用館續約；shared 不限
+    if (rp.scope !== 'shared' && (rp.targetGymId || rp.gymId) !== gymId) {
+      throw { code: 'RENEW_GYM_MISMATCH', message: '此為單館定期票，僅限適用場館續約' };
+    }
+    const [rpEff] = await require('./passExpiryService').attachEffectiveEndDates([rp]);
+    const info = await getRenewalInfo(rpEff);
+    if (!info) throw { code: 'RENEW_NOT_OPEN', message: '尚未到可續約期間（到期前 14 天開放）' };
+    renewSnapshot = {
+      passId: info.passId, passTypeId: info.passTypeId, passTypeName: info.passTypeName,
+      fullPrice: info.fullPrice, renewalPrice: info.renewalPrice,
+      currentEndDate: info.currentEndDate, newEndDate: info.newEndDate,
+      installmentEnabled: !!info.installment?.enabled,
+      plan: (renewPaymentPlan === 'installment' && info.installment?.enabled && info.renewalPrice > 0) ? 'installment' : 'full',
+    };
+  }
+
   const qrToken = uuidv4();
   const now = new Date();
   const expiresAt = dayjs().add(30, 'minute').toDate();
@@ -791,6 +873,8 @@ const createPendingCheckIn = async ({
     bonusId: bonusId || null,
     buyPassTypeId: buyPassTypeId || null,
     paymentPlan: paymentPlan || 'full',           // 'full' | 'installment'（僅 buy_pass 用）
+    renewPassId: renewPassId || null,             // 續約附加：要續約的定期票 id
+    renewSnapshot: renewSnapshot || null,         // 續約後端權威快照（折後價 / 新到期日 / 分期）
     paymentMethod: paymentMethod || null,
     amount: finalAmount,
     originalAmount: finalOriginal,
@@ -838,6 +922,24 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     throw { code: 'GYM_MISMATCH', message: `此 QR 為「${GYM_NAMES[pending.gymId] || pending.gymId}」入場碼，請至該館掃碼入場` };
   }
 
+  // 續約附加預覽：算出櫃檯此次應收（一次付清＝折後全額；分期＝首期）
+  let renewPreview = null;
+  if (pending.renewPassId && pending.renewSnapshot) {
+    const s = pending.renewSnapshot;
+    let dueNow = s.renewalPrice;
+    if (s.plan === 'installment') {
+      const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(s.passTypeId).get();
+      const inst = ptDoc.exists ? ptDoc.data().installment : null;
+      const periods = require('./installmentService').buildRenewalPeriods(inst, s.fullPrice, s.renewalPrice, taiwanToday());
+      dueNow = periods ? periods[0].amount : s.renewalPrice;
+    }
+    renewPreview = {
+      passTypeName: s.passTypeName, plan: s.plan,
+      renewalPrice: s.renewalPrice, fullPrice: s.fullPrice,
+      newEndDate: s.newEndDate, dueNow,
+    };
+  }
+
   return {
     qrToken,
     memberId: pending.memberId,
@@ -855,9 +957,9 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     shoesPrice: pending.shoesPrice,
     rentChalk: pending.rentChalk || false,
     chalkPrice: pending.chalkPrice || 0,
-    rentChalk: pending.rentChalk || false,
-    chalkPrice: pending.chalkPrice || 0,
-    totalAmount: pending.amount + pending.shoesPrice + (pending.chalkPrice || 0),
+    // 續約附加：櫃檯此次應收的續約款（一次付清＝折後全額；分期＝首期）
+    renewal: renewPreview,
+    totalAmount: pending.amount + pending.shoesPrice + (pending.chalkPrice || 0) + (renewPreview ? renewPreview.dueNow : 0),
     status: pending.status,
     createdAt: pending.createdAt,
   };
@@ -950,6 +1052,71 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     await require('./bonusService').useBonus(pending.bonusId, pending.gymId);
   }
 
+  // ── 續約附加（獨立於 entryType；到期前 14 天於產生 QR 時勾選）────────────────
+  // 免費入場（定期票）＋當場續約：延長票期、折後價收款；分期則折扣集中於最後一期。
+  let renewRevenue = 0;              // 本次入場一次付清時收的續約款（計入 amountPaid / 記帳）
+  let renewPlanId = null;
+  let renewMeta = null;
+  if (pending.renewPassId && pending.renewSnapshot) {
+    const snap = pending.renewSnapshot;
+    const passRef = db.collection(COLLECTIONS.MEMBER_PASSES).doc(pending.renewPassId);
+    const passDoc = await passRef.get();
+    if (!passDoc.exists) throw { code: 'RENEW_PASS_NOT_FOUND', message: '要續約的定期票不存在' };
+    const cur = passDoc.data();
+    const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(snap.passTypeId).get();
+    const pt = ptDoc.exists ? ptDoc.data() : {};
+    // 取消還原用：續約前快照（到期日 / 狀態 / 次數 / 既有分期計畫）
+    const beforeRenew = {
+      endDate: cur.endDate, status: cur.status,
+      credits: cur.credits ?? null, originalCredits: cur.originalCredits ?? null,
+      installmentPlanId: cur.installmentPlanId || null,
+    };
+    // 分期？續約選分期 && 票種開分期 && 有續約價
+    let plan = null;
+    if (snap.plan === 'installment' && pt.installment?.enabled && snap.renewalPrice > 0) {
+      const installmentService = require('./installmentService');
+      const periods = installmentService.buildRenewalPeriods(pt.installment, snap.fullPrice, snap.renewalPrice, taiwanToday());
+      if (periods) {
+        plan = await installmentService.createInstallmentPlan({
+          memberId: pending.memberId, memberName: pending.memberName || '',
+          gymId: pending.gymId, relatedType: 'pass', relatedId: pending.renewPassId, itemName: `${snap.passTypeName}（續約）`,
+          recognitionDate: null, installments: periods,
+          firstPaymentMethod: pending.paymentMethod || 'cash', staffId, staffName,
+        });
+        if (plan) renewPlanId = plan.id;
+      }
+    }
+    // 延長票期（比照 PUT /passes renew：續約後新到期日、重置次數、狀態 active）
+    await passRef.update({
+      endDate: snap.newEndDate,
+      status: 'active',
+      credits: pt.credits ?? cur.credits ?? null,
+      originalCredits: pt.credits ?? cur.originalCredits ?? null,
+      installmentPlanId: renewPlanId || cur.installmentPlanId || null,
+      lastRenewedAt: now, updatedAt: now,
+    });
+    // 一次付清：續約款於本次入場記帳（type 'pass'）；分期：首期已由計畫記帳，此處不記
+    if (!renewPlanId) {
+      const { recordTransaction } = require('../utils/revenueLedger');
+      const rtxn = await recordTransaction(db, {
+        gymId: pending.gymId, type: 'pass', totalAmount: snap.renewalPrice,
+        paymentMethod: pending.paymentMethod || 'cash',
+        memberId: pending.memberId, memberName: pending.memberName || '',
+        relatedId: pending.renewPassId, staffId, staffName: staffName || '',
+        notes: `定期票續約（${snap.passTypeName}）`,
+      });
+      renewRevenue = snap.renewalPrice;
+      renewMeta = { transactionId: rtxn.id };
+    }
+    renewMeta = {
+      ...(renewMeta || {}),
+      passId: pending.renewPassId, plan: renewPlanId ? 'installment' : 'full',
+      renewalPrice: snap.renewalPrice, fullPrice: snap.fullPrice,
+      newEndDate: snap.newEndDate, planId: renewPlanId,
+      before: beforeRenew,
+    };
+  }
+
   // 建立入場紀錄
   const checkIn = {
     id: checkInId,
@@ -965,6 +1132,11 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     bonusId: pending.bonusId || null,
     buyPassTypeId: pending.buyPassTypeId || null,
     paymentPlan: pending.paymentPlan || 'full',
+    // 續約附加（獨立記帳，不計入本次 checkin 交易，避免雙重記帳）
+    renewPassId: pending.renewPassId || null,
+    renewalAmount: renewRevenue,           // 一次付清收的續約款；分期為 0（首期由計畫記）
+    renewalPlanId: renewPlanId,
+    renewMeta,                             // 取消還原用快照
     transactionId: null,
     // 分期購定期票：票價由分期計畫記帳，本次入場只認列加購（岩鞋/粉袋）；一次付清照舊含票價
     amountPaid: (buyPassInstallmentApplied ? 0 : pending.amount) + pending.shoesPrice + (pending.chalkPrice || 0),
@@ -1017,6 +1189,39 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
   }
 
   return { checkIn };
+};
+
+// 取消入場時還原「續約附加」：復原票期/次數、作廢續約分期計畫、一次付清記負向沖銷。
+// 供 checkinService.cancelCheckIn 與 cancelCheckin.js 路由共用（兩條取消路徑一致）。
+const revertRenewal = async (db, checkIn, now) => {
+  const meta = checkIn.renewMeta;
+  if (!meta || !meta.passId || !meta.before) return;
+  const passRef = db.collection(COLLECTIONS.MEMBER_PASSES).doc(meta.passId);
+  const passDoc = await passRef.get();
+  if (passDoc.exists) {
+    await passRef.update({
+      endDate: meta.before.endDate,
+      status: meta.before.status,
+      credits: meta.before.credits ?? null,
+      originalCredits: meta.before.originalCredits ?? null,
+      installmentPlanId: meta.before.installmentPlanId || null,
+      updatedAt: now,
+    });
+  }
+  if (meta.planId) {
+    await db.collection(COLLECTIONS.INSTALLMENT_PLANS).doc(meta.planId)
+      .update({ status: 'cancelled', cancelledAt: now, cancelReason: '續約取消', updatedAt: now })
+      .catch(() => {});
+  }
+  if (meta.plan === 'full' && meta.renewalPrice > 0) {
+    const { recordTransaction } = require('../utils/revenueLedger');
+    await recordTransaction(db, {
+      gymId: checkIn.gymId, type: 'refund', totalAmount: -Math.abs(meta.renewalPrice),
+      paymentMethod: checkIn.paymentMethod || 'cash',
+      memberId: checkIn.memberId, memberName: checkIn.memberName || '',
+      relatedId: meta.passId, notes: '定期票續約取消沖銷',
+    }).catch(() => {});
+  }
 };
 
 // ── 取消入場（10分鐘內）────────────────────────────────────────
@@ -1115,6 +1320,9 @@ const cancelCheckIn = async (checkInId, staffId, force = false) => {
     }
   }
 
+  // 續約附加還原（獨立於 entryType）
+  await revertRenewal(db, checkIn, now);
+
   // 標記取消
   await checkInRef.update({
     isCancelled: true,
@@ -1201,5 +1409,6 @@ module.exports = {
   runEntryGates,
   getMemberType,
   computePaidEntryAmount,
+  revertRenewal,
   PRICES,
 };

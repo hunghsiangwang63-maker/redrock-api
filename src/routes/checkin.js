@@ -77,6 +77,7 @@ router.post('/qr/create',
         passId, discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
         paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, paymentPlan,
         rentShoes, shoesPrice, rentChalk, chalkPrice,
+        renewPassId, renewPaymentPlan,
       } = req.body;
 
       // 親子帳號：家長可為「自己的子會員」產生入場 QR（需驗證擁有權）
@@ -101,6 +102,7 @@ router.post('/qr/create',
         entryType, baseEntryType, passId, discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
         paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, paymentPlan,
         rentShoes, shoesPrice, rentChalk, chalkPrice,
+        renewPassId, renewPaymentPlan,
       });
 
       res.status(201).json(result);

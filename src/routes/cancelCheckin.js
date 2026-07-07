@@ -44,6 +44,8 @@ const restoreEntryCredits = async (db, checkIn) => {
       await passSnap.docs[0].ref.update({ status: 'cancelled', cancelledAt: now, cancelReason: '入場取消', updatedAt: now });
     }
   }
+  // 續約附加還原（獨立於 entryType，任何入場只要帶 renewMeta 都要復原票期/分期/營收）
+  await require('../services/checkinService').revertRenewal(db, checkIn, now);
 };
 
 // ── POST /cancel-checkins/direct ─────────────────────────────────

@@ -31,6 +31,25 @@ const buildPeriodsFromConfig = (config, totalPrice, startDateStr) => {
   });
 };
 
+// 續約分期：前 n-1 期照原價比例、續約折扣的差價全部集中在最後一期扣掉。
+// 例：半年票 7600、9折(6840)、3期(40/40/20%) → 3040/3040/760 → 折後 3040/3040/(6840-6080)=760
+//     使用者確認之例（第1期2534/第2期2533/第3期1773）為早期 round 的另一組比例；本函式一律「前期原價、末期吸收折扣」。
+const buildRenewalPeriods = (config, fullPrice, renewalPrice, startDateStr) => {
+  const dayjs = require('dayjs');
+  const periods = (config?.periods || []).filter(p => (Number(p.percent) || 0) > 0);
+  if (periods.length < 2 || !(renewalPrice > 0)) return null;
+  const start = startDateStr || taiwanToday();
+  let allocated = 0;
+  return periods.map((p, i) => {
+    const isLast = i === periods.length - 1;
+    // 末期 = 續約總價 - 前面各期(照原價比例)已分配；夾在 [0, renewalPrice] 內
+    const raw = isLast ? (renewalPrice - allocated) : Math.round(fullPrice * (Number(p.percent) || 0) / 100);
+    const amount = Math.max(0, raw);
+    allocated += amount;
+    return { amount, dueDate: dayjs(start).add(Number(p.dueOffsetDays) || 0, 'day').format('YYYY-MM-DD') };
+  });
+};
+
 // ── 分期繳款記帳 ──────────────────────────────────────────────────
 // 每期繳款記一筆 transactions（進營收/結算）。認列日：
 //   課程＝預收，認列在最後一堂（plan.recognitionDate）；定期票＝收款日即時（recognitionDate=null→paidAt）
@@ -291,6 +310,7 @@ const getAllInstallmentPlans = async (status) => {
 
 module.exports = {
   buildPeriodsFromConfig,
+  buildRenewalPeriods,
   createInstallmentPlan,
   markInstallmentPaid,
   runOverdueCheck,

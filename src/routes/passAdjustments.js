@@ -248,8 +248,9 @@ router.get('/holiday-history',
 
 module.exports = router;
 
-// ── GET /pass-adjustments/analytics - 票券統計（管理員）──
-router.get('/analytics', authenticate, async (req, res) => {
+// ── GET /pass-adjustments/analytics - 票券統計（管理員/值班）──
+// 含全館會員卡片個資（姓名/手機/卡號）→ 限值班 operator 或 gym_manager/super_admin（與 UI tab gate 一致）
+router.get('/analytics', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const db = getDb();
     const today = taiwanToday();
@@ -336,8 +337,9 @@ router.get('/analytics', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// ── GET /pass-adjustments/analytics/download - 下載詳細資料 CSV ──
-router.get('/analytics/download', authenticate, async (req, res) => {
+// ── GET /pass-adjustments/analytics/download - 下載詳細資料 CSV（管理員/值班）──
+// 下載含會員姓名/手機/卡號 → 同上限管理員/值班（防個人 full/part 未值班帳號直打 API 撈全館個資）
+router.get('/analytics/download', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const db = getDb();
     const { type } = req.query; // passes | discounts | blacks | tickets | bonuses

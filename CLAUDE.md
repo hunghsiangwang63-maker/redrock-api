@@ -292,6 +292,19 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **仍會出現購買選項的三種情形**（皆因「這一館其實沒覆蓋」）：① 手上是**他館單館票**、這次進另一館；② **回數票次數用完**（`credits<=0`）；③ 站台 `/checkin/direct` 硬帶 `entryType=buy_pass`（繞過 verify）。→ 買了都是**今天起算**、不會自動接在舊票後（無排隊/去重邏輯）。
 - **決策：維持現狀（方案 A）** ——以「入場當館的有效覆蓋」為準，他館單館票/回數票用完時仍可購買，視為合理。（未採方案 B「名下有任何 active 票就一律禁購」。）續約（到期≤14天）才是「已有票要延長」的正解，且**接在原到期日後延長、不重疊**。
 
+## 目前進度（2026-07-07 續）— 票種 & 課程：編輯／停用／刪除 三功能
+> 需求：票種與課程都要「編輯／停用／刪除」，**停用後會員看不到、可逆保留**；刪除＝真的移除。後端 `/health` `1.65.0-passtype-course-enable-disable-delete`；E2E（打 Railway）**14/14 綠**。commit 後端 `d3be571`、前端 `6caf5e3`。
+- ✅ **票種（`passes.js` + `PassesPage`）**：
+  - **停用/啟用**：`PUT /passes/types/:id` 收 `isActive`（true 清 deactivatedAt / false 記）；停用後會員**購買/挑選清單看不到**（`getBuyablePassTypes` 本就濾 active）、**既有已購買的定期票不受影響**、可再啟用。
+  - **管理頁含停用票種**：`GET /passes/types?includeInactive=1`；前端 `loadPassTypes` 帶此參數載全部、另用 `activePassTypes` 過濾給「票種一覽 / 新增定期票選單」（不列停用）。
+  - **刪除改硬刪除**：`DELETE /passes/types/:id` 改真刪；**仍有會員持有此票種「有效」定期票 → 409 `PASS_TYPE_IN_USE` 擋下**，提示改用停用。
+  - 前端票種定義卡：三鍵 編輯／停用⇄啟用／刪除；停用卡淡化＋「已停用」標籤；刪除確認 Modal 改「永久刪除、有效持有者會被擋」。（附帶：`includeInactive` 撈出**本來就停用**的兒童月票/10次回數票竹北，現可於管理頁啟用/刪除。）
+- ✅ **課程（`courses.js` + `CoursesPage`）**：
+  - **停用/啟用**：`PUT /courses/:courseId` 允許 `isActive`；`GET /courses` 會員端過濾 `isActive!==false` → 停用後**會員課程總覽看不到**、**不通知學員、不動報名**、可再啟用。
+  - 課程卡加 停用⇄啟用（淡化＋「已停用」標籤）。
+  - ⚠️ **與既有「取消課程」不同**：`DELETE /:courseId`（取消課程）＝**寄信通知學員＋取消未來報名**，仍保留為獨立動作；**永久刪除** `/permanent`（硬刪、有在籍報名會擋）**限 super_admin**。停用則所有課程管理員可用。
+- **E2E 重點**：票種停用→GET 預設不含、includeInactive 含、啟用復現；硬刪成功、有效持有者 409、票券作廢後可刪；課程停用→**真會員（林怡君）登入實測看不到、員工端仍看得到、啟用後又看得到**。票種 UI 三鍵瀏覽器實機確認。測試殘留（含順手硬刪一批舊 `【練習】` 停用票種）已清乾淨。
+
 ## 待辦
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - 清理 E2E 測試殘留：`【練習】體驗生今日` 名下的 failed/returned `fallTestBookings` + 一筆 failed `fallTests`（練習 fixture，無害）

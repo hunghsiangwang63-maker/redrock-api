@@ -311,6 +311,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **驗證（打 Railway，含停用）**：30天月票群 → 90日定期票 → 半年票(180天) → **回數票（90天）排最後**（算次數一律排時間票之後，不看自身天數）。
 - 註：持有人報表 `/reports/active-passes` 維持**依人數排序**（不受此影響）。
 
+## 目前進度（2026-07-07 續）— 票券統計/下載 CSV 補管理員權限
+> 查證：優惠卡/黑卡「票券統計＋下載 CSV」在員工端 定期票 →「📊 票券統計」分頁（`PassAnalyticsPage`）。UI tab 有 gate（`canManagePass`＝管理員或值班 operator），但**後端 `/analytics`、`/analytics/download` 原本只 `authenticate`**（註解寫「管理員」卻沒 role 檢查）→ 任何員工 token（含個人 full/part 未值班）可直打 API 下載全館會員姓名/手機/卡號。→ 補上權限。後端 `/health` `1.67.0-card-analytics-manager-only`；E2E 9/9；commit `c0533b4`。
+- ✅ **`GET /pass-adjustments/analytics` 與 `/analytics/download` 加 `requireManagerOrStation`**（值班 operator 或 `gym_manager`/`super_admin`），與 UI tab gate 一致。
+- **下載內容備忘**（供日後查）：CSV UTF-8 帶 BOM、檔名 `<type>_<日期>.csv`；`?type=discounts`（優惠卡）欄位＝序號/姓名/手機/卡號(barcode)/狀態/剩餘格數/原始格數/已用格數/**紅利已送**/到期日/綁定日/館別；`?type=blacks`（黑卡）**無「紅利已送」欄**、到期日可為「無期限」。資料源：優惠卡 `discountCards`（`ownerMemberId`，預設10格）、黑卡 `legacyBlackCards`（`memberId`，預設12格）；姓名/手機由 memberId 反查 members 補齊。統計「已使用」＝發出−剩餘，「發出」只算原始卡（`source!=='transferred'`）。
+- **E2E（打 Railway，9/9）**：admin/值班 operator → analytics + download(discounts/blacks) 皆 200；個人 part_time（未值班）→ 三者皆 **403**。
+
 ## 待辦
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - 清理 E2E 測試殘留：`【練習】體驗生今日` 名下的 failed/returned `fallTestBookings` + 一筆 failed `fallTests`（練習 fixture，無害）

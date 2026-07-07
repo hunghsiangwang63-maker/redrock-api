@@ -335,6 +335,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - `legacyCardService` 黑卡移轉預覽：原卡無期限 → 接收方無期限（不再 +1 年）＋無期限 warning。
   - **E2E 7/7（完整 initiate→真會員接收 實測）**：綁定黑卡移轉子卡=無期限、轉入優惠卡移轉子卡=無期限、購買優惠卡移轉子卡≈+365天跟隨原卡。測試卡片＋`cardTransfers` 記錄硬刪清乾淨。
 
+## 目前進度（2026-07-07 續）— 課程出缺席：入場自動標記 + 可點簽到 UI + CSV 下載
+> 三部分：入場連動自動出席、員工端可點簽到、出缺席點名表 CSV。後端 `/health` `1.70.0`→`1.71.0`；E2E 8/8＋8/8；瀏覽器實機通過。
+- ✅ **入場自動標記出席（`1.70.0`，後端 `2fd5ee6`）**：`courseService.markTodayCourseAttendanceOnEntry({memberId,gymId,staffId})`——撈 confirmed 未暫停報名 → 課程屬入場館別 → 今日場次(date===今天、非取消) → 該 (sessionId,memberId) **無出席紀錄才** `markAttendance present`（**不覆蓋**員工已標）。判斷基準是「今天有已報名場次」**與 entryType 無關**；全程 try/catch **不阻斷入場**。接入 `confirmCheckIn`(QR/direct) 與 `/checkin/phone`（建 checkIns＋墜測遞延後、lazy require 避免循環依賴）。E2E 8/8：入場→present、先標 absent 不被覆蓋、跨館不誤記。
+- ✅ **可點簽到 UI（`1.71.0`，純前端 `CoursesPage`，commit `2bc1e98`）**：場次名單正取列唯讀標籤 → 三顆按鈕「出席/遲到/缺席」（當前狀態高亮），呼叫既有 `handleMarkAttendance(selectedSession.id, memberId, status)`（⚠ session id 用 `selectedSession.id` 非課程 id，否則標到別堂）；已取消場次禁用。瀏覽器實機：點「出席」即高亮綠、roster 即時刷新。
+- ✅ **出缺席 CSV 下載（`1.71.0`，後端 `9c25e01`＋前端）**：`GET /courses/:courseId/attendance/download`（`courses.manage`）→ 點名矩陣：每列一位正取學員、每欄一場次(依日期)、格值 出席/缺席/遲到/空白 ＋ **出席次數小計**（present+late 計入）；姓名以 members 集合權威補齊；UTF-8 BOM；`filename course_attendance_<courseId>.csv`。前端名單標題「⬇ 下載出缺席」→ `downloadAttendanceCSV`（走 axios `client` blob、自動帶正確 token，檔名 `<課程名>_出缺席_<日期>.csv`）。E2E 8/8：矩陣/BOM/小計皆正確。
+
 ## 待辦
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - 清理 E2E 測試殘留：`【練習】體驗生今日` 名下的 failed/returned `fallTestBookings` + 一筆 failed `fallTests`（練習 fixture，無害）

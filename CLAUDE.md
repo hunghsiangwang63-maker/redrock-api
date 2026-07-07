@@ -254,6 +254,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **會員端 UI 瀏覽器實測（redrock-member.web.app 真登入）**：以成人非 VIP 練習會員（持到期剩 5 天半年票＋續約9折＋3期；`firebase-admin` 注入 passwordHash 可登入）逐頁確認——首頁無 onboarding gate →「租借器材」步驟頂部續約卡片顯示「剩 5 天・順便續約（延長至 2027-01-12）・~~7,600~~ **6,840** 續約優惠」→ 勾選展開「一次付清 6,840／分期 3 期 首期 3,040」＋付款方式，未選付款方式時「請先選擇續約付款方式」擋確認鈕 → 選分期＋現金後鈕啟用「確認（+NT$3,040）」→ QR 頁「定期票續約（頭款・第1期）3,040」＋「分期 3 期 · 折後全額 6,840（**末期 NT$760**）」＋合計 3,040。前端首期/末期折扣與後端 `[3040,3040,760]` 完全一致。測試會員/票/票種測後 `DELETE` 清乾淨（pending QR 30 分自動失效）。
 - ⚠️ **E2E 測試細節（新學到）**：bodyless `DELETE` 若帶 `Content-Type: application/json` 會被 express.json() 當空 body 解析失敗 → 回 400 `SERVER_ERROR`（假清理成功、留殘留）。E2E 清理的 DELETE **不要帶 Content-Type**（或帶 body）。本次殘留已補清乾淨。
 
+## 目前進度（2026-07-07 續）— 票種編輯加刪除鍵（純前端 `redrock-web`）
+> 需求：定期票「票種編輯」多一個刪除鍵、加 Modal 確認。純前端（後端 `DELETE /passes/types/:id` 軟停用早已存在）。build + firebase deploy + 員工端瀏覽器實測通過。commit（redrock-web）`9d85168`。
+- ✅ **編輯票種 Modal 加「刪除此票種」鍵**（`PassesPage`，只在編輯模式顯示，紅框全寬）；點擊跳自訂確認 Modal（取代原 `window.confirm`）。
+- ✅ **票種列表按鈕「停用」改「刪除」**，與編輯 Modal 共用同一確認 Modal；全面移除 `window.confirm`。
+- ✅ **確認 Modal 文案誠實對齊後端語意**：刪除＝**軟停用**（`isActive:false`）——之後**無法再選購**（新增定期票／入場購票／續約皆不出現），**已購買會員不受影響**、既有票照常使用。
+- **瀏覽器實測（staff.web.app，super_admin）**：建練習票種 → 票種定義列表按鈕顯示「刪除」→ 編輯 Modal 底部「刪除此票種」→ 確認 Modal 文案正確 → 確定刪除 → 卡片消失、後端 `isActive=false`；測試票種硬刪清乾淨、無殘留。
+
 ## 待辦
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - 清理 E2E 測試殘留：`【練習】體驗生今日` 名下的 failed/returned `fallTestBookings` + 一筆 failed `fallTests`（練習 fixture，無害）

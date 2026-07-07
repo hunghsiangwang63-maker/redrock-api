@@ -167,7 +167,7 @@ router.post('/cancel',
 );
 
 // ── GET /checkin/eligibility/:memberId - 查詢會員入場類型資格（手機入場篩選用）──
-router.get('/eligibility/:memberId', authenticate, async (req, res) => {
+router.get('/eligibility/:memberId', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const db = getDb();
     const memberDoc = await db.collection('members').doc(req.params.memberId).get();
@@ -259,7 +259,7 @@ router.post('/direct', authenticate, requireManagerOrStation, async (req, res) =
 });
 
 // ── GET /checkin/today-course-students - 今日課程學員名單（手機入場頁快速入場用）──
-router.get('/today-course-students', authenticate, async (req, res) => {
+router.get('/today-course-students', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const { gymId } = req.query;
     if (!gymId) return res.status(400).json({ message: '缺少場館資訊' });

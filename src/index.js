@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '1.64.0-active-passes-membername-startdate',
+    version: '1.65.0-passtype-course-enable-disable-delete',
   });
 });
 

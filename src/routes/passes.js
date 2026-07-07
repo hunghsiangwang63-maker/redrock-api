@@ -59,7 +59,11 @@ router.get('/types', authenticate, async (req, res) => {
     const db = getDb();
     const isSuper = req.staff.role === 'super_admin';
     const gymId = isSuper ? req.query.gymId : req.staff.gymId;
-    const snapshot = await db.collection(COLLECTIONS.PASS_TYPES).where('isActive', '==', true).get();
+    // 管理頁需含停用票種（供啟用/刪除）；一般（會員可購/挑選）維持只回啟用中
+    const includeInactive = req.query.includeInactive === '1' || req.query.includeInactive === 'true';
+    const snapshot = includeInactive
+      ? await db.collection(COLLECTIONS.PASS_TYPES).get()
+      : await db.collection(COLLECTIONS.PASS_TYPES).where('isActive', '==', true).get();
     let types = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
     // super_admin 選「全館」（未帶 gymId）→ 回全部；否則只留 全館通用 + 該館單館票種
     if (!(isSuper && !gymId)) {
@@ -157,26 +161,45 @@ router.put('/types/:id',
           : { enabled: false, periods: [] };
       }
       if (req.body.renewalDiscount !== undefined) updates.renewalDiscount = normalizeRenewalDiscount(req.body.renewalDiscount);
+      // 停用/啟用（isActive）：停用後會員購買/挑選清單看不到，可再啟用；不影響既有已購買的定期票
+      if (req.body.isActive !== undefined) {
+        updates.isActive = !!req.body.isActive;
+        if (updates.isActive) { updates.deactivatedAt = null; updates.deactivatedBy = null; }
+        else { updates.deactivatedAt = new Date(); updates.deactivatedBy = req.staff.id; }
+      }
       updates.updatedAt = new Date();
 
       await ref.update(updates);
-      res.json({ message: '票種已更新' });
+      res.json({ message: req.body.isActive === false ? '票種已停用' : req.body.isActive === true ? '票種已啟用' : '票種已更新' });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }
   }
 );
 
-// ── DELETE /passes/types/:id - 停用票種（軟刪除，既有已購買的定期票不受影響）──
+// ── DELETE /passes/types/:id - 永久刪除票種（硬刪除）──
+// 安全防護：仍有會員持有此票種的「有效」定期票時擋下，避免刪掉票種後續約/報表對不到（改用停用）。
 router.delete('/types/:id',
-  authenticate, checkPermission('pass_types.manage'), auditLog('pass_type.deactivate'),
+  authenticate, checkPermission('pass_types.manage'), auditLog('pass_type.delete'),
   async (req, res) => {
     try {
       const db = getDb();
-      await db.collection(COLLECTIONS.PASS_TYPES).doc(req.params.id).update({
-        isActive: false, deactivatedAt: new Date(), deactivatedBy: req.staff.id,
-      });
-      res.json({ message: '票種已停用' });
+      const ref = db.collection(COLLECTIONS.PASS_TYPES).doc(req.params.id);
+      const doc = await ref.get();
+      if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此票種' });
+
+      const activeSnap = await db.collection(COLLECTIONS.MEMBER_PASSES)
+        .where('passTypeId', '==', req.params.id)
+        .where('status', '==', 'active')
+        .get();
+      if (!activeSnap.empty) {
+        return res.status(409).json({
+          error: 'PASS_TYPE_IN_USE',
+          message: `尚有 ${activeSnap.size} 位會員持有此票種的有效定期票，無法刪除。請改用「停用」（會員即看不到、既有票不受影響）。`,
+        });
+      }
+      await ref.delete();
+      res.json({ message: '票種已刪除' });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }

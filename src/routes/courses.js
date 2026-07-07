@@ -36,7 +36,7 @@ router.get('/', authenticateAny, async (req, res) => {
     const gymId = req.query.gymId || req.staff?.gymId;
     let courses = await courseService.getCourses(gymId);
     // 會員端不顯示已取消課程與體驗課程（source:experience 由確認體驗預約自動建立，不開放報名）
-    if (req.member) courses = courses.filter(c => c.status !== 'cancelled' && c.source !== 'experience');
+    if (req.member) courses = courses.filter(c => c.status !== 'cancelled' && c.source !== 'experience' && c.isActive !== false);
     res.json({ courses });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
@@ -547,7 +547,7 @@ router.put('/:courseId',
         'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',
         'unlimitedPracticeStart', 'unlimitedPracticeEnd',
-        'allowTrial', 'trialPrice',
+        'allowTrial', 'trialPrice', 'isActive', // isActive：停用/啟用（會員課程總覽隱藏，不通知、不動報名）
       ];
       const updates = { updatedAt: new Date() };
       allowedFields.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });

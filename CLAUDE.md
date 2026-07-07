@@ -239,6 +239,20 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - dev service account json 在本機 `~/Downloads/redrock-dev-a35c1-firebase-adminsdk-*.json`（機密、不在版控）
 - **`seedTestMembers.js`** — 建/清「【練習】」測試會員（`--commit` 寫入、`--clean` 只清）；**`loop-test.js`** — 卡片/紅利/入場/課程/分期狀態機回歸（90 斷言）。
 
+## 目前進度（2026-07-07）— 定期票會員端續約（產生入場 QR 時勾選）
+> 需求：續約只放**會員端**（員工端不做）；**到期前 14 天**開放；於**產生入場 QR 時**勾選；票種多一個**續約折扣**（%或NT$兩種格式擇一）；分期時**折後差價全部集中在最後一期扣掉**。前後端各自 commit/deploy、打 Railway 正式 API E2E 通過。後端 `/health` `1.62.0-pass-renewal-at-entry`。
+- ✅ **票種續約折扣欄位（批次A）**：`passes.js` 加 `normalizeRenewalDiscount`（`{mode:'percent'|'amount', value}`，percent 夾 ≤100、value≤0 視為 null）＋ `computeRenewalPrice`；`POST/PUT /passes/types` 收 `renewalDiscount`；`checkinService.getBuyablePassTypes` 一併回傳。前端 `PassesPage` 票種表單加「續約折扣」（折%/折抵NT$ 切換＋數值，留空＝原價續約）。commit 後端 `c01fd32`、前端 `ddcc826`。E2E：建 percent 10 / 改 amount 800 / value 0→null 全綠。
+- ✅ **後端續約端點 + 分期末期折扣（批次B）**：
+  - `verifyEntry` 定期票免費短路加**續約偵測**：有效票中任一到期 ≤14 天 → 回 `renewal{passId,passTypeName,daysLeft,currentEndDate,newEndDate,fullPrice,renewalPrice,renewalDiscount,installment}`（`getRenewalInfo`，`RENEWAL_WINDOW_DAYS=14`）。
+  - `createPendingCheckIn` 收 `renewPassId`/`renewPaymentPlan`：**後端權威**驗票屬本人 / 有效 / 場館（單館票限適用館）/ 到期窗（`RENEW_NOT_OPEN`），快照折後價與新到期日到 pending（`renewSnapshot`）。續約**獨立於 entryType**（附加在免費入場定期票上）。
+  - `confirmCheckIn` 續約處理：延長票期（現到期日未過→以之為基準加月/日；已過→今日）、重置次數、`status:'active'`；一次付清記 `type:'pass'` 交易、分期建 `installmentService.buildRenewalPeriods`（前 n-1 期照原價比例、**末期＝續約總價−前期已分配**吸收折扣）計畫（首期由計畫記帳）。續約款**不併入 checkin 交易**（各自記帳、避免雙重）。
+  - `scanQrCode` 預覽續約應收 `renewal.dueNow`（一次付清＝折後全額；分期＝首期）計入 `totalAmount`。
+  - 取消：`revertRenewal`（`checkinService` 匯出，`cancelCheckIn` 與 `cancelCheckin.js` 路由共用）→ 還原票期/次數/既有分期計畫、作廢續約分期計畫、一次付清記負向 refund 沖銷。
+  - **E2E（打 Railway，23/23 綠）**：半年票 7600、續約9折 6840、3期 40/40/20 → 一次付清 scan `dueNow=6840`、confirm 延到 2027-01-12、`renewalAmount=6840`、取消還原 2026-07-12；分期 scan 首期 3040、各期 **[3040,3040,760]**（760 折扣集中末期）、票期延長、取消還原＋計畫作廢；到期30天 → `RENEW_NOT_OPEN`。commit `550cd6c`。腳本 `scratchpad/renewal-e2e.mjs`。
+  - **verify 附帶 renewal E2E（9/9 綠）**：建成人練習會員（非 VIP，簽 waiver＋墜測 passed 過關卡）→ 給到期今+5天的票 → `POST /checkin/verify` 到達**定期票免費區塊**且回傳完整 `renewal`（`renewalPrice 6840`/`newEndDate 2027-01-12`/`daysLeft 5`/`installment.enabled`）。測後清乾淨。
+- ✅ **會員端 UI（批次C）**：`MemberQRPage` 免費入場定期票路徑，`verify` 回 `renewal` 時於「租借器材」步驟上方顯示**續約卡片**（剩 N 天／折後價含原價刪除線／延長至新到期日）；可勾選順便續約；票種開分期時提供「一次付清／分期 N 期」（首期金額前端與後端同算法、顯示末期折扣）；續約需選付款方式（頭款），QR 合計加入續約應收、摘要顯示續約行。commit 前端 `c3bb60d`，已 firebase deploy。
+- ⚠️ **E2E 測試細節（新學到）**：bodyless `DELETE` 若帶 `Content-Type: application/json` 會被 express.json() 當空 body 解析失敗 → 回 400 `SERVER_ERROR`（假清理成功、留殘留）。E2E 清理的 DELETE **不要帶 Content-Type**（或帶 body）。本次殘留已補清乾淨。
+
 ## 待辦
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - 清理 E2E 測試殘留：`【練習】體驗生今日` 名下的 failed/returned `fallTestBookings` + 一筆 failed `fallTests`（練習 fixture，無害）

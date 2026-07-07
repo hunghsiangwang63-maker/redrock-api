@@ -278,6 +278,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ⚠️ **iOS 會快取主畫面圖示**：之前加過舊的要先刪主畫面圖示再重加（或無痕）才會更新。
 - ⚠️ **`index.html` 兩站共用** → 員工站加到主畫面也顯示同一 R 圖示與「RedRock」名稱（同品牌，通常 OK）。要員工站不同名稱/圖示需做**分 target 的 manifest**（目前未做）。
 
+## 目前進度（2026-07-07 續）— 定期票持有人報表顯示 memberId + 未來票提前生效 + 列表排序
+> 回報：員工會員頁點「定期票」，下方持有人列表**月票的人名顯示原始 UUID**（如 `e01e3390…`＝【練習】李定期月票）。連帶修兩個相關項。後端 `/health` `1.64.0-active-passes-membername-startdate`。
+- ✅ **主 bug：報表姓名顯示原始 memberId**（`GET /members/reports/active-passes`）：根因是報表直接用定期票文件的 `p.memberName`，但 **`POST /passes` / seed 建立的定期票根本沒存 `memberName`** → 回空字串 → 前端 `RowMemberList` 的 `memberName || memberId` fallback 成 UUID。修法：報表改用 **`members` 集合權威補齊姓名**（批次 `db.getAll`），查無會員顯示「(已刪除會員)」。commit 後端 `223151e`。E2E（打 Railway）：所有群組姓名正常、**UUID 當姓名 0 筆**（`e01e3390` 正確顯示「【練習】李定期月票」）。
+- ✅ **附帶邊界：未來起始日的票提前生效**（`checkinService.getValidPasses`）：原只看 `endDate>=today`、**沒看 `startDate`** → 起始日在未來的定期票現在就被當有效、可免費入場。加 `!startDate || startDate<=today` 判斷（合法票不受影響）。⚠️ 報表 `/reports/active-passes` **未**加 startDate 過濾（仍列出未來票＝「持有」，只是入場資格不提前生效）。
+- ✅ **會員定期票列表排序（純前端 `PassesPage`）**：`memberPasses` 改**有效優先、已取消/過期收到底部並淡化**（`opacity:0.5`），同組內到期日新→舊；不再讓「已取消」蓋過有效票。commit 前端 `64b48ad`。
+- 🧹 **清掉 E2E 定期票殘留**：先前 renewal/verify E2E 用 `DELETE /passes/:id`（軟刪＝`status:cancelled`、不移除）留下林怡君名下 2 張 + 2 張孤兒（會員已刪）共 4 張 `【練習】` 定期票，已 `firebase-admin` 硬刪清乾淨（全域掃描 0 殘留）。**教訓：E2E 定期票清理要硬刪或事後掃 `cleanupOrphans`，軟刪會殘留在持有人列表/會員定期票頁。**
+
 ## 待辦
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - 清理 E2E 測試殘留：`【練習】體驗生今日` 名下的 failed/returned `fallTestBookings` + 一筆 failed `fallTests`（練習 fixture，無害）

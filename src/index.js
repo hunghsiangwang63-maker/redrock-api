@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '1.57.0-buy-pass-installment',
+    version: '1.58.0-checkin-manager-or-station',
   });
 });
 

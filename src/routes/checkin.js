@@ -5,7 +5,7 @@ const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
-const { authenticate, authenticateAny, checkPermission } = require('../middleware/auth');
+const { authenticate, authenticateAny, checkPermission, requireManagerOrStation } = require('../middleware/auth');
 const checkinService = require('../services/checkinService');
 const memberService = require('../services/memberService');
 const { getDb, COLLECTIONS } = require('../config/firebase');
@@ -114,7 +114,7 @@ router.post('/qr/create',
 // ── POST /checkin/qr/scan ────────────────────────────────────────
 router.post('/qr/scan',
   authenticate,
-  checkPermission('checkin.create'),
+  requireManagerOrStation,   // 入場動作限值班(operator)/管理員（比照發券；個人 full/part 未值班不可）
   [body('qrToken').notEmpty()],
   validate,
   async (req, res) => {
@@ -132,7 +132,7 @@ router.post('/qr/scan',
 // ── POST /checkin/qr/confirm ─────────────────────────────────────
 router.post('/qr/confirm',
   authenticate,
-  checkPermission('checkin.create'),
+  requireManagerOrStation,   // 入場動作限值班(operator)/管理員
   [body('qrToken').notEmpty()],
   validate,
   async (req, res) => {
@@ -232,7 +232,7 @@ router.get('/eligibility/:memberId', authenticate, async (req, res) => {
 
 // ── POST /checkin/direct - 員工端直接入場（兩段流程：身分＋票券）──────
 // 重用 createPendingCheckIn + confirmCheckIn 的結算邏輯（金額後端權威、票券扣除、營收、墜測遞延）
-router.post('/direct', authenticate, async (req, res) => {
+router.post('/direct', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const {
       memberId, gymId, entryType, baseEntryType,
@@ -472,7 +472,7 @@ router.get('/history',
 
 
 // 手機號碼現場入場（單次、兒童、學生）
-router.post('/phone', authenticate, async (req, res) => {
+router.post('/phone', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     let { memberId, gymId, entryType, paymentMethod, childName, parentMemberId } = req.body;
     const db = getDb();

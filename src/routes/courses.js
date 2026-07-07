@@ -332,6 +332,67 @@ router.post('/sessions/:sessionId/attendance',
   }
 );
 
+// ── GET /courses/:courseId/attendance/download - 出缺席點名表 CSV（管理員）──
+// 矩陣：每列一位正取學員、每欄一個場次（依日期），格值 出席/缺席/遲到/空白 + 出席次數小計。
+router.get('/:courseId/attendance/download',
+  authenticate, checkPermission('courses.manage'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const courseId = req.params.courseId;
+      const courseDoc = await db.collection('courses').doc(courseId).get();
+      if (!courseDoc.exists) return res.status(404).json({ error: 'COURSE_NOT_FOUND', message: '找不到課程' });
+
+      // 場次（排除已取消，依日期→開始時間排序）
+      const sessSnap = await db.collection('courseSessions').where('courseId', '==', courseId).get();
+      const sessions = sessSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(s => s.status !== 'cancelled')
+        .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || ''));
+
+      // 正取學員（去重 memberId）
+      const enrollSnap = await db.collection('courseEnrollments')
+        .where('courseId', '==', courseId).where('status', '==', 'confirmed').get();
+      const memberIds = [...new Set(enrollSnap.docs.map(d => d.data().memberId).filter(Boolean))];
+
+      // 姓名以 members 集合為權威補齊
+      const nameMap = {};
+      if (memberIds.length) {
+        const mdocs = await db.getAll(...memberIds.map(id => db.collection('members').doc(id)));
+        mdocs.forEach(d => { if (d.exists) nameMap[d.id] = { name: d.data().name || '', phone: d.data().phone || '' }; });
+      }
+
+      // 出席紀錄：{ sessionId: { memberId: status } }
+      const attBySession = {};
+      for (const s of sessions) {
+        const aSnap = await db.collection('courseAttendance').where('sessionId', '==', s.id).get();
+        const m = {};
+        aSnap.docs.forEach(d => { m[d.data().memberId] = d.data().status; });
+        attBySession[s.id] = m;
+      }
+
+      const label = { present: '出席', absent: '缺席', late: '遲到' };
+      const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const sessCol = (s) => s.date + (s.startTime ? ` ${s.startTime}` : '');
+      const rows = [[q('學員姓名'), q('電話'), ...sessions.map(s => q(sessCol(s))), q('出席次數')].join(',')];
+      memberIds.forEach(mid => {
+        const nm = nameMap[mid] || {};
+        let attended = 0;
+        const cells = sessions.map(s => {
+          const st = attBySession[s.id]?.[mid];
+          if (st === 'present' || st === 'late') attended++; // 出席/遲到皆計為出席
+          return q(label[st] || '');
+        });
+        rows.push([q(nm.name), q(nm.phone), ...cells, attended].join(','));
+      });
+
+      const csv = '\uFEFF' + rows.join('\n'); // BOM for Excel UTF-8
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="course_attendance_${courseId}.csv"`);
+      res.send(csv);
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
 // ══════════════════════════════════════════════════════
 // 會員查詢自己的報名紀錄
 // ══════════════════════════════════════════════════════

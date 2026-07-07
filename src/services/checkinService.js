@@ -121,6 +121,7 @@ const getValidPasses = async (memberId, gymId) => {
   );
   return withEff
     .filter(p => (p.effectiveEndDate || p.endDate) >= today)
+    .filter(p => !p.startDate || p.startDate <= today) // 起始日到了才算有效（未來票不提前生效）
     .filter(p => p.scope === 'shared' || p.targetGymId === gymId)
     .filter(p => p.credits === null || p.credits > 0);
 };

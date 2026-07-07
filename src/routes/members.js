@@ -116,11 +116,19 @@ router.get('/reports/active-passes', authenticate, async (req, res) => {
     )).filter(p => (p.effectiveEndDate || p.endDate || '') >= today);
     // 與入場資格 getValidPasses 同源：全館票(scope='shared')任館可用；單館票看 targetGymId
     if (gymId) passes = passes.filter(p => p.scope === 'shared' || p.targetGymId === gymId);
+    // 姓名以 members 集合為權威補齊——定期票文件（POST /passes、seed）常未存 memberName，
+    // 否則前端 `memberName || memberId` 會 fallback 顯示原始 memberId。
+    const memberIds = [...new Set(passes.map(p => p.memberId).filter(Boolean))];
+    const nameMap = {};
+    if (memberIds.length) {
+      const memberDocs = await db.getAll(...memberIds.map(id => db.collection(COLLECTIONS.MEMBERS).doc(id)));
+      memberDocs.forEach(d => { if (d.exists) nameMap[d.id] = d.data().name || ''; });
+    }
     const groups = {};
     passes.forEach(p => {
       const key = p.passTypeId || p.passTypeName || 'other';
       if (!groups[key]) groups[key] = { passTypeId: p.passTypeId || null, passTypeName: p.passTypeName || '定期票', members: [] };
-      groups[key].members.push({ memberId: p.memberId, memberName: p.memberName || '', startDate: p.startDate || null, endDate: p.effectiveEndDate || p.endDate || null });
+      groups[key].members.push({ memberId: p.memberId, memberName: nameMap[p.memberId] || p.memberName || '(已刪除會員)', startDate: p.startDate || null, endDate: p.effectiveEndDate || p.endDate || null });
     });
     const passTypes = Object.values(groups)
       .map(g => ({ ...g, count: g.members.length, members: g.members.sort((a, b) => (a.endDate || '') < (b.endDate || '') ? -1 : 1) }))

@@ -261,6 +261,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **確認 Modal 文案誠實對齊後端語意**：刪除＝**軟停用**（`isActive:false`）——之後**無法再選購**（新增定期票／入場購票／續約皆不出現），**已購買會員不受影響**、既有票照常使用。
 - **瀏覽器實測（staff.web.app，super_admin）**：建練習票種 → 票種定義列表按鈕顯示「刪除」→ 編輯 Modal 底部「刪除此票種」→ 確認 Modal 文案正確 → 確定刪除 → 卡片消失、後端 `isActive=false`；測試票種硬刪清乾淨、無殘留。
 
+## 目前進度（2026-07-07 續）— 墜測通過鎖定文件退回 + 會員封鎖改列待辦
+> 兩個小需求：①墜落測驗已通過時，waiver／墜測同意書不可退回重簽（避免誤觸把在籍會員踢回入場前置）②會員資料頁不再顯示「封鎖中」、改直接列出待完成事項。後端 `/health` `1.63.0-reset-locked-when-falltest-passed`。
+- ✅ **墜測通過 → 鎖定兩份文件退回**（後端）：`POST /members/:id/waiver/reset` 與 `POST /fall-tests/signature/:memberId/reset` 退回前用權威 `checkinService.checkFallTest(memberId)` 檢查——`passed` → **409 `FALL_TEST_PASSED_LOCKED`**。僅 **super_admin 帶 `force:true`** 可強制覆寫（供條款改版等正當重簽）。commit 後端 `ea4610e`。
+  - **前端（`MembersPage`）**：`detail.latestFallTest.result==='passed'` 時，兩個「退回重簽」鍵改顯示 **🔒 已鎖定**（前端 api 不送 force，UI 無覆寫路徑＝完全避免誤觸）。commit 前端 `91fdbe7`。
+  - **E2E（打 Railway，8/8 綠）**：會員A(墜測passed) → waiver/同意書退回皆 **409 LOCKED**、`force:true` 皆 200；會員B(墜測未過) → 兩者退回皆 200 允許。測後清乾淨。腳本 inline。
+  - ⚠️ **鎖定條件用權威 `checkFallTest`（含過期判定）**：曾通過但**已過期** → `passed:false` → **可**退回（該會員本就要重測）；前端 UI 鎖定看 `latestFallTest.result==='passed'`（不含過期），故過期會員 UI 仍顯示🔒但後端會放行——以後端為準。
+- ✅ **會員資料頁「封鎖中」→ 直接列待完成事項**（純前端 `MembersPage`）：原單一「封鎖中」紅標改為讀 `member.blockReasons` 逐項顯示——`waiver_unsigned`→待簽免責聲明、`parent_waiver_pending`→待家長簽署、`fall_test_required`→待通過墜落測驗、`email_unverified`→待驗證 Email；全完成則無標籤。commit 前端 `88c2e40`。
+  - 📋 **「封鎖中」判斷邏輯備忘**（`memberService.getBlockReasons`，開會員詳情時 `refreshBlockStatus` 即時重算）：三條任一成立即封鎖——① Email 未驗證（**僅自助註冊** `registeredBy==='self'` 且 `emailVerified=false`；店員/遷移建立不算）② Waiver 未完成 ③ 從未通過墜落測驗（無 `result:'passed'` 紀錄）。**caveat**：此旗標＝「入場前置完成度」，**非**即時入場資格——**墜測過期**（有 passed 紀錄）與**分期逾期**都不進 blockReasons、不顯示待辦，但入場仍由 `runEntryGates` 即時擋；`email_unverified` 會顯示待辦但入場關卡實際不擋（只擋登入）。
+
 ## 待辦
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - 清理 E2E 測試殘留：`【練習】體驗生今日` 名下的 failed/returned `fallTestBookings` + 一筆 failed `fallTests`（練習 fixture，無害）

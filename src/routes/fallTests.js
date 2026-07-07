@@ -237,8 +237,21 @@ router.post('/signature/:memberId/reset', authenticate, requireManagerOrStation,
   try {
     const db = getDb();
     const { memberId } = req.params;
-    const { reason } = req.body;
+    const { reason, force } = req.body;
     if (!reason?.trim()) return res.status(400).json({ error: 'MISSING_REASON', message: '請填寫退回原因' });
+
+    // 保護：墜落測驗已通過的會員，兩份文件不可退回重簽（避免誤觸）。super_admin 帶 force:true 可強制覆寫。
+    const canForce = force === true && req.staff?.role === 'super_admin';
+    if (!canForce) {
+      const { checkFallTest } = require('../services/checkinService');
+      const ft = await checkFallTest(memberId);
+      if (ft.passed) {
+        return res.status(409).json({
+          error: 'FALL_TEST_PASSED_LOCKED',
+          message: '此會員墜落測驗已通過，免責聲明與墜測同意書已鎖定、無法退回重簽（避免誤觸）',
+        });
+      }
+    }
 
     const snap = await db.collection('fallTestSignatures')
       .where('memberId', '==', memberId)

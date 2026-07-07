@@ -1,50 +1,69 @@
 const jwt = require('jsonwebtoken');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 
+// 權限矩陣＝「個人帳號(type:'staff')登入」的能力。
+// 值班 operator 另享「櫃檯權限」(COUNTER_PERMS，見下)一律放行，不受此矩陣 full/part 收窄影響。
+// 分工：part_time 個人＝排班/課程檢視；full_time 個人＝＋課程/比賽設定、庫存(products/inventory)。
+// 櫃檯類（入場/會員/發券/POS/點名/記帳/分期收款/續約/報名經手…）在此對 full/part 設 false，改由 operator 值班或管理員做。
 const DEFAULT_PERMISSIONS = {
-  'members.create':        { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
-  'members.read':          { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
-  'members.update':        { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
+  'members.create':        { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  'members.read':          { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  'members.update':        { super_admin: true, gym_manager: true, full_time: false, part_time: false },
   'members.delete':        { super_admin: true, gym_manager: false,full_time: false, part_time: false },
   'members.read_all_gyms': { super_admin: true, gym_manager: false,full_time: false, part_time: false },
-  'waiver.sign':           { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
-  'waiver.send_parent':    { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
-  'checkin.create':        { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
-  'checkin.read':          { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
+  'waiver.sign':           { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  'waiver.send_parent':    { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  'checkin.create':        { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  'checkin.read':          { super_admin: true, gym_manager: true, full_time: false, part_time: false },
   'checkin.read_all_gyms': { super_admin: true, gym_manager: false,full_time: false, part_time: false },
-  'passes.create':         { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
-  'installments.manage':   { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
-  'passes.update':         { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
+  'passes.create':         { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  'installments.manage':   { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  'passes.update':         { super_admin: true, gym_manager: true, full_time: false, part_time: false },
   'passes.delete':         { super_admin: true, gym_manager: true, full_time: false, part_time: false },
   'passes.approve':        { super_admin: true, gym_manager: true, full_time: false, part_time: false },
   'vip.manage':            { super_admin: true, gym_manager: false,full_time: false, part_time: false },
   'pass_types.manage':     { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  // ── full_time 個人辦公權限 ──
+  'courses.view':          { super_admin: true, gym_manager: true, full_time: true,  part_time: true  }, // 課程月曆檢視（part 也可）
   'courses.manage':        { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
-  'products.manage':       { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
-  'products.warehouse':    { super_admin: true, gym_manager: false, full_time: false, part_time: false },
-  'settings.manage':       { super_admin: true, gym_manager: false, full_time: false, part_time: false },
   'courses.create':        { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
   'courses.update':        { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
   'courses.delete':        { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
-  'courses.attendance':    { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
   'courses.notify':        { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
-  'products.sell':         { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
+  'competitions.manage':   { super_admin: true, gym_manager: true, full_time: true,  part_time: false }, // 比賽設定（full 新增）
+  'competitions.sync':     { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
+  'products.manage':       { super_admin: true, gym_manager: true, full_time: true,  part_time: false }, // 完整商品/庫存（含清點/進貨/CRUD）
   'inventory.manage':      { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
-  'revenue.record':        { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
-  'schedule.manage':       { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  'products.warehouse':    { super_admin: true, gym_manager: false, full_time: false, part_time: false },
+  // ── 排班檢視（part/full 皆可）──
   'schedule.read':         { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
+  'schedule.manage':       { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  // ── 櫃檯類（full/part 個人不可；operator 值班或管理員做）──
+  'courses.attendance':    { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  'products.sell':         { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  'revenue.record':        { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  'competitions.entries':  { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  // ── 純管理員（super/gym_manager）──
   'revenue.report':        { super_admin: true, gym_manager: true, full_time: false, part_time: false },
   'revenue.report_all':    { super_admin: true, gym_manager: false,full_time: false, part_time: false },
-  'notifications.send_gym':  { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
+  'notifications.send_gym':  { super_admin: true, gym_manager: true, full_time: false, part_time: false },
   'notifications.send_all':  { super_admin: true, gym_manager: false,full_time: false, part_time: false },
   'gyms.manage':           { super_admin: true, gym_manager: false,full_time: false, part_time: false },
   'permissions.manage':    { super_admin: true, gym_manager: false,full_time: false, part_time: false },
-  'competitions.manage':   { super_admin: true, gym_manager: true, full_time: false, part_time: false },
-  'competitions.entries':  { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
-  'competitions.sync':     { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
+  'settings.manage':       { super_admin: true, gym_manager: false, full_time: false, part_time: false },
   'staff.manage':          { super_admin: true, gym_manager: true, full_time: false, part_time: false },
   'devices.manage':        { super_admin: true, gym_manager: false,full_time: false, part_time: false },
 };
+
+// 「櫃檯權限」：值班 operator（打卡上班）一律放行，不受個人角色矩陣收窄影響。
+// 個人 staff 登入（未值班）仍依上方矩陣 → full/part 皆 false → 擋。管理員(super/gym_manager)本就放行。
+const COUNTER_PERMS = new Set([
+  'members.create', 'members.read', 'members.update',
+  'waiver.sign', 'waiver.send_parent',
+  'checkin.create', 'checkin.read',
+  'passes.create', 'passes.update', 'installments.manage',
+  'courses.attendance', 'products.sell', 'revenue.record', 'competitions.entries',
+]);
 
 // ── Staff token 驗證 ─────────────────────────────────────────────
 const authenticate = async (req, res, next) => {
@@ -161,8 +180,10 @@ const authenticateAny = async (req, res, next) => {
 const checkPermission = (permKey) => {
   return async (req, res, next) => {
     try {
-      const { role, gymId } = req.staff;
+      const { role, gymId, type } = req.staff;
       if (role === 'super_admin') return next();
+      // 值班 operator：櫃檯權限一律放行（個人 staff 登入未值班則依矩陣，full/part 已收窄為 false）
+      if (type === 'operator' && COUNTER_PERMS.has(permKey)) return next();
       const permDef = DEFAULT_PERMISSIONS[permKey];
       if (!permDef) return res.status(403).json({ error: 'UNKNOWN_PERMISSION', permission: permKey });
       let hasPermission = permDef[role] ?? false;

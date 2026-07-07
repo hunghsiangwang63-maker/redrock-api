@@ -251,6 +251,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **E2E（打 Railway，23/23 綠）**：半年票 7600、續約9折 6840、3期 40/40/20 → 一次付清 scan `dueNow=6840`、confirm 延到 2027-01-12、`renewalAmount=6840`、取消還原 2026-07-12；分期 scan 首期 3040、各期 **[3040,3040,760]**（760 折扣集中末期）、票期延長、取消還原＋計畫作廢；到期30天 → `RENEW_NOT_OPEN`。commit `550cd6c`。腳本 `scratchpad/renewal-e2e.mjs`。
   - **verify 附帶 renewal E2E（9/9 綠）**：建成人練習會員（非 VIP，簽 waiver＋墜測 passed 過關卡）→ 給到期今+5天的票 → `POST /checkin/verify` 到達**定期票免費區塊**且回傳完整 `renewal`（`renewalPrice 6840`/`newEndDate 2027-01-12`/`daysLeft 5`/`installment.enabled`）。測後清乾淨。
 - ✅ **會員端 UI（批次C）**：`MemberQRPage` 免費入場定期票路徑，`verify` 回 `renewal` 時於「租借器材」步驟上方顯示**續約卡片**（剩 N 天／折後價含原價刪除線／延長至新到期日）；可勾選順便續約；票種開分期時提供「一次付清／分期 N 期」（首期金額前端與後端同算法、顯示末期折扣）；續約需選付款方式（頭款），QR 合計加入續約應收、摘要顯示續約行。commit 前端 `c3bb60d`，已 firebase deploy。
+- ✅ **會員端 UI 瀏覽器實測（redrock-member.web.app 真登入）**：以成人非 VIP 練習會員（持到期剩 5 天半年票＋續約9折＋3期；`firebase-admin` 注入 passwordHash 可登入）逐頁確認——首頁無 onboarding gate →「租借器材」步驟頂部續約卡片顯示「剩 5 天・順便續約（延長至 2027-01-12）・~~7,600~~ **6,840** 續約優惠」→ 勾選展開「一次付清 6,840／分期 3 期 首期 3,040」＋付款方式，未選付款方式時「請先選擇續約付款方式」擋確認鈕 → 選分期＋現金後鈕啟用「確認（+NT$3,040）」→ QR 頁「定期票續約（頭款・第1期）3,040」＋「分期 3 期 · 折後全額 6,840（**末期 NT$760**）」＋合計 3,040。前端首期/末期折扣與後端 `[3040,3040,760]` 完全一致。測試會員/票/票種測後 `DELETE` 清乾淨（pending QR 30 分自動失效）。
 - ⚠️ **E2E 測試細節（新學到）**：bodyless `DELETE` 若帶 `Content-Type: application/json` 會被 express.json() 當空 body 解析失敗 → 回 400 `SERVER_ERROR`（假清理成功、留殘留）。E2E 清理的 DELETE **不要帶 Content-Type**（或帶 body）。本次殘留已補清乾淨。
 
 ## 待辦

@@ -221,6 +221,17 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **修：分期時 QR 合計顯示「頭款（第一期）」而非全額**（前端 `MemberQRPage` qr 步驟）：原用 `selectedEntry.price`（全額 7600）顯示，分期時應只顯示本次收的第一期。改：`buy_pass && 分期`時 `entryPrice=round(全額×第1期%)`、標籤「定期票（頭款・第1期）」＋註「分期 N 期 · 全額 NT$X」；合計＝頭款＋加購。後端本就只收第一期（顯示對齊，無金流變動）。瀏覽器實機確認：頭款 NT$2,534、合計 NT$2,534、註「分期 3 期 · 全額 NT$7,600」。commit 前端 `27a4001`。
   - ⚠️ **快取提醒**：`firebase deploy` 後普通 hard reload 常不夠，需**加 query 參數**（如 `?x=1`）或無痕視窗強制重抓 `index.html` 才會載到新 bundle（此次即因舊 bundle 仍顯示 7600 而誤判）。
 - ✅ **選擇階段顯示「可分期」標示**（前端）：有開分期規則（`installment.enabled`）的項目在挑選當下即標示——`MemberQRPage` 購定期票下拉 option 尾端加「· 可分期」；`MemberCoursesPage` 課程總覽卡片類型徽章旁加琥珀色「可分期」tag。資料本就都在（票種來自 `getBuyablePassTypes`、課程來自清單物件）。commit 前端 `25d524c`。
+
+## 目前進度（2026-07-07）— 員工端入場動作限值班(operator)/管理員
+> 回報：櫃檯電話搜尋入場與掃 QR 入場的差別？是否關掉電話入場？結論：**兩條互補、不關**（QR＝會員自助、電話＝櫃檯代辦：沒 App/臨櫃/已付費放行/舊折扣卡；1.49–1.57 已收斂降低分歧風險）。改採「加權限」——入場動作限值班/管理員（比照發券 Group A）。後端 `/health` `1.59.0-checkin-preview-restricted`；E2E 12/12＋6/6。
+- ✅ **入場動作限 `requireManagerOrStation`**（`checkin.js`）：`/checkin/qr/scan`、`/qr/confirm`、`/direct`、`/phone` 由 `checkPermission('checkin.create')`（4 角色）→ 值班 operator 或 `gym_manager`/`super_admin`；**個人 `full_time`/`part_time` 未打卡值班不可**。commit `2ee5f41`（`1.58.0`）。
+- ✅ **資格預覽讀取也一併限**：`/checkin/eligibility`（電話搜尋資格預覽）、`/checkin/today-course-students`（今日課程學員名單，入場 tab 資料來源）加 `requireManagerOrStation`。commit `1ea81e2`（`1.59.0`）。
+- ⭕ **不受影響**：`/checkin/qr/create`、`/verify`（會員自助，`authenticateAny`）；`/checkin/today`、`/history`（報表純檢視）；`/checkin/cancel`（維持 `checkin.create`，取消非入場動作）。
+- ✅ **前端**（`CheckinPage`）：`canCheckin = 管理員 或 operator 值班`；「掃描入場」與「今日課程學員」入場 tab 僅 `canCheckin` 時顯示，否則顯示 🔒「入場功能限值班/管理員」提示；報表 tab 不限。commit `56fd32d`。
+- **E2E**：入場動作 12/12（PT 個人 scan/confirm/direct/phone 皆 403 `MANAGER_OR_STATION_REQUIRED`、OP/MGR 成功、`qr/create` 不受限）；預覽讀取 6/6（PT eligibility/course-students 403、OP/MGR 200、報表 `/today` PT 仍 200）。腳本 `scratchpad/checkin-perm-e2e.mjs`。
+- ⚠️ **行為變更**：個人 `full_time`/`part_time` 帳號（未在館別電腦打卡值班）現在**不能做任何入場**，需先打卡值班(operator) 或用管理員帳號。
+
+## 維護腳本（`scripts/`）
 - **`cleanupOrphans.js`** — 清 dev 殘留：owner 會員已不存在的孤兒（優惠卡/舊優惠卡/黑卡/單次入場券/定期票/分期計畫/定期票異動申請）+ 測試 shiftLog（`stationId` 前綴，預設 `e2e-`）。**dry-run 為預設，`--commit` 才刪**；`owner=null`（未指派）不算孤兒、不刪；憑證走 `initFirebase()`（env `FIREBASE_*` 或 `GOOGLE_APPLICATION_CREDENTIALS`）。E2E 後清殘留用。
   - 預覽：`GOOGLE_APPLICATION_CREDENTIALS=/path/sa.json node scripts/cleanupOrphans.js`
   - 刪除：`… node scripts/cleanupOrphans.js --commit`

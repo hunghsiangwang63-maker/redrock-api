@@ -285,6 +285,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **會員定期票列表排序（純前端 `PassesPage`）**：`memberPasses` 改**有效優先、已取消/過期收到底部並淡化**（`opacity:0.5`），同組內到期日新→舊；不再讓「已取消」蓋過有效票。commit 前端 `64b48ad`。
 - 🧹 **清掉 E2E 定期票殘留**：先前 renewal/verify E2E 用 `DELETE /passes/:id`（軟刪＝`status:cancelled`、不移除）留下林怡君名下 2 張 + 2 張孤兒（會員已刪）共 4 張 `【練習】` 定期票，已 `firebase-admin` 硬刪清乾淨（全域掃描 0 殘留）。**教訓：E2E 定期票清理要硬刪或事後掃 `cleanupOrphans`，軟刪會殘留在持有人列表/會員定期票頁。**
 
+### 📋 定期票「入場購買 buy_pass」語意確認（僅釐清、無程式異動）
+> 針對「起訖日怎麼決定」「已有有效票時會怎樣」的一輪確認，結論記錄如下（皆對照程式碼）。
+- **起訖日**（`confirmCheckIn`，`checkinService.js:1001-1036`）：**在櫃檯「確認入場/收款」當下才開票**——`startDate = taiwanToday()`（＝確認那天，**不是**產生 QR 那天；QR 30 分過期故實務多同日），`endDate = startDate + 效期`（有 `durationMonths` 用月數、月底自動夾，否則 `durationDays` 曆日）。與 `POST /passes` 的 `computePassEndDate` **等價**（buy_pass 為 inline 重寫）。分期只影響金流、**不影響起訖日**。buy_pass 一律「今天起算」，故**不會**產生未來起始日的票（未來票只來自店員 `POST /passes` 手動指定）。
+- **已有有效定期票時**：`verifyEntry` 在「定期票免費短路」就 `return`（`checkinService.js:529-544`），`buyPass` 是**付費階段才組**（`:664`）→ **同館有可用票的人根本走不到、選不到「購買定期票」**（會員端 `MemberQRPage` 免費入場直接跳租借步驟、無 `select_method`）。判斷基準是**「入場當館、當下有無可用覆蓋」**，不是「名下有無任何 active 票」。
+- **仍會出現購買選項的三種情形**（皆因「這一館其實沒覆蓋」）：① 手上是**他館單館票**、這次進另一館；② **回數票次數用完**（`credits<=0`）；③ 站台 `/checkin/direct` 硬帶 `entryType=buy_pass`（繞過 verify）。→ 買了都是**今天起算**、不會自動接在舊票後（無排隊/去重邏輯）。
+- **決策：維持現狀（方案 A）** ——以「入場當館的有效覆蓋」為準，他館單館票/回數票用完時仍可購買，視為合理。（未採方案 B「名下有任何 active 票就一律禁購」。）續約（到期≤14天）才是「已有票要延長」的正解，且**接在原到期日後延長、不重疊**。
+
 ## 待辦
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - 清理 E2E 測試殘留：`【練習】體驗生今日` 名下的 failed/returned `fallTestBookings` + 一筆 failed `fallTests`（練習 fixture，無害）

@@ -143,7 +143,16 @@ const getBuyablePassTypes = async (gymId) => {
       credits: t.credits ?? null,
       installment: t.installment || { enabled: false, periods: [] }, // 讓前端知道可否分期
       renewalDiscount: t.renewalDiscount || null,                    // 續約折扣（供續約流程）
-    }));
+    }))
+    // 顯示順序：效期短→長；「算次數」（回數票，credits 非 null）排在「算時間」之後
+    .sort((a, b) => {
+      const ca = (a.credits != null) ? 1 : 0, cb = (b.credits != null) ? 1 : 0;
+      if (ca !== cb) return ca - cb;
+      const da = a.durationMonths ? a.durationMonths * 30 : (a.durationDays || 0);
+      const db = b.durationMonths ? b.durationMonths * 30 : (b.durationDays || 0);
+      if (da !== db) return da - db;
+      return (a.credits || 0) - (b.credits || 0);
+    });
 };
 
 // ── 定期票續約（會員端，到期前 14 天開放）─────────────────────────

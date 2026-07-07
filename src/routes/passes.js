@@ -20,6 +20,20 @@ function computePassEndDate(startDate, passType) {
   return start.add((passType && passType.durationDays) || 0, 'day').format('YYYY-MM-DD');
 }
 
+// 定期票排序：效期短→長；「算次數（回數票，credits 非 null）」一律排在「算時間」之後。
+// 效期以天數估比：月數 × 30 vs 天數；同組再依效期、次數。就地排序（mutates）。
+const passDurationDays = (t) => (t && t.durationMonths) ? t.durationMonths * 30 : ((t && t.durationDays) || 0);
+function sortPassTypes(types) {
+  return types.sort((a, b) => {
+    const ca = (a.credits != null) ? 1 : 0;
+    const cb = (b.credits != null) ? 1 : 0;
+    if (ca !== cb) return ca - cb;                          // 算次數的排後面
+    const da = passDurationDays(a), db = passDurationDays(b);
+    if (da !== db) return da - db;                          // 效期短→長
+    return (a.credits || 0) - (b.credits || 0);             // 同效期再依次數少→多
+  });
+}
+
 // 續約折扣：支援百分比(percent，例 value=10＝折10%→×0.9)或固定折抵金額(amount，例 value=800→原價−800)。
 // 無設定/值<=0 → 回 null（續約以原價計）。
 function normalizeRenewalDiscount(rd) {
@@ -69,6 +83,7 @@ router.get('/types', authenticate, async (req, res) => {
     if (!(isSuper && !gymId)) {
       types = types.filter(t => !t.gymId || t.gymId === gymId);
     }
+    sortPassTypes(types);
     res.json({ passTypes: types });
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

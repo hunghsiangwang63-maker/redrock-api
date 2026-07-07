@@ -318,7 +318,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（打 Railway，9/9）**：admin/值班 operator → analytics + download(discounts/blacks) 皆 200；個人 part_time（未值班）→ 三者皆 **403**。
 - ✅ **修：下載 CSV 內容變成「unauthorized/請先登入」**（前端既有 bug，與上面權限改動無關）：`PassesPage.downloadAnalyticsCSV` 原自己讀 `localStorage.getItem('staffToken')`——但這個 key **根本不存在**（axios `client` interceptor 用的是 `operatorToken`／`token`／`stationToken`）→ 送空 token → 後端 `authenticate` 回 **401**，那段 JSON 被當 CSV 存下。改用 `client.get(..., {responseType:'blob'})`（與能正常載入統計的 `loadAnalytics` 同一 client/token 來源），並加錯誤提示（403 權限不足／其他 重新登入）。純前端 commit（redrock-web）`aedff18`。瀏覽器實機：統計分頁載入正常、點下載無錯誤 banner。（standalone `PassAnalyticsPage.jsx` 為未 route 的 dead code，不影響。）
   - ⚠️ **教訓**：前端下載/檔案類請求要走 axios `client`（自動帶對的 token），別自己 `fetch` + 手讀 localStorage key；token key 是 `operatorToken/token/stationToken`（見 `api/client.js`），**沒有 `staffToken`**。
-  - ✅ **瀏覽器實機下載驗證**：員工端點「優惠卡 下載」產出 `~/Downloads/discounts_2026-07-07.csv`（1389 bytes）——**不含** unauthorized 錯誤字、表頭 12 欄正確（含「紅利已送」）、15 筆與畫面統計一致、狀態/格數/日期/館別皆正常。附帶確認：優惠卡「卡號(barcode)」欄為空屬正常（barcode 用於舊實體卡，一般 `discountCards` 無掃碼卡號）。
+  - ✅ **瀏覽器實機下載驗證（優惠卡）**：員工端點「優惠卡 下載」產出 `~/Downloads/discounts_2026-07-07.csv`（1389 bytes）——**不含** unauthorized 錯誤字、表頭 12 欄正確（含「紅利已送」）、15 筆與畫面統計一致、狀態/格數/日期/館別皆正常。附帶確認：優惠卡「卡號(barcode)」欄為空屬正常（barcode 用於舊實體卡，一般 `discountCards` 無掃碼卡號）。
+  - ✅ **瀏覽器實機下載驗證（黑卡）**：「黑卡 下載」產出 `~/Downloads/blacks_2026-07-07.csv`（340 bytes）——不含錯誤字、表頭 **11 欄**（**無「紅利已送」欄**，符黑卡規格）、3 筆與統計一致、原始格數皆 12、**到期日皆「無期限」**。黑卡**有卡號 barcode**（實體舊卡如 `A019-0001`/`BC-2024-00123`，練習卡才空），與優惠卡差異都對上規格。非缺陷觀察：少數卡「綁定日/館別」空＝來源資料未填 `boundAt`/`gymId`。
 
 ## 待辦
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`

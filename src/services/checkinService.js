@@ -141,6 +141,7 @@ const getBuyablePassTypes = async (gymId) => {
       durationDays: t.durationDays || null,
       credits: t.credits ?? null,
       installment: t.installment || { enabled: false, periods: [] }, // 讓前端知道可否分期
+      renewalDiscount: t.renewalDiscount || null,                    // 續約折扣（供續約流程）
     }));
 };
 

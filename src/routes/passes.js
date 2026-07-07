@@ -20,6 +20,24 @@ function computePassEndDate(startDate, passType) {
   return start.add((passType && passType.durationDays) || 0, 'day').format('YYYY-MM-DD');
 }
 
+// 續約折扣：支援百分比(percent，例 value=10＝折10%→×0.9)或固定折抵金額(amount，例 value=800→原價−800)。
+// 無設定/值<=0 → 回 null（續約以原價計）。
+function normalizeRenewalDiscount(rd) {
+  if (!rd || !['percent', 'amount'].includes(rd.mode)) return null;
+  const value = Number(rd.value) || 0;
+  if (value <= 0) return null;
+  return { mode: rd.mode, value: rd.mode === 'percent' ? Math.min(100, value) : value };
+}
+// 依票種算續約價（原價套續約折扣）
+function computeRenewalPrice(passType) {
+  const price = passType.price || 0;
+  const rd = passType.renewalDiscount;
+  if (!rd) return price;
+  return rd.mode === 'percent'
+    ? Math.max(0, Math.round(price * (100 - rd.value) / 100))
+    : Math.max(0, price - rd.value);
+}
+
 const validate = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -94,6 +112,7 @@ router.post('/types',
         installment: (req.body.installment && req.body.installment.enabled)
           ? { enabled: true, periods: (req.body.installment.periods || []).map(p => ({ percent: Number(p.percent) || 0, dueOffsetDays: Number(p.dueOffsetDays) || 0 })) }
           : { enabled: false, periods: [] },
+        renewalDiscount: normalizeRenewalDiscount(req.body.renewalDiscount), // 續約折扣（percent/amount 或 null）
         isActive: true,
         createdAt: now, updatedAt: now,
       };
@@ -137,6 +156,7 @@ router.put('/types/:id',
           ? { enabled: true, periods: (inst.periods || []).map(p => ({ percent: Number(p.percent) || 0, dueOffsetDays: Number(p.dueOffsetDays) || 0 })) }
           : { enabled: false, periods: [] };
       }
+      if (req.body.renewalDiscount !== undefined) updates.renewalDiscount = normalizeRenewalDiscount(req.body.renewalDiscount);
       updates.updatedAt = new Date();
 
       await ref.update(updates);

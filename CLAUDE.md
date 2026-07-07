@@ -321,6 +321,20 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - ✅ **瀏覽器實機下載驗證（優惠卡）**：員工端點「優惠卡 下載」產出 `~/Downloads/discounts_2026-07-07.csv`（1389 bytes）——**不含** unauthorized 錯誤字、表頭 12 欄正確（含「紅利已送」）、15 筆與畫面統計一致、狀態/格數/日期/館別皆正常。附帶確認：優惠卡「卡號(barcode)」欄為空屬正常（barcode 用於舊實體卡，一般 `discountCards` 無掃碼卡號）。
   - ✅ **瀏覽器實機下載驗證（黑卡）**：「黑卡 下載」產出 `~/Downloads/blacks_2026-07-07.csv`（340 bytes）——不含錯誤字、表頭 **11 欄**（**無「紅利已送」欄**，符黑卡規格）、3 筆與統計一致、原始格數皆 12、**到期日皆「無期限」**。黑卡**有卡號 barcode**（實體舊卡如 `A019-0001`/`BC-2024-00123`，練習卡才空），與優惠卡差異都對上規格。非缺陷觀察：少數卡「綁定日/館別」空＝來源資料未填 `boundAt`/`gymId`。
 
+## 目前進度（2026-07-07 續）— 卡片效期規則：綁定/轉入無期限 + 移轉跟隨原卡
+> 需求：黑卡綁定、優惠卡轉入取消一年期限（無期限）；購買優惠卡入場仍維持一年；點數移轉一律跟隨原卡效期。後端 `/health` `1.68.0`→`1.69.0`；E2E 8/8＋7/7。
+- **現行效期規則總表**：綁定黑卡＝無期限｜轉入優惠卡＝無期限｜**購買優惠卡（入場/POS）＝一年**｜點數移轉＝**跟隨原卡效期（不自設）**。
+- ✅ **綁定/轉入無期限（`1.68.0`，commit 後端 `eb22368`/前端 `710e051`）**：
+  - `discountCardService.bindDiscountCard`（優惠卡轉入）：`expiresAt = null`（原本 1 年）；`purchaseDiscountCard` 維持 1 年。
+  - 查證：**`bindBlackCard` 本就 `expiresAt:null`**（黑卡的 1 年只在移轉時才有）→ 黑卡綁定不用改。
+  - 配套 null-safe：`useDiscountCard` 過期檢查、`getMemberDiscountCards` **移除 `orderBy('expiresAt')`**（Firestore 會把 null 卡排除、查不到）改記憶體排序＋null 過濾、transfer preview/return。前端優惠卡/黑卡 `expiresAt` 為 null → 顯示「無期限」（`CardsPage`/`MemberPassesPage`）。
+  - E2E 8/8：轉入卡=null、購買卡≈+365天、無期限卡仍在清單、黑卡綁定=null。
+- ✅ **移轉跟隨原卡效期（`1.69.0`，commit 後端 `da8cbc4`/前端 `409fc2b`）**：
+  - **實際移轉走兩段式 `cardTransferService`（initiate→會員 App 接收），非** `transferDiscountCard`/`transferBlackCard`（那兩個是 dead code）。
+  - `acceptTransfer` 黑卡分支：`targetExpiresAt || +1年` → **`targetExpiresAt || null`**（`targetExpiresAt = 原卡.expiresAt || null`）；優惠卡分支本就 `expiresAt: t.targetExpiresAt`。→ 綁定黑卡/轉入優惠卡（null）移轉子卡無期限；購買優惠卡（1年）移轉子卡繼承原卡到期日、不延長。
+  - `legacyCardService` 黑卡移轉預覽：原卡無期限 → 接收方無期限（不再 +1 年）＋無期限 warning。
+  - **E2E 7/7（完整 initiate→真會員接收 實測）**：綁定黑卡移轉子卡=無期限、轉入優惠卡移轉子卡=無期限、購買優惠卡移轉子卡≈+365天跟隨原卡。測試卡片＋`cardTransfers` 記錄硬刪清乾淨。
+
 ## 待辦
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - 清理 E2E 測試殘留：`【練習】體驗生今日` 名下的 failed/returned `fallTestBookings` + 一筆 failed `fallTests`（練習 fixture，無害）

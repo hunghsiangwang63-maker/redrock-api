@@ -305,6 +305,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - ⚠️ **與既有「取消課程」不同**：`DELETE /:courseId`（取消課程）＝**寄信通知學員＋取消未來報名**，仍保留為獨立動作；**永久刪除** `/permanent`（硬刪、有在籍報名會擋）**限 super_admin**。停用則所有課程管理員可用。
 - **E2E 重點**：票種停用→GET 預設不含、includeInactive 含、啟用復現；硬刪成功、有效持有者 409、票券作廢後可刪；課程停用→**真會員（林怡君）登入實測看不到、員工端仍看得到、啟用後又看得到**。票種 UI 三鍵瀏覽器實機確認。測試殘留（含順手硬刪一批舊 `【練習】` 停用票種）已清乾淨。
 
+## 目前進度（2026-07-07 續）— 定期票票種顯示順序
+> 需求：定期票排列依「效期短→長」，「算次數（回數票）」排在「算時間」之後。**純後端**（前端吃 API 順序、無自行 sort）。後端 `/health` `1.66.0-passtype-sort-duration-credits-last`；commit `feb4054`。
+- ✅ **`passes.js` 加 `sortPassTypes()`**，排序鍵：① `credits!=null`（回數票）排後 → ② 效期短→長（`durationMonths×30` vs `durationDays` 比較）→ ③ 同效期再依次數。套在 `GET /passes/types`；`checkinService.getBuyablePassTypes` 同排序（會員購買下拉一致）。
+- **驗證（打 Railway，含停用）**：30天月票群 → 90日定期票 → 半年票(180天) → **回數票（90天）排最後**（算次數一律排時間票之後，不看自身天數）。
+- 註：持有人報表 `/reports/active-passes` 維持**依人數排序**（不受此影響）。
+
 ## 待辦
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - 清理 E2E 測試殘留：`【練習】體驗生今日` 名下的 failed/returned `fallTestBookings` + 一筆 failed `fallTests`（練習 fixture，無害）

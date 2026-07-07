@@ -67,22 +67,18 @@ const getTransferPreview = async (fromCardId, toMemberId, credits) => {
   }
   if (credits <= 0) throw { code: 'INVALID_CREDITS', message: '移轉次數必須大於 0' };
 
-  // 計算接受方的到期日：
-  // - 若原卡已有到期日（曾被移轉過）→ 繼承，不延長
-  // - 若原卡無到期日（原始卡）→ 新增1年
+  // 計算接受方的到期日（一律跟隨原卡效期）：
+  // - 原卡有到期日 → 繼承，不延長
+  // - 原卡無到期日（綁定卡）→ 移轉後接受方仍無期限（不再新增 1 年）
   let receiverExpiresAt, receiverDaysLeft, isExpiringSoon = false;
 
   if (card.expiresAt) {
-    // 已有到期日（繼承）
     receiverExpiresAt = dayjs(card.expiresAt.toDate()).format('YYYY-MM-DD');
     receiverDaysLeft = dayjs(card.expiresAt.toDate()).diff(dayjs(), 'day');
     isExpiringSoon = receiverDaysLeft <= EXPIRY_WARNING_DAYS;
   } else {
-    // 原始卡首次移轉 → 新增1年
-    const newExpiry = dayjs().add(TRANSFER_VALIDITY_MONTHS, 'month');
-    receiverExpiresAt = newExpiry.format('YYYY-MM-DD');
-    receiverDaysLeft = TRANSFER_VALIDITY_MONTHS * 30;
-    isExpiringSoon = false;
+    receiverExpiresAt = null;   // 無期限
+    receiverDaysLeft = null;
   }
 
   // 發送方的到期日資訊
@@ -106,13 +102,13 @@ const getTransferPreview = async (fromCardId, toMemberId, credits) => {
       credits,
       receiverExpiresAt,
       receiverDaysLeft,
-      isInherited: !!card.expiresAt, // true = 繼承，false = 首次設定
+      isInherited: true, // 一律跟隨原卡（無期限也算繼承）
     },
     warning: isExpiringSoon
       ? `⚠ 此黑卡將於 ${receiverExpiresAt} 到期（剩餘 ${receiverDaysLeft} 天），移轉後接受方的使用期限相同，不會延長。`
       : card.expiresAt
         ? `此黑卡到期日為 ${receiverExpiresAt}，移轉後接受方期限相同，不會延長。`
-        : null,
+        : `此黑卡無使用期限，移轉後接受方同樣無期限。`,
   };
 };
 

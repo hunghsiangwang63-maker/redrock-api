@@ -39,9 +39,10 @@ const initiateTransfer = async ({ cardType, fromCardId, toMemberId, credits, ini
   if (!toMember) throw { code: 'MEMBER_NOT_FOUND', message: '找不到受贈會員' };
   const fromMember = await memberService.getMember(fromMemberId).catch(() => null);
 
-  // 受贈者卡到期日：優惠卡繼承來源；黑卡有到期日則繼承、否則自接收起 1 年（於接收時再定）
+  // 受贈者卡到期日：一律「跟隨原卡效期」——原卡有到期日則繼承（如購買優惠卡的一年），
+  // 原卡無期限（綁定黑卡 / 轉入優惠卡）則移轉後仍無期限（不再自接收起設 1 年）。
   const now = new Date();
-  const targetExpiresAt = card.expiresAt || null; // 黑卡無到期日時 null → 接收時設 1 年
+  const targetExpiresAt = card.expiresAt || null;
 
   const id = uuidv4();
   const transfer = {
@@ -89,7 +90,7 @@ const acceptTransfer = async (transferId, memberId) => {
       gymId: t.gymId, soldByStaffId: t.initiatedBy || null, isActive: true, createdAt: now, updatedAt: now,
     });
   } else {
-    const expiresAt = t.targetExpiresAt || dayjs(now).add(12, 'month').toDate(); // 黑卡無到期日 → 自接收起 1 年
+    const expiresAt = t.targetExpiresAt || null; // 跟隨原卡：原卡無期限（綁定黑卡）→ 移轉後仍無期限（不再設 1 年）
     await db.collection('legacyBlackCards').doc(newCardId).set({
       id: newCardId, barcode: null, memberId: t.toMemberId,
       originalCredits: t.credits, remainingCredits: t.credits, gymId: t.gymId,

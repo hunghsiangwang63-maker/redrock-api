@@ -270,6 +270,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **會員資料頁「封鎖中」→ 直接列待完成事項**（純前端 `MembersPage`）：原單一「封鎖中」紅標改為讀 `member.blockReasons` 逐項顯示——`waiver_unsigned`→待簽免責聲明、`parent_waiver_pending`→待家長簽署、`fall_test_required`→待通過墜落測驗、`email_unverified`→待驗證 Email；全完成則無標籤。commit 前端 `88c2e40`。
   - 📋 **「封鎖中」判斷邏輯備忘**（`memberService.getBlockReasons`，開會員詳情時 `refreshBlockStatus` 即時重算）：三條任一成立即封鎖——① Email 未驗證（**僅自助註冊** `registeredBy==='self'` 且 `emailVerified=false`；店員/遷移建立不算）② Waiver 未完成 ③ 從未通過墜落測驗（無 `result:'passed'` 紀錄）。**caveat**：此旗標＝「入場前置完成度」，**非**即時入場資格——**墜測過期**（有 passed 紀錄）與**分期逾期**都不進 blockReasons、不顯示待辦，但入場仍由 `runEntryGates` 即時擋；`email_unverified` 會顯示待辦但入場關卡實際不擋（只擋登入）。
 
+## 目前進度（2026-07-07 續）— 加到手機主畫面顯示 RedRock 圖示（PWA manifest，純前端 `redrock-web`）
+> 需求：會員把網址加到手機主畫面時，圖示要顯示我們的 Favicon。關鍵：主畫面圖示**不讀 favicon**——iOS 讀 `apple-touch-icon`、Android 讀 **Web App Manifest** 的 `icons`。原本缺 manifest（Android 不顯示）。build 兩 target + firebase deploy。commit（redrock-web）`d0b60c1`。
+- ✅ **新增 `public/manifest.webmanifest`**：`name`「RedRock 紅石攀岩館」/`short_name`「RedRock」/`display:standalone`/`theme_color:#8B1A1A`/`background_color:#F7F3F3`/`icons`（192 + 512 + 512 maskable）。
+- ✅ **由 `favicon.png`(512 彩色 R，白底不透明) 產各尺寸**：`apple-touch-icon.png`(180)、`icon-192.png`、`icon-512.png`（`sips -z`）。
+- ✅ **`index.html` head 補**：`<link rel="manifest">`、`theme-color`、`apple-mobile-web-app-capable/status-bar-style/title(RedRock)`、`mobile-web-app-capable`；`apple-touch-icon` 改指 180 版。
+- ⚠️ **iOS 會快取主畫面圖示**：之前加過舊的要先刪主畫面圖示再重加（或無痕）才會更新。
+- ⚠️ **`index.html` 兩站共用** → 員工站加到主畫面也顯示同一 R 圖示與「RedRock」名稱（同品牌，通常 OK）。要員工站不同名稱/圖示需做**分 target 的 manifest**（目前未做）。
+
 ## 待辦
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - 清理 E2E 測試殘留：`【練習】體驗生今日` 名下的 failed/returned `fallTestBookings` + 一筆 failed `fallTests`（練習 fixture，無害）

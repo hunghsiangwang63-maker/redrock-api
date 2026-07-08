@@ -356,7 +356,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 💡 **教訓**：① 多步驟表單送出成功務必**關閉/離開 Modal**，只 reset 步驟會讓人重複送出；② **會員自助批次建立類端點（整期報名/多筆）一定要加去重防護**（前端擋不夠、後端才權威）；③ 診斷「跳回第一頁」先看 reset 函式有無關閉、再查是否已產生重複資料。
 - ✅ **後續：報名成功跳出確認彈窗**（純前端 `MemberCoursesPage`，commit `34158ac`，member 已 deploy）：報名成功（非線上付款流程）→ `setEnrollSuccess` 彈窗「✅ 已報名成功／可至『我的課程』中查詢」＋按鈕「知道了」「前往我的課程」(`setTab('my')`)，取代原 3 秒自動消失 toast → 給明確成功回饋、進一步降低重複送出。⚠ 未瀏覽器實機（報名流程含簽名 canvas 難自動化、會建真資料）；掛在既有成功路徑、build 通過。
 
+## 目前進度（2026-07-08 續）— 報名法定代理人簽名 + 多梯次依類別分組
+- ✅ **法定代理人簽名改以「報名對象」判定未成年**（純前端 `MemberCoursesPage`，commit `e1a2c9c`，member 已 deploy）：原用登入者 `member?.isMinor` → 家長(成人)代未成年子女報名不出現監護人簽名欄。改 `targetIsMinor`（報名對象＝本人或所選子會員，取其 `isMinor`，無則由 `birthday` 算 <18），簽名欄顯示＋送出必填皆改用之。（未成年自己報名本就有此欄、不受影響。）
+- ✅ **多梯次依「類別」分組（1.74.0，已上線）**：`courseService.getCourses` 補 `categoryName`（讀 `courseCategories` 對照，commit 後端 `6f40b18`）；`MemberCoursesPage` 課程總覽依 `categoryName` 分組成「類別名（N 梯）」區塊＋底下該類別梯次課程卡（commit 前端 `3f963bf`）。瀏覽器實機：「小蜘蛛人 3 梯」正常。⚠ **使用者回饋「這樣呈現不好」→ 要改兩層式**（見待辦）。
+
 ## 待辦
+- 🔧 **【明天接續】多梯次改「兩層式」呈現**（使用者 7/8 交代「明天再處理」）：目前依類別分組是「每梯次一張大卡」→ 使用者嫌雜。要改成 **一門課(類別)只一張卡 →點進去→ 列該類別各梯次(現有課程) →選一個→ 進報名**（BeClass 式）。**設定機制不變**＝同課各梯次建立時選同一「類別(categoryId)」（已有 `categoryName` 於 `GET /courses`）。**待使用者回答兩題再動手**：① 梯次清單每列顯示哪些欄位（我提議：班別名/星期時間/開課迄日/價格/額滿；問要不要加 剩餘名額、講師）② 只有一個梯次的課要不要直接進場次報名跳過中間層。改的檔＝`MemberCoursesPage` 課程總覽 browse（把現行「類別區塊平鋪卡」改成「類別卡→點開梯次清單」兩層）。
+- 🔧 **【擱置中】課程加圖片介紹（單張海報，會員卡片＋詳情都要）**：已定調走 **Firebase Storage**（比照能用的 `POST /pass-adjustments/evidence`：`multer` memoryStorage + `getStorage().bucket().file().save()` + `getSignedUrl`，**勿 base64**因海報常超過 Firestore 1MB）。待做：後端 course 加 `imageUrl` 欄 + 上傳端點 + `PUT /courses/:id` 允許；員工 `CoursesPage` 課程編輯加上傳；會員 `MemberCoursesPage` 卡片＋詳情顯示。
+- 🔧 **【擱置中】BeClass 課程介紹代入「說明」欄**：抓 `beclass.com/rid=294fdfc677e66cbc1072` 課程介紹 → 填入課程 `description`（說明）欄供使用者編輯。（WebFetch 可抓；使用者當時說「稍等」後轉去別的需求。）
+- 🧹 **清 2 門練習梯次課程**（使用者說「留著」暫不刪）：`【練習】小蜘蛛人一B(7-8)` `2afece80-ac8b-4b99-bddb-16701842c03c`、`【練習】小蜘蛛人二A(9-10)` `345bab45-2406-41c8-aba2-54afed70e8ad`（gym-hsinchu、類別小蜘蛛人，為驗證分組建的）。`DELETE /courses/:id/permanent` 清。
 - ⏰ **2026-07-14 到期提醒：刪除全部測試會員**（使用者 7/8 交代「7/14 提醒我全部刪除」）。範圍＝dev 24 筆固定 fixtures：`【練習】…`×14（王小明一般/陳美麗未簽/林志明墜測過期/張家豪未墜測/李定期月票/黑卡王/紅利妹/折扣卡姊/券券子/VIP尊爵/隊員阿凱/家長爸爸+小孩安安+小孩貝貝/體驗生今日/周銷售）＋`測試/測試API會員/管理員測試會員/Test1/Who`＋`王大明`(0900222222)+子`小明明`＋林怡君底下子帳號`test`(0912345678)。**保留**：林怡君(member-001)＋6 筆非測試(陳莉涵/張元賓/朱小姐/朱智萩/陳建宏/林小明)。刪法：`DELETE /members/:id`(super_admin，先刪家長會連帶刪子)。→ **7/14（或之後）開此專案時執行；使用者先前已三次延後，動手前再跟他確認一次**。
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - 清理 E2E 測試殘留：`【練習】體驗生今日` 名下的 failed/returned `fallTestBookings` + 一筆 failed `fallTests`（練習 fixture，無害）

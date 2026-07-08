@@ -360,6 +360,9 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **法定代理人簽名改以「報名對象」判定未成年**（純前端 `MemberCoursesPage`，commit `e1a2c9c`，member 已 deploy）：原用登入者 `member?.isMinor` → 家長(成人)代未成年子女報名不出現監護人簽名欄。改 `targetIsMinor`（報名對象＝本人或所選子會員，取其 `isMinor`，無則由 `birthday` 算 <18），簽名欄顯示＋送出必填皆改用之。（未成年自己報名本就有此欄、不受影響。）
 - ✅ **多梯次依「類別」分組（1.74.0，已上線）**：`courseService.getCourses` 補 `categoryName`（讀 `courseCategories` 對照，commit 後端 `6f40b18`）；`MemberCoursesPage` 課程總覽依 `categoryName` 分組成「類別名（N 梯）」區塊＋底下該類別梯次課程卡（commit 前端 `3f963bf`）。瀏覽器實機：「小蜘蛛人 3 梯」正常。⚠ **使用者回饋「這樣呈現不好」→ 要改兩層式**（見待辦）。
 
+## 目前進度（2026-07-09）— 排班月曆顯示微調（純前端 `SchedulePage`）
+- ✅ **全天班淡色填滿 + 排序**（commit `328e988`，staff 已 deploy）：排班月曆日格子——① 全天班（`type==='full_day'`）填滿改**員工色 25% 透明淡色塊**（`${staffColor}40`）＋員工色文字（原為實色填滿＋白字）；② 排序改「**全天班置頂**（同全天依 `staffName`）→ **自由時段(`custom`)依 `startTime` 先後上下排列**」。時段班維持外框樣式。瀏覽器實機確認三項到位。
+
 ## 待辦
 - 🔧 **【明天接續】多梯次改「兩層式」呈現**（使用者 7/8 交代「明天再處理」）：目前依類別分組是「每梯次一張大卡」→ 使用者嫌雜。要改成 **一門課(類別)只一張卡 →點進去→ 列該類別各梯次(現有課程) →選一個→ 進報名**（BeClass 式）。**設定機制不變**＝同課各梯次建立時選同一「類別(categoryId)」（已有 `categoryName` 於 `GET /courses`）。**待使用者回答兩題再動手**：① 梯次清單每列顯示哪些欄位（我提議：班別名/星期時間/開課迄日/價格/額滿；問要不要加 剩餘名額、講師）② 只有一個梯次的課要不要直接進場次報名跳過中間層。改的檔＝`MemberCoursesPage` 課程總覽 browse（把現行「類別區塊平鋪卡」改成「類別卡→點開梯次清單」兩層）。
 - 🔧 **【擱置中】課程加圖片介紹（單張海報，會員卡片＋詳情都要）**：已定調走 **Firebase Storage**（比照能用的 `POST /pass-adjustments/evidence`：`multer` memoryStorage + `getStorage().bucket().file().save()` + `getSignedUrl`，**勿 base64**因海報常超過 Firestore 1MB）。待做：後端 course 加 `imageUrl` 欄 + 上傳端點 + `PUT /courses/:id` 允許；員工 `CoursesPage` 課程編輯加上傳；會員 `MemberCoursesPage` 卡片＋詳情顯示。

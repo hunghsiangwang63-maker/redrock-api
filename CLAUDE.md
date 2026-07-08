@@ -362,6 +362,17 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 
 ## 目前進度（2026-07-09）— 排班月曆顯示微調（純前端 `SchedulePage`）
 - ✅ **全天班淡色填滿 + 排序**（commit `328e988`，staff 已 deploy）：排班月曆日格子——① 全天班（`type==='full_day'`）填滿改**員工色 25% 透明淡色塊**（`${staffColor}40`）＋員工色文字（原為實色填滿＋白字）；② 排序改「**全天班置頂**（同全天依 `staffName`）→ **自由時段(`custom`)依 `startTime` 先後上下排列**」。時段班維持外框樣式。瀏覽器實機確認三項到位。
+- ✅ **月曆班別文字改粗體**（`fontWeight:700`，commit `65ab607`）。
+
+## 目前進度（2026-07-09）— 排班通知（純後端）
+> 排班/改班即時 + 值班前 2 天提醒，站內通知到**被排班員工的個人帳號**（`targetStaffId`）。前端不用改：員工個人待辦頁已渲染 `getUnreadNotifications(req.staff.id)`，純館別電腦 token 無 staffId 撈不到→天生只在員工個人帳號出現。後端 `/health` `1.75.0-shift-notifications`；E2E 11/11；commit `d1d1258`。
+- ✅ **A. 排班/改班即時通知**（`scheduleService`，走 `notificationService.createNotification({targetStaffId,...})`，全程 try/catch 不阻斷排班）：
+  - `createShift` → `shift_assigned`「新排班通知：你被排班：<date> <全天|start~end> @ <館名>」。
+  - `createRecurringShifts` → **只發一則彙總** `shift_assigned`「你被排定 <rangeStart>~<rangeEnd> 每週 <weekdays> …共 N 個班」（**避免一班一則洗版**）；`createdCount===0` 不發。
+  - `updateShift` → 對目前 `staffId` 發 `shift_updated`；**換人（staffId 變更）另通知原 staffId**「你的 <date> 班已被調整（改由他人值班）」。
+- ✅ **B. 值班前 2 天提醒**（`scheduleService.runShiftReminders`，掛進 `index.js` 每日 9 點排程）：查 `SCHEDULE_SHIFTS` 中 `date===taiwanToday()+2` 的班發 `shift_reminder`「後天(<date>)有班：…」；**`reminderSentAt` 旗標冪等**防重送（比照分期 adminNotifiedAt）。
+- **E2E 11/11**：createShift 1 則、recurring 8 班只發 1 則彙總、改時間/換人通知皆正確、runShiftReminders 發送+標記+重跑 skipped 不重送。測試員工/班次/通知清乾淨。
+- ⚠️ **E2E 附帶（非 bug）**：`runShiftReminders` 打正式 Firestore 跑，`今天+2` 那天含 3 位真實員工真實班次 → 他們**現時就收到各自的正確「值班提醒」**（＝該功能該做的事、只是由 E2E 提早觸發、`reminderSentAt` 已標記不重送），無害。
 
 ## 待辦
 - 🔧 **【明天接續】多梯次改「兩層式」呈現**（使用者 7/8 交代「明天再處理」）：目前依類別分組是「每梯次一張大卡」→ 使用者嫌雜。要改成 **一門課(類別)只一張卡 →點進去→ 列該類別各梯次(現有課程) →選一個→ 進報名**（BeClass 式）。**設定機制不變**＝同課各梯次建立時選同一「類別(categoryId)」（已有 `categoryName` 於 `GET /courses`）。**待使用者回答兩題再動手**：① 梯次清單每列顯示哪些欄位（我提議：班別名/星期時間/開課迄日/價格/額滿；問要不要加 剩餘名額、講師）② 只有一個梯次的課要不要直接進場次報名跳過中間層。改的檔＝`MemberCoursesPage` 課程總覽 browse（把現行「類別區塊平鋪卡」改成「類別卡→點開梯次清單」兩層）。

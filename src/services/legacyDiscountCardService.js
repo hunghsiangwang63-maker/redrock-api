@@ -96,7 +96,7 @@ const incrementLegacyUsedCredits = async (originalCardId) => {
       memberId: orig.originalOwnerMemberId,
       sourceType: 'legacy_discount_card',
       sourceId: originalCardId,
-      validityMonths: 6,
+      // 使用期限改讀系統設定（super_admin 可調），不再寫死 6
     });
     return { triggered: true, memberId: orig.originalOwnerMemberId };
   }

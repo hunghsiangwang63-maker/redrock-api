@@ -15,12 +15,23 @@ const dayjs = require('dayjs');
 const COLLECTION = 'discountBonuses';
 const EXPIRY_WARNING_DAYS = 30;
 
+// ── 紅利使用期限（月）：讀系統設定 systemSettings/bonus.validityMonths，預設/失敗回 6 ──
+const getBonusValidityMonths = async () => {
+  try {
+    const doc = await getDb().collection('systemSettings').doc('bonus').get();
+    const n = doc.exists ? Number(doc.data().validityMonths) : NaN;
+    return (Number.isFinite(n) && n >= 1 && n <= 60) ? Math.round(n) : 6;
+  } catch { return 6; }
+};
+
 // ── 觸發紅利（由各卡服務呼叫）───────────────────────────────────
-const triggerBonus = async ({ memberId, sourceType, sourceId, validityMonths = 6 }) => {
+// validityMonths 未指定時讀系統設定（可由 super_admin 於員工端調整），預設 6 個月。
+const triggerBonus = async ({ memberId, sourceType, sourceId, validityMonths }) => {
   const db = getDb();
   const bonusId = uuidv4();
   const now = new Date();
-  const expiresAt = dayjs().add(validityMonths, 'month').toDate();
+  const months = validityMonths ?? await getBonusValidityMonths();
+  const expiresAt = dayjs().add(months, 'month').toDate();
 
   const bonus = {
     id: bonusId,
@@ -32,7 +43,7 @@ const triggerBonus = async ({ memberId, sourceType, sourceId, validityMonths = 6
     usedAt: null,
     usedAtGymId: null,
     expiresAt,
-    validityMonths,
+    validityMonths: months,
     transferHistory: [],
     isActive: true,
     createdAt: now,

@@ -128,6 +128,29 @@ router.put('/shoe-rental', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /settings/bonus - 紅利（免費入場）使用期限（月）─────────────
+router.get('/bonus', async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('systemSettings').doc('bonus').get();
+    res.json(doc.exists ? { validityMonths: doc.data().validityMonths ?? 6 } : { validityMonths: 6 });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── PUT /settings/bonus（僅 super_admin）─────────────────────────────
+router.put('/bonus', authenticate, async (req, res) => {
+  if (!['super_admin', 'admin'].includes(req.staff?.role))
+    return res.status(403).json({ error: '權限不足' });
+  try {
+    const db = getDb();
+    const n = Math.round(Number(req.body.validityMonths));
+    if (!Number.isFinite(n) || n < 1 || n > 60)
+      return res.status(400).json({ error: 'INVALID_MONTHS', message: '紅利使用期限請填 1~60 個月' });
+    await db.collection('systemSettings').doc('bonus').set({ validityMonths: n, updatedAt: new Date() }, { merge: true });
+    res.json({ success: true, validityMonths: n });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /settings/chalk-rental ────────────────────────────────────
 router.get('/chalk-rental', async (req, res) => {
   try {

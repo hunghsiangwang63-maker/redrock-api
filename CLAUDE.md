@@ -373,6 +373,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **B. 值班前 2 天提醒**（`scheduleService.runShiftReminders`，掛進 `index.js` 每日 9 點排程）：查 `SCHEDULE_SHIFTS` 中 `date===taiwanToday()+2` 的班發 `shift_reminder`「後天(<date>)有班：…」；**`reminderSentAt` 旗標冪等**防重送（比照分期 adminNotifiedAt）。
 - **E2E 11/11**：createShift 1 則、recurring 8 班只發 1 則彙總、改時間/換人通知皆正確、runShiftReminders 發送+標記+重跑 skipped 不重送。測試員工/班次/通知清乾淨。
 - ⚠️ **E2E 附帶（非 bug）**：`runShiftReminders` 打正式 Firestore 跑，`今天+2` 那天含 3 位真實員工真實班次 → 他們**現時就收到各自的正確「值班提醒」**（＝該功能該做的事、只是由 E2E 提早觸發、`reminderSentAt` 已標記不重送），無害。
+- ✅ **待辦頁通知面板加「排班」類別**（純前端 `PendingTasksPage`，commit `2e24c18`，staff 已 deploy）：`NOTIF_CAT` 加 `shift_assigned/updated/reminder → 'shift'`，`NOTIF_CATS` 加 `{key:'shift',label:'排班'}`（置「全部」後）。員工個人待辦頁「🔔 通知」面板即可用「排班」chip 單獨過濾（原本落在「系統」）。
 
 ## 待辦
 - 🔧 **【明天接續】多梯次改「兩層式」呈現**（使用者 7/8 交代「明天再處理」）：目前依類別分組是「每梯次一張大卡」→ 使用者嫌雜。要改成 **一門課(類別)只一張卡 →點進去→ 列該類別各梯次(現有課程) →選一個→ 進報名**（BeClass 式）。**設定機制不變**＝同課各梯次建立時選同一「類別(categoryId)」（已有 `categoryName` 於 `GET /courses`）。**待使用者回答兩題再動手**：① 梯次清單每列顯示哪些欄位（我提議：班別名/星期時間/開課迄日/價格/額滿；問要不要加 剩餘名額、講師）② 只有一個梯次的課要不要直接進場次報名跳過中間層。改的檔＝`MemberCoursesPage` 課程總覽 browse（把現行「類別區塊平鋪卡」改成「類別卡→點開梯次清單」兩層）。

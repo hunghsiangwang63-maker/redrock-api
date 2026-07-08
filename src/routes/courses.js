@@ -729,6 +729,16 @@ router.post('/:courseId/enroll-all',
         return res.status(400).json({ error: 'NO_SESSIONS', message: '此課程已無未來場次' });
       }
 
+      // 去重防護：此會員已在本課程有 confirmed 報名 → 擋下（避免前端重複送出造成整期重複報名+重複收費）
+      const existing = await db.collection('courseEnrollments')
+        .where('memberId', '==', memberId)
+        .where('courseId', '==', courseId)
+        .where('status', '==', 'confirmed')
+        .limit(1).get();
+      if (!existing.empty) {
+        return res.status(409).json({ error: 'ALREADY_ENROLLED', message: '您已報名此課程，請勿重複報名' });
+      }
+
       const courseDoc = await db.collection('courses').doc(courseId).get();
       const course = courseDoc.data();
       const { v4: uuidv4 } = require('uuid');

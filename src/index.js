@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '1.74.0-courses-categoryname',
+    version: '1.75.0-shift-notifications',
   });
 });
 
@@ -151,11 +151,19 @@ if (require.main === module) {
       if (n > 0) console.log(`[卡片移轉] 逾期自動回沖 ${n} 筆`);
     } catch (e) { console.error('[卡片移轉] 回沖失敗', e.message); }
   };
+  // 值班前 2 天提醒（每日 9 點，冪等：已送過的班略過）
+  const runShiftReminderJob = async () => {
+    try {
+      const r = await require('./services/scheduleService').runShiftReminders();
+      console.log(`[值班提醒] 目標日 ${r.targetDate}：發送 ${r.sent}、略過(已送) ${r.skipped}、共 ${r.total} 班`);
+    } catch (e) { console.error('[值班提醒] 失敗', e.message); }
+  };
   setInterval(() => {
     const dateStr = taiwanToday();
     if (new Date().getHours() === 9 && lastInstallmentRunDate !== dateStr) {
       lastInstallmentRunDate = dateStr;
       runDailyInstallmentJobs();
+      runShiftReminderJob();
     }
     runCardTransferExpiry(); // 每小時掃一次逾期移轉
   }, 60 * 60 * 1000);

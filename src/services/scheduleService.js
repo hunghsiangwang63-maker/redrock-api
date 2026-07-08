@@ -6,10 +6,28 @@
  * 員工查詢：可查看自己館整月所有人的班表，唯讀
  */
 const { getDb, COLLECTIONS } = require('../config/firebase');
+const { taiwanToday } = require('../utils/taiwanDate');
 const dayjs = require('dayjs');
 const { v4: uuidv4 } = require('uuid');
 
 const MAX_RECURRING_MONTHS = 3;
+
+// ── 排班通知輔助 ─────────────────────────────────────────────────
+const GYM_NAMES = { 'gym-hsinchu': '新竹館', 'gym-shilin': '士林館' };
+const gymName = (g) => GYM_NAMES[g] || g || '';
+const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
+const shiftTimeLabel = (type, startTime, endTime) =>
+  type === 'full_day' ? '全天' : `${startTime || ''}~${endTime || ''}`;
+
+// 站內通知：發到「被排班員工的個人帳號」（targetStaffId）。全程 try/catch，永不影響排班主流程。
+const notifyShiftStaff = async ({ targetStaffId, gymId, type, title, body, referenceId }) => {
+  if (!targetStaffId) return;
+  try {
+    await require('./notificationService').createNotification({
+      gymId, targetStaffId, type, title, body, referenceId: referenceId || null, referenceType: 'shift',
+    });
+  } catch (e) { console.error('[排班通知] 失敗（不影響排班）:', e.message); }
+};
 
 // ── 批次建立固定週班 ──────────────────────────────────────────────
 // weekdays: [0-6]（0=日）；遇休館公告該天直接跳過；遇特殊營業時間公告，
@@ -118,6 +136,17 @@ const createRecurringShifts = async ({ gymId, staffId, staffName, weekdays, type
   }
 
   await batch.commit();
+
+  // 批次建立 → 只發「一則彙總」通知（避免一班一則洗版）；沒建成任何班就不發
+  if (createdCount > 0) {
+    const wdLabel = [...weekdays].sort((a, b) => a - b).map(d => WEEKDAY_LABELS[d]).join('、');
+    await notifyShiftStaff({
+      targetStaffId: staffId, gymId, type: 'shift_assigned',
+      title: '新排班通知',
+      body: `你被排定 ${rangeStart}~${rangeEnd} 每週 ${wdLabel} ${shiftTimeLabel(type, startTime, endTime)}，共 ${createdCount} 個班 @ ${gymName(gymId)}`,
+    });
+  }
+
   return { createdCount, skippedClosed, skippedDuplicate, adjustedSpecial };
 };
 
@@ -160,6 +189,14 @@ const createShift = async ({ gymId, staffId, staffName, date, type, startTime, e
     createdBy, createdAt: now, updatedAt: now,
   };
   await db.collection(COLLECTIONS.SCHEDULE_SHIFTS).doc(shiftId).set(shift);
+
+  // 即時通知被排班員工（不阻斷）
+  await notifyShiftStaff({
+    targetStaffId: staffId, gymId, type: 'shift_assigned', referenceId: shiftId,
+    title: '新排班通知',
+    body: `你被排班：${date} ${shiftTimeLabel(type, startTime, endTime)} @ ${gymName(gymId)}`,
+  });
+
   return shift;
 };
 
@@ -196,7 +233,26 @@ const updateShift = async (shiftId, { staffId, staffName, date, type, startTime,
   if (note !== undefined) updates.note = note;
 
   await ref.update(updates);
-  return { id: shiftId, ...doc.data(), ...updates };
+
+  // 通知（不阻斷）：對「目前 staffId」發異動通知；若換人，另通知「原 staffId」班已被移除
+  const orig = doc.data();
+  const gymId = orig.gymId;
+  const finalStart = updates.startTime !== undefined ? updates.startTime : orig.startTime;
+  const finalEnd = updates.endTime !== undefined ? updates.endTime : orig.endTime;
+  await notifyShiftStaff({
+    targetStaffId: finalStaffId, gymId, type: 'shift_updated', referenceId: shiftId,
+    title: '排班異動通知',
+    body: `你的班已異動：${finalDate} ${shiftTimeLabel(finalType, finalStart, finalEnd)} @ ${gymName(gymId)}`,
+  });
+  if (staffId !== undefined && orig.staffId && orig.staffId !== finalStaffId) {
+    await notifyShiftStaff({
+      targetStaffId: orig.staffId, gymId, type: 'shift_updated', referenceId: shiftId,
+      title: '排班異動通知',
+      body: `你的 ${orig.date} 班已被調整（改由他人值班）@ ${gymName(gymId)}`,
+    });
+  }
+
+  return { id: shiftId, ...orig, ...updates };
 };
 
 // ── 刪除排班 ──────────────────────────────────────────────────────
@@ -322,10 +378,34 @@ const copyPreviousMonthShifts = async (gymId, targetMonth, createdBy) => {
   return { created: toCreate.length, prevMonth, prevCount: prevShifts.length };
 };
 
+// ── 值班前 2 天提醒（每日 9 點排程呼叫）──────────────────────────
+// 查 date === 台灣今天+2 的班次，對每筆 staffId 發 shift_reminder；
+// 冪等：已送過（reminderSentAt）的略過，避免每日排程重送同一班。
+const runShiftReminders = async () => {
+  const db = getDb();
+  const targetDate = dayjs(taiwanToday()).add(2, 'day').format('YYYY-MM-DD');
+  const snap = await db.collection(COLLECTIONS.SCHEDULE_SHIFTS).where('date', '==', targetDate).get();
+  let sent = 0, skipped = 0;
+  for (const d of snap.docs) {
+    const s = d.data();
+    if (s.reminderSentAt) { skipped++; continue; } // 已送過 → 略過
+    if (!s.staffId) continue;
+    await notifyShiftStaff({
+      targetStaffId: s.staffId, gymId: s.gymId, type: 'shift_reminder', referenceId: s.id || d.id,
+      title: '值班提醒',
+      body: `後天(${s.date})有班：${shiftTimeLabel(s.type, s.startTime, s.endTime)} @ ${gymName(s.gymId)}`,
+    });
+    await d.ref.update({ reminderSentAt: new Date() }); // 標記已送（冪等）
+    sent++;
+  }
+  return { targetDate, total: snap.size, sent, skipped };
+};
+
 module.exports = {
   createShift,
   createRecurringShifts,
   updateShift,
+  runShiftReminders,
   deleteShift,
   getMonthlyShifts,
   getUpcomingShiftsForStaff,

@@ -341,6 +341,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **可點簽到 UI（`1.71.0`，純前端 `CoursesPage`，commit `2bc1e98`）**：場次名單正取列唯讀標籤 → 三顆按鈕「出席/遲到/缺席」（當前狀態高亮），呼叫既有 `handleMarkAttendance(selectedSession.id, memberId, status)`（⚠ session id 用 `selectedSession.id` 非課程 id，否則標到別堂）；已取消場次禁用。瀏覽器實機：點「出席」即高亮綠、roster 即時刷新。
 - ✅ **出缺席 CSV 下載（`1.71.0`，後端 `9c25e01`＋前端）**：`GET /courses/:courseId/attendance/download`（`courses.manage`）→ 點名矩陣：每列一位正取學員、每欄一場次(依日期)、格值 出席/缺席/遲到/空白 ＋ **出席次數小計**（present+late 計入）；姓名以 members 集合權威補齊；UTF-8 BOM；`filename course_attendance_<courseId>.csv`。前端名單標題「⬇ 下載出缺席」→ `downloadAttendanceCSV`（走 axios `client` blob、自動帶正確 token，檔名 `<課程名>_出缺席_<日期>.csv`）。E2E 8/8：矩陣/BOM/小計皆正確。
 
+## 目前進度（2026-07-08）— 紅利使用期限改系統可設定
+> 紅利（優惠卡用完→原購買者免費入場一次）原寫死 6 個月；改為 super_admin 於員工端可調。後端 `/health` `1.72.0-bonus-validity-configurable`；E2E 11/11。commit 後端 `31e905e`、前端 `2bd8e30`。
+- **紅利期限規格備忘**：觸發＝優惠卡（新 `discount_card`／舊 `legacy_discount_card`）**所有次數用完** → 原購買者（`originalOwnerMemberId`）得一筆免費入場紅利（一次、兩館皆可）；到期＝**發出日 + N 個月**（`bonusService.triggerBonus`）；移轉繼承到期日不延長；過期由每日 `sweepExpiredBonuses` 標 `inactive`（保留文件）。
+- ✅ **後端可設定**：`GET/PUT /settings/bonus`（`systemSettings/bonus.validityMonths`，PUT 限 `super_admin`/`admin`、值 1~60）；`bonusService.triggerBonus` 未帶 `validityMonths` 時讀 `getBonusValidityMonths()`（設定；讀不到/失敗 fallback 6）；discount/legacyDiscount 兩呼叫端移除寫死的 `6`。**只影響之後新發的紅利，既有不變**。
+- ✅ **前端 UI 入口**：員工端 **⚙️ 系統設定 →「入場規則」群組 →「🎁 紅利期限」分頁（superAdminOnly）** → 填「紅利使用期限（個月）」1~60 → 儲存。（`SettingsPage`）
+- **E2E 11/11**：設定 GET/PUT/驗證（0/61/abc→400）；設 3 個月 → 用完 1 格優惠卡入場觸發 → 紅利 `validityMonths=3`、到期 ≈+92 天（3 個月）。測後設定復原 6、練習資料清乾淨。
+
 ## 待辦
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - 清理 E2E 測試殘留：`【練習】體驗生今日` 名下的 failed/returned `fallTestBookings` + 一筆 failed `fallTests`（練習 fixture，無害）

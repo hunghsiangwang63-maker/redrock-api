@@ -855,6 +855,12 @@ const getCourses = async (gymId) => {
   const snap = await ref.get();
   const courses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
+  // 類別名對照（供會員端「課程總覽」依類別分組顯示；課程只存 categoryId）
+  const catMap = {};
+  try {
+    (await db.collection('courseCategories').get()).docs.forEach(d => { catMap[d.id] = d.data().name; });
+  } catch (e) {}
+
   // 計算各課程目前報名人數（不重複計算同一會員，weekly課程會有多筆場次報名紀錄）
   const enrollSnap = await db.collection(ENROLLMENT_COLLECTION)
     .where('status', '==', 'confirmed').get();
@@ -867,7 +873,7 @@ const getCourses = async (gymId) => {
 
   return courses.map(c => {
     const enrolledCount = enrolledByCourse[c.id]?.size || 0;
-    return { ...c, enrolledCount, statusLabel: computeStatusLabel(c, enrolledCount) };
+    return { ...c, enrolledCount, categoryName: catMap[c.categoryId] || null, statusLabel: computeStatusLabel(c, enrolledCount) };
   });
 };
 

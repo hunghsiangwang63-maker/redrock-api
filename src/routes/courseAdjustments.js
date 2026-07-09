@@ -7,6 +7,7 @@ const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
 const courseService = require('../services/courseService');
 const { recordTransaction } = require('../utils/revenueLedger');
+const { checkMemberOwnership } = require('../utils/memberOwnership');
 
 // ══════════════════════════════════════════════════════
 // GET /course-adjustments/requests - 取得所有課程調整申請
@@ -33,7 +34,10 @@ router.post('/enrollments/:enrollmentId/refund-request',
   async (req, res) => {
     try {
       const db = getDb();
-      const memberId = req.member?.id || req.body.memberId;
+      // 支援家長代子女：優先用 body.memberId（前端傳報名對象），驗擁有權；否則用登入者本人
+      const memberId = req.body.memberId || req.member?.id;
+      const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
+      if (deny) return res.status(deny.status).json(deny.body);
 
       // 解析 courseId（route param 可能是 enrollmentId 或 courseId）
       let courseId = req.params.enrollmentId;
@@ -116,7 +120,10 @@ router.post('/enrollments/:enrollmentId/pause-request',
   async (req, res) => {
     try {
       const db = getDb();
-      const memberId = req.member?.id || req.body.memberId;
+      // 支援家長代子女：優先 body.memberId + 驗擁有權
+      const memberId = req.body.memberId || req.member?.id;
+      const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
+      if (deny) return res.status(deny.status).json(deny.body);
 
       let enrollDoc = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).doc(req.params.enrollmentId).get();
       if (!enrollDoc.exists) {

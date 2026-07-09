@@ -18,7 +18,10 @@ const { authenticate, authenticateAny, authenticateMember, checkPermission, audi
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const courseService = require('../services/courseService');
 const { createWeeklySessions, updateSession } = courseService;
-const { getDb, COLLECTIONS } = require('../config/firebase');
+const { getDb, getStorage, COLLECTIONS } = require('../config/firebase');
+const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
+const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -596,6 +599,35 @@ router.delete('/:courseId/permanent',
   }
 );
 
+// POST /courses/:courseId/image - 上傳課程海報（單張，存 Firebase Storage、回 signed URL 並寫入課程 imageUrl）
+router.post('/:courseId/image',
+  authenticate, checkPermission('courses.manage'), auditLog('course.image.upload'),
+  uploadImage.single('file'),
+  async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'NO_FILE', message: '請選擇圖片' });
+      if (!(req.file.mimetype || '').startsWith('image/')) {
+        return res.status(400).json({ error: 'NOT_IMAGE', message: '只能上傳圖片檔' });
+      }
+      const db = getDb();
+      const doc = await db.collection('courses').doc(req.params.courseId).get();
+      if (!doc.exists) return res.status(404).json({ error: 'COURSE_NOT_FOUND', message: '找不到課程' });
+
+      const ext = (req.file.originalname.split('.').pop() || 'jpg').toLowerCase();
+      const bucket = getStorage().bucket();
+      const fileName = `courses/poster_${req.params.courseId}_${uuidv4()}.${ext}`;
+      const file = bucket.file(fileName);
+      await file.save(req.file.buffer, { contentType: req.file.mimetype });
+      const [url] = await file.getSignedUrl({ action: 'read', expires: '2035-01-01' });
+
+      await db.collection('courses').doc(req.params.courseId).update({ imageUrl: url, updatedAt: new Date() });
+      res.json({ message: '課程海報已上傳', imageUrl: url });
+    } catch (err) {
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // PUT /courses/:courseId - 更新課程
 router.put('/:courseId',
   authenticate, checkPermission('courses.manage'), auditLog('course.update'),
@@ -603,7 +635,7 @@ router.put('/:courseId',
     try {
       const db = getDb();
       const allowedFields = [
-        'name', 'description', 'price', 'maxStudents', 'instructor',
+        'name', 'description', 'imageUrl', 'price', 'maxStudents', 'instructor',
         'startDate', 'endDate', 'startTime', 'endTime', 'weekdays',
         'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',

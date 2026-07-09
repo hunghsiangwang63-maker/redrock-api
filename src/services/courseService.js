@@ -34,6 +34,7 @@ const createCourse = async ({ gymId, staffId, data }) => {
     gymId,
     name: data.name,
     description: data.description || '',
+    imageUrl: data.imageUrl || '',      // 課程海報（單張，會員卡片＋詳情顯示；走 Storage signed URL）
     type: data.type || 'weekly',        // weekly | workshop
     tags: data.tags || [],
     category: data.category || 'general',

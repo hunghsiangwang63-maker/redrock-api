@@ -260,6 +260,8 @@ const createWeeklySessions = async ({ courseId, gymId, staffId, confirm = false 
   const courseDoc = await db.collection(COURSE_COLLECTION).doc(courseId).get();
   if (!courseDoc.exists) throw { code: 'COURSE_NOT_FOUND' };
   const course = courseDoc.data();
+  // 場次館別回退到課程館別：super_admin 建課時 req.staff.gymId 為 null，若不回退則場次 gymId=null → 月曆(依館別過濾)看不到
+  gymId = gymId || course.gymId || null;
 
   if (!course.startDate || !course.endDate || !course.weekdays?.length) {
     throw { code: 'MISSING_COURSE_INFO', message: '課程需設定起訖日期與上課星期' };

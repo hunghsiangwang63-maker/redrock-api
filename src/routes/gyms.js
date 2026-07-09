@@ -30,6 +30,13 @@ const validate = (req, res, next) => {
 
 const ANNOUNCE_COLLECTION = 'gymAnnouncements';
 
+// 會員可見的「發布時段」判定：publishAt <= now <= publishUntil（兩者皆選填）。
+// ⚠ 僅供「顯示給會員」的過濾。getGymStatusForDate（休館判定／定期票臨停補償來源）
+//   只看 publishAt、不套此函式——否則發布時段一過會讓休館「不算數」，補償錯亂。
+const isPublishedNow = (a, now) =>
+  (!a.publishAt || a.publishAt.toDate() <= now) &&
+  (!a.publishUntil || a.publishUntil.toDate() >= now);
+
 // ── 今日營業狀態判斷 ──────────────────────────────────────────────
 const getGymStatusForDate = async (gymId, dateStr) => {
   const db = getDb();
@@ -200,7 +207,7 @@ router.get('/:id/announcements', async (req, res) => {
       .filter(a => {
         const matchGym = a.gymId === req.params.id || a.gymId === null;
         const notExpired = a.effectiveTo === null || a.effectiveTo >= today;
-        const published = !a.publishAt || a.publishAt.toDate() <= now;
+        const published = isPublishedNow(a, now);
         const matchType = !type || a.type === type;
         return matchGym && notExpired && published && matchType;
       })
@@ -238,12 +245,12 @@ router.get('/announcements/all', async (req, res) => {
       .map(d => ({ id: d.id, ...d.data() }))
       .filter(a => {
         const notExpired = a.effectiveTo === null || a.effectiveTo >= today;
-        const published = !a.publishAt || a.publishAt.toDate() <= now;
+        const published = isPublishedNow(a, now);
         return notExpired && (published || includeScheduled);
       });
 
     res.json({
-      banner: all.filter(a => a.showOnBanner && (!a.publishAt || a.publishAt.toDate() <= now)),
+      banner: all.filter(a => a.showOnBanner && isPublishedNow(a, now)),
       announcements: all,
       count: all.length,
     });
@@ -355,9 +362,10 @@ router.post('/:id/announcements',
         // 特殊營業時間才有
         specialOpen: req.body.specialOpen || null,
         specialClose: req.body.specialClose || null,
-        // 排期發布
+        // 排期發布時段：publishAt=顯示開始（排程上架）、publishUntil=顯示結束（皆選填）
         publishAt: req.body.publishAt ? new Date(req.body.publishAt) : null,
-        // isPublished = 是否「上架（未下架）」；排程發布交由 publishAt <= now 於讀取時過濾
+        publishUntil: req.body.publishUntil ? new Date(req.body.publishUntil) : null,
+        // isPublished = 是否「上架（未下架）」；排程發布交由 publishAt <= now <= publishUntil 於讀取時過濾
         isPublished: true,
         createdBy: req.staff.id,
         createdAt: now,
@@ -383,11 +391,12 @@ router.put('/:id/announcements/:aid',
       const db = getDb();
       const allowed = ['title', 'content', 'bannerImage', 'showOnBanner',
         'effectiveFrom', 'effectiveTo', 'specialOpen', 'specialClose',
-        'publishAt', 'isPublished'];
+        'publishAt', 'publishUntil', 'isPublished'];
       const updates = {};
       allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
-      // publishAt 需存為 Date（讀取時會 .toDate()）
+      // publishAt / publishUntil 需存為 Date（讀取時會 .toDate()）
       if (req.body.publishAt !== undefined) updates.publishAt = req.body.publishAt ? new Date(req.body.publishAt) : null;
+      if (req.body.publishUntil !== undefined) updates.publishUntil = req.body.publishUntil ? new Date(req.body.publishUntil) : null;
       updates.updatedAt = new Date();
 
       await db.collection(ANNOUNCE_COLLECTION).doc(req.params.aid).update(updates);

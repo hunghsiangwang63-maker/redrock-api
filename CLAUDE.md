@@ -401,6 +401,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **刪兩門練習**（`2afece80`、`345bab45`）`DELETE /permanent`。現「小蜘蛛人」類別＝10 真實梯 + `小蜘蛛人一A(7-8)閎`（使用者留著待自刪）。
 - **waitlist E2E 8/8**（`scratchpad/waitlist-e2e.mjs`，throwaway 課 max1/wait1）：第1位正取→第2位候補#1(fee=0)→第3位 `COURSE_FULL`→重複 `ALREADY_ENROLLED`→場次計數 正取1/候補1；測後硬刪清乾淨。
 
+## 目前進度（2026-07-09 續）— 課程剩餘名額對齊 BeClass（reservedSlots）
+> 使用者：剩餘名額要照 BeClass 報名表實際顯示（例 週日A 剩 0＝已滿）。這些梯次是搬遷、已有人佔位。後端 `/health` `1.78.0-course-reserved-slots`；commit 後端 `fdb42c5`、前端 `2092536`。
+- ✅ **`reservedSlots` 欄位**（外部帶入的已佔用正取名額）：`getCourses` 回傳 `enrolledCount = 實報名 + reservedSlots`（另回 `realEnrolled`），故會員/員工顯示「剩餘、額滿」正確；`computeStatusLabel` 一併吃到。`enroll-all` 名額判斷改 `confirmedMembers + reservedSlots >= maxStudents`（滿→候補/`COURSE_FULL`）。create 預設 0、`PUT` 可調；`CoursesPage` 建立/編輯表單加「已佔用名額」欄。
+- ✅ **10 梯 reservedSlots 已設**（= maxStudents 6 − BeClass 剩餘）：週一A剩3/週二A剩6/週二B剩4/週三A剩5/週三B剩2/週五A剩6/週五B剩5/週六A剩4/週六B剩4/**週日A剩0(額滿)**——驗證回傳剩餘與 BeClass 完全一致。
+  - 註：這 10 梯 startDate 為 7/1–7/6（相對系統今日 7/9 已開始）→ `statusLabel` 顯示 `ongoing`；會員報名即走**插班**比例計費（符合搬遷中途課實況）。週日A remaining=0 → 會員端顯示「額滿」。
+- ⚠️ **reservedSlots 是靜態帶入值**：實際 BeClass 報名數變動不會同步；之後有真人報名，remaining 會在 reserved 基礎上再減。要調整佔用數到員工端課程編輯改「已佔用名額」。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

@@ -513,6 +513,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（打 Railway，22/22 綠）**：R1 4歲 `POST /members`/`self-register`/`:id/children` 皆 400 `AGE_UNDER_5`、10/20歲建立 OK；R2 注入 legacy 4歲會員→課程報名 400、體驗 participant 民國4歲 400、10歲對照非年齡擋（10歲課程回 `MEMBER_BLOCKED`＝waiver、體驗201）；R3 10歲 `POST /passes`/buy_pass/優惠卡購買/轉移(preview+transfer) 全擋、20歲對照放行（buy_pass 20歲回 `WAIVER_REQUIRED`＝通過年齡檢查）。腳本 `scratchpad/age-restrictions-e2e.mjs`（firebase-admin 注入/清理）；測試會員/卡/票/孤兒交易已清乾淨（`cleanupOrphans` 0 殘留）。
 - 🖥️ **前端實機驗證**：會員自助註冊填 ~2 歲生日→按「註冊」顯示紅字「未滿 5 歲無法成為會員」、未送出。
 - ⚠️ **決策點記錄**：① 兒童一律用出生日期 age<13（非 memberType）→ VIP/隊員身分的小孩仍受限；② 課程/體驗/轉移都解析「真正對象」（childMemberId/toMemberId），非登入者本人。
+- 🧹 **順手清 7/7 殘留的 5 筆 `e2e-` shiftLogs**（`cleanupOrphans.js --commit`；與年齡任務無關的舊 E2E 值班殘留）→ shiftLogs 34→29、`e2e-` 0 筆，孤兒卡/票/定期票全 0。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

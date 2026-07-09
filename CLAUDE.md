@@ -435,7 +435,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 > 長期痛點：`firebase deploy` 後常拿到舊 bundle、需手動硬重載/`?v=`。從源頭修：`redrock-web/firebase.json` 兩站加 `headers`。commit 前端 `4fc121f`，已 deploy＋curl 驗證。
 - ✅ **`index.html`**：`Cache-Control: no-cache, must-revalidate`（每次重新驗證 → 部署後**自動載新版**，仍走 ETag 304 不浪費流量）。
 - ✅ **`/assets/**`**（Vite 內容雜湊檔）：`public, max-age=31536000, immutable`（永久快取、載入快；改版檔名變自動失效）。
-- ⚠️ **這次修復部署前就已快取的舊 index.html** 仍需最後一次硬重載/`?v=` 才生效，之後自動；**PWA 主畫面圖示**快取更頑固，改版需刪圖示重加。
+- 🐞 **補修真正漏洞（commit `7807562`）**：第一版 header `source:'/index.html'` **只匹配字面路徑**——直接開 `/staff/activities`、`/member/courses` 等 SPA 路由時，Firebase 經 rewrite 回 index.html 內容卻套預設 `max-age=3600`（仍快取 1 小時→舊版）。改 `source:'**'` no-cache（`/assets/**` immutable 列後覆蓋）。curl 驗證：路由（含自訂網域 `staff.redrocktaiwan.com/staff/activities`）皆 `no-cache`、雜湊資產 `immutable`。
+- ⚠️ **這次修復部署前就已快取的舊頁** 仍需最後一次硬重載/`?v=` 才生效，之後自動；**PWA 主畫面圖示**快取更頑固，改版需刪圖示重加。
 - 記憶 [[testing-live-system]] 已更新（原「部署後需硬重載」改為「已從源頭修、一般不需」）。
 
 ## 待辦

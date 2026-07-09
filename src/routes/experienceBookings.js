@@ -92,12 +92,27 @@ router.post('/', authenticateAny, async (req, res) => {
     // 後端權威：未滿 5 歲無法報名體驗。解析參加者——
     //  1) 若帶 childMemberId → 該子會員；否則登入會員本人（memberId）。
     //  2) 參加者名單 participants 各自帶 birthday（含非會員 walk-in）→ 任一未滿 5 歲亦擋。
+    //     參加者生日為前端民國格式（如 "920110"＝民國92年）；也相容 ISO YYYY-MM-DD。
+    const _partUnder5 = (s) => {
+      if (!s) return false;
+      const str = String(s).trim();
+      let d;
+      if (str.includes('-')) d = dayjs(str);                 // ISO
+      else {
+        const digits = str.replace(/\D/g, '');
+        if (digits.length < 5) return false;                 // 需 年(2-3碼)+MMDD(4碼)
+        const year = parseInt(digits.slice(0, -4), 10) + 1911; // 民國→西元
+        const mmdd = digits.slice(-4);
+        d = dayjs(`${year}-${mmdd.slice(0, 2)}-${mmdd.slice(2, 4)}`);
+      }
+      return d.isValid() && dayjs().diff(d, 'year') < 5;
+    };
     const _bookerId = req.body.childMemberId || memberId;
     if (_bookerId) {
       const _bookerMember = await memberService.getMember(_bookerId).catch(() => null);
       if (isUnder5(_bookerMember)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
     }
-    if ((participants || []).some(p => isUnder5(p?.birthday))) {
+    if ((participants || []).some(p => _partUnder5(p?.birthday))) {
       return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
     }
 

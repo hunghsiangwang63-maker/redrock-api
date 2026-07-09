@@ -205,9 +205,11 @@ router.get('/', authenticate, async (req, res) => {
       const snap = await ref.get();
       snap.docs.forEach(d => {
         const t = d.data();
+        const isCash = t.paymentMethod === 'cash';
         tasks.push({
           id: `transfer_${d.id}`, type: 'transfer_confirm', targetId: d.id,
-          title: '轉帳待確認收款',
+          title: isCash ? '現金待收款' : '轉帳待確認收款',
+          method: t.paymentMethod || 'transfer',   // cash→值班確認；transfer→管理員確認
           desc: `${t.memberName || ''} — ${t.orderName || t.courseName || ''}${t.bankLastFive ? `（末五碼 ${t.bankLastFive}）` : ''}`,
           date: t.paymentDate || (t.createdAt?._seconds ? new Date(t.createdAt._seconds*1000).toISOString().slice(0,10) : today),
           createdAt: t.createdAt?._seconds || 0,
@@ -276,7 +278,7 @@ router.get('/', authenticate, async (req, res) => {
         if (gymId && e.gymId && e.gymId !== gymId) return;
         const key = `${e.memberId}_${e.courseId}`;
         if (seen.has(key)) return; seen.add(key);
-        registrations.push({ id:`reg_course_${d.id}`, regType:'course', memberName:e.memberName||'', name:e.courseName||'', detail:e.date||'', createdAt: secOf(e.createdAt), dateStr: dayOf(e.createdAt), gymId:e.gymId, link:'/staff/courses' });
+        registrations.push({ id:`reg_course_${d.id}`, regType:'course', memberName:e.memberName||'', name:e.courseName||'', detail:e.date||'', createdAt: secOf(e.createdAt), dateStr: dayOf(e.createdAt), gymId:e.gymId, link:'/staff/pending-tasks' });
       });
     } catch(e) {}
     // 比賽

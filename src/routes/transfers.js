@@ -88,6 +88,14 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此轉帳紀錄' });
     const t = doc.data();
+    // 收款確認權限：現金→值班 operator 或管理員；轉帳→僅管理員
+    const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+    const isStationMode = ['operator', 'station'].includes(req.staff?.type);
+    if (t.paymentMethod === 'cash') {
+      if (!isManager && !isStationMode) return res.status(403).json({ error: 'MANAGER_OR_STATION_REQUIRED', message: '現金收款確認限值班人員或管理員' });
+    } else {
+      if (!isManager) return res.status(403).json({ error: 'MANAGER_REQUIRED', message: '轉帳收款確認限管理員' });
+    }
     if (t.status === 'confirmed') return res.json({ message: '已確認收款' }); // 冪等：避免重複確認
     const now = new Date();
 

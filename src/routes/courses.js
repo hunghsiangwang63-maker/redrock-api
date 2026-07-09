@@ -948,6 +948,22 @@ router.post('/:courseId/enroll-all',
         });
       }
 
+      // 課程報名一律經「待收款」核對（營收為 accrual、已於上方認列；此為收款確認追蹤）：
+      // 現金→值班 operator 確認；轉帳→管理員確認（轉帳的待收款由前端 /transfers/upload 建立，此處只建現金）
+      if (fee > 0 && !isWaitlist && !req.body.deferPayment && !coursePlan && paymentMethod === 'cash') {
+        try {
+          const trId = uuidv4();
+          await db.collection('transferRecords').doc(trId).set({
+            id: trId, orderType: 'course', refId: firstEnrollmentId,
+            memberId, memberName: req.member?.name || req.body.memberName || '',
+            gymId: futureSessions[0].gymId || gymId,
+            courseId, courseName: course.name, orderName: course.name,
+            amount: fee, paymentMethod: 'cash', status: 'pending',
+            submittedAt: now, createdAt: now, updatedAt: now,
+          });
+        } catch (e) { console.error('現金待收款建立失敗', e.message); }
+      }
+
       res.status(201).json({
         enrollmentId: firstEnrollmentId,
         installmentPlan: coursePlan,

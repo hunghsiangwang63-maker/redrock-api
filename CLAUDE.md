@@ -383,8 +383,17 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - 館別 chip 僅第一層顯示、切館一併 `setSelectedCategory(null)`。名額/額滿資料來自 `courseService.getCourses` 既有 `enrolledCount`(distinct 報名人數)/`maxStudents`/`statusLabel`。
 - ✅ **BeClass 課程介紹擷取（供貼入「說明」欄）**：WebFetch 抓 `beclass.com/rid=294fdfc677e66cbc1072` →「小蜘蛛人 2026 7-8月」課程介紹（宗旨/適合對象 5–12歲/課程內容/三期制安排）整理成純文字回給使用者自行貼入課程 `description`。**尚未寫入 DB**——待使用者決定要套用到哪些課程（可 `PUT /courses/:id` 批次填入小蜘蛛人各梯 `description`）。
 
+## 目前進度（2026-07-09 續）— 課程海報圖片（Firebase Storage）
+> 承 7/8 待辦②。使用者要「抓小蜘蛛人的圖片」放進課程。走 Storage（非 base64，海報常超 1MB）。後端 `/health` `1.76.0-course-image`；commit 後端 `8b052b7`、前端 `4b6aab7`；兩端已 deploy。
+- ✅ **後端**（`courses.js` + `courseService.js`）：course 加 `imageUrl` 欄；`PUT /courses/:id` allowedFields 加 `imageUrl`；新增 `POST /courses/:courseId/image`（`courses.manage`，`multer` memoryStorage → `getStorage().bucket().file().save()` → `getSignedUrl` expires 2035 → 寫入課程 `imageUrl` 並回傳；非圖片檔擋 `NOT_IMAGE`）。
+- ✅ **會員端**（`MemberCoursesPage`）：**類別卡頂部**（`g.map(c=>c.imageUrl).find(Boolean)`，program 級同類別共用）＋**課程詳情**顯示海報；詳情另補顯示 `description`（說明，`pre-wrap`）。
+- ✅ **員工端**（`CoursesPage` 編輯 Modal）：加「課程海報」區——預覽 + 上傳/更換（即傳即存，`POST /courses/:id/image`）+ 移除（改 `editForm.imageUrl=''`、按儲存才寫）。
+- 🐞 **附帶修 latent bug**：`CoursesPage.jsx` 用了 `client.get/put`（下載出缺席 CSV `aedff18`前後、名單 roster、max-leaves）但**從未 import `client`** → 那三條路徑本會 `ReferenceError`（各自 try/catch 吞成「下載失敗/載入失敗」）。補 `import client from '../../api/client'`。
+- ✅ **小蜘蛛人海報已上線**：WebFetch 抓 `beclass.com/rid=294fdfc677e66cbc1072` 主視覺「攀岩的好處」infographic（850×699 JPEG，RedRock 自有）→ 打 `POST /courses/.../image` 掛到真實課程 `小蜘蛛人一A(7-8)閎`（`3f35216f…`）；驗證 `imageUrl` 已存、圖 http 200 可抓（62838 bytes）。**Storage getSignedUrl 在 Railway 正常**（`FIREBASE_PRIVATE_KEY` 本地簽章，同 `/pass-adjustments/evidence`）。
+- 📌 BeClass「說明」文字先前已擷取（見前一段），使用者最後決定**只抓圖片**、說明暫不自動寫入 DB（可自行貼）。
+
 ## 待辦
-- 🔧 **【擱置中】BeClass 課程介紹寫入 DB（選做）**：介紹文字已擷取（見上方 7/09 進度）；若要落地＝`PUT /courses/:id` 把該段填入「小蜘蛛人」各梯次 `description`（`GET /courses` 類別＝小蜘蛛人那幾門）。使用者當前傾向自行貼入編輯，暫不自動寫。
+- 🔧 **【選做】BeClass 課程介紹寫入 DB**：介紹文字已擷取；若要落地＝`PUT /courses/:id` 填入「小蜘蛛人」各梯 `description`。使用者傾向自行貼入編輯，暫不自動寫。
 - 🔧 **【擱置中】課程加圖片介紹（單張海報，會員卡片＋詳情都要）**：已定調走 **Firebase Storage**（比照能用的 `POST /pass-adjustments/evidence`：`multer` memoryStorage + `getStorage().bucket().file().save()` + `getSignedUrl`，**勿 base64**因海報常超過 Firestore 1MB）。待做：後端 course 加 `imageUrl` 欄 + 上傳端點 + `PUT /courses/:id` 允許；員工 `CoursesPage` 課程編輯加上傳；會員 `MemberCoursesPage` 卡片＋詳情顯示。
 - 🔧 **【擱置中】BeClass 課程介紹代入「說明」欄**：抓 `beclass.com/rid=294fdfc677e66cbc1072` 課程介紹 → 填入課程 `description`（說明）欄供使用者編輯。（WebFetch 可抓；使用者當時說「稍等」後轉去別的需求。）
 - 🧹 **清 2 門練習梯次課程**（使用者說「留著」暫不刪）：`【練習】小蜘蛛人一B(7-8)` `2afece80-ac8b-4b99-bddb-16701842c03c`、`【練習】小蜘蛛人二A(9-10)` `345bab45-2406-41c8-aba2-54afed70e8ad`（gym-hsinchu、類別小蜘蛛人，為驗證分組建的）。`DELETE /courses/:id/permanent` 清。

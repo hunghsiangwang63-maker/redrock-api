@@ -473,6 +473,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 > 需求：staff 課程頁也要分兩層——先課程總頁（類別），第二層才各梯資訊。純前端 `CoursesPage`，commit `939f4c5`，staff 已 deploy＋瀏覽器實機驗證。
 - ✅ **兩層結構**（`tab==='courses'`，新增 `selectedCategory` state）：**第一層** 依 `categoryName` 分組一卡（類別名／`N 梯 ›`／價格範圍 min~max／正取合計 enrolled/cap／含已停用註記）；**第二層**（← 返回課程總頁）列該類別各梯次卡，**保留原有動作**（編輯／停用⇄啟用／取消課程／查看名單／刪除、點卡進場次管理）。無類別歸「其他」。
 - **實機驗證**：課程總頁顯示「小蜘蛛人 11梯 NT$4,400~4,950 正取25/66」＋「其他 1梯」→ 點小蜘蛛人 → 11 個梯次卡（週日A/週六B進階/…）動作齊全。
+- ✅ **修：員工課程頁 super_admin 未依館別過濾**（commit `31242ba`＋`7ea6c3b`）：回報「士林館的小蜘蛛人課程要移除」→ 查明**士林館 0 門小蜘蛛人**（全 11 門在新竹館），會看到是因為 `CoursesPage` 兩個 bug：① `loadCourses` useEffect 空依賴、切館別不重載 ② `effectiveGymId = activeGymId||staff.gymId` **漏了 super_admin 的 `viewGym`**（頂部檢視場館選單走 viewGym，非 activeGymId）→ super_admin 恆 null→getCourses(all)→顯示全館課程。修：`effectiveGymId` 補 `(isSuperAdmin ? viewGym : '')`＋useEffect 依賴 `effectiveGymId`（切館重載+回類別總頁）。實機驗證：切士林館→只剩「其他 1 梯」、小蜘蛛人消失；切新竹館→11 梯回來。（比照 CheckinPage 的 viewGym 用法。）
 - ✅ **新增課程也改兩步**（`createStep` state，commit `a417aac`）：**步驟1** 選 課程類別(門課)＋課程類型＋館別（＋複製現有課程，複製改保留/帶入 categoryId/gymId）；**步驟2** 填梯次資料（名稱=梯次名/費用/正取/候補/日期時間/星期…）＋分期，頂部顯示「類別：X · 類型」。從某類別第二層按新增課程會**預帶該類別**；super_admin 未選館別擋下一步。實機驗證：步驟1選小蜘蛛人+新竹館→下一步→步驟2顯示梯次欄位（無類別/館別/類型選單）。
 
 ## 待辦

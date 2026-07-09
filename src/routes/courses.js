@@ -737,6 +737,42 @@ router.put('/:courseId/members/:memberId/max-leaves',
   }
 );
 
+// POST /courses/:courseId/cancel-waitlist - 會員取消自己的候補（僅 waitlist 狀態、未收費）
+router.post('/:courseId/cancel-waitlist', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const courseId = req.params.courseId;
+    const memberId = req.body.memberId || req.member?.id;
+    if (!memberId) return res.status(400).json({ error: 'MISSING_MEMBER' });
+    // 只能取消自己或子會員的候補
+    const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
+    if (deny) return res.status(deny.status).json(deny.body);
+
+    const snap = await db.collection('courseEnrollments')
+      .where('courseId', '==', courseId)
+      .where('memberId', '==', memberId)
+      .where('status', '==', 'waitlist')
+      .get();
+    if (snap.empty) return res.status(404).json({ error: 'NO_WAITLIST', message: '查無候補紀錄' });
+
+    const now = new Date();
+    const batch = db.batch();
+    const sessionIds = [];
+    snap.forEach(d => {
+      batch.update(d.ref, { status: 'cancelled', cancelledAt: now, updatedAt: now });
+      if (d.data().sessionId) sessionIds.push(d.data().sessionId);
+    });
+    // 場次候補數 -1
+    for (const sid of sessionIds) {
+      const sref = db.collection('courseSessions').doc(sid);
+      const sdoc = await sref.get();
+      if (sdoc.exists) batch.update(sref, { waitlistCount: Math.max(0, (sdoc.data().waitlistCount || 0) - 1), updatedAt: now });
+    }
+    await batch.commit();
+    res.json({ success: true, cancelled: snap.size, message: '已取消候補' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // POST /courses/:courseId/enroll-all - 報名整個週課（自動加入所有場次）
 router.post('/:courseId/enroll-all',
   authenticateAny,

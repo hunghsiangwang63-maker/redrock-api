@@ -454,6 +454,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - ⚠️ 月曆網格瀏覽器截圖驗證未完成（Chrome 擴充當下 screenshot/read_page 回鏈結錯誤/0x0）；改動為單純 filter、tab 門數已實機確認，程式邏輯確定。
 - 測試（林怡君子女 test 報 週五A）已 firebase-admin 硬刪清乾淨。
 
+## 目前進度（2026-07-09 續）— 課程報名收款核對（現金也走待收款、分角色）
+> 回報：報名課程應經管理員核對，但只收到通知、點查看進到課程總覽。定調：①課程端隱藏電子支付 ②報名通知查看→待辦頁待收款 ③現金由值班 operator 確認、匯款由管理員確認 ④**櫃檯現金也進待收款**（使用者「進待收款」）。後端 `/health` `1.82.0-course-cash-collection`；E2E（打 Railway）通過。
+- **重要前提（先查清楚才動）**：課程營收是 **accrual**——`enroll-all` 報名當下就 `recordTransaction`（認列在最後一堂），`轉帳確認收款`只是把 enrollment 標 `paymentConfirmed:true`（`transfers.js:118`），**不重複記帳**。故本次**不動營收記帳時機**，只補「收款確認（待收款）」這層追蹤。
+- ✅ **① 課程端隱藏電子支付**（前端）：`PaymentSection` 加 `methods` prop；會員課程報名 modal 傳 `['cash','transfer']`（只留現金/轉帳，藏 LinePay/街口/台灣Pay）。commit `53493d8`。
+- ✅ **② 現金也走待收款**（後端 `enroll-all`）：`paymentMethod==='cash'`（且非候補/分期/deferPayment、fee>0）→ 建 `transferRecords{orderType:'course', paymentMethod:'cash', status:'pending', amount:fee}`。轉帳的待收款仍由前端 `/transfers/upload` 建（不重複）。
+- ✅ **③ 待收款分角色確認**：`PUT /transfers/:id/confirm` 依 `record.paymentMethod` gate——**現金→值班 operator 或管理員**（`type∈[operator,station]` 或 `role∈[super_admin,gym_manager]`）、**轉帳→僅管理員**。`pending-tasks` 待收款帶 `method`＋標題「現金待收款／轉帳待確認收款」。前端 `PendingTasksPage` 對應顯示 gate（無權淡化「需值班或管理員確認／需管理員確認」）；`TransferConfirmModal` 現金顯示「確認現金收款」、隱藏匯款欄位/截圖。
+- ✅ **④ 報名通知「查看」→ 待辦頁**：`pending-tasks` 課程報名 `link` 由 `/staff/courses` 改 `/staff/pending-tasks`（原本點查看進到課程總覽的問題）。
+- **E2E**：會員報子女(現金 3850) → `/pending-tasks` 出現「現金待收款」method:cash → admin `PUT /confirm` 成功、待收款消失。測試 enrollment/transferRecord/**transaction** 全 firebase-admin 硬刪清乾淨。
+- ⛔ **分期不變**：分期第一期維持既有 installment 計畫流程（未納入待收款）。commit 後端 `a253c4d`、前端 `53493d8`＋`72d06cb`。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

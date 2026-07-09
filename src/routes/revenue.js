@@ -199,6 +199,53 @@ router.get('/checkin-stats',
   }
 );
 
+// ── GET /revenue/adjustments - 加減項明細（來源：dailySettlements.deductions）─────
+// 加減項＝結帳時抽屜現金的手動加/減（非銷售收入），與交易營收「分開列、不併入營收總數」。
+router.get('/adjustments',
+  authenticate,
+  checkPermission('revenue.report'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
+      const days = parseInt(req.query.days) || 7;
+      // 與 /revenue/daily 期間對齊（近 N 天、含今日）
+      const fromDate = dayjs().subtract(days - 1, 'day').format('YYYY-MM-DD');
+
+      // 單欄位範圍查 date（字串 YYYY-MM-DD 字典序即時間序），gymId / status 記憶體過濾避免複合索引
+      const snap = await db.collection('dailySettlements').where('date', '>=', fromDate).get();
+      const settlements = snap.docs.map(d => d.data())
+        .filter(s => s.status !== 'draft' && (!gymId || s.gymId === gymId)); // 只計已結帳（settled/unlocked），排除暫存
+
+      // 攤平每筆結帳的 deductions → 明細列
+      const adjustments = [];
+      settlements.forEach(s => {
+        (s.deductions || []).forEach(d => {
+          const sign = d.sign === '+' ? '+' : '-'; // 舊資料無 sign 視為 '-'（減），比對 dailySettlements.js:238
+          adjustments.push({
+            date: s.date,
+            gymId: s.gymId || null,
+            sign,
+            type: d.type || '',
+            amount: Number(d.amount) || 0,
+            note: d.note || '',
+          });
+        });
+      });
+
+      // 淨額合計：'+' 加、'-' 減
+      const netAdjust = adjustments.reduce((sum, a) => sum + ((a.sign === '+' ? 1 : -1) * a.amount), 0);
+
+      // 新→舊（日期，同日館別）排序
+      adjustments.sort((a, b) => b.date.localeCompare(a.date) || String(a.gymId).localeCompare(String(b.gymId)));
+
+      res.json({ adjustments, netAdjust, count: adjustments.length });
+    } catch (err) {
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // ── GET /revenue/export-csv - 匯出 CSV ──────────────────────────
 router.get('/export-csv',
   authenticate,

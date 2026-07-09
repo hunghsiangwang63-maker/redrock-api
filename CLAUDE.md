@@ -492,6 +492,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🖥️ **前端實機驗證**：新竹館今日已結帳 → 已結帳畫面正確顯示五項摘要（發票總額 NT$2,780／加減項3列＋淨額−3,320／實際現金 42,519／差異 +39,299 紅字⚠將通知／發票 34372002～34372027）＋「當日再次結帳」→ 點開預填（含多段發票區＋新增序號鈕）→「更新結帳」→ 確認 modal 五項正確（發票總額改 NT$11,430＝手動收入加總）＋再次結帳原因欄 →「取消」關閉（未動真實資料）。
 - ⚠️ **E2E 提醒**：兩實體館今日皆已結帳，直接 E2E 會覆寫/加 revision 真實資料 → 後端 E2E 改用假館 `gym-e2e-test`、測後 `DELETE`；前端只走到確認 modal 取消、不送出。
 
+## 目前進度（2026-07-09 續）— 營收總覽列出「加減項」（來源每日結帳 deductions）
+> 需求：營收總覽除交易收入外，也要列出結帳時的加減項（抽屜現金手動加/減）。**關鍵：與交易營收分開列、不併入營收總數**（它是抽屜現金加減、非銷售收入）。後端 `/health` `1.86.0-revenue-adjustments`；E2E 15/15；commit 後端 `e1e33e2`、前端 `d516760`。
+- ✅ **後端 `GET /revenue/adjustments`**（`revenue.js`，`revenue.report` 權限）：撈期間內 `dailySettlements`（`date>=fromDate` 單欄位查、`gymId`/`status` 記憶體過濾）、**只計已結帳**（`status!=='draft'`，含 settled/unlocked，排除暫存）→ 攤平每筆 `deductions` 為明細列 `{date, gymId, sign, type, amount, note}`；`netAdjust` 淨額（`'+'`加`'-'`減，**舊資料無 sign 視為減**，比對 `dailySettlements.js:238`）。期間對齊營收總覽（`days` 近 N 天、含今日）；super_admin 可 `gymId` 指定館別、否則全館。**不動既有交易營收數字**。
+- ✅ **前端（`RevenuePage.jsx` 營收總覽）**：日報表下方加「加減項（近 N 天結帳）」表格——逐條列 日期・館別・類型・**±金額**（+綠 −紅）・備註 ＋ 淨額小計；沿用該頁期間/館別篩選；千分位 NT$；加註「抽屜現金加減、非銷售收入、不併入上方營收總數」。`api/revenue.js` 加 `getAdjustments`。
+- **E2E（打 Railway，假館 `gym-e2e-test`，測後 DELETE）15/15**：造含 3 筆 deductions（+800其他/−420教練費/−3700定線費、皆帶備註）的結帳（`paymentManual.cash` 抵銷 netAdjust→difference 0 不通知）→ `/revenue/adjustments` 回 3 列、`netAdjust=-3320`、備註/±號/金額/gymId/date 皆正確；指定他館(新竹)不含假館資料（gymId 過濾）；DELETE 後 0 列。腳本 `scratchpad/revenue-adjustments-e2e.mjs`。
+- 🖥️ **瀏覽器實機驗證**（staff 營收總覽，新竹館）：加減項區塊顯示今日結帳 3 筆（教練費 −420 / 定線費 −3,700 / 其他 +800，備註齊全）＋淨額小計 **−NT$3,320**；與上方日報表 7 天合計 NT$27,134 各自獨立、未互相併入。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

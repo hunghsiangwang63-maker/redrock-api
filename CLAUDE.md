@@ -500,6 +500,20 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🖥️ **瀏覽器實機驗證**（staff 營收總覽，新竹館）：加減項區塊顯示今日結帳 3 筆（教練費 −420 / 定線費 −3,700 / 其他 +800，備註齊全）＋淨額小計 **−NT$3,320**；與上方日報表 7 天合計 NT$27,134 各自獨立、未互相併入。
 - ✅ **加減項匯出 CSV**（後端 `/health` `1.87.0-revenue-adjustments-csv`，commit 後端 `509777b`、前端 `495ef12`）：新增 `GET /revenue/export-adjustments-csv`（同 `/adjustments` 來源與過濾）——欄位 日期/館別/類型/加減/金額(帶負號)/備註 ＋ 末列淨額小計；UTF-8 BOM、備註加引號防逗號。前端加減項表頭右上加「↓ 匯出 CSV」鈕（有資料才顯示，走 axios `client` blob 帶對的 token，檔名 `adjustments-<日期>.csv`）。**瀏覽器實機下載驗證**：新竹館下載 `adjustments-20260710.csv`（284 bytes）內容正確（BOM＋表頭＋3 列＋淨額小計 −3320、備註帶引號保留），測試檔已清。
 
+## 目前進度（2026-07-10）— 三組年齡限制（後端權威 + 前端友善提示）
+> 未滿 5 歲不能成會員/報課程體驗；未滿 13 歲（兒童）不能買定期票/優惠卡/接受點數轉移。一律後端權威擋、不信前端。後端 `/health` `1.88.0-age-restrictions`；E2E（打 Railway）22/22。commit 後端 `63bd1e2`＋`11590be`、前端 `c94b047`。
+- ✅ **共用年齡工具 `src/utils/age.js`（前後端各一份）**：`ageOf(birthday)`→整數歲、`isUnder5`、`isChild`（**兒童＝出生日期年齡<13，刻意不用 `getMemberType`**，避免小孩掛 VIP/隊員時 memberType 覆蓋 'child' 而繞過限制）。`memberService` isMinor 計算改用 `ageOf`。
+- ✅ **限制 1 未滿 5 歲不能成會員（含子會員）**：`memberService.createMember`（所有建立入口共用：`POST /members`、`/self-register`、`/my/children`、`/:id/children`）有 birthday 且 `isUnder5` → throw `AGE_UNDER_5`，各 route 回 400。birthday 選填→有填才判。
+- ✅ **限制 2 未滿 5 歲不能報課程/體驗**：課程 `POST /sessions/:id/enroll` 與 `enroll-all` 解析實際上課者（`memberId`／家長代子的 `childMemberId`）`isUnder5`→400；體驗 `POST /experience-bookings` 試上擋 `trialMemberId`、一般擋 `childMemberId||memberId` **與 participants 各自 birthday**（前端送**民國格式** `920110`＝民國92，後端做 ROC 相容解析）。
+- ✅ **限制 3 未滿 13 歲（兒童）三擋**：
+  - **買定期票**：`POST /passes`（店員賣票）目標會員 `isChild`→400 `CHILD_NO_PASS`；入場 `buy_pass`（`checkinService.createPendingCheckIn` 頂端、runEntryGates 之前）`isChild`→throw `CHILD_NO_PASS`。既有 `buy_discount_card` 兒童擋改用 `isChild`（原 `memberType==='child'`）對齊。
+  - **買優惠卡**：`POST /cards/discount/purchase` 會員 `isChild`→400 `CHILD_NOT_ALLOWED`。
+  - **接受點數轉移**：`cards.js` 抽 `childBlock(toMemberId)` 套 6 端點（優惠卡/舊優惠卡/黑卡各 transfer + transfer-preview），受贈者 `isChild`→400 `CHILD_NOT_ALLOWED`；`cardTransferService.initiateTransfer` 再保險一層。
+- ✅ **前端友善提示（`redrock-web`，後端仍權威）**：`src/utils/age.js`；會員自助註冊(`MemberRegisterPage`)、新增子會員(`MemberProfilePage`)前端先擋<5；課程報名 modal(`MemberCoursesPage`)以「報名對象」年齡禁用送出+紅字提示；體驗(`MemberExperiencePage`)試上依對象、一般依 participants 民國生日禁用+提示；入場 QR(`MemberQRPage`)對兒童入場者隱藏「購買定期票/優惠折扣券」選項。後端 400 訊息各頁既有 catch 顯示。
+- **E2E（打 Railway，22/22 綠）**：R1 4歲 `POST /members`/`self-register`/`:id/children` 皆 400 `AGE_UNDER_5`、10/20歲建立 OK；R2 注入 legacy 4歲會員→課程報名 400、體驗 participant 民國4歲 400、10歲對照非年齡擋（10歲課程回 `MEMBER_BLOCKED`＝waiver、體驗201）；R3 10歲 `POST /passes`/buy_pass/優惠卡購買/轉移(preview+transfer) 全擋、20歲對照放行（buy_pass 20歲回 `WAIVER_REQUIRED`＝通過年齡檢查）。腳本 `scratchpad/age-restrictions-e2e.mjs`（firebase-admin 注入/清理）；測試會員/卡/票/孤兒交易已清乾淨（`cleanupOrphans` 0 殘留）。
+- 🖥️ **前端實機驗證**：會員自助註冊填 ~2 歲生日→按「註冊」顯示紅字「未滿 5 歲無法成為會員」、未送出。
+- ⚠️ **決策點記錄**：① 兒童一律用出生日期 age<13（非 memberType）→ VIP/隊員身分的小孩仍受限；② 課程/體驗/轉移都解析「真正對象」（childMemberId/toMemberId），非登入者本人。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

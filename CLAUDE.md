@@ -447,6 +447,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🐞 **附帶修**：`enroll-all` 儲存 `memberName` 原 `req.member.name` 優先 → 子女報名存成**家長名**。改 `req.body.memberName||req.member.name`（前端本就傳子女名）。既有錯名資料：**staff roster 本就以 members 集合權威解析姓名（`getSessionRoster:845`）顯示不受影響**；會員端標籤已改為查家庭成員清單，故既有資料也正確顯示。
 - **驗證**：以可控帳號林怡君＋其子女 `test` 報 週五A → 我的課程顯示「小蜘蛛人 週五A班 👦 test」＋退費/暫停/請假；測試報名已 firebase-admin 硬刪清乾淨（含場次 enrolledCount 回復）。
 
+## 目前進度（2026-07-09 續）— 會員月曆只顯示自己報名 + 我的課程 tab 改「N 門進行中」
+> 兩項純前端（`MemberCoursesPage`），commit `1802771`，member 已 deploy。
+- ✅ **我的課程 tab 標籤**：原 `(${myEnrollments.length})` ＝**報名場次列數**（每堂一列、含 cancelled 殘列→數字虛高，如 33）。改 **`(N 門進行中)`**：以「課程＋報名對象」分組、計有效報名(confirmed/leave/waitlist)且未結束（有候補或 date≥今日場次）的**門數**。實機驗證：林怡君子女報 1 門 → 顯示「我的課程 (1 門進行中)」。
+- ✅ **會員月曆只顯示自己（含子女）報名的課程**：`loadCalendarSessions` 原抓全館 `/courses/sessions` 全部顯示（僅標記有無報名）→ 改**帶子女報名建 enrollMap（僅 confirmed/leave/waitlist）並 `filter(s => enrollMap[s.id])`**，只留有報名的場次。體驗預約/競賽本就是本人資料、保留。
+  - ⚠️ 月曆網格瀏覽器截圖驗證未完成（Chrome 擴充當下 screenshot/read_page 回鏈結錯誤/0x0）；改動為單純 filter、tab 門數已實機確認，程式邏輯確定。
+- 測試（林怡君子女 test 報 週五A）已 firebase-admin 硬刪清乾淨。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

@@ -392,11 +392,18 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **小蜘蛛人海報已上線**：WebFetch 抓 `beclass.com/rid=294fdfc677e66cbc1072` 主視覺「攀岩的好處」infographic（850×699 JPEG，RedRock 自有）→ 打 `POST /courses/.../image` 掛到真實課程 `小蜘蛛人一A(7-8)閎`（`3f35216f…`）；驗證 `imageUrl` 已存、圖 http 200 可抓（62838 bytes）。**Storage getSignedUrl 在 Railway 正常**（`FIREBASE_PRIVATE_KEY` 本地簽章，同 `/pass-adjustments/evidence`）。
 - 📌 BeClass「說明」文字先前已擷取（見前一段），使用者最後決定**只抓圖片**、說明暫不自動寫入 DB（可自行貼）。
 
+## 目前進度（2026-07-09 續）— 依 BeClass 建 10 門小蜘蛛人真實梯次 + 週課名額/候補控管
+> 使用者澄清：先前掛海報到【練習】是錯的，正解＝**依 BeClass 報名表建真實梯次**（新竹館 only）。指示：一A 不用管（之後自刪）、另建 10 梯、maxStudents 預設 6、候補上限預設 2（可留空）、兩門練習直接刪。後端 `/health` `1.77.0-course-waitlist-cap`；commit 後端 `73d895d`、前端 `b7cc4d4`；waitlist E2E 8/8。
+- ✅ **候補上限 `maxWaitlist` 欄位**（`courseService`/`courses.js`）：`null`＝不限候補、`0`＝不開放、正整數＝候補名額。`POST /courses` validator optional、`PUT` 允許並正規化（`''`→null）。前端 `CoursesPage` 建立/編輯/複製表單加「候補上限（留空＝不限、0＝不開放）」欄；**建立表單 maxStudents 預設 6、maxWaitlist 預設 2**。
+- ✅ **週課名額/候補控管（原本零控管！）**：`POST /courses/:id/enroll-all` 原本報名一律 `confirmed`、`maxStudents` 只影響 UI 不擋人。補：以「整門課不重複會員數」為準——滿 `maxStudents`→進**候補**（`waitlist`，不收費/不記帳、佔 `waitlistCount`、`waitlistPosition`）；候補也滿(`maxWaitlist`)→擋 `409 COURSE_FULL`；**遞補為正取後才收費（店員手動）**。去重擋改含 waitlist。workshop 單場 `enrollSession` 亦補候補上限擋（`WAITLIST_FULL`）。
+  - ⚠️ **週課候補遞補為手動**：per-session 有 `promoteWaitlist`，但**整門課候補→正取自動遞補未接**；候補者付款也待遞補後由店員處理。（本次範圍：控管+擋人+不誤收，遞補自動化屬後續。）
+- ✅ **建 10 門真實梯次**（新竹館・類別小蜘蛛人・海報＋說明・maxStudents 6・maxWaitlist 2）：週一A(9堂4950)/週二A・B(8堂4400)/週三A・B進階(9堂4950)/週五A・B(8堂4400)/週六A・B進階(8堂4400)/週日A(8堂4400)；`POST /courses`＋`generate-sessions`，**場次數全部對上預期**。腳本 `scratchpad/create-spider-cohorts.mjs`。
+- ✅ **刪兩門練習**（`2afece80`、`345bab45`）`DELETE /permanent`。現「小蜘蛛人」類別＝10 真實梯 + `小蜘蛛人一A(7-8)閎`（使用者留著待自刪）。
+- **waitlist E2E 8/8**（`scratchpad/waitlist-e2e.mjs`，throwaway 課 max1/wait1）：第1位正取→第2位候補#1(fee=0)→第3位 `COURSE_FULL`→重複 `ALREADY_ENROLLED`→場次計數 正取1/候補1；測後硬刪清乾淨。
+
 ## 待辦
-- 🔧 **【選做】BeClass 課程介紹寫入 DB**：介紹文字已擷取；若要落地＝`PUT /courses/:id` 填入「小蜘蛛人」各梯 `description`。使用者傾向自行貼入編輯，暫不自動寫。
-- 🔧 **【擱置中】課程加圖片介紹（單張海報，會員卡片＋詳情都要）**：已定調走 **Firebase Storage**（比照能用的 `POST /pass-adjustments/evidence`：`multer` memoryStorage + `getStorage().bucket().file().save()` + `getSignedUrl`，**勿 base64**因海報常超過 Firestore 1MB）。待做：後端 course 加 `imageUrl` 欄 + 上傳端點 + `PUT /courses/:id` 允許；員工 `CoursesPage` 課程編輯加上傳；會員 `MemberCoursesPage` 卡片＋詳情顯示。
-- 🔧 **【擱置中】BeClass 課程介紹代入「說明」欄**：抓 `beclass.com/rid=294fdfc677e66cbc1072` 課程介紹 → 填入課程 `description`（說明）欄供使用者編輯。（WebFetch 可抓；使用者當時說「稍等」後轉去別的需求。）
-- 🧹 **清 2 門練習梯次課程**（使用者說「留著」暫不刪）：`【練習】小蜘蛛人一B(7-8)` `2afece80-ac8b-4b99-bddb-16701842c03c`、`【練習】小蜘蛛人二A(9-10)` `345bab45-2406-41c8-aba2-54afed70e8ad`（gym-hsinchu、類別小蜘蛛人，為驗證分組建的）。`DELETE /courses/:id/permanent` 清。
+- 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
+- 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。
 - ⏰ **2026-07-14 到期提醒：刪除全部測試會員**（使用者 7/8 交代「7/14 提醒我全部刪除」）。範圍＝dev 24 筆固定 fixtures：`【練習】…`×14（王小明一般/陳美麗未簽/林志明墜測過期/張家豪未墜測/李定期月票/黑卡王/紅利妹/折扣卡姊/券券子/VIP尊爵/隊員阿凱/家長爸爸+小孩安安+小孩貝貝/體驗生今日/周銷售）＋`測試/測試API會員/管理員測試會員/Test1/Who`＋`王大明`(0900222222)+子`小明明`＋林怡君底下子帳號`test`(0912345678)。**保留**：林怡君(member-001)＋6 筆非測試(陳莉涵/張元賓/朱小姐/朱智萩/陳建宏/林小明)。刪法：`DELETE /members/:id`(super_admin，先刪家長會連帶刪子)。→ **7/14（或之後）開此專案時執行；使用者先前已三次延後，動手前再跟他確認一次**。
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - 清理 E2E 測試殘留：`【練習】體驗生今日` 名下的 failed/returned `fallTestBookings` + 一筆 failed `fallTests`（練習 fixture，無害）

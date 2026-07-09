@@ -9,6 +9,7 @@ const { getMember } = require('./memberService');
 const { getValidDiscountCards, useDiscountCard } = require('./discountCardService');
 const { getMemberBlackCards, useBlackCard, getBlackCardById, refundBlackCard } = require('./legacyCardService');
 const { isActiveTeamMember, TEAM_DISCOUNT_MIN_AMOUNT } = require('./teamMemberService');
+const { isChild } = require('../utils/age');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
@@ -739,9 +740,15 @@ const createPendingCheckIn = async ({
   const member = await getMember(memberId);
   const memberType = getMemberType(member);
 
-  // 後端權威：兒童不適用折扣券，禁止「購買優惠折扣券入場」（不信前端傳值）
-  if (entryType === 'buy_discount_card' && memberType === 'child') {
+  // 後端權威：兒童（未滿 13，以出生日期判定、不受 VIP/隊員 memberType 影響）——
+  //  ‧ 不適用折扣券，禁止「購買優惠折扣券入場」
+  //  ‧ 不可購買定期票（buy_pass）
+  // （不信前端傳值）
+  if (entryType === 'buy_discount_card' && isChild(member)) {
     throw { code: 'CHILD_NO_DISCOUNT_CARD', message: '兒童不適用折扣券，無法購買' };
+  }
+  if (entryType === 'buy_pass' && isChild(member)) {
+    throw { code: 'CHILD_NO_PASS', message: '未滿 13 歲無法購買定期票' };
   }
 
   // ── 關卡 0（同日重複 / Waiver / 墜測「使用中體驗券」例外 / 分期逾期）：共用 runEntryGates ──

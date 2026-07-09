@@ -18,6 +18,8 @@ const { authenticate, authenticateAny, authenticateMember, checkPermission, audi
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const courseService = require('../services/courseService');
 const { createWeeklySessions, updateSession } = courseService;
+const memberService = require('../services/memberService');
+const { isUnder5 } = require('../utils/age');
 const { getDb, getStorage, COLLECTIONS } = require('../config/firebase');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
@@ -147,6 +149,9 @@ router.post('/sessions/:sessionId/enroll',
       // 驗證：會員只能為自己或子會員報名
       const deny = await checkMemberOwnership(req.member, req.body.memberId, { onMissing: 404 });
       if (deny) return res.status(deny.status).json(deny.body);
+      // 後端權威：未滿 5 歲無法報名課程（實際上課者＝req.body.memberId，家長代子時已解析為子會員）
+      const _attendee = await memberService.getMember(req.body.memberId).catch(() => null);
+      if (isUnder5(_attendee)) return res.status(400).json({ code: 'AGE_UNDER_5', message: '未滿 5 歲無法報名課程' });
       const result = await courseService.enrollCourse({
         memberId: req.body.memberId,
         sessionId: req.params.sessionId,
@@ -789,6 +794,9 @@ router.post('/:courseId/enroll-all',
       // 會員只能為自己或子會員整期報名（防帶他人 memberId；查無會員視為無權）
       const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
       if (deny) return res.status(deny.status).json(deny.body);
+      // 後端權威：未滿 5 歲無法報名課程（實際上課者＝memberId，家長代子時已解析為子會員）
+      const _attendee = await memberService.getMember(memberId).catch(() => null);
+      if (isUnder5(_attendee)) return res.status(400).json({ code: 'AGE_UNDER_5', message: '未滿 5 歲無法報名課程' });
 
       // 取得課程所有未取消場次
       const sessionsSnap = await db.collection('courseSessions')

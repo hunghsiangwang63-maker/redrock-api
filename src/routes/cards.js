@@ -7,11 +7,21 @@ const discountCardService = require('../services/discountCardService');
 const legacyDiscountCardService = require('../services/legacyDiscountCardService');
 const legacyCardService = require('../services/legacyCardService');
 const bonusService = require('../services/bonusService');
+const memberService = require('../services/memberService');
+const { isChild } = require('../utils/age');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors.array() });
   next();
+};
+
+// 後端權威：購買者/受贈者未滿 13 歲（兒童，以出生日期判定、不受 VIP/隊員影響）→ 回 err 物件供 route 回 400。
+// 無 memberId（如 POS 匿名購買）不擋。
+const childBlock = async (memberId, message) => {
+  if (!memberId) return null;
+  const m = await memberService.getMember(memberId).catch(() => null);
+  return isChild(m) ? { code: 'CHILD_NOT_ALLOWED', message } : null;
 };
 
 // ══════════════════════════════════════════════════════
@@ -28,6 +38,8 @@ router.post('/discount/purchase',
   [body('price').isNumeric()], validate,
   async (req, res) => {
     try {
+      const cb = await childBlock(req.body.memberId, '未滿 13 歲無法購買優惠卡');
+      if (cb) return res.status(400).json(cb);
       const card = await discountCardService.purchaseDiscountCard({
         memberId: req.body.memberId || null, gymId: req.staff.gymId,
         staffId: req.staff.id, price: parseInt(req.body.price), paymentId: req.body.paymentId,
@@ -68,7 +80,11 @@ router.post('/discount/:id/transfer-preview',
   authenticate, checkPermission('products.sell'),
   [body('toMemberId').notEmpty(), body('credits').isInt({ min: 1 })], validate,
   async (req, res) => {
-    try { res.json(await discountCardService.getTransferPreview(req.params.id, req.body.toMemberId, parseInt(req.body.credits))); }
+    try {
+      const cb = await childBlock(req.body.toMemberId, '未滿 13 歲無法接受點數轉移');
+      if (cb) return res.status(400).json(cb);
+      res.json(await discountCardService.getTransferPreview(req.params.id, req.body.toMemberId, parseInt(req.body.credits)));
+    }
     catch (err) { res.status(err.code ? 400 : 500).json(err.code ? err : { error: 'SERVER_ERROR', message: err.message }); }
   }
 );
@@ -80,6 +96,8 @@ router.post('/discount/:id/transfer',
   validate,
   async (req, res) => {
     try {
+      const cb = await childBlock(req.body.toMemberId, '未滿 13 歲無法接受點數轉移');
+      if (cb) return res.status(400).json(cb);
       const cardTransferService = require('../services/cardTransferService');
       const t = await cardTransferService.initiateTransfer({
         cardType: 'discount', fromCardId: req.params.id, toMemberId: req.body.toMemberId,
@@ -127,7 +145,11 @@ router.post('/legacy-discount/:id/transfer-preview',
   authenticate, checkPermission('products.sell'),
   [body('toMemberId').notEmpty(), body('credits').isInt({ min: 1 })], validate,
   async (req, res) => {
-    try { res.json(await legacyDiscountCardService.getTransferPreview(req.params.id, req.body.toMemberId, parseInt(req.body.credits))); }
+    try {
+      const cb = await childBlock(req.body.toMemberId, '未滿 13 歲無法接受點數轉移');
+      if (cb) return res.status(400).json(cb);
+      res.json(await legacyDiscountCardService.getTransferPreview(req.params.id, req.body.toMemberId, parseInt(req.body.credits)));
+    }
     catch (err) { res.status(err.code ? 400 : 500).json(err.code ? err : { error: 'SERVER_ERROR', message: err.message }); }
   }
 );
@@ -138,6 +160,8 @@ router.post('/legacy-discount/:id/transfer',
   validate,
   async (req, res) => {
     try {
+      const cb = await childBlock(req.body.toMemberId, '未滿 13 歲無法接受點數轉移');
+      if (cb) return res.status(400).json(cb);
       const result = await legacyDiscountCardService.transferLegacyDiscountCard({
         fromCardId: req.params.id, toMemberId: req.body.toMemberId,
         credits: parseInt(req.body.credits), staffId: req.staff.id,
@@ -189,7 +213,11 @@ router.post('/black/:id/transfer-preview',
   authenticate, checkPermission('products.sell'),
   [body('toMemberId').notEmpty(), body('credits').isInt({ min: 1 })], validate,
   async (req, res) => {
-    try { res.json(await legacyCardService.getTransferPreview(req.params.id, req.body.toMemberId, parseInt(req.body.credits))); }
+    try {
+      const cb = await childBlock(req.body.toMemberId, '未滿 13 歲無法接受點數轉移');
+      if (cb) return res.status(400).json(cb);
+      res.json(await legacyCardService.getTransferPreview(req.params.id, req.body.toMemberId, parseInt(req.body.credits)));
+    }
     catch (err) { res.status(err.code ? 400 : 500).json(err.code ? err : { error: 'SERVER_ERROR', message: err.message }); }
   }
 );
@@ -201,6 +229,8 @@ router.post('/black/:id/transfer',
   validate,
   async (req, res) => {
     try {
+      const cb = await childBlock(req.body.toMemberId, '未滿 13 歲無法接受點數轉移');
+      if (cb) return res.status(400).json(cb);
       const cardTransferService = require('../services/cardTransferService');
       const t = await cardTransferService.initiateTransfer({
         cardType: 'black', fromCardId: req.params.id, toMemberId: req.body.toMemberId,

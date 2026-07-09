@@ -9,6 +9,8 @@ const { sanitizeSheet } = require('../utils/xlsxSafe');
 const emailService = require('../services/emailService');
 const courseService = require('../services/courseService');
 const scheduleService = require('../services/scheduleService');
+const memberService = require('../services/memberService');
+const { isUnder5 } = require('../utils/age');
 
 const COURSE_TYPES = [
   { id:'general',   label:'抱石體驗課程',          priceMap:{ 1:975, 2:875, 3:875, '4-5':825, '6-8':775, '9-12':775 } },
@@ -58,6 +60,10 @@ router.post('/', authenticateAny, async (req, res) => {
         trialPhone = contactPhone || child.phone || req.member?.phone || '';
       }
 
+      // 後端權威：未滿 5 歲無法報名試上（實際參加者＝trialMemberId，家長代子時為子會員）
+      const _trialMember = await memberService.getMember(trialMemberId).catch(() => null);
+      if (isUnder5(_trialMember)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
+
       const trialFee = course.trialPrice || 0;
       const id = `trial_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
       await db.collection('experienceBookings').doc(id).set({
@@ -82,6 +88,18 @@ router.post('/', authenticateAny, async (req, res) => {
     if (!gymId) return res.status(400).json({ code:'MISSING_GYM', message:'請選擇場館' });
     if (!bookingDate) return res.status(400).json({ code:'MISSING_DATE', message:'請填寫體驗日期' });
     if (!participants?.length) return res.status(400).json({ code:'MISSING_PARTICIPANTS', message:'請填寫參加人員資料' });
+
+    // 後端權威：未滿 5 歲無法報名體驗。解析參加者——
+    //  1) 若帶 childMemberId → 該子會員；否則登入會員本人（memberId）。
+    //  2) 參加者名單 participants 各自帶 birthday（含非會員 walk-in）→ 任一未滿 5 歲亦擋。
+    const _bookerId = req.body.childMemberId || memberId;
+    if (_bookerId) {
+      const _bookerMember = await memberService.getMember(_bookerId).catch(() => null);
+      if (isUnder5(_bookerMember)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
+    }
+    if ((participants || []).some(p => isUnder5(p?.birthday))) {
+      return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
+    }
 
     // 後端權威計算費用（不信任前端傳入的 totalFee）：用與前端相同的設定來源
     const _settingsDoc = await db.collection('systemSettings').doc('experienceCourses').get();

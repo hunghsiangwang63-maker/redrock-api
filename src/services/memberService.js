@@ -3,6 +3,7 @@ const { getDb, COLLECTIONS } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const QRCode = require('qrcode');
 const dayjs = require('dayjs');
+const { ageOf, isUnder5 } = require('../utils/age');
 
 // ── QR Code 產生 ──────────────────────────────────────────────────
 const generateQRCode = async (memberId, memberPhone) => {
@@ -116,6 +117,11 @@ const createMember = async (memberData, staffId, options = {}) => {
   const db = getDb();
   const memberId = uuidv4();
 
+  // 後端權威：未滿 5 歲無法成為會員（含子會員）。birthday 選填 → 有填才判斷。
+  if (isUnder5(memberData.birthday)) {
+    throw { code: 'AGE_UNDER_5', message: '未滿 5 歲無法成為會員' };
+  }
+
   // 檢查電話是否重複（子會員共用父會員電話，跳過此檢查）
   if (!options?.isChildAccount) {
     const existing = await db.collection(COLLECTIONS.MEMBERS)
@@ -127,9 +133,9 @@ const createMember = async (memberData, staffId, options = {}) => {
     }
   }
 
-  // 計算是否未成年
-  const birthday = memberData.birthday ? dayjs(memberData.birthday) : null;
-  const isMinor = birthday ? dayjs().diff(birthday, 'year') < 18 : false;
+  // 計算是否未成年（<18）—— 用共用 ageOf 工具
+  const _age = ageOf(memberData.birthday);
+  const isMinor = _age !== null && _age < 18;
 
   // 產生 QR Code
   const { qrCodeId, qrCodeUrl } = await generateQRCode(memberId, memberData.phone);

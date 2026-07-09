@@ -37,6 +37,8 @@ const initiateTransfer = async ({ cardType, fromCardId, toMemberId, credits, ini
   // 受贈者需存在（打錯電話→查無會員時，route 層解析階段即擋；此處再保險）
   const toMember = await memberService.getMember(toMemberId).catch(() => null);
   if (!toMember) throw { code: 'MEMBER_NOT_FOUND', message: '找不到受贈會員' };
+  // 後端權威：未滿 13 歲（兒童，以出生日期判定）不可接受點數轉移
+  if (require('../utils/age').isChild(toMember)) throw { code: 'CHILD_NOT_ALLOWED', message: '未滿 13 歲無法接受點數轉移' };
   const fromMember = await memberService.getMember(fromMemberId).catch(() => null);
 
   // 受贈者卡到期日：一律「跟隨原卡效期」——原卡有到期日則繼承（如購買優惠卡的一年），

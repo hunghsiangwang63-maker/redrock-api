@@ -9,6 +9,8 @@ const { authenticate, authenticateAny, checkPermission, requireManagerOrStation,
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
+const memberService = require('../services/memberService');
+const { isChild } = require('../utils/age');
 
 // 由票種效期算到期日：優先「月數」（一個月一個月算，7/6→10/6；月底自動夾到當月最後一天，
 // 例 1/31＋1月→2/28），未設月數則沿用「天數」（曆日）。
@@ -249,6 +251,9 @@ router.post('/',
   async (req, res) => {
     try {
       const db = getDb();
+      // 後端權威：未滿 13 歲（兒童）不可購買定期票（用出生日期判定，不受 VIP/隊員 memberType 影響）
+      const _buyer = await memberService.getMember(req.body.memberId).catch(() => null);
+      if (isChild(_buyer)) return res.status(400).json({ code: 'CHILD_NO_PASS', message: '未滿 13 歲無法購買定期票' });
       const passTypeDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(req.body.passTypeId).get();
       if (!passTypeDoc.exists) return res.status(404).json({ error: 'PASS_TYPE_NOT_FOUND' });
       const passType = passTypeDoc.data();

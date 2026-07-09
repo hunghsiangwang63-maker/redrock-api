@@ -99,7 +99,10 @@ router.post('/my/children',
       });
 
       res.status(201).json({ child, message: `${req.body.name} 已加入家庭成員` });
-    } catch (err) { res.status(500).json({ error: err.code || 'SERVER_ERROR', message: err.message }); }
+    } catch (err) {
+      if (err.code === 'AGE_UNDER_5') return res.status(400).json(err);
+      res.status(500).json({ error: err.code || 'SERVER_ERROR', message: err.message });
+    }
   }
 );
 
@@ -460,6 +463,7 @@ router.post('/',
       res.status(201).json({ member, message: '會員建立成功' });
     } catch (err) {
       if (err.code === 'PHONE_EXISTS') return res.status(409).json(err);
+      if (err.code === 'AGE_UNDER_5') return res.status(400).json(err);
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }
   }
@@ -481,7 +485,7 @@ router.post('/self-register',
       const bcrypt = require('bcryptjs');
       const passwordHash = await bcrypt.hash(req.body.password, 10);
 
-      // 建立會員
+      // 建立會員（未滿 5 歲會於 createMember throw AGE_UNDER_5）
       const member = await memberService.createMember({
         ...req.body,
         registeredBy: 'self',
@@ -502,6 +506,7 @@ router.post('/self-register',
       });
     } catch (err) {
       if (err.code === 'PHONE_EXISTS') return res.status(409).json(err);
+      if (err.code === 'AGE_UNDER_5') return res.status(400).json(err);
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }
   }
@@ -605,6 +610,7 @@ router.post('/:id/children',
 
       res.status(201).json({ child, message: '子會員建立成功' });
     } catch (err) {
+      if (err.code === 'AGE_UNDER_5') return res.status(400).json(err);
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }
   }

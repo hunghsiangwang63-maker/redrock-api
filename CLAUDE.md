@@ -417,6 +417,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - 10 梯**教練**已補（`PUT instructor`）：週一A=閎聿、週日A=品翰、其餘=晉瑋（依 BeClass 報名表師資）。
 - ✅ **全系統「段落內文置左、標題置中」盤點**（commit `835ff9b`；三支平行 subagent 掃 member/staff/components）：把置中的**段落/描述/提醒/條款類內文**改 `textAlign:left`，**保留**標題/空狀態/按鈕/徽章/數字置中。實改 10 檔 12 處（會員 Waiver/Register/Login/Forgot/QR/Parent waiver 說明與提醒、員工 Checkin 統計提示 & DailySettlement 限制說明、元件 OnboardingGate 卡片內文）。`SettingsPage` 轉換頁先前已左對齊、無需改。**規則已存記憶** `[[ui-text-alignment]]`：日後新畫面段落一律置左、只有標題置中。
 
+## 目前進度（2026-07-09 續）— 額滿課程報名顯示候補提醒、不問繳費
+> 回報：小蜘蛛人週日班已額滿、可報名候補，但報名時**沒有任何提醒、且直接問繳費方式**。純前端 `MemberCoursesPage`，commit `6e23ed8`，member 已 deploy＋瀏覽器實機驗證通過。
+- ✅ **週課 detail 名額滿偵測**：`isCourseFull = statusLabel==='full' || (maxStudents − enrolledCount) <= 0`（`enrolledCount` 已含 `reservedSlots`）。滿時：顯示**候補提醒橫幅**（「正取已額滿，報名將加入候補、候補期間不需付款、遞補為正取後另行通知繳費」）、價格標「（遞補後收費）」、按鈕改**「加入候補名單」**（琥珀色）；`enrollSession.isWaitlist=true`。
+- ✅ **報名 Modal 候補化**：`isWaitlist` 時——標題「候補報名」、步驟1 標籤「候補說明」、**付款區塊改候補說明**（不顯示 `PaymentPlanChoice`/`PaymentSection`/繳費方式，只說明遞補後才收費＋約略金額）、送出鈕「✓ 確認加入候補」、成功彈窗改「已加入候補名單」文案。`handleEnroll` 依 `res.data.isWaitlist` 設 flag、候補**不觸發轉帳上傳**。
+- **實機驗證**：週日A班 detail 顯示候補橫幅＋「加入候補名單」；點入 Modal 顯示「候補報名 — 小蜘蛛人 週日A班」、候補說明（遞補後約 NT$3,850）、無繳費欄位。未實際送出（避免建真資料）。
+- ⚠️ 沿用先前缺口：**週課候補→正取自動遞補仍為手動**（見下方待辦）。workshop 單場額滿在會員端仍為 disabled（不開放候補 UI），非本次範圍。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

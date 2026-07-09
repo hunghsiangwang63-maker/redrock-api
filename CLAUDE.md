@@ -439,6 +439,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ⚠️ **這次修復部署前就已快取的舊頁** 仍需最後一次硬重載/`?v=` 才生效，之後自動；**PWA 主畫面圖示**快取更頑固，改版需刪圖示重加。
 - 記憶 [[testing-live-system]] 已更新（原「部署後需硬重載」改為「已從源頭修、一般不需」）。
 
+## 目前進度（2026-07-09 續）— 我的課程含子女報名（家長帳號）
+> 回報：朱智萩幫家庭成員王登第報名課程，在「我的課程」看不到。查明＝**我的課程只載入登入者本人的報名**（`/courses/member/{本人id}/enrollments`），子女報名 memberId 是子女→不顯示。後端 `/health` `1.81.0-enroll-target-name`；commit 後端 `ef19b5b`＋`81f3a79`、前端 `49464c4`＋`df432b7`；瀏覽器實機驗證通過。
+- 🔍 **資料現況**：朱智萩(`d633effc`) 名下＝一A confirmed×8＋週日A **waitlist×7**；子女 王登第(`17f4cf6c`)＝週二B confirmed×7＋週三B(進階) confirmed×7。修好後朱智萩「我的課程」會看到自己 2 筆＋王登第 2 筆（標「👦 王登第」）。
+- ✅ **顯示子女報名**（`MemberCoursesPage`）：`loadMyEnrollments` 改**一併載入子女報名**（`/members/my/children` → 各自 `/courses/member/:id/enrollments` 合併）；分組 key 改 **`courseId+memberId`**（家長與子女同課不合併，`expandedCourseId`/React key/退費暫停旗標同步改 composite）；子女課卡標 **「👦 <子女名>」**（姓名以家庭成員清單解析，不信 `enrollment.memberName`）。
+- ✅ **退費/暫停/請假支援家長代子女**：後端 `course-adjustments` refund/pause-request 與 `courses` leave 改 `memberId = body.memberId||本人` ＋ `checkMemberOwnership`（原用 `req.member.id`→查無子女報名 404/FORBIDDEN）；前端退費/暫停/請假帶 `group.memberId`。
+- 🐞 **附帶修**：`enroll-all` 儲存 `memberName` 原 `req.member.name` 優先 → 子女報名存成**家長名**。改 `req.body.memberName||req.member.name`（前端本就傳子女名）。既有錯名資料：**staff roster 本就以 members 集合權威解析姓名（`getSessionRoster:845`）顯示不受影響**；會員端標籤已改為查家庭成員清單，故既有資料也正確顯示。
+- **驗證**：以可控帳號林怡君＋其子女 `test` 報 週五A → 我的課程顯示「小蜘蛛人 週五A班 👦 test」＋退費/暫停/請假；測試報名已 firebase-admin 硬刪清乾淨（含場次 enrolledCount 回復）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

@@ -482,6 +482,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **員工課程月曆日格顯示各場次資訊**（commit `9db8386`）：原日格只「N堂·M人」→ 改逐場次（依開始時間）列出 **課程名稱＋👟教練·報名人數**（`registeredCount ?? enrolledCount`）；日格 minHeight 74→90。實機驗證：7/1 顯示「小蜘蛛人 週三A班 👟晉瑋·0人／週三B班(進階) 👟晉瑋」、週日 👟品翰、週一 👟閎聿。（人數為該場次實際報名數；課程卡的人數含 reservedSlots，兩者定義不同。）
 - ✅ **新增課程也改兩步**（`createStep` state，commit `a417aac`→`8ff0ddb`）：**步驟1＝課程通用資訊**（同門課各梯共用性質）＝類別＋類型＋館別＋複製 ＋ **課程名稱/課程說明/課程海報(建立後上傳)/插班加成/請假截止/整期可請假次數/補課期限/退費每堂扣除/退費手續費率/開放補課/開放試上(+試上費)/是否分期**；**步驟2＝此梯次專屬**＝費用/最多人數(正取)/候補上限/已佔用名額/入館天數/課程起訖日/上課時段/教練/上課星期。頂部顯示「類別 · 類型 · 名稱」。從某類別第二層按新增會**預帶該類別**；super_admin 未選館別 / 未填名稱擋下一步。海報用 `createImageFile` state，建立成功後 `POST /courses/:id/image`（失敗不阻斷）。實機驗證：步驟1填通用+海報→下一步→步驟2只剩梯次專屬欄位。
 
+## 目前進度（2026-07-09 續）— 每日結帳強化（暫存檔 / 完成結帳確認 modal / 多段發票 / 當日再次結帳）
+> 四項一起做：後端 `/health` `1.85.0-settlement-draft-resettle-segments`（commit `edd6bd5`）＋前端（commit `249072d`，兩 target build＋firebase deploy）。金額一律**後端權威**、modal 僅前端預覽。後端 E2E（假館 `gym-e2e-test`，測後 DELETE）全綠；前端瀏覽器實機驗證（走「當日再次結帳」預填→確認 modal→取消，不動真實結帳）。
+- ✅ **(1) 暫存檔（draft）**：新增 `PUT /daily-settlements/draft`（`requireStationAuth`）——upsert 今日 gym+date 一筆 `status:'draft'`，**不擋 ALREADY_SETTLED、不發差異通知**；已是 `settled` 則回 `{alreadySettled:true}` 不覆寫。`GET /today` 擴充：無正式結帳但有 draft → 回 `{settlement, draft:{...}}`。前端「💾 存暫存檔」→ PUT draft 顯示「已暫存」；進頁 `loadToday` 從 `res.data.draft` 預填（點鈔/加減項/多段發票/作廢/卡號/備註/手動輸入，showMsg「已載入暫存檔」）。
+- ✅ **(2) 完成結帳確認 modal（純前端）**：「完成結帳」不再直接送出 → 先跳 `Modal`（`src/components/Modal.jsx`）顯示 `SettlementSummary` 五項（下同）；「確認結帳」才 POST、「取消」關閉。
+- **結帳摘要五項（確認 modal 與「今日已結帳」畫面共用同一元件、同順序，千分位＋NT$）**：① **發票總金額**＝收入項加總（`settlementManualInput` 開啟時用 incomeManual 加總、**不從發票號推算**）② **加減項**（每列 ±號/類型/金額/備註 ＋ 淨額小計，無則「無」）③ **實際現金**（點鈔加總）④ **差異**＝實際−預期，`abs>200` 紅字＋「⚠將通知管理員」⑤ **發票起末號碼**（多段逐段列 ＋ 作廢號碼）。
+- ✅ **(3) 更換/新增發票序號（多段）**：資料模型 `invoiceSegments:[{start,last}]`。POST/PUT/draft 收陣列；**向下相容**仍寫 `invoiceStartNumber=首段.start`、`invoiceLastNumber=末段.last`；`voidNumbers` 共用。`invoice-export` 逐段各出一列（當日總計如客次/發票總額/作廢/卡片只掛首段列），無 segments 才 fallback 舊單段。前端多段列（第N段 start～last、>1 可✕）＋「＋新增發票序號」（自動帶前段 last+1）；至少一段、末段的 last 必填。
+- ✅ **(4) 當日再次結帳**：POST 移除 `ALREADY_SETTLED` 硬擋 → 已結帳則**更新同一 doc**（一天一 doc 供月報/發票）：舊狀態 push 進 `revisions[]`、更新欄位＋`settledAt`＋`staffId`＋`resettleCount+1`＋選填 `resettleReason`。差異/前日餘額**以前一天為基準**（非自身）；差異>200 重新通知。前端已結帳畫面「🔁 當日再次結帳」→ 預填表單（`startResettle`）→ 同一確認 modal（帶 `resettleReason`）→ POST。另加 `DELETE /:id`（super_admin，供 E2E 清理）。
+- 🖥️ **前端實機驗證**：新竹館今日已結帳 → 已結帳畫面正確顯示五項摘要（發票總額 NT$2,780／加減項3列＋淨額−3,320／實際現金 42,519／差異 +39,299 紅字⚠將通知／發票 34372002～34372027）＋「當日再次結帳」→ 點開預填（含多段發票區＋新增序號鈕）→「更新結帳」→ 確認 modal 五項正確（發票總額改 NT$11,430＝手動收入加總）＋再次結帳原因欄 →「取消」關閉（未動真實資料）。
+- ⚠️ **E2E 提醒**：兩實體館今日皆已結帳，直接 E2E 會覆寫/加 revision 真實資料 → 後端 E2E 改用假館 `gym-e2e-test`、測後 `DELETE`；前端只走到確認 modal 取消、不送出。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

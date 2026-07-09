@@ -246,6 +246,59 @@ router.get('/adjustments',
   }
 );
 
+// ── GET /revenue/export-adjustments-csv - 加減項匯出 CSV ─────────
+router.get('/export-adjustments-csv',
+  authenticate,
+  checkPermission('revenue.report'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
+      const days = parseInt(req.query.days) || 7;
+      const fromDate = dayjs().subtract(days - 1, 'day').format('YYYY-MM-DD');
+
+      const snap = await db.collection('dailySettlements').where('date', '>=', fromDate).get();
+      const settlements = snap.docs.map(d => d.data())
+        .filter(s => s.status !== 'draft' && (!gymId || s.gymId === gymId));
+
+      const GYM_LABEL = { 'gym-hsinchu': '新竹館', 'gym-shilin': '士林館' };
+      const adjustments = [];
+      settlements.forEach(s => {
+        (s.deductions || []).forEach(d => {
+          const sign = d.sign === '+' ? '+' : '-';
+          adjustments.push({
+            date: s.date, gymId: s.gymId || null,
+            sign, type: d.type || '', amount: Number(d.amount) || 0, note: d.note || '',
+          });
+        });
+      });
+      adjustments.sort((a, b) => b.date.localeCompare(a.date) || String(a.gymId).localeCompare(String(b.gymId)));
+
+      const netAdjust = adjustments.reduce((sum, a) => sum + ((a.sign === '+' ? 1 : -1) * a.amount), 0);
+      const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`; // 備註可能含逗號 → 加引號
+
+      const rows = [
+        ['日期', '館別', '類型', '加減', '金額', '備註'].join(','),
+        ...adjustments.map(a => [
+          a.date,
+          csvCell(GYM_LABEL[a.gymId] || a.gymId || ''),
+          csvCell(a.type),
+          a.sign === '+' ? '加' : '減',
+          (a.sign === '+' ? '' : '-') + a.amount,
+          csvCell(a.note),
+        ].join(',')),
+        ['', '', '', '淨額小計', netAdjust, ''].join(','),
+      ];
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="adjustments-${dayjs().format('YYYYMMDD')}.csv"`);
+      res.send('﻿' + rows.join('\n')); // BOM for Excel
+    } catch (err) {
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // ── GET /revenue/export-csv - 匯出 CSV ──────────────────────────
 router.get('/export-csv',
   authenticate,

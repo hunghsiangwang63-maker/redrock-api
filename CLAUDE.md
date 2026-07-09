@@ -429,7 +429,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **候補群組顯示**（`MemberCoursesPage` 我的課程）：`isWaitlistGroup = 無 confirmed/leave 且有 waitlist`——徽章改**「候補中・第 N 位」**（琥珀）、資訊列改候補說明（左對齊）、**隱藏 請假/申請退費/申請暫停**、改顯示**「取消候補」**。另**全數已取消/失效的群組不再顯示幽靈卡**（`confirmed+leave+waitlist===0` → 不 render）。
 - ✅ **取消候補端點**（後端 `POST /courses/:courseId/cancel-waitlist`，`authenticateAny`）：驗擁有權（本人/子女）→ 將該會員此課程 `status:'waitlist'` 報名標 `cancelled` + 場次 `waitlistCount-1`；無候補回 404 `NO_WAITLIST`。前端 `handleCancelWaitlist`（`window.confirm` 確認）。
 - **E2E（打 Railway，林怡君）**：報名 週日A(額滿) → `isWaitlist=true` pos2 fee0、7 筆 waitlist 場次 → `/member/enrollments` 顯示候補 → `cancel-waitlist` 取消 7 筆 → 0 筆殘留。瀏覽器：我的課程顯示「候補中・第2位」＋候補說明＋「取消候補」、無退費/暫停/請假。測試資料已清。
-- ⚠️ `handleCancelWaitlist` 用 `window.confirm`（專案他處多已改自訂 Modal）；如要一致化可改自訂確認框，非必要。
+- ✅ **取消候補改自訂確認 Modal**（commit 前端 `2a8789a`→`51e95f7`）：`window.confirm` → 自訂 Modal（標題/說明置左、「返回」/「確定取消」紅鈕），與專案他處一致；成功後**樂觀移除該課候補列**（`setMyEnrollments` filter）避免 Firestore 讀寫延遲卡片短暫殘留，再 `loadMyEnrollments` reconcile。瀏覽器實機：候補卡 → 取消候補 → 自訂確認 → 確定取消 → 綠「已取消候補」＋卡片即時消失。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

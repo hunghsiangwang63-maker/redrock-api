@@ -408,6 +408,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - 註：這 10 梯 startDate 為 7/1–7/6（相對系統今日 7/9 已開始）→ `statusLabel` 顯示 `ongoing`；會員報名即走**插班**比例計費（符合搬遷中途課實況）。週日A remaining=0 → 會員端顯示「額滿」。
 - ⚠️ **reservedSlots 是靜態帶入值**：實際 BeClass 報名數變動不會同步；之後有真人報名，remaining 會在 reserved 基礎上再減。要調整佔用數到員工端課程編輯改「已佔用名額」。
 
+## 目前進度（2026-07-09 續）— 課程總覽微調 + 全系統段落置左盤點
+> 兩件事。前端 `redrock-web`，member/staff 皆 deploy。
+- ✅ **課程總覽多梯次微調**（`MemberCoursesPage`，commit `e4a24be`；瀏覽器實機驗證通過）：
+  - **梯次依週一→週日排序**（週日排最後 `weekday 0→7`），同日再依開始時間。
+  - **名額只顯示剩餘**（拿掉「已報名/上限」比例），保留「剩 N 位／額滿」徽章。
+  - **流程改**：第一層類別卡**移除海報**（改點進去才顯示）；點進類別**先看到海報＋課程說明**（左對齊）再列各梯；**點入梯次後不再重複顯示說明**（梯次 detail 移除 description 區塊，保留海報＋時段＋報名）。
+  - 10 梯**教練**已補（`PUT instructor`）：週一A=閎聿、週日A=品翰、其餘=晉瑋（依 BeClass 報名表師資）。
+- ✅ **全系統「段落內文置左、標題置中」盤點**（commit `835ff9b`；三支平行 subagent 掃 member/staff/components）：把置中的**段落/描述/提醒/條款類內文**改 `textAlign:left`，**保留**標題/空狀態/按鈕/徽章/數字置中。實改 10 檔 12 處（會員 Waiver/Register/Login/Forgot/QR/Parent waiver 說明與提醒、員工 Checkin 統計提示 & DailySettlement 限制說明、元件 OnboardingGate 卡片內文）。`SettingsPage` 轉換頁先前已左對齊、無需改。**規則已存記憶** `[[ui-text-alignment]]`：日後新畫面段落一律置左、只有標題置中。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

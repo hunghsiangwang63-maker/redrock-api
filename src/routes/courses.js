@@ -51,6 +51,7 @@ router.post('/',
     body('name').notEmpty().withMessage('請輸入課程名稱'),
     body('price').isNumeric().withMessage('請輸入課程費用'),
     body('maxStudents').isInt({ min: 1 }).withMessage('請輸入最大人數'),
+    body('maxWaitlist').optional({ checkFalsy: true }).isInt({ min: 0 }).withMessage('候補上限須為 0 以上整數'),
   ],
   validate,
   async (req, res) => {
@@ -635,7 +636,7 @@ router.put('/:courseId',
     try {
       const db = getDb();
       const allowedFields = [
-        'name', 'description', 'imageUrl', 'price', 'maxStudents', 'instructor',
+        'name', 'description', 'imageUrl', 'price', 'maxStudents', 'maxWaitlist', 'instructor',
         'startDate', 'endDate', 'startTime', 'endTime', 'weekdays',
         'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',
@@ -644,6 +645,10 @@ router.put('/:courseId',
       ];
       const updates = { updatedAt: new Date() };
       allowedFields.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+      // 候補上限：留空('')＝不限候補(null)，否則轉數字
+      if (req.body.maxWaitlist !== undefined) {
+        updates.maxWaitlist = (req.body.maxWaitlist === '' || req.body.maxWaitlist === null) ? null : Number(req.body.maxWaitlist);
+      }
       // 分期規則
       if (req.body.installment !== undefined) {
         const inst = req.body.installment;
@@ -761,11 +766,11 @@ router.post('/:courseId/enroll-all',
         return res.status(400).json({ error: 'NO_SESSIONS', message: '此課程已無未來場次' });
       }
 
-      // 去重防護：此會員已在本課程有 confirmed 報名 → 擋下（避免前端重複送出造成整期重複報名+重複收費）
+      // 去重防護：此會員已在本課程有 confirmed / waitlist 報名 → 擋下（避免前端重複送出造成整期重複報名+重複收費）
       const existing = await db.collection('courseEnrollments')
         .where('memberId', '==', memberId)
         .where('courseId', '==', courseId)
-        .where('status', '==', 'confirmed')
+        .where('status', 'in', ['confirmed', 'waitlist'])
         .limit(1).get();
       if (!existing.empty) {
         return res.status(409).json({ error: 'ALREADY_ENROLLED', message: '您已報名此課程，請勿重複報名' });
@@ -776,6 +781,29 @@ router.post('/:courseId/enroll-all',
       const { v4: uuidv4 } = require('uuid');
       const now = new Date();
       const batch = db.batch();
+
+      // ── 名額 / 候補控管（以整門課「不重複會員數」為準）──
+      // 滿 maxStudents → 進候補；候補也滿(maxWaitlist；null=不限) → 擋 COURSE_FULL。候補報名不收費，遞補後才收。
+      const courseEnrollSnap = await db.collection('courseEnrollments')
+        .where('courseId', '==', courseId)
+        .where('status', 'in', ['confirmed', 'waitlist'])
+        .get();
+      const confirmedMembers = new Set(), waitlistMembers = new Set();
+      courseEnrollSnap.forEach(d => {
+        const e = d.data();
+        (e.status === 'waitlist' ? waitlistMembers : confirmedMembers).add(e.memberId);
+      });
+      const maxStudents = course.maxStudents || Infinity;
+      let enrollStatus = 'confirmed';
+      if (confirmedMembers.size >= maxStudents) {
+        const wcap = (course.maxWaitlist === null || course.maxWaitlist === undefined) ? Infinity : course.maxWaitlist;
+        if (waitlistMembers.size >= wcap) {
+          return res.status(409).json({ error: 'COURSE_FULL', message: '此課程正取與候補皆已額滿' });
+        }
+        enrollStatus = 'waitlist';
+      }
+      const isWaitlist = enrollStatus === 'waitlist';
+      const waitlistPosition = isWaitlist ? waitlistMembers.size + 1 : null;
 
       // 後端權威計算費用（不信任前端傳入的金額），邏輯與前端顯示一致：
       // 插班報名按剩餘場次比例計收，低於一半加成；隊員身份再套用九折（滿NT$100適用）
@@ -816,10 +844,12 @@ router.post('/:courseId/enroll-all',
           date: s.date,
           startTime: s.startTime,
           endTime: s.endTime,
-          status: 'confirmed',
-          enrollmentFee: futureSessions.indexOf(s) === 0 ? fee : 0,
-          paymentMethod: futureSessions.indexOf(s) === 0 ? paymentMethod : null,
-          paymentStatus: futureSessions.indexOf(s) === 0 ? 'pending' : 'na',
+          status: enrollStatus,
+          waitlistPosition: isWaitlist ? waitlistPosition : null,
+          // 候補不收費（遞補為正取後才收）；正取維持原本第一筆收費、其餘 0
+          enrollmentFee: isWaitlist ? 0 : (idx === 0 ? fee : 0),
+          paymentMethod: (isWaitlist || idx !== 0) ? null : paymentMethod,
+          paymentStatus: isWaitlist ? 'na' : (idx === 0 ? 'pending' : 'na'),
           gymAccessStart: s.date,
           gymAccessEnd: require('dayjs')(s.date).add(course.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD'),
           enrolledBy: memberId,
@@ -827,10 +857,10 @@ router.post('/:courseId/enroll-all',
           createdAt: now,
           updatedAt: now,
         });
-        batch.update(db.collection('courseSessions').doc(s.id), {
-          enrolledCount: (s.enrolledCount || 0) + 1,
-          updatedAt: now,
-        });
+        batch.update(db.collection('courseSessions').doc(s.id),
+          isWaitlist
+            ? { waitlistCount: (s.waitlistCount || 0) + 1, updatedAt: now }
+            : { enrolledCount: (s.enrolledCount || 0) + 1, updatedAt: now });
       });
 
       await batch.commit();
@@ -840,7 +870,7 @@ router.post('/:courseId/enroll-all',
         || course.unlimitedPracticeEnd
         || (futureSessions.length ? futureSessions[futureSessions.length - 1].date : null);
       // 分期：課程有開分期規則且會員選「分期」→ 建立分期計畫（第一期簽約當下收，各期記帳認列最後一堂）
-      const useCourseInstallment = course.installment?.enabled && req.body.paymentPlan === 'installment' && !req.body.deferPayment;
+      const useCourseInstallment = !isWaitlist && course.installment?.enabled && req.body.paymentPlan === 'installment' && !req.body.deferPayment;
       let coursePlan = null;
       if (fee > 0 && useCourseInstallment) {
         const installmentService = require('../services/installmentService');
@@ -858,8 +888,8 @@ router.post('/:courseId/enroll-all',
           });
         }
       }
-      // 記錄交易（一次付清；分期改由計畫逐期記帳，此處略過；deferPayment 由付款 callback 記）
-      if (fee > 0 && !req.body.deferPayment && !coursePlan) {
+      // 記錄交易（一次付清；分期改由計畫逐期記帳，此處略過；deferPayment 由付款 callback 記）候補不記帳
+      if (fee > 0 && !isWaitlist && !req.body.deferPayment && !coursePlan) {
         const { recordTransaction } = require('../utils/revenueLedger');
         await recordTransaction(db, {
           gymId: futureSessions[0].gymId || gymId,
@@ -879,14 +909,18 @@ router.post('/:courseId/enroll-all',
       res.status(201).json({
         enrollmentId: firstEnrollmentId,
         installmentPlan: coursePlan,
-        message: isTeam && discountResult.discount > 0
-          ? `報名成功，已加入 ${futureSessions.length} 個場次（已套用攀岩隊員折扣，折抵 NT$${discountResult.discount}）`
-          : `報名成功，已加入 ${futureSessions.length} 個場次`,
+        isWaitlist,
+        waitlistPosition,
+        message: isWaitlist
+          ? `課程正取已額滿，已加入候補名單（第 ${waitlistPosition} 位）；遞補為正取後再行收費`
+          : (isTeam && discountResult.discount > 0
+            ? `報名成功，已加入 ${futureSessions.length} 個場次（已套用攀岩隊員折扣，折抵 NT$${discountResult.discount}）`
+            : `報名成功，已加入 ${futureSessions.length} 個場次`),
         count: futureSessions.length,
-        fee,
+        fee: isWaitlist ? 0 : fee,
         originalFee: baseFee,
-        teamDiscountApplied: discountResult.applied,
-        teamDiscountAmount: discountResult.discount,
+        teamDiscountApplied: !isWaitlist && discountResult.applied,
+        teamDiscountAmount: isWaitlist ? 0 : discountResult.discount,
       });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

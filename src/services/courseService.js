@@ -45,6 +45,9 @@ const createCourse = async ({ gymId, staffId, data }) => {
     startTime: data.startTime || null,
     endTime: data.endTime || null,
     maxStudents: data.maxStudents || 12,
+    // 候補上限：留空(''/null/undefined)＝不限候補；0＝不開放候補；正整數＝候補名額
+    maxWaitlist: (data.maxWaitlist === '' || data.maxWaitlist === null || data.maxWaitlist === undefined)
+      ? null : Number(data.maxWaitlist),
     price: data.price || 0,
     totalSessions: data.totalSessions || 0,   // 總堂數（建立後可更新）
     durationMinutes: data.durationMinutes || 90,
@@ -447,6 +450,13 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, paymentId,
   // 計算入館權益日期
   const courseDoc = await db.collection(COURSE_COLLECTION).doc(session.courseId).get();
   const course = courseDoc.data();
+  // 候補上限：正取已滿且候補也滿(maxWaitlist；null=不限) → 擋下
+  if (isFull) {
+    const wcap = (course.maxWaitlist === null || course.maxWaitlist === undefined) ? Infinity : course.maxWaitlist;
+    if ((session.waitlistCount || 0) >= wcap) {
+      throw { code: 'WAITLIST_FULL', message: '此場次正取與候補皆已額滿' };
+    }
+  }
   const gymAccessStart = dayjs(session.date)
     .subtract(course.gymAccessDaysBefore || 0, 'day').format('YYYY-MM-DD');
   const gymAccessEnd = dayjs(session.date)

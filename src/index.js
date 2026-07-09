@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '1.83.0-session-gym-fallback',
+    version: '1.84.0-blockreason-falltest-expired',
   });
 });
 

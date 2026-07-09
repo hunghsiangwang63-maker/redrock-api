@@ -44,15 +44,27 @@ const getBlockReasons = async (memberId, memberData) => {
     }
   }
 
-  // 3. 從未通過墜落測驗
+  // 3. 墜落測驗：從未通過 → fall_test_required；曾通過但所有 passed 紀錄皆已過期 → fall_test_expired
   const fallTests = await db.collection(COLLECTIONS.FALL_TESTS)
     .where('memberId', '==', memberId)
     .where('result', '==', 'passed')
-    .limit(1)
     .get();
 
   if (fallTests.empty) {
     reasons.push('fall_test_required');
+  } else {
+    // 是否至少一筆 passed 尚未過期（無到期日＝永久有效）；效期欄位比照 calcFallTestStatus
+    const now = Date.now();
+    let hasValid = false;
+    fallTests.docs.forEach(d => {
+      const t = d.data();
+      const raw = t.currentExpiresAt || t.expiresAt;
+      if (!raw) { hasValid = true; return; }
+      const sec = raw?.seconds ?? raw?._seconds;
+      const ms = sec != null ? sec * 1000 : new Date(raw).getTime();
+      if (!isNaN(ms) && ms >= now) hasValid = true;
+    });
+    if (!hasValid) reasons.push('fall_test_expired');
   }
 
   return reasons;

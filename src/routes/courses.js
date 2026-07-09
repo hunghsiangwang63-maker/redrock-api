@@ -636,7 +636,7 @@ router.put('/:courseId',
     try {
       const db = getDb();
       const allowedFields = [
-        'name', 'description', 'imageUrl', 'price', 'maxStudents', 'maxWaitlist', 'instructor',
+        'name', 'description', 'imageUrl', 'price', 'maxStudents', 'maxWaitlist', 'reservedSlots', 'instructor',
         'startDate', 'endDate', 'startTime', 'endTime', 'weekdays',
         'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',
@@ -648,6 +648,10 @@ router.put('/:courseId',
       // 候補上限：留空('')＝不限候補(null)，否則轉數字
       if (req.body.maxWaitlist !== undefined) {
         updates.maxWaitlist = (req.body.maxWaitlist === '' || req.body.maxWaitlist === null) ? null : Number(req.body.maxWaitlist);
+      }
+      // 已佔用名額：留空('')＝0
+      if (req.body.reservedSlots !== undefined) {
+        updates.reservedSlots = (req.body.reservedSlots === '' || req.body.reservedSlots === null) ? 0 : Number(req.body.reservedSlots);
       }
       // 分期規則
       if (req.body.installment !== undefined) {
@@ -794,8 +798,9 @@ router.post('/:courseId/enroll-all',
         (e.status === 'waitlist' ? waitlistMembers : confirmedMembers).add(e.memberId);
       });
       const maxStudents = course.maxStudents || Infinity;
+      const occupied = confirmedMembers.size + (course.reservedSlots || 0); // 含外部帶入的已佔用名額
       let enrollStatus = 'confirmed';
-      if (confirmedMembers.size >= maxStudents) {
+      if (occupied >= maxStudents) {
         const wcap = (course.maxWaitlist === null || course.maxWaitlist === undefined) ? Infinity : course.maxWaitlist;
         if (waitlistMembers.size >= wcap) {
           return res.status(409).json({ error: 'COURSE_FULL', message: '此課程正取與候補皆已額滿' });

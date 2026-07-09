@@ -48,6 +48,8 @@ const createCourse = async ({ gymId, staffId, data }) => {
     // 候補上限：留空(''/null/undefined)＝不限候補；0＝不開放候補；正整數＝候補名額
     maxWaitlist: (data.maxWaitlist === '' || data.maxWaitlist === null || data.maxWaitlist === undefined)
       ? null : Number(data.maxWaitlist),
+    // 已佔用正取名額（外部帶入，如 BeClass 既有報名）：剩餘＝maxStudents−實報名−reservedSlots
+    reservedSlots: data.reservedSlots ? Number(data.reservedSlots) : 0,
     price: data.price || 0,
     totalSessions: data.totalSessions || 0,   // 總堂數（建立後可更新）
     durationMinutes: data.durationMinutes || 90,
@@ -883,8 +885,10 @@ const getCourses = async (gymId) => {
   });
 
   return courses.map(c => {
-    const enrolledCount = enrolledByCourse[c.id]?.size || 0;
-    return { ...c, enrolledCount, categoryName: catMap[c.categoryId] || null, statusLabel: computeStatusLabel(c, enrolledCount) };
+    const realEnrolled = enrolledByCourse[c.id]?.size || 0;
+    // reservedSlots：從 BeClass 等外部帶入的「已佔用正取名額」，計入佔用數（剩餘=max−實報名−reserved）
+    const enrolledCount = realEnrolled + (c.reservedSlots || 0);
+    return { ...c, enrolledCount, realEnrolled, categoryName: catMap[c.categoryId] || null, statusLabel: computeStatusLabel(c, enrolledCount) };
   });
 };
 

@@ -375,8 +375,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ⚠️ **E2E 附帶（非 bug）**：`runShiftReminders` 打正式 Firestore 跑，`今天+2` 那天含 3 位真實員工真實班次 → 他們**現時就收到各自的正確「值班提醒」**（＝該功能該做的事、只是由 E2E 提早觸發、`reminderSentAt` 已標記不重送），無害。
 - ✅ **待辦頁通知面板加「排班」類別**（純前端 `PendingTasksPage`，commit `2e24c18`，staff 已 deploy）：`NOTIF_CAT` 加 `shift_assigned/updated/reminder → 'shift'`，`NOTIF_CATS` 加 `{key:'shift',label:'排班'}`（置「全部」後）。員工個人待辦頁「🔔 通知」面板即可用「排班」chip 單獨過濾（原本落在「系統」）。
 
+## 目前進度（2026-07-09 續）— 課程總覽多梯次兩層式 + BeClass 課程介紹擷取（純前端 `redrock-web`）
+> 承 7/8 待辦。使用者回答兩題後定案：① 梯次列欄位＝班別名/星期時間/開課迄日/教練/名額(剩N位或額滿)/價格/類型（**加了名額、教練**）② **只有一梯的課點卡直接進報名、跳過中間層**。
+- ✅ **多梯次兩層式**（`MemberCoursesPage` 課程總覽 browse，commit `a9ebbdd`，member 已 deploy＋push）：原「每梯次一張大卡平鋪」→ 改**兩層**：
+  - **第一層**（依 `categoryName` 分組，`其他` 墊底）：一課(類別)一張卡，顯示 類別名／價格範圍(min~max)／類型(週課/工作坊)／可分期 tag。**只有一梯者卡片右上顯「報名 ›」點卡直接 `setSelectedCourse`（跳過中間層）**；多梯顯「N 梯 ›」點卡進第二層。
+  - **第二層**（`selectedCategory` 狀態，← 返回類別）：列該類別各梯次，每列＝班別名／🗓每週星期時間／📅開課迄日／👟教練＋名額(`enrolledCount/maxStudents`)／NT$價格／類型／可分期；右上**額滿**(`statusLabel==='full'`或剩0)或綠**剩 N 位**。點列 `setSelectedCourse` 進既有報名場次頁（報名頁「←」因 `selectedCategory` 仍在→回第二層；單梯 skip 時 `selectedCategory` 為 null→回第一層）。
+  - 館別 chip 僅第一層顯示、切館一併 `setSelectedCategory(null)`。名額/額滿資料來自 `courseService.getCourses` 既有 `enrolledCount`(distinct 報名人數)/`maxStudents`/`statusLabel`。
+- ✅ **BeClass 課程介紹擷取（供貼入「說明」欄）**：WebFetch 抓 `beclass.com/rid=294fdfc677e66cbc1072` →「小蜘蛛人 2026 7-8月」課程介紹（宗旨/適合對象 5–12歲/課程內容/三期制安排）整理成純文字回給使用者自行貼入課程 `description`。**尚未寫入 DB**——待使用者決定要套用到哪些課程（可 `PUT /courses/:id` 批次填入小蜘蛛人各梯 `description`）。
+
 ## 待辦
-- 🔧 **【明天接續】多梯次改「兩層式」呈現**（使用者 7/8 交代「明天再處理」）：目前依類別分組是「每梯次一張大卡」→ 使用者嫌雜。要改成 **一門課(類別)只一張卡 →點進去→ 列該類別各梯次(現有課程) →選一個→ 進報名**（BeClass 式）。**設定機制不變**＝同課各梯次建立時選同一「類別(categoryId)」（已有 `categoryName` 於 `GET /courses`）。**待使用者回答兩題再動手**：① 梯次清單每列顯示哪些欄位（我提議：班別名/星期時間/開課迄日/價格/額滿；問要不要加 剩餘名額、講師）② 只有一個梯次的課要不要直接進場次報名跳過中間層。改的檔＝`MemberCoursesPage` 課程總覽 browse（把現行「類別區塊平鋪卡」改成「類別卡→點開梯次清單」兩層）。
+- 🔧 **【擱置中】BeClass 課程介紹寫入 DB（選做）**：介紹文字已擷取（見上方 7/09 進度）；若要落地＝`PUT /courses/:id` 把該段填入「小蜘蛛人」各梯次 `description`（`GET /courses` 類別＝小蜘蛛人那幾門）。使用者當前傾向自行貼入編輯，暫不自動寫。
 - 🔧 **【擱置中】課程加圖片介紹（單張海報，會員卡片＋詳情都要）**：已定調走 **Firebase Storage**（比照能用的 `POST /pass-adjustments/evidence`：`multer` memoryStorage + `getStorage().bucket().file().save()` + `getSignedUrl`，**勿 base64**因海報常超過 Firestore 1MB）。待做：後端 course 加 `imageUrl` 欄 + 上傳端點 + `PUT /courses/:id` 允許；員工 `CoursesPage` 課程編輯加上傳；會員 `MemberCoursesPage` 卡片＋詳情顯示。
 - 🔧 **【擱置中】BeClass 課程介紹代入「說明」欄**：抓 `beclass.com/rid=294fdfc677e66cbc1072` 課程介紹 → 填入課程 `description`（說明）欄供使用者編輯。（WebFetch 可抓；使用者當時說「稍等」後轉去別的需求。）
 - 🧹 **清 2 門練習梯次課程**（使用者說「留著」暫不刪）：`【練習】小蜘蛛人一B(7-8)` `2afece80-ac8b-4b99-bddb-16701842c03c`、`【練習】小蜘蛛人二A(9-10)` `345bab45-2406-41c8-aba2-54afed70e8ad`（gym-hsinchu、類別小蜘蛛人，為驗證分組建的）。`DELETE /courses/:id/permanent` 清。

@@ -515,6 +515,18 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ⚠️ **決策點記錄**：① 兒童一律用出生日期 age<13（非 memberType）→ VIP/隊員身分的小孩仍受限；② 課程/體驗/轉移都解析「真正對象」（childMemberId/toMemberId），非登入者本人。
 - 🧹 **順手清 7/7 殘留的 5 筆 `e2e-` shiftLogs**（`cleanupOrphans.js --commit`；與年齡任務無關的舊 E2E 值班殘留）→ shiftLogs 34→29、`e2e-` 0 筆，孤兒卡/票/定期票全 0。
 
+## 目前進度（2026-07-10 續）— 會員首頁公告（館別標示 + 空心方框指示器）+ 公告發布結束時間
+> 三項一起做。後端 `/health` `1.89.0-announcement-publish-until`；C 段 E2E（打 Railway）13/13 實質斷言綠。commit 後端 `a2fd97d`、前端 `308e77d`。公告物件 `gymId`＝`gym-hsinchu`/`gym-shilin`/`null`（全館）。
+- ✅ **A. 輪播指示器改空心方框**（純前端 `MemberHomePage`）：原實心圓/膠囊（active 寬 16）→ 改 **8×8 方框**（`borderRadius:2`＋`border:1px solid rgba(255,255,255,.8)`），**active 填滿白**（`rgba(255,255,255,.9)`）、非 active 空心（`transparent`）；保留點擊切換/cursor/transition。
+- ✅ **B. 輪播 + 最新公告標題前加館別**（純前端 `MemberHomePage`）：`annGymLabel(gymId)`＝`新竹館`/`士林館`/**`全館`（null，非二元寫法，避免全館誤標士林）**；輪播標題與 `announcements.map` 清單標題皆前綴 `【館別】`。
+- ✅ **C. 公告新增「發布結束時間」`publishUntil`**（後端 `gyms.js` + 前端 `GymsPage`）：
+  - **概念釐清（文案對齊）**：`effectiveFrom/effectiveTo`＝休館/營業調整**生效**起訖日（前端標籤「生效開始/結束日期」）；`publishAt`/新增 `publishUntil`＝公告**顯示給會員的發布時段**（標籤「發布開始時間（排程上架）」/「發布結束時間」）。
+  - 後端建立（`POST`）/更新（`PUT` allowed 加 `publishUntil` + Date 轉換）收 `publishUntil`；抽共用 `isPublishedNow(a,now)=(publishAt<=now)&&(publishUntil>=now)`（皆選填）套**會員可見 3 處**：`GET /:id/announcements`、`GET /announcements/all` 清單 + banner 過濾。
+  - ⚠️ **`getGymStatusForDate`（休館判定／定期票臨停補償來源，`gyms.js:56`）維持只看 `publishAt`、不套 `isPublishedNow`**——否則發布時段一過會讓休館「不算數」、補償錯亂。
+  - 前端 `GymsPage` 表單加「發布結束時間」`datetime-local`（state/reset/編輯載入 `tsToLocalInput(a.publishUntil)`，null→''）；`createAnnouncement/updateAnnouncement` 傳整個 annForm、自動帶 `publishUntil`。
+- **C 段 E2E（打 Railway，13/13 實質斷言綠）**：建 `publishUntil`＝過去/未來/無 三公告 → 會員端 `/announcements/all`＋`/:id/announcements` **過期不顯示、未來顯示、無結束時間顯示**；建今日休館 `publishUntil`＝過去 → **`today-status`＝closed（休館不受 publishUntil 過期影響）**、但該公告會員端不顯示。測試 4 公告測後 DELETE、0 殘留。（腳本 `scratchpad/announce-publish-until-e2e.mjs`；第 14 條「清理後非 closed」為誤判——當日 gym-hsinchu 有**真實 `颱風休館`** closure，與測試無關。）
+- 🖥️ **前端實機驗證**（會員 林怡君 首頁）：輪播兩指示器為**空心方框、當前頁填滿**；輪播標題 `【新竹館】颱風休館`、最新公告 `【新竹館】颱風休館`/`【新竹館】營業時間調整` 皆帶館別前綴。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

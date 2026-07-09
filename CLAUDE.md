@@ -517,7 +517,9 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 
 ## 目前進度（2026-07-10 續）— 會員首頁公告（館別標示 + 空心方框指示器）+ 公告發布結束時間
 > 三項一起做。後端 `/health` `1.89.0-announcement-publish-until`；C 段 E2E（打 Railway）13/13 實質斷言綠。commit 後端 `a2fd97d`、前端 `308e77d`。公告物件 `gymId`＝`gym-hsinchu`/`gym-shilin`/`null`（全館）。
-- ✅ **A. 輪播指示器改空心方框**（純前端 `MemberHomePage`）：原實心圓/膠囊（active 寬 16）→ 改 **8×8 方框**（`borderRadius:2`＋`border:1px solid rgba(255,255,255,.8)`），**active 填滿白**（`rgba(255,255,255,.9)`）、非 active 空心（`transparent`）；保留點擊切換/cursor/transition。
+- ✅ **A. 輪播指示器改方框指示（純前端 `MemberHomePage`）**：原實心圓/膠囊 → 改 **14×14 方框**（`borderRadius:3`＋`border:1px 白`）；**未選取＝空心（`background:transparent`）、選取＝白底 + 打勾**。保留點擊切換/cursor/transition。
+  - ⚠️ **打勾用「純 CSS 繪製」（旋轉 border 的 tick），不用 `✓` 字型字元**——回報某些裝置缺字會把 `✓` 渲染成黑色豆腐方框（tofu）；改 CSS 後任何裝置都不會出現黑方塊。（迭代：填滿白 → `✓` 字元 → 純 CSS 打勾。）
+  - 💡 使用者若「一直看到舊樣式/黑方塊」＝裝置載到舊 bundle：正式站實測無 Service Worker、無 cacheStorage、index.html no-cache，故線上版正確；需**無痕/`?v=` 強制重抓**，PWA 主畫面圖示要**刪除重加**（獨立快取最頑固）。見 [[testing-live-system]]。
 - ✅ **B. 輪播 + 最新公告標題前加館別**（純前端 `MemberHomePage`）：`annGymLabel(gymId)`＝`新竹館`/`士林館`/**`全館`（null，非二元寫法，避免全館誤標士林）**；輪播標題與 `announcements.map` 清單標題皆前綴 `【館別】`。
 - ✅ **C. 公告新增「發布結束時間」`publishUntil`**（後端 `gyms.js` + 前端 `GymsPage`）：
   - **概念釐清（文案對齊）**：`effectiveFrom/effectiveTo`＝休館/營業調整**生效**起訖日（前端標籤「生效開始/結束日期」）；`publishAt`/新增 `publishUntil`＝公告**顯示給會員的發布時段**（標籤「發布開始時間（排程上架）」/「發布結束時間」）。

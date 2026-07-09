@@ -466,6 +466,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **回填舊未確認報名（一次性）**：改版前的報名不會自動出現在待收款（無 transferRecords）。應要求回填 3 筆為**現金**待收款：朱智萩 週一A班(4400)、王登第 週二B班(3850,原LinePay)、王登第 週三B班(3850,原街口)。firebase-admin 建 `transferRecords{paymentMethod:cash, origPaymentMethod, notes, backfilled:true, createdAt=原報名時間}`。**test 練習課(#1周銷售/#3張元賓) 不回填**。
 - ✅ **確認彈窗顯示報名資料供核對**（`TransferConfirmModal`，commit `3ba0559`）：加「原報名選」(`origPaymentMethod`，如原選街口/LinePay)＋備註(`notes`)顯示；現金隱藏匯款欄位、轉帳顯示匯款銀行/末五碼/日期/截圖。滿足「點進去看到當初報名資料才能核對金額/匯款」。
 - ⚠️ 回填的 3 筆現在是 pending 待收款，等值班 operator／管理員實際收款後「確認收款」。
+- ✅ **實機驗證（staff.redrocktaiwan.com，super_admin）**：待辦頁「💰 待收款」顯示 3 筆現金待收款（王登第 週二B/週三B、朱智萩 週一A）＋確認/退回鈕；點確認彈窗＝「💵 確認現金收款」顯示 會員/課程/金額 3850/付款現金/**原報名選 LinePay**/報名時間/📝備註 → 符合「核對金額+看報名資料」。未真的按確認（待實際收款）。
+- ✅ **附帶修徽章**（`PendingTasksPage`，commit `8b75079`）：現金待收款徽章原顯示「轉帳確認」→ 依 `task.method==='cash'` 改「💵 現金確認」。
+
+## 目前進度（2026-07-09 續）— 員工課程列表改兩層（比照會員端）
+> 需求：staff 課程頁也要分兩層——先課程總頁（類別），第二層才各梯資訊。純前端 `CoursesPage`，commit `939f4c5`，staff 已 deploy＋瀏覽器實機驗證。
+- ✅ **兩層結構**（`tab==='courses'`，新增 `selectedCategory` state）：**第一層** 依 `categoryName` 分組一卡（類別名／`N 梯 ›`／價格範圍 min~max／正取合計 enrolled/cap／含已停用註記）；**第二層**（← 返回課程總頁）列該類別各梯次卡，**保留原有動作**（編輯／停用⇄啟用／取消課程／查看名單／刪除、點卡進場次管理）。無類別歸「其他」。
+- **實機驗證**：課程總頁顯示「小蜘蛛人 11梯 NT$4,400~4,950 正取25/66」＋「其他 1梯」→ 點小蜘蛛人 → 11 個梯次卡（週日A/週六B進階/…）動作齊全。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

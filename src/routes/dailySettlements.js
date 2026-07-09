@@ -20,13 +20,15 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     if (!gymId) return res.status(400).json({ error: 'GYM_REQUIRED', message: '請選擇館別' });
     const today = dayjs().format('YYYY-MM-DD');
 
-    // 查今日是否已結帳
+    // 查今日 gym+date 的結帳 doc（同一 doc 承載 draft / settled）
     const existSnap = await db.collection('dailySettlements')
       .where('gymId', '==', gymId)
       .where('date', '==', today)
       .limit(1).get();
-    if (!existSnap.empty)
-      return res.json({ settlement: { id: existSnap.docs[0].id, ...existSnap.docs[0].data() }, alreadySettled: true });
+    const existDoc = existSnap.empty ? null : existSnap.docs[0];
+    // 已正式結帳 → 直接回摘要（含 revisions/resettleCount）
+    if (existDoc && existDoc.data().status === 'settled')
+      return res.json({ settlement: { id: existDoc.id, ...existDoc.data() }, alreadySettled: true });
 
     // 取前日餘額
     const prevSnap = await db.collection('dailySettlements')
@@ -150,7 +152,46 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       status: 'draft',
     };
 
+    // 有暫存檔（status:'draft'）→ 一併回傳供前端載回續填（收入等仍用即時重算的 settlement）
+    if (existDoc && existDoc.data().status === 'draft') {
+      return res.json({ settlement, draft: { id: existDoc.id, ...existDoc.data() }, alreadySettled: false });
+    }
     res.json({ settlement, alreadySettled: false });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── PUT /daily-settlements/draft ── 暫存檔（不擋已結帳判斷、不發差異通知）──
+router.put('/draft', authenticate, requireStationAuth, async (req, res) => {
+  try {
+    const db = getDb();
+    const gymId = req.staff?.role === 'super_admin' ? (req.body.gymId || req.staff?.gymId) : req.staff?.gymId;
+    if (!gymId) return res.status(400).json({ error: 'GYM_REQUIRED', message: '請選擇館別' });
+    const today = dayjs().format('YYYY-MM-DD');
+
+    const existSnap = await db.collection('dailySettlements')
+      .where('gymId', '==', gymId).where('date', '==', today).limit(1).get();
+    const existDoc = existSnap.empty ? null : existSnap.docs[0];
+    if (existDoc && existDoc.data().status === 'settled')
+      return res.json({ alreadySettled: true, message: '今日已結帳，暫存未儲存（請用「當日再次結帳」）' });
+
+    const id = existDoc ? existDoc.id : uuidv4();
+    const b = req.body;
+    const draft = {
+      id, date: today, gymId, status: 'draft',
+      // 暫存表單欄位（不做金額權威計算，僅保存續填）
+      income: b.income || null, payment: b.payment || null,
+      deductions: b.deductions || [], denominations: b.denominations || null,
+      invoiceSegments: Array.isArray(b.invoiceSegments) ? b.invoiceSegments : null,
+      invoiceStartNumber: b.invoiceStartNumber || '', invoiceLastNumber: b.invoiceLastNumber || '',
+      invoiceVoidNumbers: b.invoiceVoidNumbers || '',
+      cardOrangeFirst: b.cardOrangeFirst || '', cardFullFirst: b.cardFullFirst || '',
+      checkinCount: b.checkinCount ?? null, notes: b.notes || '',
+      incomeManual: b.incomeManual || null, paymentManual: b.paymentManual || null,
+      savedBy: req.staff.id, savedByName: req.staff.name, updatedAt: new Date(),
+      createdAt: existDoc ? (existDoc.data().createdAt || new Date()) : new Date(),
+    };
+    await db.collection('dailySettlements').doc(id).set(draft);
+    res.json({ draft, message: '已暫存' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -162,15 +203,25 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
     if (!gymId) return res.status(400).json({ error: 'GYM_REQUIRED', message: '請選擇館別' });
     const today = dayjs().format('YYYY-MM-DD');
 
-    // 確認今日未結帳
+    // 今日 gym+date doc（可能是 draft 或已 settled）；當日再次結帳＝更新同一 doc + revisions
     const existSnap = await db.collection('dailySettlements')
       .where('gymId', '==', gymId).where('date', '==', today).limit(1).get();
-    if (!existSnap.empty)
-      return res.status(400).json({ error: 'ALREADY_SETTLED', message: '今日已結帳' });
+    const existDoc = existSnap.empty ? null : existSnap.docs[0];
+    const wasSettled = existDoc && existDoc.data().status === 'settled';
 
     const { income, payment, deductions, denominations, invoiceLastNumber, notes,
       invoiceStartNumber, invoiceVoidNumbers, cardOrangeFirst, cardFullFirst, checkinCount,
-      incomeManual, paymentManual } = req.body;  // 轉換期手動輸入並列（系統值與手動值都存）
+      incomeManual, paymentManual, invoiceSegments, resettleReason } = req.body;  // 轉換期手動輸入並列（系統值與手動值都存）
+
+    // 發票多段：優先 invoiceSegments 陣列；否則回退舊單段欄位。相容性：仍寫 invoiceStartNumber=首段.start、invoiceLastNumber=末段.last
+    const segments = (Array.isArray(invoiceSegments) && invoiceSegments.length
+      ? invoiceSegments.map(sg => ({ start: String(sg.start ?? '').trim(), last: String(sg.last ?? '').trim() }))
+      : ((invoiceStartNumber || invoiceLastNumber)
+        ? [{ start: String(invoiceStartNumber || '').trim(), last: String(invoiceLastNumber || '').trim() }]
+        : [])
+    ).filter(sg => sg.start || sg.last);
+    const firstStart = segments.length ? segments[0].start : (invoiceStartNumber || '');
+    const lastLast = segments.length ? segments[segments.length - 1].last : (invoiceLastNumber || '');
 
     // 計算實際現金
     const d = denominations || {};
@@ -192,7 +243,7 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
     const expectedCash = prevBalance + effectiveCash + netAdjust;
     const difference = actualCash - expectedCash;
 
-    const id = uuidv4();
+    const id = existDoc ? existDoc.id : uuidv4();
     const settlement = {
       id, date: today, gymId,
       staffId: req.staff.id, staffName: req.staff.name,
@@ -204,9 +255,10 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
       closingCashBalance: actualCash,
       difference,
       differenceAlert: Math.abs(difference) > 200,
-      invoiceLastNumber: invoiceLastNumber || '',
+      invoiceSegments: segments,   // 多段發票
+      invoiceLastNumber: lastLast || '',
       // 月銷售紀錄用：發票起訖/作廢號、票卡最前號、當日 check-in 人數
-      invoiceStartNumber: invoiceStartNumber || '',
+      invoiceStartNumber: firstStart || '',
       invoiceVoidNumbers: invoiceVoidNumbers || '',
       cardOrangeFirst: cardOrangeFirst || '',
       cardFullFirst: cardFullFirst || '',
@@ -214,8 +266,29 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
       notes: notes || '',
       status: 'settled',
       settledAt: new Date(),
-      createdAt: new Date(),
+      createdAt: existDoc ? (existDoc.data().createdAt || new Date()) : new Date(),
     };
+
+    // 當日再次結帳：把上一版存入 revisions（稽核），更新同一 doc、resettleCount+1
+    if (wasSettled) {
+      const p = existDoc.data();
+      const revisions = Array.isArray(p.revisions) ? [...p.revisions] : [];
+      revisions.push({
+        settledAt: p.settledAt || null, staffId: p.staffId || null, staffName: p.staffName || null,
+        income: p.income || null, payment: p.payment || null, deductions: p.deductions || [],
+        denominations: p.denominations || null,
+        actualCashBalance: p.actualCashBalance ?? null, expectedCashBalance: p.expectedCashBalance ?? null,
+        difference: p.difference ?? null,
+        invoiceSegments: p.invoiceSegments || null, invoiceStartNumber: p.invoiceStartNumber || '',
+        invoiceLastNumber: p.invoiceLastNumber || '', invoiceVoidNumbers: p.invoiceVoidNumbers || '',
+      });
+      settlement.revisions = revisions;
+      settlement.resettleCount = (p.resettleCount || 0) + 1;
+      if (resettleReason) settlement.resettleReason = resettleReason;
+    } else {
+      settlement.revisions = (existDoc && existDoc.data().revisions) || [];
+      settlement.resettleCount = 0;
+    }
 
     await db.collection('dailySettlements').doc(id).set(settlement);
 
@@ -237,7 +310,17 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
       await batch.commit();
     }
 
-    res.status(201).json({ settlement, message: Math.abs(difference) > 200 ? `結帳完成，差異 NT$${difference} 已通知管理員` : '結帳完成' });
+    const doneWord = wasSettled ? '已更新今日結帳' : '結帳完成';
+    res.status(201).json({ settlement, resettled: wasSettled, message: Math.abs(difference) > 200 ? `${doneWord}，差異 NT$${difference} 已通知管理員` : `${doneWord}！` });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── DELETE /daily-settlements/:id ── 僅 super_admin，供清理測試資料 ──
+router.delete('/:id', authenticate, checkPermission('super_admin'), async (req, res) => {
+  try {
+    const db = getDb();
+    await db.collection('dailySettlements').doc(req.params.id).delete();
+    res.json({ message: '已刪除結帳紀錄' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -419,16 +502,23 @@ router.get('/invoice-export', authenticate, async (req, res) => {
     aoa.push(['發票字軌', '', '', track]);
     aoa.push(['開立日期', '星期', '交易客次', '開立發票起號', '開立發票迄號', '發票總金額', '作廢發票號碼', '集點卡最前號', '優惠卡最前號', '全票最前號']);
 
+    const segCount = (st, en) => (/^\d+$/.test(String(st)) && /^\d+$/.test(String(en))) ? (parseInt(en, 10) - parseInt(st, 10) + 1) : 0;
     let d = dayjs(start); const last = dayjs(end);
     while (d.isBefore(last.add(1, 'day'))) {
       const dt = d.format('YYYY-MM-DD'); const s = byDate[dt];
-      const st = s?.invoiceStartNumber || '', en = s?.invoiceLastNumber || '';
-      const cnt = (/^\d+$/.test(String(st)) && /^\d+$/.test(String(en))) ? (parseInt(en, 10) - parseInt(st, 10) + 1) : '';
-      aoa.push([
-        d.format('YYYY/MM/DD'), WD[d.day()], s ? cnt : '',
-        st, en, s ? (s.income?.total ?? '') : '', s?.invoiceVoidNumbers || '',
-        '', s?.cardOrangeFirst || '', s?.cardFullFirst || '',
-      ]);
+      if (!s) { aoa.push([d.format('YYYY/MM/DD'), WD[d.day()], '', '', '', '', '', '', '', '']); d = d.add(1, 'day'); continue; }
+      // 多段發票逐段列（無 invoiceSegments 則回退舊單段）；日彙總（客次/金額/卡號）放第一段列
+      const segs = (Array.isArray(s.invoiceSegments) && s.invoiceSegments.length)
+        ? s.invoiceSegments : [{ start: s.invoiceStartNumber || '', last: s.invoiceLastNumber || '' }];
+      const totalCnt = segs.reduce((a, sg) => a + segCount(sg.start, sg.last), 0) || '';
+      segs.forEach((sg, idx) => {
+        aoa.push([
+          idx === 0 ? d.format('YYYY/MM/DD') : '', idx === 0 ? WD[d.day()] : '', idx === 0 ? totalCnt : '',
+          sg.start || '', sg.last || '', idx === 0 ? (s.income?.total ?? '') : '',
+          idx === 0 ? (s.invoiceVoidNumbers || '') : '',
+          '', idx === 0 ? (s.cardOrangeFirst || '') : '', idx === 0 ? (s.cardFullFirst || '') : '',
+        ]);
+      });
       d = d.add(1, 'day');
     }
 

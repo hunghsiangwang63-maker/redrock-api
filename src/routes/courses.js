@@ -877,7 +877,8 @@ router.post('/:courseId/enroll-all',
         batch.set(db.collection('courseEnrollments').doc(enrollmentId), {
           id: enrollmentId,
           memberId,
-          memberName: req.member?.name || req.body.memberName || '',
+          // 報名對象姓名：優先用傳入的 targetName（子女報名時＝子女名），否則登入者本人
+          memberName: req.body.memberName || req.member?.name || '',
           sessionId: s.id,
           courseId,
           courseName: course.name,

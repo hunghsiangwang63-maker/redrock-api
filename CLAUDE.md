@@ -529,6 +529,17 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **C 段 E2E（打 Railway，13/13 實質斷言綠）**：建 `publishUntil`＝過去/未來/無 三公告 → 會員端 `/announcements/all`＋`/:id/announcements` **過期不顯示、未來顯示、無結束時間顯示**；建今日休館 `publishUntil`＝過去 → **`today-status`＝closed（休館不受 publishUntil 過期影響）**、但該公告會員端不顯示。測試 4 公告測後 DELETE、0 殘留。（腳本 `scratchpad/announce-publish-until-e2e.mjs`；第 14 條「清理後非 closed」為誤判——當日 gym-hsinchu 有**真實 `颱風休館`** closure，與測試無關。）
 - 🖥️ **前端實機驗證**（會員 林怡君 首頁）：輪播兩指示器為**空心方框、當前頁填滿**；輪播標題 `【新竹館】颱風休館`、最新公告 `【新竹館】颱風休館`/`【新竹館】營業時間調整` 皆帶館別前綴。
 
+## 目前進度（2026-07-10 續）— 課程轉帳付款期限（+2天）+ 退回待補正 + 逾期自動釋名額
+> 規則：會員轉帳報名 → 付款期限＝報名時間+2天；員工「退回」保留報名（不釋名額）、標待補正、會員可重新上傳但**期限追溯原值不重算**；期限到仍未確認（含退回未補正）→ 自動取消釋名額。後端 `/health` `1.90.0-course-payment-deadline`；E2E（打 Railway）**32/32**；瀏覽器實機驗證通過。commit 後端 `20e46ce`、前端 `f56d604`。
+- ✅ **1) 報名設付款期限**（`courses.js` enroll-all）：`paymentMethod==='transfer' && !候補 && !分期 && !deferPayment && fee>0` → 主報名（idx0）`paymentDeadline=報名時間+2天`（現金櫃檯即時確認、不設）；回前端 `paymentDeadline`。
+- ✅ **2) 退回連動**（`transfers.js` `PUT /:id/reject`）：先讀 transferRecord，標 rejected 後——`orderType==='course' && refId` → enrollment `paymentStatus:'transfer_rejected'`＋`paymentRejectReason`＋`paymentRejectedAt`＋`paymentConfirmed:false`；**保留 status、不釋名額、【不動 paymentDeadline】**（try/catch 不阻斷）。
+- ✅ **3) 重新補正**（`transfers.js` `/transfers/upload`）：course 單先驗**擁有權**（`checkMemberOwnership`，本人/子女，他人 403）再建**新** transferRecord(pending)；enrollment 回 `pending_confirm`、清退回標記，**【paymentDeadline 不變】**（退回→補正不延長）。前端 `MemberCoursesPage` 重用此端點。
+- ✅ **4) 逾期 sweep**（`courseService.sweepExpiredCoursePayments`）：掃 `paymentDeadline<now && paymentConfirmed!==true && status!=='cancelled'`，依 (courseId,memberId) 去重 → `cancelCourseEnrollments` 取消整門課、**釋名額並遞補候補**、作廢該報名未確認 transferRecords（→`expired`）、`cancelReason:'payment_expired'`；**冪等**（已取消者被過濾）。掛每日 9 點排程（`index.js`）＋ `POST /courses/sweep-expired-payments`（super_admin 手動觸發，供測試/補跑）。
+- ✅ **5) 前端**（`MemberCoursesPage` 我的課程）：待付款群組顯示「⏳ 請於 <期限> 前完成付款」（含「轉帳待確認」）；被退回顯示紅框「轉帳被退回：<原因>，請於 <期限> 前重新上傳」＋「重新上傳轉帳」按鈕（開 Modal：末五碼/日期/截圖，標「不會延長付款期限」）；逾期取消群組顯示「因逾期未付款已自動取消」卡（**其他取消仍不顯示幽靈卡**，只 `cancelReason==='payment_expired'` 顯示）。付款期限 `{_seconds}` 以 `tsToDay` 解析。
+- **E2E（打 Railway，firebase-admin 建練習課/會員/backdate/清理，32/32 綠）**：轉帳報名→`paymentDeadline`≈+2天、`enrolledCount=1`；上傳→`pending_confirm`（期限不變）；退回→`transfer_rejected`+原因、`status`仍 confirmed、名額未釋放、期限不變；補正→新單 pending、清標記、期限不變、**他人補正 403**；confirm→`paymentConfirmed`；backdate+sweep→取消、`payment_expired`、名額 2→1、舊單`expired`、**再 sweep 冪等**、已付款會員不受影響。腳本 `_course-payment-e2e.mjs`（測後全清）。
+- 🖥️ **前端實機**（林怡君注入 transfer_rejected 報名）：我的課程顯示「轉帳被退回：匯款末五碼與帳單不符／請於 2026-07-11 23:08 前重新上傳」＋按鈕 → Modal（應付 NT$3,850、末五碼/日期/截圖、「不會延長付款期限」）→ 取消（未送出、測資已清）。
+- ⚠️ **範圍/易錯提醒**：① 退回與補正都**沿用**原 `paymentDeadline`（否則會員退→補永不過期）；② 釋名額走既有 `cancelCourseEnrollments`（含候補遞補），非只扣人數；③ sweep 冪等＋順手把未確認 transferRecords 標 `expired`（不留孤兒單）。**experience/competition/rental 的退回連動未做**（同缺口，本次僅 course）。單堂 workshop（`enrollCourse`）未設 paymentDeadline（主流程走 enroll-all）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

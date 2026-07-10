@@ -1353,6 +1353,25 @@ const cancelCheckIn = async (checkInId, staffId, force = false) => {
     cancelledBy: staffId,
   });
 
+  // 入場費沖銷：原本 confirmCheckIn 對 amountPaid>0 記了一筆 checkin 交易，
+  // 取消時須記負向 refund 沖銷（對齊 cancelCheckin.js），否則營收報表（認列制）會多算已取消入場。
+  // （續約款已由 revertRenewal 沖銷；票券/卡退回不涉及金流交易，故只沖 amountPaid。）
+  if (checkIn.amountPaid > 0) {
+    const { recordTransaction } = require('../utils/revenueLedger');
+    await recordTransaction(db, {
+      gymId: checkIn.gymId,
+      type: 'refund',
+      totalAmount: -checkIn.amountPaid,
+      paymentMethod: checkIn.paymentMethod || 'cash',
+      memberId: checkIn.memberId,
+      memberName: checkIn.memberName,
+      relatedId: checkInId,
+      notes: '入場取消退款',
+      staffId: staffId || null,
+      staffName: null,
+    });
+  }
+
   // 更新對應 pendingCheckIn
   if (checkIn.qrToken) {
     await db.collection(COLLECTIONS.PENDING_CHECK_INS).doc(checkIn.qrToken).update({

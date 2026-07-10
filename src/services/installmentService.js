@@ -127,6 +127,37 @@ const createInstallmentPlan = async ({ memberId, memberName, gymId, relatedType,
   return plan;
 };
 
+// ── 取消分期計畫 + 沖銷已繳期營收 ──────────────────────────────────
+// 供入場取消（buy_pass 分期 / 續約分期）共用：作廢計畫，並把「已 paid 各期」認列過的營收
+// 逐期記負向 refund 沖銷（否則已取消的分期入場仍留 completed 交易 → 營收報表多算）。
+// 冪等：已 cancelled 的計畫直接返回、不重複沖銷。
+const cancelInstallmentPlan = async (db, planId, { reason = '取消' } = {}) => {
+  if (!planId) return { reversed: 0, periods: 0 };
+  const ref = db.collection(COLLECTIONS.INSTALLMENT_PLANS).doc(planId);
+  const doc = await ref.get();
+  if (!doc.exists) return { reversed: 0, periods: 0 };
+  const plan = doc.data();
+  if (plan.status === 'cancelled') return { reversed: 0, periods: 0 }; // 冪等，避免重複沖銷
+  const now = new Date();
+  const { recordTransaction } = require('../utils/revenueLedger');
+  let reversed = 0, periods = 0;
+  for (const p of (plan.installments || [])) {
+    if (p.status === 'paid' && plan.gymId && p.amount > 0) {
+      await recordTransaction(db, {
+        gymId: plan.gymId, type: 'refund', totalAmount: -Math.abs(p.amount),
+        paymentMethod: p.paymentMethod || 'cash',
+        memberId: plan.memberId, memberName: plan.memberName || '',
+        relatedId: plan.relatedId || plan.id,
+        notes: `分期取消沖銷-${plan.itemName}（第${p.seq}期）`,
+        recognitionDate: plan.relatedType === 'course' ? (plan.recognitionDate || null) : null,
+      }).catch(() => {});
+      reversed += p.amount; periods++;
+    }
+  }
+  await ref.update({ status: 'cancelled', cancelledAt: now, cancelReason: reason, updatedAt: now });
+  return { reversed, periods };
+};
+
 // ── 標記某期已繳款 ────────────────────────────────────────────────
 const markInstallmentPaid = async ({ planId, seq, paymentMethod, staffId, staffName }) => {
   if (!VALID_PAYMENT_METHODS.includes(paymentMethod)) {
@@ -312,6 +343,7 @@ module.exports = {
   buildPeriodsFromConfig,
   buildRenewalPeriods,
   createInstallmentPlan,
+  cancelInstallmentPlan,
   markInstallmentPaid,
   runOverdueCheck,
   sendInstallmentReminders,

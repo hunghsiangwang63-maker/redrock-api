@@ -41,7 +41,13 @@ const restoreEntryCredits = async (db, checkIn) => {
     // 購買新定期票入場取消：作廢對應定期票（與 checkinService.cancelCheckIn 一致）
     const passSnap = await db.collection('memberPasses').where('paymentId', '==', checkIn.id).limit(1).get();
     if (!passSnap.empty) {
-      await passSnap.docs[0].ref.update({ status: 'cancelled', cancelledAt: now, cancelReason: '入場取消', updatedAt: now });
+      const passDoc = passSnap.docs[0];
+      await passDoc.ref.update({ status: 'cancelled', cancelledAt: now, cancelReason: '入場取消', updatedAt: now });
+      // 分期購票：作廢分期計畫 + 沖銷已繳期營收（與 checkinService.cancelCheckIn 一致）
+      const planId = passDoc.data().installmentPlanId;
+      if (planId) {
+        await require('../services/installmentService').cancelInstallmentPlan(db, planId, { reason: '入場取消' }).catch(() => {});
+      }
     }
   }
   // 續約附加還原（獨立於 entryType，任何入場只要帶 renewMeta 都要復原票期/分期/營收）

@@ -1232,9 +1232,8 @@ const revertRenewal = async (db, checkIn, now) => {
     });
   }
   if (meta.planId) {
-    await db.collection(COLLECTIONS.INSTALLMENT_PLANS).doc(meta.planId)
-      .update({ status: 'cancelled', cancelledAt: now, cancelReason: '續約取消', updatedAt: now })
-      .catch(() => {});
+    // 續約分期：作廢計畫 + 沖銷已繳期營收（首期由 createInstallmentPlan 認列，取消須沖）
+    await require('./installmentService').cancelInstallmentPlan(db, meta.planId, { reason: '續約取消' }).catch(() => {});
   }
   if (meta.plan === 'full' && meta.renewalPrice > 0) {
     const { recordTransaction } = require('../utils/revenueLedger');
@@ -1333,12 +1332,10 @@ const cancelCheckIn = async (checkInId, staffId, force = false) => {
       await passDoc.ref.update({
         status: 'cancelled', cancelledAt: now, cancelReason: '入場取消', updatedAt: now,
       });
-      // 分期購票：一併作廢分期計畫（否則會留下「欠款/逾期擋入場」的孤兒計畫）
+      // 分期購票：作廢分期計畫 + 沖銷已繳期營收（否則留孤兒計畫、且首期票價營收未沖 → 報表多算）
       const planId = passDoc.data().installmentPlanId;
       if (planId) {
-        await db.collection(COLLECTIONS.INSTALLMENT_PLANS).doc(planId)
-          .update({ status: 'cancelled', cancelledAt: now, cancelReason: '入場取消', updatedAt: now })
-          .catch(() => {});
+        await require('./installmentService').cancelInstallmentPlan(db, planId, { reason: '入場取消' }).catch(() => {});
       }
     }
   }

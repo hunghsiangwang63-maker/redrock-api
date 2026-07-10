@@ -538,7 +538,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **5) 前端**（`MemberCoursesPage` 我的課程）：待付款群組顯示「⏳ 請於 <期限> 前完成付款」（含「轉帳待確認」）；被退回顯示紅框「轉帳被退回：<原因>，請於 <期限> 前重新上傳」＋「重新上傳轉帳」按鈕（開 Modal：末五碼/日期/截圖，標「不會延長付款期限」）；逾期取消群組顯示「因逾期未付款已自動取消」卡（**其他取消仍不顯示幽靈卡**，只 `cancelReason==='payment_expired'` 顯示）。付款期限 `{_seconds}` 以 `tsToDay` 解析。
 - **E2E（打 Railway，firebase-admin 建練習課/會員/backdate/清理，32/32 綠）**：轉帳報名→`paymentDeadline`≈+2天、`enrolledCount=1`；上傳→`pending_confirm`（期限不變）；退回→`transfer_rejected`+原因、`status`仍 confirmed、名額未釋放、期限不變；補正→新單 pending、清標記、期限不變、**他人補正 403**；confirm→`paymentConfirmed`；backdate+sweep→取消、`payment_expired`、名額 2→1、舊單`expired`、**再 sweep 冪等**、已付款會員不受影響。腳本 `_course-payment-e2e.mjs`（測後全清）。
 - 🖥️ **前端實機**（林怡君注入 transfer_rejected 報名）：我的課程顯示「轉帳被退回：匯款末五碼與帳單不符／請於 2026-07-11 23:08 前重新上傳」＋按鈕 → Modal（應付 NT$3,850、末五碼/日期/截圖、「不會延長付款期限」）→ 取消（未送出、測資已清）。
-- ⚠️ **範圍/易錯提醒**：① 退回與補正都**沿用**原 `paymentDeadline`（否則會員退→補永不過期）；② 釋名額走既有 `cancelCourseEnrollments`（含候補遞補），非只扣人數；③ sweep 冪等＋順手把未確認 transferRecords 標 `expired`（不留孤兒單）。**experience/competition/rental 的退回連動未做**（同缺口，本次僅 course）。單堂 workshop（`enrollCourse`）未設 paymentDeadline（主流程走 enroll-all）。
+- ⚠️ **範圍/易錯提醒**：① 退回與補正都**沿用**原 `paymentDeadline`（否則會員退→補永不過期）；② 釋名額走既有 `cancelCourseEnrollments`（含候補遞補），非只扣人數；③ sweep 冪等＋順手把未確認 transferRecords 標 `expired`（不留孤兒單）。單堂 workshop（`enrollCourse`）未設 paymentDeadline（主流程走 enroll-all）。**（experience/competition/rental 退回連動已於 1.91.0 補上，見下。）**
+
+## 目前進度（2026-07-10 續）— 轉帳退回連動擴及 experience/competition/rental
+> 承上：原「退回」只連動 course，補上 experience/competition/rental（比照 course 標記待補正、可重新上傳）。純後端 `transfers.js`。後端 `/health` `1.91.0-transfer-reject-all-orders`；E2E（打 Railway）**35/35**；commit `f6998aa`。
+- ✅ **抽 `REJECTABLE_COLL`**（course/experience/competition/rental → 各底層集合；team_member 不納入，其活動化流程另計）。三處通用化：
+  - **退回** `PUT /transfers/:id/reject`：訂單 `paymentStatus:'transfer_rejected'`＋`paymentRejectReason`＋`paymentRejectedAt`＋`paymentConfirmed:false`；**保留訂單狀態、不釋放/不作廢**（course 另不動 `paymentDeadline`）。
+  - **重新補正** `/transfers/upload`：通用驗**擁有權**（`checkMemberOwnership` 訂單 `memberId`，本人/子女，他人 403）→ 建新單 + 訂單回 `pending_confirm`、清退回標記（course 仍不動 `paymentDeadline`）。
+  - **確認收款** `PUT /:id/confirm`：各型別確認 side-effect 一併清退回標記（`paymentConfirmed:true`、清 `paymentRejectReason`、`paymentStatus:'confirmed'`）→ 避免曾退回的訂單確認後殘留 `transfer_rejected`。
+- **E2E（打 Railway，35/35 綠）**：experience/competition/rental 各跑 上傳→退回(訂單 `transfer_rejected`+原因、status 未變/未釋放)→**他人補正 403**→重新上傳(回 `pending_confirm`、清原因)→確認(→`confirmed`+`paymentConfirmed`+清標記)。firebase-admin 注入最小訂單、測後全清、0 殘留。腳本 `_transfer-reject-all-e2e.mjs`。
+- 註：本次為**後端連動**；experience/competition/rental 會員端「被退回→重新上傳」的**前端 UI 未做**（course 已做，其餘沿用 `/transfers/upload` 端點、要接前端隨時可用）。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

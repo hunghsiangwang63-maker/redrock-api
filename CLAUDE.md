@@ -616,6 +616,18 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **入場費拆細項**：`SettlementSummary` 新增「總金額分項（系統紀錄）」——**入場（含 `entryItems` 細項：成人單次購票/學生/兒童/優惠券…）**／課程／裝備銷售／出租／定期票（含 `passItems`）。（今日收入卡本就渲染 entryItems，這次摘要/確認/歷史也一併有）。
 - ✅ **歷史紀錄單天下拉結帳摘要**：`歷史紀錄` 每天卡片可點展開（`expandedDay`）→ 顯示完整 `SettlementSummary`（發票總金額手計/系統、**總金額分項 入場/課程/裝備銷售/出租/定期票**、加減項、實際現金、差異、發票號碼）。super_admin 於歷史點單天即可下拉核對。
 - 🖥️ **瀏覽器實機驗證**（Sean/新竹館）：今日已結帳摘要顯示「手計 7,081·系統 2,480·差 4,601」＋分項（裝備銷售 2,480）；歷史 2026-07-09 展開→「手計 11,430·系統 2,780·差 8,650」＋**入場 300·單次購票 300**（細項）＋裝備銷售 2,480。
+- ✅ **總金額分項並列手動/系統**（純前端 `DailySettlementPage`，commit `fc318e1`）：`SettlementSummary` 加 `incomeManual`，轉換期各分項（入場/課程/裝備/出租/定期票）顯示「手動 X · 系統 Y」（不一致紅字）；無手動輸入則只顯示系統。三處摘要都帶。
+
+## 目前進度（2026-07-10 續）— 診斷「營收報表今日營收 ≠ 結帳」→ 修取消入場不沖銷 bug
+> 使用者問為何營收報表今日營收與結帳不吻合。查底層資料釐清「結構性差異」vs「實質 bug」，清掉測試殘留，並修好一個真 bug。後端 `/health` `1.94.0-cancel-checkin-refund`；E2E（打 Railway）8/8。
+- 📋 **不吻合的兩層原因**（新竹 7/10 實查：營收報表 3,270 vs 結帳 2,480，差額全在「入場」）：
+  - **① 測試殘留（本次差額主因）**：當天 9 筆入場中 8 筆已取消（我做入場 E2E 建了又清的），但取消是用 firebase-admin 直接清、**沒走正式取消流程沖銷交易**（當天 refund 交易 0 筆）→ 那些 `completed` 的 checkin 交易留著灌水 690＋殘留 100。已 firebase-admin 硬刪 8 筆已取消入場＋8 筆孤兒 checkin 交易 → 營收報表回到實際 **2,480**、與結帳吻合。
+  - **② 結構性差異（設計本然、就算沒殘留也不會恆等）**：結帳入場走 `checkIns` 集合（排除取消）、商品走 `productSales`；營收報表一律走 `transactions`（認列制）＋可切全館＋含比賽/退款沖銷/購票等類別；且結帳是「settle 當下快照」，之後收款不自動更新（要當日再次結帳）。
+- ✅ **修真 bug：取消入場不沖銷入場費交易**（`checkinService.cancelCheckIn`，commit `a715a85`）：
+  - **根因**：兩條取消路徑帳務分岔——`routes/cancelCheckin.js`（`/cancel-checkins/` 自助送審＋`/:id/approve` 管理員核准）在 `amountPaid>0` **有**記負向 refund；但**主要路徑** `POST /checkin/cancel`→`checkinService.cancelCheckIn`（員工入場頁「取消入場/強制取消」按鈕、會員自助 `api/checkin.js` 都走這條）只退票券/卡、**沒對入場費記負向 refund** → 已取消的付費入場仍留 `completed` 交易 → **營收報表(認列制)多算**（結帳讀 checkIns 排除取消、不受影響）。
+  - **修**：`cancelCheckIn` 標記取消後補「`amountPaid>0` → 記 `type:'refund', totalAmount:-amountPaid, relatedId:checkInId`」（續約款已由 `revertRenewal` 沖銷、票券退回不涉金流，故只沖 `amountPaid`），與 `cancelCheckin.js` 對齊。
+  - **E2E（打 Railway，8/8）**：注入付費入場（現金 300）＋checkin 交易 → `POST /checkin/cancel force` 200 → checkIn `isCancelled`、產生 refund `-300`（relatedId 對上、completed）、此筆對營收淨貢獻 checkin(+300)+refund(-300)=**0**、營收 total 較取消前下降 300。腳本 `scratchpad/cancel-refund-e2e.mjs`，測後 0 殘留。
+  - ⚠️ **注意**：買定期票一次付清（`buy_pass` 全額）票價記在**另一筆** `type:'pass'` 交易，此沖銷與既有 `cancelCheckin.js` 一樣**只沖 `amountPaid`（入場費）**、不沖 pass 票價交易（buy_pass 分支已作廢定期票、分期計畫；一次付清票價沖銷屬另一個未處理缺口，範圍外）。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

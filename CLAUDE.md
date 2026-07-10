@@ -633,6 +633,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **修**：新增 `installmentService.cancelInstallmentPlan(db, planId, {reason})`——作廢計畫 + 逐期把 `status:'paid'` 的期數記負向 `type:'refund'` 沖銷（`relatedId=plan.relatedId`）；**冪等**（已 cancelled 不重複沖）。接入三處取消路徑：`checkinService.cancelCheckIn` 的 buy_pass 分支、`revertRenewal` 續約分期分支、`cancelCheckin.js` `restoreEntryCredits` buy_pass 分支（後者原本連分期計畫都沒作廢→順手補上）。
   - **E2E（打 Railway，10/10）**：A. buy_pass 分期（首期 2534）→ `/checkin/cancel force` → 定期票+計畫 cancelled、產生 refund −2534、passA 營收淨額 **0**；B. 續約分期（首期 3040）→ 計畫 cancelled、票期還原 2026-07-12、refund −3040、passB 淨額 **0**。腳本 `scratchpad/cancel-pass-installment-e2e.mjs`，測後 0 殘留。
 
+## 目前進度（2026-07-10 續）— 我的票券失效區拆「已使用/已用完」與「已失效」兩獨立折疊區（純前端 `redrock-web`）
+> 讓用過的票券（有使用紀錄）不再被埋在單一混合「已失效」清單最底。純前端 `MemberPassesPage.jsx`，commit `8765d1e`，member/staff 皆 deploy。
+- ✅ **折疊區泛化**：`renderExpiredSection` → `renderCollapseSection(items, type, keySuffix, title, render)`，展開 state key 用 `${type}:${keySuffix}`（`type:used` / `type:expired` **各自獨立展開、不連動**）。
+- ✅ **失效再細分**：`splitInvalid` 以**單一真相** `invalidReason` 分——**consumed**（已使用/已用完）vs **dead**（已取消/已過期/已失效）；`sortConsumed` 讓 consumed 依 `usedAt`（單日券/紅利）或 `updatedAt`（優惠卡/黑卡）desc 排序（最近用的在最上）。
+- ✅ **5 分頁 body** 改「有效 → 已使用/已用完 → 已失效」三段；consumed 為空該區自動隱藏 → **定期票/紅利無 consumed 時只剩「已失效」、行為不變**。單日券/紅利 consumed 標題「已使用」、優惠卡/黑卡「已用完」。
+- **不動**：`isValidTicket`/`splitValid`/`invalidReason`/`TicketDetailModal`；有效券區塊原樣。
+- ⚠️ **驗證**：build 兩 target 通過、資料側以複製前端 `invalidReason` 打正式資料分類驗證（林怡君單日券 10→有效 1、失效 9 正確歸 dead）。**瀏覽器實機未跑**——Claude 瀏覽器擴充當下未連線，且林怡君帳上目前 0 筆 consumed（全為已取消）→ 無法呈現兩區並列；使用者確認驗證沒問題、免實機。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

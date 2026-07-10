@@ -5,9 +5,10 @@ const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
-const { authenticate, authenticateAny, checkPermission, requireManagerOrStation } = require('../middleware/auth');
+const { authenticate, authenticateAny, authenticateMember, checkPermission, requireManagerOrStation } = require('../middleware/auth');
 const checkinService = require('../services/checkinService');
 const memberService = require('../services/memberService');
+const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
 
@@ -149,6 +150,45 @@ router.post('/qr/confirm',
     }
   }
 );
+
+// ── GET /checkin/qr/status/:qrToken - 會員輪詢自己 QR 的入場狀態 ──
+// 會員產 QR 後輪詢：pending→confirmed（店員已確認）/cancelled/expired。驗擁有權（本人或子女）。
+router.get('/qr/status/:qrToken', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection(COLLECTIONS.PENDING_CHECK_INS).doc(req.params.qrToken).get();
+    if (!doc.exists) return res.json({ status: 'expired' }); // QR 逾時後 pending 可能已清；視為過期
+    const p = doc.data();
+    // 擁有權：會員只能查自己或子女的 QR（員工 token 放行）
+    if (req.member) {
+      const deny = await checkMemberOwnership(req.member, p.memberId, { onMissing: 'allow' });
+      if (deny) return res.status(deny.status).json(deny.body);
+    }
+    let status = p.status;
+    // 仍 pending 但已過 expiresAt（30 分）→ 視為過期，讓前端停止輪詢
+    if (status === 'pending' && p.expiresAt) {
+      const exp = p.expiresAt.toDate ? p.expiresAt.toDate() : new Date(p.expiresAt);
+      if (dayjs().isAfter(dayjs(exp))) status = 'expired';
+    }
+    res.json({ status, gymId: p.gymId || null, checkInId: p.checkInId || null });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /checkin/my-today - 會員首頁橫幅：今日是否已入場（台灣日、未取消）──
+router.get('/my-today', authenticateMember, async (req, res) => {
+  try {
+    const db = getDb();
+    const todayStart = new Date(taiwanToday() + 'T00:00:00+08:00');
+    // 單欄位等值查（memberId），記憶體過濾今日/未取消（避免 memberId+checkedInAt 複合索引）
+    const snap = await db.collection(COLLECTIONS.CHECK_INS).where('memberId', '==', req.member.id).get();
+    const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .filter(c => c.isCancelled !== true && c.checkedInAt && (c.checkedInAt.toDate ? c.checkedInAt.toDate() : new Date(c.checkedInAt)) >= todayStart)
+      .sort((a, b) => (b.checkedInAt?.toMillis?.() || 0) - (a.checkedInAt?.toMillis?.() || 0));
+    if (rows.length === 0) return res.json({ checkedIn: false });
+    const latest = rows[0];
+    res.json({ checkedIn: true, gymId: latest.gymId || null, checkedInAt: latest.checkedInAt, checkInId: latest.id });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
 
 // ── POST /checkin/cancel ─────────────────────────────────────────
 router.post('/cancel',

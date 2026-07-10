@@ -627,7 +627,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **根因**：兩條取消路徑帳務分岔——`routes/cancelCheckin.js`（`/cancel-checkins/` 自助送審＋`/:id/approve` 管理員核准）在 `amountPaid>0` **有**記負向 refund；但**主要路徑** `POST /checkin/cancel`→`checkinService.cancelCheckIn`（員工入場頁「取消入場/強制取消」按鈕、會員自助 `api/checkin.js` 都走這條）只退票券/卡、**沒對入場費記負向 refund** → 已取消的付費入場仍留 `completed` 交易 → **營收報表(認列制)多算**（結帳讀 checkIns 排除取消、不受影響）。
   - **修**：`cancelCheckIn` 標記取消後補「`amountPaid>0` → 記 `type:'refund', totalAmount:-amountPaid, relatedId:checkInId`」（續約款已由 `revertRenewal` 沖銷、票券退回不涉金流，故只沖 `amountPaid`），與 `cancelCheckin.js` 對齊。
   - **E2E（打 Railway，8/8）**：注入付費入場（現金 300）＋checkin 交易 → `POST /checkin/cancel force` 200 → checkIn `isCancelled`、產生 refund `-300`（relatedId 對上、completed）、此筆對營收淨貢獻 checkin(+300)+refund(-300)=**0**、營收 total 較取消前下降 300。腳本 `scratchpad/cancel-refund-e2e.mjs`，測後 0 殘留。
-  - ⚠️ **注意**：買定期票一次付清（`buy_pass` 全額）票價記在**另一筆** `type:'pass'` 交易，此沖銷與既有 `cancelCheckin.js` 一樣**只沖 `amountPaid`（入場費）**、不沖 pass 票價交易（buy_pass 分支已作廢定期票、分期計畫；一次付清票價沖銷屬另一個未處理缺口，範圍外）。
+  - ℹ️ **更正**：原以為「buy_pass 一次付清票價記在另一筆 `type:'pass'` 交易、未沖」——查證後**錯**：buy_pass 一次付清票價其實在 `amountPaid` 內（`checkinService.js:1159`）、由 `type:'checkin'` 交易記，**已由本次沖銷涵蓋**。真正未沖的是**分期首期**（見下一段修復）。
+- ✅ **續補：取消入場沖銷定期票分期首期營收**（`/health 1.95.0-cancel-pass-installment-refund`，commit `d43b6a5`；E2E 10/10）：
+  - **釐清四種定期票收款的沖銷歸屬**：`buy_pass` 一次付清＝票價在 `amountPaid`→checkin 交易（1.94 已沖）｜`buy_pass` 分期＝首期由 `createInstallmentPlan` 記 `type:'pass'`（**原未沖**）｜續約一次付清＝`revertRenewal` full 分支記 −renewalPrice（已沖）｜續約分期＝首期由 `createInstallmentPlan` 記（**原未沖**）。分期時 `amountPaid` 只含加購（岩鞋/粉袋），與首期票價不重疊。
+  - **修**：新增 `installmentService.cancelInstallmentPlan(db, planId, {reason})`——作廢計畫 + 逐期把 `status:'paid'` 的期數記負向 `type:'refund'` 沖銷（`relatedId=plan.relatedId`）；**冪等**（已 cancelled 不重複沖）。接入三處取消路徑：`checkinService.cancelCheckIn` 的 buy_pass 分支、`revertRenewal` 續約分期分支、`cancelCheckin.js` `restoreEntryCredits` buy_pass 分支（後者原本連分期計畫都沒作廢→順手補上）。
+  - **E2E（打 Railway，10/10）**：A. buy_pass 分期（首期 2534）→ `/checkin/cancel force` → 定期票+計畫 cancelled、產生 refund −2534、passA 營收淨額 **0**；B. 續約分期（首期 3040）→ 計畫 cancelled、票期還原 2026-07-12、refund −3040、passB 淨額 **0**。腳本 `scratchpad/cancel-pass-installment-e2e.mjs`，測後 0 殘留。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

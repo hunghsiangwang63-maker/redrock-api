@@ -15,6 +15,15 @@ const { v4: uuidv4 } = require('uuid');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
+// 可「退回待補正」的訂單型別 → 底層集合。退回時標記 transfer_rejected（保留訂單、不釋放）；
+// 重新上傳時清標記回 pending_confirm；確認收款時清標記為 confirmed。team_member 不納入（活動化流程另計）。
+const REJECTABLE_COLL = {
+  course: 'courseEnrollments',
+  experience: 'experienceBookings',
+  competition: 'competitionRegistrations',
+  rental: 'equipmentRentals',
+};
+
 // POST /transfers/upload - 會員提交轉帳待確認（截圖或填寫資料皆可，擇一即可）
 router.post('/upload', authenticateAny, upload.single('screenshot'), async (req, res) => {
   try {
@@ -36,14 +45,16 @@ router.post('/upload', authenticateAny, upload.single('screenshot'), async (req,
     const resolvedOrderType = orderType || (enrollmentId ? 'course' : null);
     const resolvedRefId = refId || enrollmentId || null;
 
-    // 課程補正：會員只能為自己/子女的報名上傳（在建立轉帳單前先驗證，避免產生孤兒單）
-    let courseEnrollment = null;
-    if (resolvedOrderType === 'course' && resolvedRefId) {
-      const enDoc = await db.collection('courseEnrollments').doc(resolvedRefId).get();
-      if (enDoc.exists) {
-        courseEnrollment = enDoc.data();
-        if (req.member) {
-          const deny = await checkMemberOwnership(req.member, courseEnrollment.memberId, { onMissing: 'allow' });
+    // 補正：會員只能為自己/子女的訂單上傳（在建立轉帳單前先驗證，避免產生孤兒單）。
+    // 適用 course/experience/competition/rental；有訂單且帶 memberId 才驗擁有權。
+    let linkedOrder = null;
+    const linkedColl = REJECTABLE_COLL[resolvedOrderType];
+    if (linkedColl && resolvedRefId) {
+      const oDoc = await db.collection(linkedColl).doc(resolvedRefId).get();
+      if (oDoc.exists) {
+        linkedOrder = oDoc.data();
+        if (req.member && linkedOrder.memberId) {
+          const deny = await checkMemberOwnership(req.member, linkedOrder.memberId, { onMissing: 'allow' });
           if (deny) return res.status(deny.status).json(deny.body);
         }
       }
@@ -82,18 +93,18 @@ router.post('/upload', authenticateAny, upload.single('screenshot'), async (req,
     };
     await db.collection('transferRecords').doc(id).set(transfer);
 
-    // 課程：上傳/重新上傳轉帳 → enrollment 回「待確認」(pending_confirm)、清除退回標記；
-    // 【不重設 paymentDeadline】（沿用報名時的原期限，退回→補正不延長時間）。
-    if (courseEnrollment && resolvedRefId) {
+    // 上傳/重新上傳轉帳 → 訂單回「待確認」(pending_confirm)、清除退回標記；
+    // 【course 不重設 paymentDeadline】（沿用報名時原期限，退回→補正不延長時間）。
+    if (linkedOrder && linkedColl && resolvedRefId) {
       try {
-        await db.collection('courseEnrollments').doc(resolvedRefId).update({
+        await db.collection(linkedColl).doc(resolvedRefId).update({
           paymentStatus: 'pending_confirm',
           paymentRejectReason: null,
           paymentRejectedAt: null,
           paymentConfirmed: false,
           updatedAt: now,
         });
-      } catch (e) { console.error('course transfer upload link:', e.message); }
+      } catch (e) { console.error('transfer upload link:', e.message); }
     }
 
     res.status(201).json({ transfer, message: '已提交，等待工作人員確認收款' });
@@ -150,23 +161,27 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
     // 依訂單型別確認底層付款（side-effect 失敗不阻斷收款確認）
     try {
       const by = req.staff.id, byName = req.staff.name;
+      // 確認收款一律清掉退回/待補正標記（paymentConfirmed:true、清 paymentRejectReason），
+      // 避免曾被退回的訂單確認後仍殘留 transfer_rejected/pending_confirm 狀態。
+      const clearReject = { paymentConfirmed: true, paymentRejectReason: null, paymentRejectedAt: null };
       if (t.orderType === 'experience' && t.refId) {
         await db.collection('experienceBookings').doc(t.refId).update({
-          status: 'confirmed', confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
+          status: 'confirmed', paymentStatus: 'confirmed', ...clearReject,
+          confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
         });
       } else if (t.orderType === 'course' && t.refId) {
         // 課程營收已於報名時(courses.js enroll, deferPayment=false)記入(認列＝最後一堂課)，此處僅標記付款確認
-        await db.collection('courseEnrollments').doc(t.refId).update({ paymentConfirmed: true, updatedAt: now });
+        await db.collection('courseEnrollments').doc(t.refId).update({ paymentStatus: 'confirmed', ...clearReject, updatedAt: now });
       } else if (t.orderType === 'competition' && t.refId) {
         await db.collection('competitionRegistrations').doc(t.refId).update({
-          paymentStatus: 'confirmed', paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,
+          paymentStatus: 'confirmed', ...clearReject, paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,
         });
         // 記比賽營收（預收，認列在比賽前一天）；helper 冪等
         try { await require('../services/competitionService').recordCompetitionRevenue({ db, regId: t.refId, sign: 1, staffId: by, staffName: byName }); }
         catch (e) { console.error('比賽轉帳記帳失敗', e.message); }
       } else if (t.orderType === 'rental' && t.refId) {
         await db.collection('equipmentRentals').doc(t.refId).update({
-          paymentStatus: 'confirmed', status: 'active', confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
+          paymentStatus: 'confirmed', status: 'active', ...clearReject, confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
         });
       } else if (t.orderType === 'team_member' && t.refId) {
         const appRef = db.collection('teamApplications').doc(t.refId);
@@ -200,11 +215,12 @@ router.put('/:id/reject', authenticate, async (req, res) => {
       status: 'rejected', rejectedBy: req.staff.id,
       rejectedAt: now, updatedAt: now, rejectReason: reason,
     });
-    // 課程：退回＝標記「待補正」，【保留 enrollment.status、不釋放名額】、【不動 paymentDeadline】（沿用報名時原期限）
-    // → 會員可重新上傳轉帳（走 /transfers/upload），期限一過仍未確認由 sweep 自動取消。
+    // 退回＝標記底層訂單「待補正」（course/experience/competition/rental 共用同一組欄位）：
+    // 【保留訂單狀態、不釋放名額/不作廢】、【course 不動 paymentDeadline】（沿用原期限）。
+    // → 會員可重新上傳轉帳（走 /transfers/upload）；course 期限一過仍未確認由 sweep 自動取消。
     try {
-      if (t.orderType === 'course' && t.refId) {
-        await db.collection('courseEnrollments').doc(t.refId).update({
+      if (t.orderType && t.refId && REJECTABLE_COLL[t.orderType]) {
+        await db.collection(REJECTABLE_COLL[t.orderType]).doc(t.refId).update({
           paymentStatus: 'transfer_rejected',
           paymentRejectReason: reason,
           paymentRejectedAt: now,
@@ -212,7 +228,7 @@ router.put('/:id/reject', authenticate, async (req, res) => {
           updatedAt: now,
         });
       }
-    } catch (e) { console.error('transfer reject side-effect(course):', e.message); }
+    } catch (e) { console.error('transfer reject side-effect:', e.message); }
     res.json({ message: '已退回，會員可重新上傳轉帳' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

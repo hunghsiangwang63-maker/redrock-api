@@ -598,7 +598,20 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **A. 分頁數字只算「有效」張數**：抽 `isValidTicket(item,type)`——定期票 `active && endDate>=今天`；單日券 `active && (無 expiresAt||未過期)`；優惠卡/黑卡/舊折扣卡 `未取消 && isActive!==false && remainingCredits>0 && 未過期`；紅利 `未用 && 未過期`。TABS count 改 `splitValid(...).valid.length`。（例：林怡君單日券 10 筆(9 取消+1 有效)→**顯示 1**）。
 - ✅ **B. 失效票券收折疊區**：每分頁 `splitValid` 分有效/失效；有效正常顯示、失效（已過期/已使用/已取消/已用完）收進**「已失效（N）」折疊區**（放底部、**預設收合**、可展開）；失效卡淡化＋小標籤（`invalidReason`）、**仍可點開詳情**。抽 `renderPassCard/DiscountCard/BlackCard/SingleCard/BonusCard` 共用於有效與失效區（`renderExpiredSection`/`invalidBadge` 用函式回傳 JSX，避免元件內定義元件 remount）。
 - ✅ **C. 補定期票/舊折扣卡使用紀錄**：詳情 Modal 白名單加 `'pass'`＋`'legacy_discount'`。**定期票卡改可點開詳情**（保留申請鈕、`stopPropagation`），Modal 標題顯示票種+效期、歷程標「**入場紀錄**」且**無限次不顯示 -1 次**（取消只標「入場取消」）；**舊折扣卡**以 `source==='legacy'` 判定→卡片標「舊折扣卡」、`ticketType='legacy_discount'`、Modal 標題「舊折扣卡」、可移轉。history 走 1.92.0（`ticket.id` 比對 passId/discountCardId 任一欄位）。
-- 🖥️ **瀏覽器實機驗證**（林怡君）：單日券分頁數字 **1**（非 10）、失效 9 筆收「已失效（9）」折疊、展開見淡化卡＋「已取消」；注入半年票→定期票卡「點擊查看使用紀錄」→Modal「半年票（全館）/入場紀錄/新竹館 2026-07-08 10:30（無 -1 次）」；注入 `source:legacy` 卡→顯示「舊折扣卡 3 次」、Modal 標題「舊折扣卡·剩餘3次」＋申請移轉鈕。測試注入資料已清。：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
+- 🖥️ **瀏覽器實機驗證**（林怡君）：單日券分頁數字 **1**（非 10）、失效 9 筆收「已失效（9）」折疊、展開見淡化卡＋「已取消」；注入半年票→定期票卡「點擊查看使用紀錄」→Modal「半年票（全館）/入場紀錄/新竹館 2026-07-08 10:30（無 -1 次）」；注入 `source:legacy` 卡→顯示「舊折扣卡 3 次」、Modal 標題「舊折扣卡·剩餘3次」＋申請移轉鈕。測試注入資料已清。
+
+## 目前進度（2026-07-10 續）— 會員 QR 入場：掃描確認後自動跳首頁 + 首頁「已入場」橫幅
+> 會員產 QR 後無從得知店員是否已確認入場；補會員輪詢＋首頁今日入場橫幅。後端 `/health` `1.93.0-checkin-qr-status-my-today`；E2E 11/11；commit 後端 `ef0c013`、前端 `bad8577`。
+- ✅ **後端兩端點**（`checkin.js`）：
+  - `GET /checkin/qr/status/:qrToken`（`authenticateAny`，會員輪詢）：讀 `pendingCheckIns.doc(qrToken)`→回 `{status,gymId,checkInId}`；**驗擁有權**（本人/子女 `checkMemberOwnership`，他人 403）；仍 `pending` 但過 `expiresAt`(30 分)→`expired`；不存在→`expired`。
+  - `GET /checkin/my-today`（`authenticateMember`）：查 `checkIns where memberId==` + 記憶體過濾（今日台灣日、`isCancelled!==true`）取最新→`{checkedIn,gymId,checkedInAt,checkInId}`（避複合索引）。
+- ✅ **前端 A（`MemberQRPage`）**：產 QR 後每 3 秒輪詢 status——`confirmed`→清 interval→`navigate('/member/home')`；`cancelled`/`expired`→停並提示；**卸載/QR 變更 `clearInterval`**（不無限輪詢）。文案改「掃描確認後會自動完成入場並跳回首頁」。
+- ✅ **前端 B（`MemberHomePage`）**：進頁抓 `/checkin/my-today`，`checkedIn`→頂部綠橫幅「✅ 已於 <館名> 完成入場」。**全天顯示、資料源自後端 checkIns**（非前端旗標）→隔日午夜後自然消失、入場被取消則橫幅消失。`api/checkin.js` 加 `getQrStatus/getMyToday`。
+- **E2E（打 Railway，11/11）**：status pending 本人回 pending+gymId、他人 **403**、confirmed 回 checkInId、過期→expired、不存在→expired；my-today 無入場 false、今日入場 true+gymId、取消後 false、昨日不算、未登入擋。
+- 🖥️ **瀏覽器實機全流程**（林怡君）：產 QR（新文案）→ 模擬店員確認+建今日 checkIn → **頁面 3 秒內自動跳 `/member/home`** → 綠橫幅「✅ 已於 新竹館 完成入場」；刪 checkIn 重整→**橫幅消失**（證資料源自 my-today）。測試資料已清、0 殘留。
+
+## 待辦
+- 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。
 - ⏰ **2026-07-14 到期提醒：刪除全部測試會員**（使用者 7/8 交代「7/14 提醒我全部刪除」）。範圍＝dev 24 筆固定 fixtures：`【練習】…`×14（王小明一般/陳美麗未簽/林志明墜測過期/張家豪未墜測/李定期月票/黑卡王/紅利妹/折扣卡姊/券券子/VIP尊爵/隊員阿凱/家長爸爸+小孩安安+小孩貝貝/體驗生今日/周銷售）＋`測試/測試API會員/管理員測試會員/Test1/Who`＋`王大明`(0900222222)+子`小明明`＋林怡君底下子帳號`test`(0912345678)。**保留**：林怡君(member-001)＋6 筆非測試(陳莉涵/張元賓/朱小姐/朱智萩/陳建宏/林小明)。刪法：`DELETE /members/:id`(super_admin，先刪家長會連帶刪子)。→ **7/14（或之後）開此專案時執行；使用者先前已三次延後，動手前再跟他確認一次**。
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`

@@ -647,6 +647,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **修**：改 **ASCII fallback filename**（`sales_hsinchu_…` / `invoice_hsinchu_…`，slug 由 gymId 對應 hsinchu/shilin/all）**＋ RFC 5987 `filename*=UTF-8''<percent-encoded 中文名>`**。兩個 export route 同修。前端 `DailySettlementPage.downloadMonthly` 本就自訂 `a.download='月銷售紀錄_<月>.xlsx'`，header filename 只是 fallback、不影響實際下載檔名。
 - **驗證（打 Railway，皆 200 合法 xlsx）**：月銷售 新竹 59KB／月銷售 全館(super_admin 無 gymId)／發票明細 新竹 皆 `HTTP 200` + `Microsoft Excel 2007+`；header 為 `filename="sales_hsinchu_2026-07.xlsx"; filename*=UTF-8''月銷售紀錄_新竹_…`。（修前 monthly-export 新竹實測 500 `Invalid character in header`。）
 
+## 目前進度（2026-07-10 續）— 結帳入場費細分（成人/學生/兒童/優惠券/隊員折扣/疊加）
+> 需求：結帳入場費再細分成人、學生、兒童、個別使用優惠券、隊員折扣。折扣是 checkIn 旗標非獨立類型，故需改分類鍵。後端 `/health` `1.97.0-settlement-entry-discount-breakdown`；E2E（打 Railway）10/10。commit `3d9e776`。
+- 📋 **兩個定義（使用者拍板）**：①「個別使用優惠券」＝**兩種都算**——舊折扣卡8折 `legacyDiscount`（套單次入場個別 8 折）+ 優惠折扣券卡 `discount_card` 入場（後者 entryFee 0、不產生營收行）②疊加（成人＋隊員9折＋舊折扣卡8折）**另拆一類「隊員＋優惠券」**。
+- ✅ **`GET /daily-settlements/today` 入場分類**（`dailySettlements.js`）：`entryCategory(data)`——`team=isTeamDiscount`、`coupon=legacyDiscount||entryType==='discount_card'`；`team&&coupon→隊員＋優惠券`｜`team→隊員折扣`｜`coupon→個別使用優惠券`｜否則依原類型（`single_ticket→成人`/`student_free→學生`/`child_free→兒童`/其餘 VIP/課程學員/定期票入場/單次入場券/黑卡/紅利/體驗）。`entryItems` 依固定順序 `ENTRY_ORDER` 排序。
+- **流向**：GET /today 算好 `income.entryItems` → 前端 `SettlementSummary` 直接渲染（label+value，無硬編分類）＋結帳時 `POST /` 原封存入 `income`（line 251，非重算）→ 摘要顯示與已結帳存檔一致。**歷史已結帳 doc 維持舊分類**（用當時算的存值、不追溯）。
+- **E2E（打 Railway，假館 `gym-e2e-test`，10/10）**：注入 8 筆（成人×2=600/學生250/兒童150/舊折扣卡8折240/隊員9折270/隊員+舊卡216/discount_card 0）→ `GET /today?gymId=gym-e2e-test` → entryItems 六類金額全對、排序正確、0 元 discount_card 不顯示、`income.entry` 總額 1726。腳本 `scratchpad/settlement-entry-breakdown-e2e.mjs`，測後 0 殘留。
+- ⚠️ **未動月銷售 Excel（`monthly-export`）**：它有自己的每日欄位入場拆分（依 entryType＋隊員9折，`dailySettlements.js:~400`），**未**納入「優惠券」拆分 → 與結帳摘要分類不完全一致。使用者若要對齊 Excel 可再抽共用 `entryCategory` 套用（本次僅依需求改結帳摘要）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

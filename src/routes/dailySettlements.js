@@ -457,8 +457,11 @@ router.get('/monthly-export', authenticate, async (req, res) => {
     XLSX.utils.book_append_sheet(wb, ws, month);
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     const gymName = gymId === 'gym-hsinchu' ? '新竹' : gymId === 'gym-shilin' ? '士林' : '全館';
+    const gymSlug = gymId === 'gym-hsinchu' ? 'hsinchu' : gymId === 'gym-shilin' ? 'shilin' : 'all';
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="sales_${gymName}_${month}.xlsx"`);
+    // HTTP header 必須 ASCII：ASCII fallback filename + RFC 5987 filename*（中文館名 percent-encode）
+    res.setHeader('Content-Disposition',
+      `attachment; filename="sales_${gymSlug}_${month}.xlsx"; filename*=UTF-8''${encodeURIComponent(`月銷售紀錄_${gymName}_${month}.xlsx`)}`);
     res.send(buf);
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
@@ -529,8 +532,11 @@ router.get('/invoice-export', authenticate, async (req, res) => {
     XLSX.utils.book_append_sheet(wb, ws, sheetName);
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     const gymName = gymId === 'gym-hsinchu' ? '新竹' : gymId === 'gym-shilin' ? '士林' : '全館';
+    const gymSlug = gymId === 'gym-hsinchu' ? 'hsinchu' : gymId === 'gym-shilin' ? 'shilin' : 'all';
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="invoice_${gymName}_${sheetName}.xlsx"`);
+    // HTTP header 必須 ASCII：ASCII fallback + RFC 5987 filename*（中文館名 percent-encode）
+    res.setHeader('Content-Disposition',
+      `attachment; filename="invoice_${gymSlug}_${sheetName}.xlsx"; filename*=UTF-8''${encodeURIComponent(`發票明細_${gymName}_${sheetName}.xlsx`)}`);
     res.send(buf);
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '1.89.0-announcement-publish-until',
+    version: '1.90.0-course-payment-deadline',
   });
 });
 
@@ -143,6 +143,11 @@ if (require.main === module) {
       const { expiredCount } = await require('./services/bonusService').sweepExpiredBonuses();
       if (expiredCount > 0) console.log(`[紅利排程] 過期停用 ${expiredCount} 筆`);
     } catch (e) { console.error('[紅利排程] 過期清除失敗', e.message); }
+    // 課程轉帳逾期未付款：自動取消報名、釋放名額、作廢未確認轉帳單
+    try {
+      const r = await require('./services/courseService').sweepExpiredCoursePayments();
+      if (r.cancelledGroups > 0) console.log(`[課程逾期] 取消 ${r.cancelledGroups} 門課（${r.cancelledEnrollments} 堂）、作廢 ${r.voidedTransfers} 筆轉帳單`);
+    } catch (e) { console.error('[課程逾期排程] 失敗', e.message); }
   };
   // 卡片移轉逾期回沖：每小時掃描（24h 未接收 → 次數回沖來源）
   const runCardTransferExpiry = async () => {

@@ -10,6 +10,7 @@ const router = express.Router();
 const multer = require('multer');
 const { authenticate, authenticateAny } = require('../middleware/auth');
 const { getDb, getStorage } = require('../config/firebase');
+const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { v4: uuidv4 } = require('uuid');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -30,6 +31,22 @@ router.post('/upload', authenticateAny, upload.single('screenshot'), async (req,
     const last5 = (bankLastFive || '').trim();
     if (!req.file && !last5) {
       return res.status(400).json({ error: 'NO_PROOF', message: '請上傳轉帳截圖，或填寫帳號末五碼' });
+    }
+
+    const resolvedOrderType = orderType || (enrollmentId ? 'course' : null);
+    const resolvedRefId = refId || enrollmentId || null;
+
+    // 課程補正：會員只能為自己/子女的報名上傳（在建立轉帳單前先驗證，避免產生孤兒單）
+    let courseEnrollment = null;
+    if (resolvedOrderType === 'course' && resolvedRefId) {
+      const enDoc = await db.collection('courseEnrollments').doc(resolvedRefId).get();
+      if (enDoc.exists) {
+        courseEnrollment = enDoc.data();
+        if (req.member) {
+          const deny = await checkMemberOwnership(req.member, courseEnrollment.memberId, { onMissing: 'allow' });
+          if (deny) return res.status(deny.status).json(deny.body);
+        }
+      }
     }
 
     // 有截圖才上傳到 Firebase Storage
@@ -64,6 +81,21 @@ router.post('/upload', authenticateAny, upload.single('screenshot'), async (req,
       submittedAt: now, createdAt: now, updatedAt: now,
     };
     await db.collection('transferRecords').doc(id).set(transfer);
+
+    // 課程：上傳/重新上傳轉帳 → enrollment 回「待確認」(pending_confirm)、清除退回標記；
+    // 【不重設 paymentDeadline】（沿用報名時的原期限，退回→補正不延長時間）。
+    if (courseEnrollment && resolvedRefId) {
+      try {
+        await db.collection('courseEnrollments').doc(resolvedRefId).update({
+          paymentStatus: 'pending_confirm',
+          paymentRejectReason: null,
+          paymentRejectedAt: null,
+          paymentConfirmed: false,
+          updatedAt: now,
+        });
+      } catch (e) { console.error('course transfer upload link:', e.message); }
+    }
+
     res.status(201).json({ transfer, message: '已提交，等待工作人員確認收款' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
@@ -154,16 +186,34 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// PUT /transfers/:id/reject
+// PUT /transfers/:id/reject - 退回（保留訂單、待會員補正；不釋放名額、不重算付款期限）
 router.put('/:id/reject', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    await db.collection('transferRecords').doc(req.params.id).update({
+    const ref = db.collection('transferRecords').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此轉帳紀錄' });
+    const t = doc.data();
+    const now = new Date();
+    const reason = req.body.reason || '';
+    await ref.update({
       status: 'rejected', rejectedBy: req.staff.id,
-      rejectedAt: new Date(), updatedAt: new Date(),
-      rejectReason: req.body.reason || '',
+      rejectedAt: now, updatedAt: now, rejectReason: reason,
     });
-    res.json({ message: '已拒絕' });
+    // 課程：退回＝標記「待補正」，【保留 enrollment.status、不釋放名額】、【不動 paymentDeadline】（沿用報名時原期限）
+    // → 會員可重新上傳轉帳（走 /transfers/upload），期限一過仍未確認由 sweep 自動取消。
+    try {
+      if (t.orderType === 'course' && t.refId) {
+        await db.collection('courseEnrollments').doc(t.refId).update({
+          paymentStatus: 'transfer_rejected',
+          paymentRejectReason: reason,
+          paymentRejectedAt: now,
+          paymentConfirmed: false,
+          updatedAt: now,
+        });
+      }
+    } catch (e) { console.error('transfer reject side-effect(course):', e.message); }
+    res.json({ message: '已退回，會員可重新上傳轉帳' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

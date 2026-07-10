@@ -132,6 +132,14 @@ router.get('/sessions/:sessionId/roster',
   }
 );
 
+// POST /courses/sweep-expired-payments - 手動觸發「逾期未付款自動取消」（super_admin，供排程外測試/補跑）
+router.post('/sweep-expired-payments', authenticate, checkPermission('super_admin'), async (req, res) => {
+  try {
+    const result = await courseService.sweepExpiredCoursePayments();
+    res.json({ success: true, ...result });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ══════════════════════════════════════════════════════
 // 報名
 // ══════════════════════════════════════════════════════
@@ -878,6 +886,12 @@ router.post('/:courseId/enroll-all',
       const discountResult = applyTeamDiscount(baseFee, isTeam);
       const fee = discountResult.discounted;
 
+      // 轉帳付款期限：會員轉帳報名 → 報名時間 +2 天（僅主報名 idx===0、非候補、非分期、fee>0）。
+      // 現金於櫃檯即時確認、不設期限。逾期未確認由每日 sweepExpiredCoursePayments 自動取消釋名額。
+      const willInstallment = course.installment?.enabled && req.body.paymentPlan === 'installment' && !req.body.deferPayment;
+      const wantsPaymentDeadline = paymentMethod === 'transfer' && !isWaitlist && !req.body.deferPayment && !willInstallment && fee > 0;
+      const paymentDeadline = wantsPaymentDeadline ? require('dayjs')(now).add(2, 'day').toDate() : null;
+
       let firstEnrollmentId = null;
       futureSessions.forEach((s, idx) => {
         const enrollmentId = uuidv4();
@@ -900,6 +914,8 @@ router.post('/:courseId/enroll-all',
           enrollmentFee: isWaitlist ? 0 : (idx === 0 ? fee : 0),
           paymentMethod: (isWaitlist || idx !== 0) ? null : paymentMethod,
           paymentStatus: isWaitlist ? 'na' : (idx === 0 ? 'pending' : 'na'),
+          // 付款期限只掛在主報名（idx===0）；sweep 依此取消整門課、釋放各場次名額
+          paymentDeadline: idx === 0 ? paymentDeadline : null,
           gymAccessStart: s.date,
           gymAccessEnd: require('dayjs')(s.date).add(course.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD'),
           enrolledBy: memberId,
@@ -977,6 +993,7 @@ router.post('/:courseId/enroll-all',
         installmentPlan: coursePlan,
         isWaitlist,
         waitlistPosition,
+        paymentDeadline: paymentDeadline ? paymentDeadline.toISOString() : null,
         message: isWaitlist
           ? `課程正取已額滿，已加入候補名單（第 ${waitlistPosition} 位）；遞補為正取後再行收費`
           : (isTeam && discountResult.discount > 0

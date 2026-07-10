@@ -671,6 +671,41 @@ const cancelCourseEnrollments = async ({ courseId, memberId, reason }) => {
   return cancelled;
 };
 
+// ── 逾期未付款自動取消（每日排程）────────────────────────────────
+// 掃 paymentDeadline 已過、仍未確認收款（含被退回未補正）的課程轉帳報名 → 取消整門課、
+// 釋放名額並遞補候補（走 cancelCourseEnrollments）、作廢該報名未確認的轉帳單、記 cancelReason:'payment_expired'。
+// 冪等：cancelCourseEnrollments 只動 active 狀態；已取消者被 status 過濾掉、不重複處理。
+const sweepExpiredCoursePayments = async () => {
+  const db = getDb();
+  const now = new Date();
+  // paymentDeadline 只掛在主報名(idx0)。單欄位範圍查 < now，記憶體過濾「未確認 + 未取消」。
+  const snap = await db.collection(ENROLLMENT_COLLECTION).where('paymentDeadline', '<', now).get();
+  const expired = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .filter(e => e.paymentDeadline && e.paymentConfirmed !== true && e.status !== 'cancelled');
+
+  let cancelledGroups = 0, cancelledEnrollments = 0, voidedTransfers = 0;
+  const seen = new Set(); // 以 (courseId, memberId) 去重，避免同群組重複處理
+  for (const e of expired) {
+    const key = `${e.courseId}__${e.memberId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      const n = await cancelCourseEnrollments({ courseId: e.courseId, memberId: e.memberId, reason: 'payment_expired' });
+      cancelledEnrollments += n; cancelledGroups++;
+      // 作廢該報名（主報名 id === transferRecords.refId）尚未確認的轉帳單，別留孤兒單
+      const trSnap = await db.collection('transferRecords').where('refId', '==', e.id).get();
+      for (const td of trSnap.docs) {
+        if (['pending', 'rejected'].includes(td.data().status)) {
+          await td.ref.update({ status: 'expired', expiredAt: now, updatedAt: now });
+          voidedTransfers++;
+        }
+      }
+    } catch (err) { console.error('sweepExpiredCoursePayments 單筆失敗', e.id, err.message); }
+  }
+  if (cancelledGroups) console.log(`[課程逾期未付款] 取消 ${cancelledGroups} 門課報名（${cancelledEnrollments} 堂）、作廢 ${voidedTransfers} 筆轉帳單`);
+  return { cancelledGroups, cancelledEnrollments, voidedTransfers };
+};
+
 // ── 補課報名 ──────────────────────────────────────────────────────
 const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
   const db = getDb();
@@ -1174,6 +1209,7 @@ module.exports = {
   requestLeave,
   promoteWaitlist,
   cancelCourseEnrollments,
+  sweepExpiredCoursePayments,
   enrollMakeup,
   markAttendance,
   markTodayCourseAttendanceOnEntry,

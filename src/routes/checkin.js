@@ -460,12 +460,23 @@ router.get('/history',
       let checkIns = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       if (gymId) checkIns = checkIns.filter(c => c.gymId === gymId);
       if (scopedMemberId) checkIns = checkIns.filter(c => c.memberId === scopedMemberId);
-      if (ticketId) checkIns = checkIns.filter(c => c.ticketId === ticketId);
-      if (ticketType) checkIns = checkIns.filter(c => c.ticketType === ticketType);
+      // checkIn 文件無 ticketId/ticketType 欄位；票券使用實記在各自 id 欄位
+      // （discountCardId / blackCardId / singleEntryTicketId / bonusId / passId，UUID 不會撞）
+      // → 有帶 ticketId 就比對任一票券 id 欄位（ticketType 不再拿來過濾，checkIn 沒這欄位否則恆空）
+      if (ticketId) {
+        checkIns = checkIns.filter(c =>
+          c.discountCardId === ticketId ||
+          c.blackCardId === ticketId ||
+          c.singleEntryTicketId === ticketId ||
+          c.bonusId === ticketId ||
+          c.passId === ticketId
+        );
+      }
       checkIns = checkIns
         .sort((a, b) => (b.checkedInAt?._seconds||0) - (a.checkedInAt?._seconds||0))
         .slice(0, parseInt(limit));
-      res.json({ checkIns, count: checkIns.length });
+      // records：會員端 MemberPassesPage 讀此 key；checkIns：員工端歷史入場讀此 key（同一份陣列）
+      res.json({ records: checkIns, checkIns, count: checkIns.length });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }

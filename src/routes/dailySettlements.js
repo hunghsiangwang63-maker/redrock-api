@@ -56,15 +56,26 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
 
     let entryIncome = 0, shoeRentalIncome = 0;
     let cashEntry = 0, linePayEntry = 0, jkoEntry = 0, twPayEntry = 0;
-    const entryByType = {};   // 入場收入細項（依入場類型）
-    const ENTRY_LABEL = { single_ticket:'單次購票', single_entry_ticket:'單次入場券', pass:'定期票入場', vip:'VIP', course_access:'課程學員', discount_card:'優惠折扣券', black_card:'黑卡', child_free:'兒童免費', student_free:'學生免費', experience:'體驗' };
+    const entryByType = {};   // 入場收入細項（依入場類型 + 折扣分類）
+    const ENTRY_LABEL = { single_ticket:'成人', single_entry_ticket:'單次入場券', pass:'定期票入場', vip:'VIP', course_access:'課程學員', discount_card:'優惠折扣券', black_card:'黑卡', child_free:'兒童', student_free:'學生', bonus:'紅利', experience:'體驗' };
+    // 入場費細分：折扣為 checkIn 旗標（隊員 isTeamDiscount、優惠券＝舊折扣卡 legacyDiscount 或優惠折扣券卡 discount_card 入場）。
+    // 疊加時另拆「隊員＋優惠券」一類；無折扣才依原入場類型（成人/學生/兒童/…）。
+    const ENTRY_ORDER = ['成人', '學生', '兒童', '個別使用優惠券', '隊員折扣', '隊員＋優惠券'];
+    const entryCategory = (data) => {
+      const team = data.isTeamDiscount === true;
+      const coupon = data.legacyDiscount === true || data.entryType === 'discount_card';
+      if (team && coupon) return '隊員＋優惠券';
+      if (team) return '隊員折扣';
+      if (coupon) return '個別使用優惠券';
+      return ENTRY_LABEL[data.entryType] || data.entryType || '其他入場';
+    };
     checkinSnap.docs.forEach(d => {
       const data = d.data();
       const amount = data.amountPaid || 0;
       const entryAmt = data.entryFee ?? amount;
       entryIncome += entryAmt;
-      const et = data.entryType || 'other';
-      entryByType[et] = (entryByType[et] || 0) + entryAmt;
+      const cat = entryCategory(data);
+      entryByType[cat] = (entryByType[cat] || 0) + entryAmt;
       shoeRentalIncome += data.shoesPrice || 0;
       if (data.paymentMethod === 'cash') cashEntry += amount;
       else if (data.paymentMethod === 'linepay') linePayEntry += amount;
@@ -132,7 +143,12 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
         pass: passIncome,
         total: totalIncome,
         // 細項
-        entryItems: Object.entries(entryByType).filter(([, v]) => v > 0).map(([k, v]) => ({ label: ENTRY_LABEL[k] || k, value: v })),
+        entryItems: Object.entries(entryByType).filter(([, v]) => v > 0)
+          .map(([k, v]) => ({ label: k, value: v }))   // k 已是分類標籤
+          .sort((a, b) => {
+            const ia = ENTRY_ORDER.indexOf(a.label), ib = ENTRY_ORDER.indexOf(b.label);
+            return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+          }),
         passItems: Object.entries(passByType).filter(([, v]) => v > 0).map(([k, v]) => ({ label: k, value: v })),
       },
       payment: {

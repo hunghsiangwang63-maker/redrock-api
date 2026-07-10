@@ -591,6 +591,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🔍 **雙根因**：① 後端回 `{ checkIns }`，會員端 `MemberPassesPage` 讀 `r.data.records`（key 不符）；② 後端用 `c.ticketId`/`c.ticketType` 過濾，但 **checkIn 文件根本沒這兩個欄位**——票券使用實記在 `discountCardId`/`blackCardId`/`singleEntryTicketId`/`bonusId`/`passId` ＋ `entryType` → 清單恆空。四種票券（優惠卡/黑卡/紅利/單次券）全中。
 - ✅ **修**：`ticketId` 帶入時改**比對任一票券 id 欄位**（UUID 不會撞，`discountCardId||blackCardId||singleEntryTicketId||bonusId||passId===ticketId`），移除恆空的 `ticketType` 過濾；回傳補 `records` key（會員端讀）＋保留 `checkIns`（員工端歷史入場讀，相容）。
 - **E2E（打 Railway，17/17，用既有真實 checkIns、唯讀不改資料）**：優惠卡/黑卡/單次券/紅利各以真實票券 id 查 → `records` 有紀錄（原本恆空）、每筆對應 id 欄位相符、`checkIns` key 仍在；不存在票券 id → 0 筆（過濾正確非全回）。
+- ✅ **附帶修使用紀錄顯示（純前端 `MemberPassesPage` TicketDetailModal，commit `b185378`）**：原顯示「gym-hsinchu Invalid date」→ ① `gymId`→`GYM_LABEL` 顯示**新竹館/士林館**；② `checkedInAt` 以 `_seconds/seconds` 解析（原恆 Invalid date，Firestore Timestamp 序列化為 `{_seconds}`）；③ `isCancelled` 的紀錄顯示琥珀「**入場取消返還**」＋綠「**+1 次**」（返還），一般用「-1 次」。瀏覽器實機驗證（林怡君優惠卡 7次 的取消入場紀錄）：顯示「新竹館 入場取消返還 / 2026/07/10 18:42 / +1 次」正確。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

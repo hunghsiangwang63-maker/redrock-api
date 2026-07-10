@@ -579,6 +579,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **修「全部報名皆已取消→整頁空白」bug**（`MemberCoursesPage`，commit `942b510`）：`我的課程`空狀態判斷由 `myEnrollments.length===0` 改為「無任何可顯示報名」（confirmed/leave/waitlist 或 payment_expired 取消卡）→ 皆無則顯示「尚未報名任何課程」。實機驗證：林怡君 我的課程正確顯示空狀態、月曆正常渲染（空、無課程故不可點）。
 - 📌 **月曆設計維持不變**（使用者確認）：**只顯示自己（含子女）已報名的課程**；沒報名任何課程→空月曆為正常，報名按鈕只在自己已報名的課展開時出現。要瀏覽全部班表另循「課程總覽」。
 
+## 目前進度（2026-07-10 續）— 員工端入場「相機掃描」（iPad/手機相機掃會員 QR，純前端）
+> 原員工端「掃描入場」只吃**掃描槍**（文字輸入框，無相機）。加相機掃碼讓 iPad/手機直接掃。commit `ad11cfd`，staff/member 皆 deploy。
+- ✅ **`CheckinPage` 掃描 tab 加「📷 用相機掃描」**：`getUserMedia({video:{facingMode:'environment'}})` 開後鏡頭 → `requestAnimationFrame` 逐幀畫到 canvas → **`jsQR`** 解碼（純 JS，iOS Safari 相容；BarcodeDetector 在 Safari 不支援故不用）。掃到即停鏡頭、關視窗，token 走**共用 `runScan`** → `/checkin/qr/scan` 顯示入場預覽 → 既有「確認入場」。
+- ✅ 會員入場 QR 內容＝`QRCode.toDataURL(qrToken)` 純 token 字串（`MemberQRPage:156`），故相機解出的字串直接可用。
+- ✅ iOS 相容：`<video playsInline muted autoPlay>`＋JS 設 `playsinline`；權限拒絕/無裝置/非 HTTPS 各有錯誤提示；元件卸載與「關閉」自動 `stop()` 所有 track。新增依賴 `jsqr`。
+- 🖥️ **驗證**：staff 入場頁「掃描入場」tab「📷 用相機掃描」按鈕正常渲染、頁面無 console error（jsQR import OK）。**相機實掃需真機（iPad/手機）測**——自動化環境無相機且會觸發原生權限對話框（會凍結 session）故未實掃；使用方式：員工端→入場→掃描入場→📷 用相機掃描→允許相機→對準會員 QR→自動帶入→確認入場。要 HTTPS（firebase hosting 已是）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

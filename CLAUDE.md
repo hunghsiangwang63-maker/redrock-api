@@ -564,7 +564,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **課程/比賽報名簽名欄放大**（commit `a4a7b0d`）：`SignaturePad` height —— 課程 120→**200**、比賽 130→**200**（本人＋法定代理人共 4 個；寬度本就滿版）。
 - ✅ **課程報名「如何得知本課程？」問卷改多選**（commit `f2e0b35`）：`MemberCoursesPage` 報名步驟2 由 radio 單選 → checkbox **可複選**（標籤加註「（可複選）」）；state `referralSource`(字串)→`referralSources`(陣列)，送出以「、」串接存回 `referralSource`（後端欄位/報表不變），modal 關閉一併重置。
 
-## 目前進度（2026-07-10 續）— 會員課程月曆展開加「報名課程／報名單次體驗」按鈕（純前端）
+## 目前進度（2026-07-10 續）— 會員課程月曆展開加「報名課程／報名單次體驗」按鈕（純前端）→ **已移除**
+> ⚠️ **後來移除**（commit `cdea339`）：月曆只顯示「已報名」課程，兩按鈕只在展開**已報名**課時出現（已報名了才看得到報名鈕、反了），使用者決定移除。展開現只顯示場次表。以下為原實作記錄（已 revert）。
 > `MemberCoursesPage` 月曆分頁：點日期→課程卡「查看場次表 ▼」展開後，場次列表下方加兩顆按鈕。commit `960a68c`，member/staff 皆 deploy＋瀏覽器實機驗證。
 - ✅ **報名課程**（紅）：`setSelectedCategory(null)`＋`setSelectedCourse(courses.find(c=>c.id===group.courseId))`＋`setTab('browse')`＋捲頂 → 切「課程總覽」並開啟**該堂課報名頁**（課程已下架/不在 browse 清單則 fallback 類別總覽）。
 - ✅ **報名單次體驗**（外框）：`navigate('/member/experience')` → 體驗課程預約頁。

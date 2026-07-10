@@ -641,6 +641,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **不動**：`isValidTicket`/`splitValid`/`invalidReason`/`TicketDetailModal`；有效券區塊原樣。
 - ⚠️ **驗證**：build 兩 target 通過、資料側以複製前端 `invalidReason` 打正式資料分類驗證（林怡君單日券 10→有效 1、失效 9 正確歸 dead）。**瀏覽器實機未跑**——Claude 瀏覽器擴充當下未連線，且林怡君帳上目前 0 筆 consumed（全為已取消）→ 無法呈現兩區並列；使用者確認驗證沒問題、免實機。
 
+## 目前進度（2026-07-10 續）— 修：結帳「月銷售/發票」Excel 下載 500（Content-Disposition 中文館名）
+> 回報結帳頁下載歷史紀錄 Excel 失敗。查為 HTTP header 含中文致 500。後端 `/health` `1.96.0-settlement-export-header-ascii`；commit `89e285f`。
+- 🔍 **根因**：`GET /daily-settlements/monthly-export` 與 `/invoice-export` 的 `Content-Disposition` 用 `filename="sales_${gymName}_…"`，`gymName`＝中文（新竹/士林/**全館**）→ Node 丟 `Invalid character in header content ["Content-Disposition"]`（HTTP header 值須 ASCII/latin1）→ 500（且因 Content-Type 已設 xlsx，前端把那段 JSON 錯誤當檔案 → 「下載失敗」）。**兩館皆中，含 super_admin 全館**。
+- ✅ **修**：改 **ASCII fallback filename**（`sales_hsinchu_…` / `invoice_hsinchu_…`，slug 由 gymId 對應 hsinchu/shilin/all）**＋ RFC 5987 `filename*=UTF-8''<percent-encoded 中文名>`**。兩個 export route 同修。前端 `DailySettlementPage.downloadMonthly` 本就自訂 `a.download='月銷售紀錄_<月>.xlsx'`，header filename 只是 fallback、不影響實際下載檔名。
+- **驗證（打 Railway，皆 200 合法 xlsx）**：月銷售 新竹 59KB／月銷售 全館(super_admin 無 gymId)／發票明細 新竹 皆 `HTTP 200` + `Microsoft Excel 2007+`；header 為 `filename="sales_hsinchu_2026-07.xlsx"; filename*=UTF-8''月銷售紀錄_新竹_…`。（修前 monthly-export 新竹實測 500 `Invalid character in header`。）
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

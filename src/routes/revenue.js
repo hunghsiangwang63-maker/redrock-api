@@ -7,6 +7,23 @@ const { authenticate, checkPermission } = require('../middleware/auth');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
 
+// 沖銷/退費歸回原類別，讓 byType 各分類為「淨額」（合計本就含負向沖銷、不受影響）：
+//  - 'refund'（入場/定期票取消沖銷）：優先用 refundCategory；否則依 notes 推斷（入場→checkin、定期票/分期/續約→pass）
+//  - '*_refund'（course_refund/competition_refund）：歸回前綴類別（course/competition）
+// 這樣日報表的「入場/課程/定期票…」欄位會反映沖銷、與合計一致（原本欄位顯示 gross、只有合計淨額）。
+const foldType = (t) => {
+  const ty = t.type || 'other';
+  if (ty === 'refund') {
+    if (t.refundCategory) return t.refundCategory;
+    const n = t.notes || '';
+    if (n.includes('入場')) return 'checkin';
+    if (n.includes('定期票') || n.includes('分期') || n.includes('續約')) return 'pass';
+    return 'refund';
+  }
+  if (ty.endsWith('_refund')) return ty.slice(0, -7); // 'course_refund' → 'course'
+  return ty;
+};
+
 // ── GET /revenue/summary - 今日/本週/本月統計 ────────────────────
 router.get('/summary',
   authenticate,
@@ -103,7 +120,7 @@ router.get('/daily',
         if (byDate[date]) {
           byDate[date].total += t.totalAmount || 0;
           byDate[date].count += 1;
-          const type = t.type || 'other';
+          const type = foldType(t);   // 沖銷歸回原類別 → 欄位淨額
           byDate[date].byType[type] = (byDate[date].byType[type] || 0) + (t.totalAmount || 0);
         }
       });
@@ -402,7 +419,8 @@ router.get('/export-checkin-csv',
 function groupByType(txns) {
   const result = {};
   txns.forEach(t => {
-    result[t.type] = (result[t.type] || 0) + (t.totalAmount || 0);
+    const type = foldType(t);   // 沖銷歸回原類別 → 各分類淨額
+    result[type] = (result[type] || 0) + (t.totalAmount || 0);
   });
   return result;
 }

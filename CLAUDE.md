@@ -695,6 +695,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **驗證（打 Railway，林怡君 member token）**：修前 `/my/children` 回 **(無)**；修後回 **林小明(member-003)**，其 `passes/member` 2 筆、`single-entry` 1 筆可載 → 家長「我的票券」會顯示林小明的票（前端本就標「👦 林小明」）。**前端無需改動/部署**（載入子女邏輯早在 `3b40175`／`ef19b5b` 完成並部署）。
 - 📌 **附記**：`memberService.getMemberByPhone` 的 `isChildAccount` 判斷（挑主帳號用）維持不動、正確；本次只改「列子女／代操作權限」兩處。
 
+## 目前進度（2026-07-10 續）— 子會員 ≥18 硬擋收斂進 createMember + 前端超齡 modal
+> 申請子會員頁強調未滿 18 歲、超齡送出跳 modal（前端）；後端把 ≥18 硬擋收斂進共用 `createMember`（涵蓋店員路徑）。後端 `/health` `2.03.0-child-under18-authoritative`；E2E 打 Railway 通過。
+- ✅ **前端**（`MemberProfilePage`，commit `e7a2304`）：新增家庭成員表單加醒目提示「僅限未滿 18 歲」＋生日欄標註；`handleAddChild` 對 `age>=18` 由 inline 訊息改跳**置中「超過年齡限制」modal**（🔞、顯示填寫歲數、提示改註冊正式會員、「我知道了」關閉）。未滿 5 歲等其他檢查不變。
+- ✅ **後端**（`memberService.createMember` + `members.js`，commit `824ff08`）：原 `>=18` 檢查只在 `POST /members/my/children` 路由層，**店員 `POST /:id/children` 與共用 `createMember` 沒擋**。改在 `createMember` 對 `options.isChildAccount` 加 `ageOf>=18 → throw AGE_RESTRICTION`（比照 `AGE_UNDER_5`），兩路由 catch 皆改回 400（`['AGE_UNDER_5','AGE_RESTRICTION']`）。一般成人會員（非子帳號）不受影響。
+- **E2E（打 Railway）**：會員自助 `/my/children` 成人(≥18) → **400 AGE_RESTRICTION**；店員 `/:id/children` 成人 → **400 AGE_RESTRICTION**（新覆蓋）；未滿 18（11 歲）→ 201 建立成功。測試資料測後清、0 殘留。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

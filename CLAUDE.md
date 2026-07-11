@@ -734,6 +734,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端**（`RevenuePage` 日報表）：欄位由 入場/課程/商品 改為 **入場/租借/定期票/課程/商品**（`DAILY_COLS`），tfoot 逐欄合計、表格 `overflow-x` 可橫捲、`min-width 560`。
 - **驗證（打 Railway 全館近14天實資料）**：7/11 合計 4150＝入場 **3300**＋租借 **850**（原入場 4150 綁租借）；7/07 合計 4240＝入場 1200＋**定期票 3040**；7/05 入場 300＋租借 100＋商品 4880＝5280；各日欄位加總＝合計（`single_entry_ticket` 無獨立欄、仍計入合計，屬既有小類別未拆）。
 
+## 目前進度（2026-07-10 續）— 定期票轉讓：送出即驗接收對象 + 可選子會員（防誤轉）
+> 回報轉讓打錯電話/非會員的行為。原本送出不驗、只在核准查電話（`limit(1)` 有共用電話誤解析、打成他人電話會誤轉）。改為送出時就驗＋顯示/選定接收人。後端 `/health` `2.09.0-pass-transfer-validate-recipient`；E2E 8/8。commit 後端 `1bcbd5f`、前端 `9d25483`。
+- ✅ **後端**（`passAdjustmentService` + `passAdjustments.js`）：`createPassRequest` transfer 收 `transferToMemberId`——驗證為有效會員(`TARGET_MEMBER_NOT_FOUND`)、非本人(`CANNOT_TRANSFER_SELF`)、必選(`MISSING_TRANSFER_TARGET`)→ 存 `transferToMemberId/transferToName/transferToPhone`。`approvePassRequest` **優先用 `transferToMemberId`**（依 id 直接取，避開共用電話誤解析）；舊申請無 id 才退回依電話查。
+- ✅ **前端**（`MemberPassesPage` 轉讓表單）：輸入電話（≥10碼、debounce）→ 打 `/ticket-transfers/recipients?phone=` 查該電話會員（含家庭成員、排除本人）→ 單人顯示「✅ 接收人：姓名（家長/子女）」、**多人下拉選**、查無紅字擋送出；payload 帶 `transferToMemberId`。`PassRequestReviewModal` 顯示「將轉讓至：姓名（電話）」供店員核對。
+- **E2E（打 Railway，8/8）**：未選對象/非會員 id/轉給自己 各自對應 code；轉給 B → 201 存姓名、核准後票 memberId→B、requestUsed=true；**轉給「與家長 B 共用電話的子女 C」→ 核准後票正確落在 C（非 B）**。腳本 `scratchpad/pass-transfer-recipient-e2e.mjs`，測後 0 殘留。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

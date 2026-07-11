@@ -727,6 +727,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **修**：改 `passRequestState(passId)`——有 `approved`→`used`（顯示「已申請過（限一次）」）、有 `pending`→顯示「申請審核中，請等待審核結果」、其餘（**rejected 或無**）→顯示「申請展延／退費／轉讓」鈕。
 - **驗證**（打 Railway，林怡君真資料）：active 學生30日票（extension rejected）→ `none`→**顯示申請鈕**；approved 的 transfer 票→`used`→擋。純前端、已 deploy（快取可能需 `?v=`/無痕）。
 
+## 目前進度（2026-07-10 續）— 營收日報表把定期票/租借從入場拆開
+> 回報營收報表日報表要把定期票、租借費用跟入場拆開。後端 `/health` `2.08.0-revenue-daily-split-rental-pass`；commit 後端 `cf012a1`、前端 `4fc0c78`。
+- 🔍 **現況**：`/revenue/daily` byType 原只 `checkin/course/product`（前端只 3 欄）；**入場(checkin)交易的 totalAmount 含岩鞋租借**（`shoesPrice` 綁在內），且 `pass`/`rental` 有值卻無欄位（只進合計、看不到）。
+- ✅ **後端**（`/revenue/daily`）：checkin 交易依分開存的 `entryFee`/`shoesPrice` 拆——`入場=entryFee`、`租借=totalAmount−entryFee`（岩鞋+粉袋）；`rental*` 類型（器材租借 `/rentals`）進「租借」；`pass` 進「定期票」；其餘沿用 `foldType`（沖銷歸類）。**合計不變**。
+- ✅ **前端**（`RevenuePage` 日報表）：欄位由 入場/課程/商品 改為 **入場/租借/定期票/課程/商品**（`DAILY_COLS`），tfoot 逐欄合計、表格 `overflow-x` 可橫捲、`min-width 560`。
+- **驗證（打 Railway 全館近14天實資料）**：7/11 合計 4150＝入場 **3300**＋租借 **850**（原入場 4150 綁租借）；7/07 合計 4240＝入場 1200＋**定期票 3040**；7/05 入場 300＋租借 100＋商品 4880＝5280；各日欄位加總＝合計（`single_entry_ticket` 無獨立欄、仍計入合計，屬既有小類別未拆）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

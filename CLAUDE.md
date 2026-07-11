@@ -701,6 +701,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **後端**（`memberService.createMember` + `members.js`，commit `824ff08`）：原 `>=18` 檢查只在 `POST /members/my/children` 路由層，**店員 `POST /:id/children` 與共用 `createMember` 沒擋**。改在 `createMember` 對 `options.isChildAccount` 加 `ageOf>=18 → throw AGE_RESTRICTION`（比照 `AGE_UNDER_5`），兩路由 catch 皆改回 400（`['AGE_UNDER_5','AGE_RESTRICTION']`）。一般成人會員（非子帳號）不受影響。
 - **E2E（打 Railway）**：會員自助 `/my/children` 成人(≥18) → **400 AGE_RESTRICTION**；店員 `/:id/children` 成人 → **400 AGE_RESTRICTION**（新覆蓋）；未滿 18（11 歲）→ 201 建立成功。測試資料測後清、0 殘留。
 
+## 目前進度（2026-07-10 續）— 全站「免責聲明書」改名「風險安全聲明書」
+> 使用者要求全面改名。純文案（waiver 英文 key/欄位/路由不動）。前端 commit `9a1f0bb`（member/staff deploy）、後端 commit `0c33fce`（`/health` `2.04.0-waiver-rename-risk-safety`）。
+- ✅ **全域替換 `免責聲明`→`風險安全聲明`**（含 `免責聲明書`→`風險安全聲明書`、無「書」的 3 處標籤/訊息一併）：前端 9 檔（OnboardingGate、Waiver/ParentWaiver 頁、QR/Home/Profile/Competitions、員工 MembersPage 待辦標籤、墜測預約 modal）、後端 3 檔（members.js 註解＋墜測鎖定訊息、fallTests.js 鎖定訊息、fallTestBookings.js「請先完成風險安全聲明書簽署」）。
+- **查證不需改**：`systemSettings/waiver` 存的 zh/en 內容**不含**「免責聲明」（本就用風險字樣）；全專案（排 node_modules/dist）除 CLAUDE.md 進度史外 0 殘留。
+- ⚠️ 後端 `0c33fce` 已 push 到 GitHub（Railway 監看），提交時 Railway 部署較慢、未即時上 2.04.0；文案類低風險，稍後自動部署。前端已生效。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

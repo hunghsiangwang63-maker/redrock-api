@@ -253,7 +253,11 @@ const approvePassRequest = async ({ requestId, operatorId, operatorName, extensi
 
     await passRef.update({
       memberId: targetMember.id, memberName: targetMember.data().name,
-      requestUsed: true, transferredFrom: pass.memberId, updatedAt: now,
+      requestUsed: true,
+      // 轉入註記（收票人卡片顯示「由 XXX 轉入」）：原持有人 id/姓名 + 轉讓日期
+      transferredFrom: pass.memberId, transferredFromName: pass.memberName || '',
+      transferredAt: dayjs(now).format('YYYY-MM-DD'),
+      updatedAt: now,
     });
     await logAdjustment({
       passId: pass.id, type: 'transfer',

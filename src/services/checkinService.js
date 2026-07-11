@@ -26,6 +26,8 @@ const PRICES = {
 
 // 使用優惠折扣券入場：原價 8 折（兒童不適用）。原價依會員身份取 entryTypes 價格。
 const DISCOUNT_CARD_RATE = 0.8;
+// 特約廠商入場優惠：全票/學生票在「無其他折扣」時定額 −20（兒童不適用；與隊員9折/舊折扣卡8折互斥）
+const PARTNER_VENDOR_DISCOUNT = 20;
 
 // 取得「原價」（折扣券 8 折的基準）：一般→single_ticket，學生→student_free
 const getOriginalEntryPrice = async (memberType) => {
@@ -92,17 +94,25 @@ const computePaidEntryAmount = async (entryType, member, opts = {}) => {
   const originalAmount = t.price;
   // 兒童：不適用折扣卡、也不會是隊員 → 一律原價，任何折扣都不套（權威擋，涵蓋電話入場與 QR 自助）
   if (entryType === 'child_free') {
-    return { amount: originalAmount, originalAmount, isTeamDiscount: false, legacyDiscount: false };
+    return { amount: originalAmount, originalAmount, isTeamDiscount: false, legacyDiscount: false, partnerVendor: false };
   }
   const isTeam = isActiveTeamMember(member);
   const teamEligible = isTeam && originalAmount >= TEAM_DISCOUNT_MIN_AMOUNT;
   let amount = originalAmount;
   if (opts.legacyDiscountCard) amount = Math.round(amount * DISCOUNT_CARD_RATE); // 舊折扣卡 8 折
   if (teamEligible) amount = Math.round(amount * PRICES.team_discount_rate);      // 有效隊員再疊 9 折
+  // 特約廠商：僅當【未套舊折扣卡 且 非有效隊員】且全票/學生票 → 定額 −20（權威互斥，隊員/舊卡任一成立即忽略）
+  let partnerVendor = false;
+  if (!opts.legacyDiscountCard && !teamEligible && opts.partnerVendor
+      && (entryType === 'single_ticket' || entryType === 'student_free')) {
+    amount = Math.max(0, originalAmount - PARTNER_VENDOR_DISCOUNT);
+    partnerVendor = true;
+  }
   return {
     amount, originalAmount,
     isTeamDiscount: teamEligible,
     legacyDiscount: !!opts.legacyDiscountCard,
+    partnerVendor,
   };
 };
 
@@ -618,6 +628,8 @@ const verifyEntry = async (memberId, gymId) => {
       price: t.price,
       discountedPrice: withTeam(t.price),
       teamDiscount: isTeam && withTeam(t.price) < t.price,
+      // 特約廠商優惠：全票/學生票且非隊員（隊員 9 折較優、不提供特約）
+      partnerVendorEligible: (t.id === 'single_ticket' || t.id === 'student_free') && !isTeam,
       available: true,
       requiresPayment: true,
     }));
@@ -639,6 +651,7 @@ const verifyEntry = async (memberId, gymId) => {
       type: singleTypeId, label: singleLabel, price: singlePrice,
       discountedPrice: withTeam(singlePrice),
       teamDiscount: isTeam && withTeam(singlePrice) < singlePrice,
+      partnerVendorEligible: (singleTypeId === 'single_ticket' || singleTypeId === 'student_free') && !isTeam,
       available: true, requiresPayment: true,
     }];
   }
@@ -647,6 +660,7 @@ const verifyEntry = async (memberId, gymId) => {
     allowed: true, status: 'ok', freeEntry: false,
     requiresPayment: true,
     member: memberInfo,
+    partnerVendorDiscount: PARTNER_VENDOR_DISCOUNT,   // 特約廠商定額折扣（−20，前端顯示）
     // 兩段式流程：先選身分(entryTypeOptions)，再選要不要用票券(instruments)
     entryTypeOptions,
     instruments: {
@@ -731,7 +745,7 @@ const verifyEntry = async (memberId, gymId) => {
 const createPendingCheckIn = async ({
   memberId, gymId, entryType, baseEntryType,
   passId, discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
-  paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, paymentPlan,
+  paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, partnerVendor, paymentPlan,
   rentShoes, shoesPrice,
   rentChalk, chalkPrice,
   renewPassId, renewPaymentPlan,
@@ -792,6 +806,7 @@ const createPendingCheckIn = async ({
   let finalOriginal = originalAmount || 0;
   let finalTeam = isTeamDiscount || false;
   let finalLegacy = false;
+  let finalPartnerVendor = false;
   {
     // 舊折扣卡 8 折：權威以後端轉換期開關 checkinLegacyDiscountCard 為準，不單信呼叫端旗標（與 /checkin/phone 同一份邏輯）
     let useLegacyDiscount = false;
@@ -801,12 +816,13 @@ const createPendingCheckIn = async ({
         useLegacyDiscount = !!(ts.exists && ts.data().checkinLegacyDiscountCard);
       } catch {}
     }
-    const computed = await computePaidEntryAmount(entryType, member, { legacyDiscountCard: useLegacyDiscount });
+    const computed = await computePaidEntryAmount(entryType, member, { legacyDiscountCard: useLegacyDiscount, partnerVendor: partnerVendor === true });
     if (computed) {
       finalOriginal = computed.originalAmount;
       finalAmount = computed.amount;
       finalTeam = computed.isTeamDiscount;
       finalLegacy = !!computed.legacyDiscount;
+      finalPartnerVendor = !!computed.partnerVendor;   // 後端權威：隊員/舊卡成立時一律 false
     }
   }
 
@@ -897,6 +913,7 @@ const createPendingCheckIn = async ({
     originalAmount: finalOriginal,
     isTeamDiscount: finalTeam,
     legacyDiscount: finalLegacy,
+    partnerVendor: finalPartnerVendor,   // 特約廠商優惠（−20，掃碼提示出示證件）
     rentShoes: rentShoes || false,
     shoesPrice: rentShoes ? (shoesPrice || PRICES.shoes_rental) : 0,
     rentChalk: rentChalk || false,
@@ -970,6 +987,7 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     originalAmount: pending.originalAmount,
     isTeamDiscount: pending.isTeamDiscount,
     legacyDiscount: pending.legacyDiscount || false,
+    partnerVendor: pending.partnerVendor === true,   // 特約廠商優惠 → 員工端提示出示證件
     rentShoes: pending.rentShoes,
     shoesPrice: pending.shoesPrice,
     rentChalk: pending.rentChalk || false,
@@ -1160,6 +1178,7 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     paymentMethod: pending.paymentMethod,
     isTeamDiscount: pending.isTeamDiscount,
     legacyDiscount: pending.legacyDiscount || false,
+    partnerVendor: pending.partnerVendor || false,   // 特約廠商優惠（供報表/掃碼顯示）
     rentShoes: pending.rentShoes,
     shoesPrice: pending.shoesPrice,
     rentChalk: pending.rentChalk || false,

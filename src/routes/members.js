@@ -101,7 +101,7 @@ router.post('/my/children',
 
       res.status(201).json({ child, message: `${req.body.name} 已加入家庭成員` });
     } catch (err) {
-      if (err.code === 'AGE_UNDER_5') return res.status(400).json(err);
+      if (['AGE_UNDER_5', 'AGE_RESTRICTION'].includes(err.code)) return res.status(400).json(err);
       res.status(500).json({ error: err.code || 'SERVER_ERROR', message: err.message });
     }
   }
@@ -611,7 +611,7 @@ router.post('/:id/children',
 
       res.status(201).json({ child, message: '子會員建立成功' });
     } catch (err) {
-      if (err.code === 'AGE_UNDER_5') return res.status(400).json(err);
+      if (['AGE_UNDER_5', 'AGE_RESTRICTION'].includes(err.code)) return res.status(400).json(err);
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }
   }

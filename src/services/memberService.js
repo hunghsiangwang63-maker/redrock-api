@@ -122,6 +122,15 @@ const createMember = async (memberData, staffId, options = {}) => {
     throw { code: 'AGE_UNDER_5', message: '未滿 5 歲無法成為會員' };
   }
 
+  // 後端權威：子會員（家庭成員）僅限未滿 18 歲（滿 18 歲應註冊正式會員）。
+  // 涵蓋所有建子會員入口（會員自助 /my/children、店員 /:id/children），不單靠路由層或前端。
+  if (options?.isChildAccount) {
+    const a = ageOf(memberData.birthday);
+    if (a !== null && a >= 18) {
+      throw { code: 'AGE_RESTRICTION', message: '家庭成員僅限未滿 18 歲，滿 18 歲請註冊正式會員' };
+    }
+  }
+
   // 檢查電話是否重複（子會員共用父會員電話，跳過此檢查）
   if (!options?.isChildAccount) {
     const existing = await db.collection(COLLECTIONS.MEMBERS)

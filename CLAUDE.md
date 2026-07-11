@@ -654,6 +654,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **流向**：GET /today 算好 `income.entryItems` → 前端 `SettlementSummary` 直接渲染（label+value，無硬編分類）＋結帳時 `POST /` 原封存入 `income`（line 251，非重算）→ 摘要顯示與已結帳存檔一致。**歷史已結帳 doc 維持舊分類**（用當時算的存值、不追溯）。
 - **E2E（打 Railway，假館 `gym-e2e-test`，10/10）**：注入 8 筆（成人×2=600/學生250/兒童150/舊折扣卡8折240/隊員9折270/隊員+舊卡216/discount_card 0）→ `GET /today?gymId=gym-e2e-test` → entryItems 六類金額全對、排序正確、0 元 discount_card 不顯示、`income.entry` 總額 1726。腳本 `scratchpad/settlement-entry-breakdown-e2e.mjs`，測後 0 殘留。
 - ✅ **月銷售 Excel 對齊同一套六分類**（`/health 1.98.0-monthly-export-entry-six-category`，commit `c6cbb27`；E2E 9/9）：抽 `entryCategory`/`ENTRY_LABEL`/`ENTRY_ORDER`/`entryOrderSort` 到**模組頂共用**，`GET /today` 與 `monthly-export` 同一套。月銷售 Excel「入場費」列由原「入場類型＋（隊員9折）」改為六分類（成人/學生/兒童/個別使用優惠券/隊員折扣/隊員＋優惠券/其餘類型）、只列有金額分類（value>0）、固定序排列。（移除原 `entryName`/systemSettings ET_NAME 依賴。）**E2E**：注入 8 情境 → 下載 xlsx 解析「入場費」列六類金額全對、0 元 discount_card 不出現、列序正確。腳本 `scratchpad/monthly-export-entry-e2e.mjs`，測後 0 殘留。→ **結帳摘要與月銷售 Excel 入場分類現已完全一致。**
+- ✅ **入場費六分類欄位「預設就顯示 + 逐類手動輸入」**（純前端 `DailySettlementPage.jsx`，commit `148fcee`）：回報「結帳畫面沒出細項」——查為當天無付費入場（唯一一筆是 0 元單次入場券）＋歷史是舊格式快照，非 bug。使用者要「default 就有這些欄位、即使沒收入、旁邊可手動輸入」，拍板**每分類各一輸入框、固定六分類**。
+  - 模組頂加 `ENTRY_CATS`(六類)＋`sysEntryVal`/`entryCatList`(固定六＋其他有系統值分類)/`manEntryVal`/`entryManualTotal`；`manualIncomeTotal` 入場改走 `entryManualTotal`（逐類 Σ手動缺回退系統）。
+  - **今日收入卡**：入場收入下**恆顯示六分類列**（即使系統 0）；轉換期手動模式每類各一輸入框（值存 `incomeManual.entryItems[label]`），入場收入總額＝各類手動加總、底部總計走 `manualIncomeTotal`。其餘四項（岩鞋/商品/課程/定期票）維持單一手動框。
+  - **SettlementSummary（確認 modal／已結帳／歷史）**：入場分項改逐類顯示——手動模式全六類「手動·系統」（不一致紅字）、純系統檢視只列系統值>0；`invoiceTotal` 改用 `manualIncomeTotal`。
+  - **向下相容**：舊 `incomeManual.entry`（單一手動值、無 entryItems）→ `entryManualTotal` 回退舊值，歷史顯示不變。`incomeManual.entryItems` 隨 buildBody 存入結帳 doc。
+  - ⚠️ **未跑瀏覽器實機**（擴充未連線）；build 兩 target 通過、邏輯逐案推演（空手動→系統值、輸入單類→該類手動＋餘類系統、顯式 0 生效、舊 doc 回退）。使用者可到轉換期手動模式實測。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

@@ -770,6 +770,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🧹 **清測試殘留**：刪掉近14天孤兒 checkin/refund 交易 3 筆＋當日新竹「對應已取消入場」的 checkin+refund 對 14 筆（net 0，但營收 entry/rental 欄被拆歪）。清後**新竹今日 營收＝結帳＝入場4000/租借(出租)300/合計4300**，完全對齊。
 - ✅ **補上 refund 明細對稱拆分**（`/health` `2.15.0-refund-split-rental`，commit `d75125f`；E2E 5/5）：入場取消退款的 `type:'refund'` 交易補存 `entryFee`(負)、`shoesPrice`(負，=岩鞋+粉袋)——`cancelCheckIn`（checkinService）與 `cancelCheckin.js`（自助/管理員核准）三處；`revenue/daily` 對「有 entryFee 的 refund」套 checkin 同一拆分公式（rental 允許負值）→ 入場取消時 **entry/rental 欄對稱歸零**，與結帳（排除已取消）完全一致。`pass`/課程退費（`type:'refund'` 無 entryFee 或 `*_refund`）不受影響、仍 foldType 歸原類別。**E2E**：付費入場300+岩鞋100+粉袋50 → 營收 入場300/租借150 → 取消 → refund(entryFee-300/shoes-150/total-450) → 營收 入場0/租借0/合計0。腳本 `scratchpad/refund-split-e2e.mjs`，測後 0 殘留。
 
+## 目前進度（2026-07-10 續）— 結帳「今日收入」≠「付款方式」修正（A 免費入場租借預設現金 + B 付款方式涵蓋全方式）
+> 回報結帳今日收入與付款方式金額不一致。查：① 免費入場(定期票等)加租借岩鞋粉袋時 `paymentMethod:null` → 收入算(出租)、付款方式漏；② 付款方式只有 現金/LinePay/街口/台灣Pay、**無轉帳欄**，且**課程/定期票只累加現金**（電子/轉帳漏）。後端 `/health` `2.16.0-settlement-payment-all-methods`；E2E 5/5。commit 後端 `88efb6d`、前端 `3896f15`。
+- ✅ **B 付款方式涵蓋全部方式**（`dailySettlements` GET /today）：改用 `payByMethod` 累加**所有來源**（入場/租借/商品/課程/定期票）的**所有付款方式**——`payment` 加 `transfer` 欄；課程/定期票的 LinePay/街口/台灣Pay/轉帳不再漏（原只 `cashCourse`/`cashPass`）。`totalCash/electronic/transfer` 皆由 payByMethod 導出。前端 `DailySettlementPage` 付款方式統計加「轉帳」列（含手動輸入）。
+- ✅ **A 免費入場租借預設現金**：`addPay` 對 `paymentMethod` 為 null（免費入場但加租岩鞋粉袋）**預設歸現金**（櫃檯實收）→ 收入的出租金額在付款方式現金欄計入。`confirmCheckIn` 亦對「有實收金額但無付款方式」的 checkIn 存 `paymentMethod:'cash'`（資料本身也記，非只報表）。使用者拍板可「預設現金」。
+- **結果**：**付款方式合計 ＝ 今日收入 total**（每筆收款都歸到某付款方式）。**E2E（打 Railway 假館，5/5）**：入場300現金 + 免費入場租借150(null) + 商品500轉帳 + 課程1000 LinePay + 定期票2000轉帳 → income total **3950**；payment 現金**450**(300+150)、LinePay 1000、轉帳 2500(500+2000)、合計 **3950 ＝ 收入**。腳本 `scratchpad/settlement-payment-e2e.mjs`，測後 0 殘留。
+- 📌 免費入場租借目前**一律預設現金**；若會員實際刷卡付租借，需之後在會員 QR 免費入場流程加「租借付款方式選擇」（未做，可再補）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

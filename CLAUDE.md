@@ -777,6 +777,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **結果**：**付款方式合計 ＝ 今日收入 total**（每筆收款都歸到某付款方式）。**E2E（打 Railway 假館，5/5）**：入場300現金 + 免費入場租借150(null) + 商品500轉帳 + 課程1000 LinePay + 定期票2000轉帳 → income total **3950**；payment 現金**450**(300+150)、LinePay 1000、轉帳 2500(500+2000)、合計 **3950 ＝ 收入**。腳本 `scratchpad/settlement-payment-e2e.mjs`，測後 0 殘留。
 - ✅ **免費入場租借可選付款方式**（純前端 `MemberQRPage`，commit `03c7777`；E2E 3/3）：租借步驟——免費入場（定期票/VIP/黑卡/紅利/單次券等）且加租岩鞋/粉袋 → 顯示「租借付款方式」選擇（現金/LinePay/街口/台灣Pay/轉帳），未選擋確認；`handleGenerateQR` 對免費入場+租借帶 `paymentMethod`。→ 結帳付款方式**依實選歸類**（不再一律現金；未帶時後端仍 fallback 現金）。E2E：免費 pass 入場+租岩鞋100+指定 transfer → checkIn 及 checkin 交易 `paymentMethod=transfer`、amountPaid 100。腳本 `scratchpad/free-rental-paymethod-e2e.mjs`。
 
+## 目前進度（2026-07-10 續）— 統一入場標籤 pass→定期票、buy_pass→購買定期票
+> 回報入場有些寫 pass/buy_pass（原始英文）、有些寫定期票，要統一。後端 `/health` `2.17.0-unify-pass-labels`；commit 後端 `149b042`、前端 `3ef7a80`。
+- ✅ **後端結帳**（`dailySettlements` ENTRY_LABEL）：`pass` 由「定期票入場」→「**定期票**」；補上 `buy_pass`→「**購買定期票**」＋`buy_discount_card`→「購買優惠折扣券」（原缺 buy_pass → entryItems 顯示原始 `buy_pass`）。驗證：新竹結帳 entryItems 由 `buy_pass` → **「購買定期票」**。
+- ✅ **前端共用表**：新增 `utils/entryLabel.js`（`ENTRY_TYPE_LABEL` + `entryTypeLabel()`，pass=定期票、buy_pass=購買定期票…）；修原本直接顯示原始 `entryType` 的 4 處——`MemberRecords`、`MemberRecordsPage`、`MemberProfilePage`（原只判 monthly_pass/single_ticket、其餘顯原始）、`CheckinPage` 入場歷史列（`c.entryType`）→ 全走共用表。（各頁既有 ENTRY_TYPE_LABEL 已含 pass/buy_pass、不受影響。）
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

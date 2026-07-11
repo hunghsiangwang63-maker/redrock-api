@@ -707,6 +707,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **查證不需改**：`systemSettings/waiver` 存的 zh/en 內容**不含**「免責聲明」（本就用風險字樣）；全專案（排 node_modules/dist）除 CLAUDE.md 進度史外 0 殘留。
 - ⚠️ 後端 `0c33fce` 已 push 到 GitHub（Railway 監看），提交時 Railway 部署較慢、未即時上 2.04.0；文案類低風險，稍後自動部署。前端已生效。
 
+## 目前進度（2026-07-10 續）— 定期票展延改「會員填停用期間」（後端權威順延）
+> 展延由「店員填月數」改為「會員自填停用期間（起訖日）」，後端依停用天數順延票期。後端 `/health` `2.05.0-pass-extension-suspend-period`；E2E 13/13。commit 後端 `d80e87e`、前端 `b3c7311`。
+- **規則（使用者拍板）**：新到期日 = **原到期日 + 停用天數**；6 個月上限判斷基準 = **新到期日 ≤ 原到期日 + 6 個月**。開始日不可早於申請日。拒絕不佔「限一次」額度。
+- ✅ **後端**（`passAdjustmentService.createPassRequest` + `passAdjustments.js`）：extension 收 `suspendStart`/`suspendEnd`——驗開始日≥今天(`SUSPEND_START_TOO_EARLY`)、結束>開始(`INVALID_SUSPEND_PERIOD`)、缺期間(`MISSING_SUSPEND_PERIOD`)；`extensionDays=結束−開始`、`newEnd=原到期日+天數`，`newEnd>原到期日+6月`→`EXTENSION_EXCEEDS_LIMIT`。存 `suspendStart/End/extensionDays/passEndDateAtRequest`。`approvePassRequest` extension 改用 `request.extensionDays` 順延（核准當下再守 6 月上限），**舊申請無 extensionDays 沿用店員月數**（相容）。
+- ✅ **拒絕不佔額度**：查證原本即是——`requestUsed` 只在**核准**時設 true，`rejectPassRequest` 不動它、createPassRequest 也不設 → 拒絕後可重申請。E2E 實證。
+- ✅ **前端**：會員 `MemberPassesPage` 展延表單加「停用期間」起訖日（`min=今天`）+ 即時預覽「停用 N 天 → 到期日順延為 X」、超 6 月上限紅字擋 submit；帶 `suspendStart/End`。員工 `PassRequestReviewModal` 展延審核由「填月數」改**唯讀顯示會員停用期間 + 順延後到期日**（舊申請無停用期間才顯示月數輸入）。
+- **E2E（打 Railway，練習會員/票，13/13）**：缺期間/早於今天/結束≤開始/超6月 各自 400 對應 code；45 天 → `extensionDays:45`、核准後票期 2026-10-01→**2026-11-15**、`requestUsed:true`、再申請 `REQUEST_ALREADY_USED`；另一票 拒絕後 `requestUsed` 仍 false、可再次申請 201。腳本 `scratchpad/pass-extension-suspend-e2e.mjs`，測後 0 殘留。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

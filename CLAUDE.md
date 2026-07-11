@@ -805,6 +805,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **入場 tab 標記已取消入場**（純前端 `MemberRecordsPage`，commit `5065c52`）：回報「我的紀錄的入場紀錄，取消入場看不出來」——原入場 tab 只列 館名/類型/日期、不分取消。`/checkin/history` 本就回 `isCancelled`（未過濾）→ 取消者館名加**刪除線淡化**＋灰底「已取消」徽章。
   - 📋 **入場取消「備註/原因」現況**（查證，未改）：checkIn 文件取消時只寫 `isCancelled/cancelledAt/cancelledBy`，**無原因欄**。三路徑中只有「員工申請取消→管理員核准」(`/cancel-checkins/request`) 帶 `reason`，但存在 `cancelCheckinRequests` 集合、**核准時未回填 checkIn** → 會員端查不到原因。若要顯示原因需另做（取消端點加 `cancelReason` 並回填）。
 
+## 目前進度（2026-07-11 續）— 課程名稱前綴顯示館別（會員＋員工，排除課程月曆）
+> 需求：課程前面固定顯示館別（會員課程月曆一律排除；AskUserQuestion 確認「會員端＋員工端都加」）。純前端 `redrock-web`，commit `b4e5a4a`，member/staff 皆 deploy。
+- ✅ **共用 `src/utils/gymLabel.js`**：`GYM_LABEL`、`gymLabel(gymId)`、`gymPrefix(gymId)`→`【新竹館】`/`【士林館】`；**未知/雙館/空 gymId → 回空字串（不前綴）**。
+- ✅ **會員端**（`MemberCoursesPage`）：課程總覽——第一層類別卡（該類別全屬同館才前綴、跨館不加）、第二層類別標題＋各梯次卡、課程詳情標題；我的課程卡（group 加 `gymId`，前綴 `group.courseName`，含逾期取消卡）。`MemberRecordsPage` 課程 tab（`gymPrefix(e.gymId)`）。**課程月曆 tab 不加**（依需求排除）。
+- ✅ **員工端**（`CoursesPage`）：課程列表第一層類別卡（同館才前綴）、第二層類別標題、梯次卡；場次管理側欄課程列、場次詳情標題；名單 modal 標題。**課程月曆日格不加**（自行決定排除、避免洗版，與會員月曆一致）。
+- **資料來源**：課程/場次/報名皆帶 `gymId`（enroll-all 存 `gymId: s.gymId||gymId`，courseService 回傳 enrollment 含 gymId）→ 前綴即時可用。build 兩 target 通過。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

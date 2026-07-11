@@ -796,6 +796,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **掃描 0 孤兒票券**（owner 已刪的殘留票券）：8 個票券集合全掃、無殘留。
 - 📌 原「2026-07-14 刪除全部測試會員」待辦**已完成並移除**（提前執行、範圍與原規劃不同：保留王大明與全部真實會員）。
 
+## 目前進度（2026-07-11 續）— 我的紀錄加家庭成員下拉（父子會員切換檢視）
+> 回報：會員「我的紀錄」若有父子會員，五分項（入場/定期票/課程/退費請假/比賽）不會分開顯示、無切換。做法採「頂部下拉選單切換檢視對象」（方案 1）。後端 `/health` `2.19.0-records-child-query`；E2E（打 Railway）9/9。commit 後端 `aed60a1`、前端 `277c0a0`。
+- 🔍 **五端點原本擋子女的 3 個**：`/checkin/history`（會員 token 硬綁 `req.member.id`、忽略 `query.memberId`）、`/course-adjustments/member/:id`（`req.member.id!==memberId → 403`）、`/competitions/registrations/member/:id`（同 403）。`/passes/member/:id`、`/courses/member/:id/enrollments` 本就 `where(memberId==)` 無擁有權限制、家長可查。
+- ✅ **後端放行家長代查子女**（三端點改用 `checkMemberOwnership(req.member, targetId, {onMissing:403})`）：`checkin.js` history——會員 token 帶 `query.memberId` 且非本人時驗擁有權後才放行（否則沿用本人）；`courseAdjustments.js`、`competitions.js` 把原硬 403 換成 ownership 檢查。非子女他人仍擋（403／不外洩）。
+- ✅ **前端**（`MemberRecordsPage`）：載入 `/members/my/children`→ 家庭成員清單（本人＋子女）；**有子女才顯示頂部「檢視對象」下拉**（本人／👦 子女），切換 `viewId` 重載該人五分項。無子女者畫面不變。
+- **E2E（9/9）**：注入林怡君臨時子會員＋各集合一筆 → 家長查子女五分項全 200 有資料；查非子女他人 → 入場不外洩、退費請假/比賽 403。測後清乾淨。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

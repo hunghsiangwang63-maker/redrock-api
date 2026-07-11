@@ -172,4 +172,25 @@ const getPendingByFromMember = async (memberId) => {
   return snap.docs.map(d => ({ id: d.id, ...d.data(), expiresAtISO: toDate(d.data().expiresAt)?.toISOString() }));
 };
 
-module.exports = { initiateTransfer, acceptTransfer, cancelTransfer, revertExpired, getIncoming, getPendingByFromMember };
+// ── 單張卡的移轉紀錄（轉入 + 轉出，含對方姓名）──────────────────────
+// cardId 可能是「來源卡」(轉出，fromCardId) 或「接收後產生的卡」(轉入，newCardId)。
+const getCardTransferHistory = async (cardId, memberId) => {
+  const db = getDb();
+  const [outSnap, inSnap] = await Promise.all([
+    db.collection(COLLECTION).where('fromCardId', '==', cardId).get(),   // 此卡轉出
+    db.collection(COLLECTION).where('newCardId', '==', cardId).get(),    // 此卡由轉入產生
+  ]);
+  const recs = [];
+  outSnap.docs.forEach(d => { const t = d.data();
+    if (t.status === 'completed' && (t.fromMemberId === memberId || t.toMemberId === memberId))
+      recs.push({ direction: 'out', memberName: t.toMemberName || '', credits: t.credits || 0, at: t.acceptedAt || t.createdAt || null });
+  });
+  inSnap.docs.forEach(d => { const t = d.data();
+    if (t.fromMemberId === memberId || t.toMemberId === memberId)
+      recs.push({ direction: 'in', memberName: t.fromMemberName || '', credits: t.credits || 0, at: t.acceptedAt || t.createdAt || null });
+  });
+  const ms = (v) => { const dt = toDate(v); return dt ? dt.getTime() : 0; };
+  return recs.sort((a, b) => ms(b.at) - ms(a.at));
+};
+
+module.exports = { initiateTransfer, acceptTransfer, cancelTransfer, revertExpired, getIncoming, getPendingByFromMember, getCardTransferHistory };

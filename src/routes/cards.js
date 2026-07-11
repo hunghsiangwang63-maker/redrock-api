@@ -278,6 +278,15 @@ router.get('/transfers/incoming', authenticateMember, async (req, res) => {
   try { res.json({ transfers: await require('../services/cardTransferService').getIncoming(req.member.id) }); }
   catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
+// 單張卡的移轉紀錄（轉入/轉出，含對方姓名）— 卡片詳情頁「轉移紀錄」用
+router.get('/transfers/history/:cardId', authenticateAny, async (req, res) => {
+  try {
+    const memberId = req.member?.id;
+    if (!memberId) return res.status(401).json({ error: 'UNAUTHORIZED' });
+    const records = await require('../services/cardTransferService').getCardTransferHistory(req.params.cardId, memberId);
+    res.json({ records });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
 // 受贈者接收（會員 App）
 router.post('/transfers/:id/accept', authenticateMember, async (req, res) => {
   try {

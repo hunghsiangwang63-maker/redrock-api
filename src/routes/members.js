@@ -45,9 +45,10 @@ router.get('/my/children', authenticateAny, async (req, res) => {
     const memberId = req.member?.id;
     if (!memberId) return res.status(401).json({ error: 'UNAUTHORIZED' });
     const db = getDb();
+    // 子會員判定以 parentMemberId 為準（唯一定義關係）；不再要求 isChildAccount:true，
+    // 避免有 parentMemberId 但漏設旗標的子會員在家長「我的票券/課程」看不到、無法代操作。
     const snap = await db.collection(COLLECTIONS.MEMBERS)
       .where('parentMemberId', '==', memberId)
-      .where('isChildAccount', '==', true)
       .get();
     const children = snap.docs.map(d => {
       const { phone, email, ...rest } = d.data();

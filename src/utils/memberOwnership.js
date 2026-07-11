@@ -32,7 +32,9 @@ async function checkMemberOwnership(member, targetMemberId, opts = {}) {
   }
 
   const target = snap.data();
-  if (!target.isChildAccount || target.parentMemberId !== member.id) {
+  // 子會員判定以 parentMemberId 為準（與 /members/my/children 一致）；不要求 isChildAccount 旗標，
+  // 避免漏設旗標的子會員讓家長無法代操作（退費/請假/轉移等）。
+  if (target.parentMemberId !== member.id) {
     return forbidden;
   }
   return null; // 為自己的子會員

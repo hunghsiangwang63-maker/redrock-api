@@ -60,7 +60,7 @@ const getPassAdjustmentHistory = async (passId) => {
 // 會員申請（展延/退費/轉讓 三選一，限一次）
 // ══════════════════════════════════════════════════════
 
-const createPassRequest = async ({ passId, memberId, type, reasonKey, reasonDetail, evidenceUrl, transferToPhone }) => {
+const createPassRequest = async ({ passId, memberId, type, reasonKey, reasonDetail, evidenceUrl, transferToPhone, suspendStart, suspendEnd }) => {
   if (!['extension', 'refund', 'transfer'].includes(type)) {
     throw { code: 'INVALID_TYPE', message: 'type 必須為 extension、refund 或 transfer' };
   }
@@ -78,6 +78,26 @@ const createPassRequest = async ({ passId, memberId, type, reasonKey, reasonDeta
   if (pass.memberId !== memberId) throw { code: 'FORBIDDEN', message: '只能為自己的定期票申請' };
   if (pass.requestUsed) throw { code: 'REQUEST_ALREADY_USED', message: '此張定期票已使用過展延/退費/轉讓申請（三者擇一，限一次）' };
 
+  // 展延：會員自填停用期間（起訖日），後端權威驗證並算出延後天數與新到期日
+  //  ‧ 開始日不可早於申請日（今天，台灣時間）
+  //  ‧ 延後天數＝停用結束日−停用開始日；新到期日＝原到期日＋延後天數
+  //  ‧ 新到期日不可比原到期日晚超過 6 個月
+  let extensionDays = null, extensionNewEndDate = null;
+  if (type === 'extension') {
+    if (!suspendStart || !suspendEnd) throw { code: 'MISSING_SUSPEND_PERIOD', message: '請填寫停用期間（起訖日）' };
+    const today = dayjs().format('YYYY-MM-DD');
+    const s = dayjs(suspendStart), e = dayjs(suspendEnd);
+    if (!s.isValid() || !e.isValid()) throw { code: 'INVALID_SUSPEND_PERIOD', message: '停用期間日期格式不正確' };
+    if (suspendStart < today) throw { code: 'SUSPEND_START_TOO_EARLY', message: '停用開始日不可早於申請日' };
+    extensionDays = e.diff(s, 'day');
+    if (extensionDays <= 0) throw { code: 'INVALID_SUSPEND_PERIOD', message: '停用結束日必須晚於開始日' };
+    extensionNewEndDate = dayjs(pass.endDate).add(extensionDays, 'day').format('YYYY-MM-DD');
+    const maxEndDate = dayjs(pass.endDate).add(MAX_EXTENSION_MONTHS, 'month').format('YYYY-MM-DD');
+    if (extensionNewEndDate > maxEndDate) {
+      throw { code: 'EXTENSION_EXCEEDS_LIMIT', message: `展延後到期日不可比原到期日（${pass.endDate}）晚超過 ${MAX_EXTENSION_MONTHS} 個月` };
+    }
+  }
+
   // 是否已有處理中的申請
   const pendingSnap = await db.collection(COLLECTIONS.PASS_REQUESTS)
     .where('passId', '==', passId).where('status', '==', 'pending').limit(1).get();
@@ -94,6 +114,11 @@ const createPassRequest = async ({ passId, memberId, type, reasonKey, reasonDeta
     reasonDetail: reasonDetail || '',
     evidenceUrl,
     transferToPhone: type === 'transfer' ? (transferToPhone || '') : null,
+    // 展延：停用期間 + 後端算好的延後天數/新到期日（核准時據此更新，不再由店員填月數）
+    suspendStart: type === 'extension' ? suspendStart : null,
+    suspendEnd: type === 'extension' ? suspendEnd : null,
+    extensionDays: type === 'extension' ? extensionDays : null,
+    passEndDateAtRequest: type === 'extension' ? pass.endDate : null,
     status: 'pending', // pending | approved | rejected
     reviewedBy: null, reviewedAt: null, rejectReason: null,
     createdAt: now,
@@ -145,16 +170,29 @@ const approvePassRequest = async ({ requestId, operatorId, operatorName, extensi
   let result = {};
 
   if (request.type === 'extension') {
-    const months = Math.min(parseInt(extensionMonths) || MAX_EXTENSION_MONTHS, MAX_EXTENSION_MONTHS);
-    const newEndDate = dayjs(pass.endDate).add(months, 'month').format('YYYY-MM-DD');
+    // 新制：會員申請時已填停用期間、後端算好延後天數 → 依此延長（不再由店員填月數）。
+    //       核准當下以「現行 pass.endDate + 延後天數」重算，並再次守住 6 個月上限（防審核期間票期有變）。
+    // 舊制相容：無 extensionDays 的舊申請 → 沿用店員填的月數（capped 6）。
+    let newEndDate, afterMeta;
+    if (Number.isFinite(request.extensionDays) && request.extensionDays > 0) {
+      const days = request.extensionDays;
+      const maxEndDate = dayjs(pass.endDate).add(MAX_EXTENSION_MONTHS, 'month').format('YYYY-MM-DD');
+      newEndDate = dayjs(pass.endDate).add(days, 'day').format('YYYY-MM-DD');
+      if (newEndDate > maxEndDate) newEndDate = maxEndDate;   // 權威守 6 個月上限
+      afterMeta = { endDate: newEndDate, days, suspendStart: request.suspendStart, suspendEnd: request.suspendEnd };
+    } else {
+      const months = Math.min(parseInt(extensionMonths) || MAX_EXTENSION_MONTHS, MAX_EXTENSION_MONTHS);
+      newEndDate = dayjs(pass.endDate).add(months, 'month').format('YYYY-MM-DD');
+      afterMeta = { endDate: newEndDate, months };
+    }
     await passRef.update({ endDate: newEndDate, requestUsed: true, updatedAt: now });
     await logAdjustment({
       passId: pass.id, type: 'extension',
-      beforeData: { endDate: pass.endDate }, afterData: { endDate: newEndDate, months },
+      beforeData: { endDate: pass.endDate }, afterData: afterMeta,
       reason: `會員申請展延核准：${request.reasonLabel}`,
       operatorId, operatorName, operatorType: 'staff',
     });
-    result = { newEndDate, months };
+    result = { newEndDate, ...afterMeta };
 
   } else if (request.type === 'refund') {
     if (!hasInvoice) throw { code: 'INVOICE_REQUIRED', message: '退費需確認會員已提供發票正本' };

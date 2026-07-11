@@ -747,6 +747,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（打 Railway，4/4）**：轉給 6 歲子女 C → `CHILD_NOT_ALLOWED`；轉給成人家長 B → 201；recipients `under13`（C=true、B=false）。腳本 `scratchpad/pass-transfer-child-e2e.mjs`，測後 0 殘留。
 - ⚠️ **政策**：以「兒童不能買定期票/接受點數轉移」一致性為由**禁止**轉給未滿 13 歲。若之後要開放（例如家庭把票給小孩用）再調整此擋。
 
+## 目前進度（2026-07-10 續）— 定期票轉入卡片註記 + 轉出紀錄（會員端）
+> 需求：轉出/轉入在會員端定期票上做註記。轉入＝收票人卡片標「由 XXX 轉入」；轉出＝票已離開帳號、用申請紀錄呈現「已轉出給 XXX」（方案 A）。後端 `/health` `2.11.0-pass-transfer-in-out-mark`；E2E 6/6。commit 後端 `20538d9`、前端 `8bedb73`。
+- ✅ **後端**（`approvePassRequest` transfer）：除 `transferredFrom`(id) 另存 **`transferredFromName`（原持有人姓名）＋`transferredAt`（轉讓日期）** 到轉入後的票（收票人卡片顯示用）。轉出紀錄不需改後端——直接用會員既有的「定期票異動申請」（`type=transfer, status=approved` 帶 `transferToName`）。
+- ✅ **前端**（`MemberPassesPage`）：
+  - **轉入**：`renderPassCard` 對 `p.transferredFrom` 顯示藍色標記「🔄 由 {transferredFromName} 轉入（{transferredAt}）」。
+  - **轉出（方案 A）**：定期票分頁底部加「轉出紀錄（N）」區——列本人 `myRequests` 中 `transfer+approved`，顯示「↗ 已轉出給 {transferToName}（核准日期）」＋「已轉出」徽章。**票已離開帳號故以紀錄呈現**；passes 全空但有轉出紀錄時不顯示空狀態（原本會提早 return）。
+- **E2E（打 Railway，6/6）**：A→B 轉讓核准 → 票 memberId=B、`transferredFrom=A`、`transferredFromName=原持有人`、`transferredAt=今天`；A 的申請 `approved`＋`transferToName=接收人`（轉出紀錄資料源）。腳本 `scratchpad/pass-transfer-mark-e2e.mjs`，測後 0 殘留。
+- 註：轉出紀錄只列**本人**（`getMyPassRequests` 後端限本人）；子女的轉讓不在此列（子女票券本就唯讀）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

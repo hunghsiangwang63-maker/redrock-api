@@ -677,6 +677,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **驗證（打 Railway 新竹近7天實資料）**：修後 7/11 入場 **5290→0**（合計 0）；7/07 定期票 **9880→3040**（合計 4240＝入場1200＋定期票3040）；各日「殘留 refund」欄全 0，欄位加總＝合計（7/06 差 400 為 `single_entry_ticket` 無獨立欄、非沖銷問題）。
 - 註：export-csv 明細（逐筆列 refund/退費）**不套 fold**（明細本就該逐筆顯示沖銷列，非彙總）；日報表 `count` 仍計入沖銷交易筆數。
 
+## 目前進度（2026-07-10 續）— 特約廠商入場優惠（全票/學生票無其他折扣 −20）
+> 全票/學生票在「無其他折扣」時入場費定額 −20；會員 QR 自選、員工掃碼提示出示證件。金額後端權威。後端 `/health` `2.00.0-partner-vendor-discount`；E2E（打 Railway）12/12。commit 後端 `efc94fc`、前端 `8c7b333`。
+- **規則**：適用 `single_ticket`/`student_free`（兒童 `child_free` 不適用）；定額常數 `PARTNER_VENDOR_DISCOUNT=20`（只折入場費、加購原價）；**互斥優先序 legacy(8折) > team(9折) > partner(−20)**——隊員或舊折扣卡任一成立 → 特約忽略（partnerVendor:false）；優惠卡/黑卡/紅利/單次券走各自 entryType 不在此路徑。
+- ✅ **後端**（`checkinService.js` + `checkin.js`）：`computePaidEntryAmount` 加 `opts.partnerVendor`——僅當 `!legacyDiscountCard && !teamEligible && partnerVendor && entryType∈{single_ticket,student_free}` → `amount=max(0,原價−20)`、回 `partnerVendor:true`（否則 false，child_free 分支亦回 false）。`createPendingCheckIn` 收 `partnerVendor`→帶入 compute→存 `finalPartnerVendor` 進 pending；`confirmCheckIn` 寫入 checkIn；`verifyEntry` 每 `entryTypeOptions` 加 `partnerVendorEligible=(single/student && !isTeam)`＋頂層 `partnerVendorDiscount:20`；`scanQrCode` 回 `partnerVendor` 供掃碼提示；`/checkin/qr/create` 透傳。**後端權威**：前端勾了但判定隊員/舊卡/兒童 → 不套。（`/checkin/direct` 未帶 partnerVendor，站台無此入口、預設 false。）
+- ✅ **前端**：會員 `MemberQRPage` 付款步驟——一般付款且 `partnerVendorEligible` → 顯示可勾選「特約廠商（−NT$20，需出示證件）」，勾選則金額 −20、payload 帶 `partnerVendor:true`；兒童/隊員/卡券/定期票路徑不顯示；QR 頁摘要標「入場費（特約 −20）」。員工 `CheckinPage` 掃碼預覽 `partnerVendor:true` → 顯眼琥珀提示「⚠ 特約廠商優惠（−20）：請會員出示證件確認」。
+- **E2E（打 Railway，練習會員 super_admin 驅動 `/qr/create`→pending→scan→confirm，12/12）**：成人 300→**280**/pv:true、學生 250→**230**、兒童帶特約 **150**/pv:false、成人不勾 300/pv:false、隊員帶特約 **270**(9折)/pv:false、舊折扣卡開+特約 **240**(8折)/pv:false；scan 有/無特約回 true/false；confirm `amountPaid 280`/pv:true；verify 頂層 `partnerVendorDiscount:20`、成人選項 eligible:true、隊員選項 eligible:false。腳本 `scratchpad/partner-vendor-e2e.mjs`，練習會員/pending/checkIn/交易測後清乾淨、轉換期設定還原、0 殘留。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

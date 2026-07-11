@@ -73,8 +73,10 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       .where('checkedInAt', '<=', todayEnd).get();
 
     let entryIncome = 0, shoeRentalIncome = 0;
-    let cashEntry = 0, linePayEntry = 0, jkoEntry = 0, twPayEntry = 0;
     const entryByType = {};   // 入場收入細項（依折扣分類，見模組頂 entryCategory）
+    // 各付款方式收款（跨入場/租借/商品/課程/定期票，含轉帳）；免費入場+租借等無付款方式者預設歸現金（櫃檯實收）
+    const payByMethod = {};
+    const addPay = (method, amt) => { if (amt) { const m = method || 'cash'; payByMethod[m] = (payByMethod[m] || 0) + amt; } };
     checkinSnap.docs.forEach(d => {
       const data = d.data();
       const amount = data.amountPaid || 0;
@@ -86,10 +88,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       const cat = entryCategory(data);
       entryByType[cat] = (entryByType[cat] || 0) + entryAmt;
       shoeRentalIncome += rentalAmt;
-      if (data.paymentMethod === 'cash') cashEntry += amount;
-      else if (data.paymentMethod === 'linepay') linePayEntry += amount;
-      else if (data.paymentMethod === 'jkopay') jkoEntry += amount;
-      else if (data.paymentMethod === 'taiwanpay') twPayEntry += amount;
+      addPay(data.paymentMethod, amount);   // 免費入場但有租借 → paymentMethod 可能為 null，預設歸現金
     });
 
     // 商品銷售
@@ -97,14 +96,11 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       .where('gymId', '==', gymId)
       .where('soldAt', '>=', todayStart)
       .where('soldAt', '<=', todayEnd).get();
-    let productIncome = 0, cashProduct = 0, linePayProduct = 0, jkoProduct = 0, twPayProduct = 0;
+    let productIncome = 0;
     salesSnap.docs.forEach(d => {
       const data = d.data();
       productIncome += data.totalAmount || 0;
-      if (data.paymentMethod === 'cash') cashProduct += data.totalAmount || 0;
-      else if (data.paymentMethod === 'linepay') linePayProduct += data.totalAmount || 0;
-      else if (data.paymentMethod === 'jkopay') jkoProduct += data.totalAmount || 0;
-      else if (data.paymentMethod === 'taiwanpay') twPayProduct += data.totalAmount || 0;
+      addPay(data.paymentMethod, data.totalAmount || 0);
     });
 
     // 課程／定期票收入：統一從 transactions 撈今日已完成交易，再依type分類
@@ -115,8 +111,8 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       .where('recognitionDate', '>=', todayStart)
       .where('recognitionDate', '<=', todayEnd).get();
 
-    let courseIncome = 0, cashCourse = 0;
-    let passIncome = 0, cashPass = 0;
+    let courseIncome = 0;
+    let passIncome = 0;
     const passByType = {};   // 定期票收入細項（依票種，從 notes「定期票購買：xxx」取名）
     txnSnap.docs.forEach(d => {
       const data = d.data();
@@ -124,20 +120,21 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       const amount = data.totalAmount || 0;
       if (data.type === 'course') {
         courseIncome += amount;
-        if (data.paymentMethod === 'cash') cashCourse += amount;
+        addPay(data.paymentMethod, amount);   // 含轉帳/LinePay/街口/台灣Pay（原本只算現金）
       } else if (data.type === 'pass') {
         passIncome += amount;
-        if (data.paymentMethod === 'cash') cashPass += amount;
+        addPay(data.paymentMethod, amount);
         const nm = ((data.notes || '').split('：')[1] || '定期票').trim() || '定期票';
         passByType[nm] = (passByType[nm] || 0) + amount;
       }
       // type === 'checkin' / 'product' / 'single_entry_ticket' / 'refund' 等
-      // 已分別由 checkinSnap / salesSnap 統計，此處不重複加總，僅作為交叉驗證來源
+      // 入場/商品已分別由 checkinSnap / salesSnap 統計，此處不重複加總
     });
 
     const totalIncome = entryIncome + shoeRentalIncome + productIncome + courseIncome + passIncome;
-    const totalCash = cashEntry + cashProduct + cashCourse + cashPass;
-    const totalElectronic = linePayEntry + linePayProduct + jkoEntry + jkoProduct + twPayEntry + twPayProduct;
+    const totalCash = payByMethod.cash || 0;
+    const totalElectronic = (payByMethod.linepay || 0) + (payByMethod.jkopay || 0) + (payByMethod.taiwanpay || 0);
+    const totalTransfer = payByMethod.transfer || 0;
 
     const settlement = {
       date: today,
@@ -159,9 +156,10 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       },
       payment: {
         cash: totalCash,
-        linePay: linePayEntry + linePayProduct,
-        jko: jkoEntry + jkoProduct,
-        taiwanPay: twPayEntry + twPayProduct,
+        linePay: payByMethod.linepay || 0,
+        jko: payByMethod.jkopay || 0,
+        taiwanPay: payByMethod.taiwanpay || 0,
+        transfer: totalTransfer,
         electronic: totalElectronic,
       },
       deductions: [],

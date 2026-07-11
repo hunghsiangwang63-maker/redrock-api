@@ -1217,7 +1217,8 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     transactionId: null,
     // 分期購定期票：票價由分期計畫記帳，本次入場只認列加購（岩鞋/粉袋）；一次付清照舊含票價
     amountPaid: (buyPassInstallmentApplied ? 0 : pending.amount) + pending.shoesPrice + (pending.chalkPrice || 0),
-    paymentMethod: pending.paymentMethod,
+    // 免費入場但有加租（岩鞋/粉袋）時 paymentMethod 可能為 null → 有實收金額就預設現金（櫃檯實收），供結帳付款方式歸類
+    paymentMethod: pending.paymentMethod || (((buyPassInstallmentApplied ? 0 : pending.amount) + pending.shoesPrice + (pending.chalkPrice || 0)) > 0 ? 'cash' : null),
     isTeamDiscount: pending.isTeamDiscount,
     legacyDiscount: pending.legacyDiscount || false,
     partnerVendor: pending.partnerVendor || false,   // 特約廠商優惠（供報表/掃碼顯示）

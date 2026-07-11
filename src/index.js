@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '2.15.0-refund-split-rental',
+    version: '2.16.0-settlement-payment-all-methods',
   });
 });
 

@@ -661,6 +661,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **向下相容**：舊 `incomeManual.entry`（單一手動值、無 entryItems）→ `entryManualTotal` 回退舊值，歷史顯示不變。`incomeManual.entryItems` 隨 buildBody 存入結帳 doc。
   - ⚠️ **未跑瀏覽器實機**（擴充未連線）；build 兩 target 通過、邏輯逐案推演（空手動→系統值、輸入單類→該類手動＋餘類系統、顯式 0 生效、舊 doc 回退）。使用者可到轉換期手動模式實測。
 
+## 目前進度（2026-07-10 續）— 結帳暫存檔(draft)只保留三天（每日排程自動清理）
+> 需求：結帳暫存檔只留三天，逾期未結帳暫存自動刪；正式結帳永不刪。純後端。`/health` `1.99.0-settlement-draft-sweep`；E2E 9/9。commit `89c3165`。
+- 🔍 **現況**：暫存檔存 `dailySettlements`（gymId+date 鍵、`status:'draft'`），原**無 TTL、無清理**；`GET /today` 只抓 date==今天 → 跨日後舊 draft 不再載入但 doc 永久殘留。
+- ✅ **新增 `settlementService.sweepStaleSettlementDrafts()`**：`cutoff = 今天−3`（保留今天與最近三天），`where('status','==','draft')` 單一查詢 + 記憶體過濾 `date < cutoff`（避複合索引）→ batch 刪；回 `{deleted}` + log。**只刪 `draft`；`settled`/`unlocked` 正式結帳一律不動、永不刪。**
+- ✅ **掛進每日 9 點排程**（`index.js` `runDailyInstallmentJobs` 尾端，try/catch 不影響其他 sweep）。
+- ✅ **手動端點 `POST /daily-settlements/sweep-stale-drafts`**（super_admin，供補跑/測試，呼叫同一函式）。
+- **不動**：`GET /today`、`PUT /draft`、`POST /`（結帳）行為；draft「當天載回」語意不變。
+- **E2E（打 Railway，假館 `gym-e2e-test`，9/9）**：注入 draft d0/d2/d5 + settled d5（cutoff=今天−3）→ sweep → **只刪 d5 draft**（deleted:1），d0/d2 draft、d5 **settled** 全保留；二次冪等；無認證 401。腳本 `scratchpad/draft-sweep-e2e.mjs`，測後 0 殘留。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

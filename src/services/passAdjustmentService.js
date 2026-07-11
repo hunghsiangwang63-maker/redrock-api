@@ -16,6 +16,7 @@
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
 const { v4: uuidv4 } = require('uuid');
+const { isChild } = require('../utils/age');
 
 const REFUND_FEE = 600;
 const TRANSFER_FEE = 300;
@@ -105,6 +106,8 @@ const createPassRequest = async ({ passId, memberId, type, reasonKey, reasonDeta
     const tDoc = await db.collection(COLLECTIONS.MEMBERS).doc(transferToMemberId).get();
     if (!tDoc.exists) throw { code: 'TARGET_MEMBER_NOT_FOUND', message: '找不到轉讓對象會員，請確認' };
     if (transferToMemberId === memberId) throw { code: 'CANNOT_TRANSFER_SELF', message: '不能轉讓給自己' };
+    // 未滿 13 歲不可接收定期票轉讓（與「兒童不能買定期票/接受點數轉移」一致）
+    if (isChild(tDoc.data())) throw { code: 'CHILD_NOT_ALLOWED', message: '未滿 13 歲無法接收定期票轉讓' };
     transferTarget = { id: transferToMemberId, name: tDoc.data().name || '', phone: tDoc.data().phone || (transferToPhone || '') };
   }
 
@@ -245,6 +248,8 @@ const approvePassRequest = async ({ requestId, operatorId, operatorName, extensi
       if (targetSnap.empty) throw { code: 'TARGET_MEMBER_NOT_FOUND', message: `找不到轉讓對象會員（${phoneToSearch}），請確認電話號碼` };
       targetMember = targetSnap.docs[0];
     }
+    // 權威後盾：未滿 13 歲不可接收（涵蓋舊申請/電話路徑）
+    if (isChild(targetMember.data())) throw { code: 'CHILD_NOT_ALLOWED', message: '未滿 13 歲無法接收定期票轉讓' };
 
     await passRef.update({
       memberId: targetMember.id, memberName: targetMember.data().name,

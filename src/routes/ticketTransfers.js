@@ -230,8 +230,9 @@ router.get('/recipients', authenticateAny, async (req, res) => {
     if (!phone || phone.length < 10) return res.json({ recipients: [] });
     const snap = await db.collection('members').where('phone', '==', phone).get();
     const requesterId = req.member?.id || req.staff?.id;
+    const { isChild } = require('../utils/age');
     const recipients = snap.docs
-      .map(d => ({ id: d.id, name: d.data().name, isChildAccount: !!d.data().isChildAccount }))
+      .map(d => ({ id: d.id, name: d.data().name, isChildAccount: !!d.data().isChildAccount, under13: isChild(d.data()) }))
       .filter(m => m.id !== requesterId)                       // 不列自己
       .sort((a, b) => (a.isChildAccount ? 1 : 0) - (b.isChildAccount ? 1 : 0)); // 家長排前
     res.json({ recipients });

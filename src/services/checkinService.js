@@ -988,6 +988,21 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     };
   }
 
+  // 購買定期票入場：解析票種名稱與金額，供櫃檯掃碼確認時標示
+  let buyPassInfo = null;
+  if (pending.entryType === 'buy_pass' && pending.buyPassTypeId) {
+    const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(pending.buyPassTypeId).get();
+    if (ptDoc.exists) {
+      const pt = ptDoc.data();
+      buyPassInfo = {
+        passTypeName: pt.name,
+        fullPrice: pt.price,                    // 定期票全額
+        plan: pending.paymentPlan || 'full',    // 'full' | 'installment'
+        dueNow: pending.amount,                 // 本次櫃檯應收（一次付清＝全額；分期＝首期）
+      };
+    }
+  }
+
   return {
     qrToken,
     memberId: pending.memberId,
@@ -999,6 +1014,7 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     paymentMethod: pending.paymentMethod,
     amount: pending.amount,
     originalAmount: pending.originalAmount,
+    buyPass: buyPassInfo,                        // 購買定期票：票種名稱 + 金額（供掃碼標示）
     isTeamDiscount: pending.isTeamDiscount,
     legacyDiscount: pending.legacyDiscount || false,
     partnerVendor: pending.partnerVendor === true,   // 特約廠商優惠 → 員工端提示出示證件

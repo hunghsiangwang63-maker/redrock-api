@@ -783,6 +783,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端共用表**：新增 `utils/entryLabel.js`（`ENTRY_TYPE_LABEL` + `entryTypeLabel()`，pass=定期票、buy_pass=購買定期票…）；修原本直接顯示原始 `entryType` 的 4 處——`MemberRecords`、`MemberRecordsPage`、`MemberProfilePage`（原只判 monthly_pass/single_ticket、其餘顯原始）、`CheckinPage` 入場歷史列（`c.entryType`）→ 全走共用表。（各頁既有 ENTRY_TYPE_LABEL 已含 pass/buy_pass、不受影響。）
 - ✅ **員工今日統計補標籤**（commit `eb81793`）：`CheckinPage` 今日統計（`statsByGym.counts` 由 `/checkin/today` 動態 `counts[entryType]++`、帶原始 key）用的 local `typeLabel` 缺 `buy_pass` → 顯示原文。補 `buy_pass=購買定期票`、`buy_discount_card=購買優惠折扣券`、`vip=VIP`（此 map 刻意用短標籤如「單次/兒童免費」，故不換共用表、只補缺項）。純前端。
 
+## 目前進度（2026-07-11）— 優惠卡/黑卡詳情加「移轉紀錄」（轉入/轉出）
+> 承上：優惠卡/黑卡詳情原只有使用紀錄，加一段「移轉紀錄」列出轉入/轉出（含對方姓名/次數/日期）。後端 `/health` `2.18.0-card-transfer-history`；E2E（打 Railway）10/10。commit 後端 `0fe1724`、前端 `d5c8d96`。
+- ✅ **後端**（`cardTransferService.getCardTransferHistory(cardId, memberId)` + `GET /cards/transfers/history/:cardId`，`authenticateAny` member）：查 `cardTransfers` 的 `fromCardId==cardId`（轉出、限 `status:completed`）與 `newCardId==cardId`（轉入，接收後產生的卡）→ 回 `{direction:'in'|'out', memberName(對方), credits, at}` 依日期新→舊；權限以 memberId 比對 from/to、非本人相關不回。
+- ✅ **前端**（`MemberPassesPage` `TicketDetailModal`）：對 `discount_card`/`legacy_discount`/`black_card` 載入 `/cards/transfers/history/:id`，於使用紀錄上方顯示「移轉紀錄」——🔽 由 XX 轉入 +N 次 / 🔼 轉出給 XX -N 次 ＋日期（無紀錄則不顯示區塊）。單次券/紅利/定期票不走卡片移轉、不載入。
+- **E2E（10/10）**：注入林怡君「轉出 3 格給收卡人」與「由收卡人轉入 5 格」兩筆 completed transfer + 對應卡 → `/cards/transfers/history/:card` 轉出卡回 out(對方名/3)、接收卡回 in(來源名/5)、無關卡片回空。測後清乾淨。腳本 `scratchpad/card-transfer-history-e2e.mjs`。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

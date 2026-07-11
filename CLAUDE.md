@@ -802,6 +802,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **後端放行家長代查子女**（三端點改用 `checkMemberOwnership(req.member, targetId, {onMissing:403})`）：`checkin.js` history——會員 token 帶 `query.memberId` 且非本人時驗擁有權後才放行（否則沿用本人）；`courseAdjustments.js`、`competitions.js` 把原硬 403 換成 ownership 檢查。非子女他人仍擋（403／不外洩）。
 - ✅ **前端**（`MemberRecordsPage`）：載入 `/members/my/children`→ 家庭成員清單（本人＋子女）；**有子女才顯示頂部「檢視對象」下拉**（本人／👦 子女），切換 `viewId` 重載該人五分項。無子女者畫面不變。
 - **E2E（9/9）**：注入林怡君臨時子會員＋各集合一筆 → 家長查子女五分項全 200 有資料；查非子女他人 → 入場不外洩、退費請假/比賽 403。測後清乾淨。
+- ✅ **入場 tab 標記已取消入場**（純前端 `MemberRecordsPage`，commit `5065c52`）：回報「我的紀錄的入場紀錄，取消入場看不出來」——原入場 tab 只列 館名/類型/日期、不分取消。`/checkin/history` 本就回 `isCancelled`（未過濾）→ 取消者館名加**刪除線淡化**＋灰底「已取消」徽章。
+  - 📋 **入場取消「備註/原因」現況**（查證，未改）：checkIn 文件取消時只寫 `isCancelled/cancelledAt/cancelledBy`，**無原因欄**。三路徑中只有「員工申請取消→管理員核准」(`/cancel-checkins/request`) 帶 `reason`，但存在 `cancelCheckinRequests` 集合、**核准時未回填 checkIn** → 會員端查不到原因。若要顯示原因需另做（取消端點加 `cancelReason` 並回填）。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

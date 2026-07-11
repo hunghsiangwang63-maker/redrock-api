@@ -755,6 +755,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **轉出（方案 A）**：定期票分頁底部加「轉出紀錄（N）」區——列本人 `myRequests` 中 `transfer+approved`，顯示「↗ 已轉出給 {transferToName}（核准日期）」＋「已轉出」徽章。**票已離開帳號故以紀錄呈現**；passes 全空但有轉出紀錄時不顯示空狀態（原本會提早 return）。
 - **E2E（打 Railway，6/6）**：A→B 轉讓核准 → 票 memberId=B、`transferredFrom=A`、`transferredFromName=原持有人`、`transferredAt=今天`；A 的申請 `approved`＋`transferToName=接收人`（轉出紀錄資料源）。腳本 `scratchpad/pass-transfer-mark-e2e.mjs`，測後 0 殘留。
 - 註：轉出紀錄只列**本人**（`getMyPassRequests` 後端限本人）；子女的轉讓不在此列（子女票券本就唯讀）。
+- 🧹 **回填舊轉入票姓名（一次性）**：改版前轉讓的票只存 `transferredFrom`(id)、無 `transferredFromName` → 前端顯示「由**他人**轉入」（回報：王大明的票應是林怡君轉入）。firebase-admin 掃全庫「有 `transferredFrom` 缺 `transferredFromName`」的票，以 id 反查原持有人姓名回填（順補 `transferredAt`＝該票已核准 transfer 申請的 reviewedAt）。回填 2 筆：王大明←林怡君(2026-07-11)、另一張←陳建宏(2026-06-25)。純資料、無程式變動。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

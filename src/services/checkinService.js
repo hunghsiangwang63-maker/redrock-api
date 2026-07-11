@@ -1416,10 +1416,15 @@ const cancelCheckIn = async (checkInId, staffId, force = false) => {
   // （續約款已由 revertRenewal 沖銷；票券/卡退回不涉及金流交易，故只沖 amountPaid。）
   if (checkIn.amountPaid > 0) {
     const { recordTransaction } = require('../utils/revenueLedger');
+    // 沖銷明細（負值）：入場費/岩鞋粉袋分開沖，讓營收日報表 entry/rental 欄對稱拆分
+    const _shoes = checkIn.shoesPrice || 0, _chalk = checkIn.chalkPrice || 0;
+    const _entryPortion = (checkIn.entryFee != null) ? checkIn.entryFee : Math.max(0, checkIn.amountPaid - _shoes - _chalk);
     await recordTransaction(db, {
       gymId: checkIn.gymId,
       type: 'refund',
       totalAmount: -checkIn.amountPaid,
+      entryFee: -_entryPortion,        // 反向沖入場費
+      shoesPrice: -(_shoes + _chalk),  // 反向沖岩鞋+粉袋
       paymentMethod: checkIn.paymentMethod || 'cash',
       memberId: checkIn.memberId,
       memberName: checkIn.memberName,

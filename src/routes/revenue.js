@@ -123,13 +123,13 @@ router.get('/daily',
         byDate[date].count += 1;
         const bt = byDate[date].byType;
         const add = (k, v) => { if (v) bt[k] = (bt[k] || 0) + v; };
-        if (t.type === 'checkin') {
+        if (t.type === 'checkin' || (t.type === 'refund' && t.entryFee != null)) {
           // 入場費與租借拆開：入場＝純入場(entryFee)；岩鞋/粉袋一律歸「租借」、不算入場。
-          // 無 entryFee 的舊資料退回 totalAmount−岩鞋；租借＝totalAmount−入場（含岩鞋+粉袋）。
-          const shoes = t.shoesPrice || 0;
-          const entry = (t.entryFee != null) ? t.entryFee : Math.max(0, amt - shoes);
+          // 入場取消退款(refund)也帶 entryFee/shoesPrice（負值）→ 用同一公式對稱沖銷 entry/rental。
+          // 無 entryFee 的舊資料退回 totalAmount−岩鞋；租借＝totalAmount−入場（允許負值供退款沖銷）。
+          const entry = (t.entryFee != null) ? t.entryFee : Math.max(0, amt - (t.shoesPrice || 0));
           add('checkin', entry);
-          add('rental', Math.max(0, amt - entry));   // 岩鞋 + 粉袋
+          add('rental', amt - entry);   // 岩鞋 + 粉袋（退款時為負）
         } else if (/^rental/.test(t.type)) {
           add('rental', amt);           // 器材租借（/rentals）
         } else {

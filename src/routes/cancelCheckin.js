@@ -97,6 +97,9 @@ router.post('/direct', authenticateAny, async (req, res) => {
         gymId: checkIn.gymId,
         type: 'refund',
         totalAmount: -checkIn.amountPaid,
+        // 沖銷明細（負值）：入場費/岩鞋粉袋分開沖，供營收日報表 entry/rental 對稱拆分
+        entryFee: -((checkIn.entryFee != null) ? checkIn.entryFee : Math.max(0, checkIn.amountPaid - (checkIn.shoesPrice || 0) - (checkIn.chalkPrice || 0))),
+        shoesPrice: -((checkIn.shoesPrice || 0) + (checkIn.chalkPrice || 0)),
         paymentMethod: checkIn.paymentMethod || 'cash',
         memberId: checkIn.memberId,
         memberName: checkIn.memberName,
@@ -199,6 +202,9 @@ router.post('/:id/approve', authenticate, async (req, res) => {
         gymId: checkIn.gymId,
         type: 'refund',
         totalAmount: -checkIn.amountPaid,
+        // 沖銷明細（負值）：入場費/岩鞋粉袋分開沖，供營收日報表 entry/rental 對稱拆分
+        entryFee: -((checkIn.entryFee != null) ? checkIn.entryFee : Math.max(0, checkIn.amountPaid - (checkIn.shoesPrice || 0) - (checkIn.chalkPrice || 0))),
+        shoesPrice: -((checkIn.shoesPrice || 0) + (checkIn.chalkPrice || 0)),
         paymentMethod: checkIn.paymentMethod || 'cash',
         memberId: checkIn.memberId,
         memberName: checkIn.memberName,

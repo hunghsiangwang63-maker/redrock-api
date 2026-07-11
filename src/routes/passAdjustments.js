@@ -97,6 +97,7 @@ router.post('/requests',
         type: req.body.type, reasonKey: req.body.reasonKey,
         reasonDetail: req.body.reasonDetail, evidenceUrl: req.body.evidenceUrl,
         transferToPhone: req.body.transferToPhone,
+        transferToMemberId: req.body.transferToMemberId,
         suspendStart: req.body.suspendStart, suspendEnd: req.body.suspendEnd,
       });
       res.status(201).json({ request, message: '申請已送出，請等待審核' });

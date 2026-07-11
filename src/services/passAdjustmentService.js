@@ -60,7 +60,7 @@ const getPassAdjustmentHistory = async (passId) => {
 // 會員申請（展延/退費/轉讓 三選一，限一次）
 // ══════════════════════════════════════════════════════
 
-const createPassRequest = async ({ passId, memberId, type, reasonKey, reasonDetail, evidenceUrl, transferToPhone, suspendStart, suspendEnd }) => {
+const createPassRequest = async ({ passId, memberId, type, reasonKey, reasonDetail, evidenceUrl, transferToPhone, transferToMemberId, suspendStart, suspendEnd }) => {
   if (!['extension', 'refund', 'transfer'].includes(type)) {
     throw { code: 'INVALID_TYPE', message: 'type 必須為 extension、refund 或 transfer' };
   }
@@ -98,6 +98,16 @@ const createPassRequest = async ({ passId, memberId, type, reasonKey, reasonDeta
     }
   }
 
+  // 轉讓：後端權威驗證接收對象（送出時就擋打錯電話/非會員/誤轉；支援選定家庭成員）
+  let transferTarget = null;
+  if (type === 'transfer') {
+    if (!transferToMemberId) throw { code: 'MISSING_TRANSFER_TARGET', message: '請選擇轉讓對象' };
+    const tDoc = await db.collection(COLLECTIONS.MEMBERS).doc(transferToMemberId).get();
+    if (!tDoc.exists) throw { code: 'TARGET_MEMBER_NOT_FOUND', message: '找不到轉讓對象會員，請確認' };
+    if (transferToMemberId === memberId) throw { code: 'CANNOT_TRANSFER_SELF', message: '不能轉讓給自己' };
+    transferTarget = { id: transferToMemberId, name: tDoc.data().name || '', phone: tDoc.data().phone || (transferToPhone || '') };
+  }
+
   // 是否已有處理中的申請
   const pendingSnap = await db.collection(COLLECTIONS.PASS_REQUESTS)
     .where('passId', '==', passId).where('status', '==', 'pending').limit(1).get();
@@ -113,7 +123,9 @@ const createPassRequest = async ({ passId, memberId, type, reasonKey, reasonDeta
     reasonLabel: REQUEST_REASONS.find(r => r.key === reasonKey)?.label,
     reasonDetail: reasonDetail || '',
     evidenceUrl,
-    transferToPhone: type === 'transfer' ? (transferToPhone || '') : null,
+    transferToPhone: type === 'transfer' ? (transferTarget?.phone || transferToPhone || '') : null,
+    transferToMemberId: type === 'transfer' ? (transferTarget?.id || null) : null,
+    transferToName: type === 'transfer' ? (transferTarget?.name || '') : null,
     // 展延：停用期間 + 後端算好的延後天數/新到期日（核准時據此更新，不再由店員填月數）
     suspendStart: type === 'extension' ? suspendStart : null,
     suspendEnd: type === 'extension' ? suspendEnd : null,
@@ -216,16 +228,23 @@ const approvePassRequest = async ({ requestId, operatorId, operatorName, extensi
     result = { grossRefund, fee: REFUND_FEE, netRefund, remainingDays };
 
   } else if (request.type === 'transfer') {
-    if (!request.transferToPhone) throw { code: 'MISSING_TRANSFER_TARGET', message: '缺少轉讓對象電話' };
-    const phoneToSearch = request.transferToPhone.trim();
-    let targetSnap = await db.collection(COLLECTIONS.MEMBERS).where('phone', '==', phoneToSearch).limit(1).get();
-    // 如果找不到，嘗試去掉開頭的國碼格式
-    if (targetSnap.empty && phoneToSearch.startsWith('+886')) {
-      const localPhone = '0' + phoneToSearch.slice(4);
-      targetSnap = await db.collection(COLLECTIONS.MEMBERS).where('phone', '==', localPhone).limit(1).get();
+    // 優先用申請時已選定的接收會員 id（避免共用電話誤解析/誤轉）；舊申請無 id 才退回依電話查
+    let targetMember;
+    if (request.transferToMemberId) {
+      const tDoc = await db.collection(COLLECTIONS.MEMBERS).doc(request.transferToMemberId).get();
+      if (!tDoc.exists) throw { code: 'TARGET_MEMBER_NOT_FOUND', message: '找不到轉讓對象會員，請確認' };
+      targetMember = tDoc;
+    } else {
+      if (!request.transferToPhone) throw { code: 'MISSING_TRANSFER_TARGET', message: '缺少轉讓對象電話' };
+      const phoneToSearch = request.transferToPhone.trim();
+      let targetSnap = await db.collection(COLLECTIONS.MEMBERS).where('phone', '==', phoneToSearch).limit(1).get();
+      if (targetSnap.empty && phoneToSearch.startsWith('+886')) {
+        const localPhone = '0' + phoneToSearch.slice(4);
+        targetSnap = await db.collection(COLLECTIONS.MEMBERS).where('phone', '==', localPhone).limit(1).get();
+      }
+      if (targetSnap.empty) throw { code: 'TARGET_MEMBER_NOT_FOUND', message: `找不到轉讓對象會員（${phoneToSearch}），請確認電話號碼` };
+      targetMember = targetSnap.docs[0];
     }
-    if (targetSnap.empty) throw { code: 'TARGET_MEMBER_NOT_FOUND', message: `找不到轉讓對象會員（${phoneToSearch}），請確認電話號碼` };
-    const targetMember = targetSnap.docs[0];
 
     await passRef.update({
       memberId: targetMember.id, memberName: targetMember.data().name,

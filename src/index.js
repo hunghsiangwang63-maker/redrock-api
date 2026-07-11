@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '2.13.0-shoe-chalk-always-rental',
+    version: '2.14.0-settlement-entry-minus-rental',
   });
 });
 

@@ -78,11 +78,10 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     checkinSnap.docs.forEach(d => {
       const data = d.data();
       const amount = data.amountPaid || 0;
-      const shoes = data.shoesPrice || 0;
-      // 入場費＝純入場（entryFee）；連帶岩鞋/粉袋一律歸「出租」、不算入場。
-      // 無 entryFee 的舊資料退回 amountPaid−岩鞋；租借＝amountPaid−入場（含岩鞋+粉袋）。
-      const entryAmt = (data.entryFee != null) ? data.entryFee : Math.max(0, amount - shoes);
-      const rentalAmt = Math.max(0, amount - entryAmt);
+      // 連帶岩鞋/粉袋一律歸「出租」、不算入場（不管哪種入場）。checkIn 分開存 shoesPrice/chalkPrice，
+      // 直接 租借＝岩鞋+粉袋、入場＝amountPaid−租借（entryFee 對 buy_pass 未存、故不倚賴）。
+      const rentalAmt = (data.shoesPrice || 0) + (data.chalkPrice || 0);
+      const entryAmt = Math.max(0, amount - rentalAmt);
       entryIncome += entryAmt;
       const cat = entryCategory(data);
       entryByType[cat] = (entryByType[cat] || 0) + entryAmt;

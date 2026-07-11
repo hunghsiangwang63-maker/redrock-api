@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '1.98.0-monthly-export-entry-six-category',
+    version: '1.99.0-settlement-draft-sweep',
   });
 });
 
@@ -148,6 +148,10 @@ if (require.main === module) {
       const r = await require('./services/courseService').sweepExpiredCoursePayments();
       if (r.cancelledGroups > 0) console.log(`[課程逾期] 取消 ${r.cancelledGroups} 門課（${r.cancelledEnrollments} 堂）、作廢 ${r.voidedTransfers} 筆轉帳單`);
     } catch (e) { console.error('[課程逾期排程] 失敗', e.message); }
+    // 結帳暫存檔（draft）清理：只保留今天與最近三天，刪更舊的未結帳暫存（settled 永不刪）
+    try {
+      await require('./services/settlementService').sweepStaleSettlementDrafts();
+    } catch (e) { console.error('[結帳暫存清理] 失敗', e.message); }
   };
   // 卡片移轉逾期回沖：每小時掃描（24h 未接收 → 次數回沖來源）
   const runCardTransferExpiry = async () => {

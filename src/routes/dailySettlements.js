@@ -343,6 +343,15 @@ router.delete('/:id', authenticate, checkPermission('super_admin'), async (req, 
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── POST /daily-settlements/sweep-stale-drafts（super_admin，手動補跑/測試）──
+// 清理逾期暫存檔（date < 今天−3 的 status:'draft'）；settled 永不刪。與每日排程同一函式。
+router.post('/sweep-stale-drafts', authenticate, checkPermission('super_admin'), async (req, res) => {
+  try {
+    const r = await require('../services/settlementService').sweepStaleSettlementDrafts();
+    res.json(r);
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /daily-settlements ────────────────────────────────────────
 router.get('/', authenticate, async (req, res) => {
   try {

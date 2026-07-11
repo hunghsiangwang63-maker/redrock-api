@@ -768,7 +768,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🔍 **兩個根因**：① **粉袋(chalk)漏歸租借**——結帳 `entryFee??amountPaid`（buy_pass 的 checkIn 未存 entryFee → 岩鞋+粉袋留在入場）、`shoeRental` 只算岩鞋不含粉袋（粉袋整個漏計）；營收舊資料 entry 也含岩鞋。② **測試殘留**——營收讀 `transactions`、結帳讀 `checkIns`，當日 9 筆 checkin 交易中 7 筆對應**已取消**入場（我今天 E2E 的 checkin+refund 對，該沖但殘留），營收計入、結帳排除 → 數字差很大。
 - ✅ **修（`2.13.0`→`2.14.0`）**：結帳 `dailySettlements`＝**租借=岩鞋+粉袋、入場=amountPaid−租借**（直接用 checkIn 的 shoesPrice/chalkPrice，不倚賴 buy_pass 未存的 entryFee）；營收 `revenue/daily`＝**入場=entryFee（完整）、租借=totalAmount−entryFee（含岩鞋+粉袋）**，舊資料 fallback `amt−岩鞋`。**粉袋原本會漏計、現補回**。commit `f81da00`（revenue+初版）、`278d03a`（結帳改減租借）。
 - 🧹 **清測試殘留**：刪掉近14天孤兒 checkin/refund 交易 3 筆＋當日新竹「對應已取消入場」的 checkin+refund 對 14 筆（net 0，但營收 entry/rental 欄被拆歪）。清後**新竹今日 營收＝結帳＝入場4000/租借(出租)300/合計4300**，完全對齊。
-- ⚠️ **已知小限制（暫不處理）**：入場取消的 refund 交易（`type:'refund'`）在營收日報表**整筆歸入場欄**（沒拆岩鞋/粉袋）→ 若當日有「付費入場＋租借後又取消」，該日 entry/rental 欄會偏（總額仍對、且結帳本就排除已取消）。要完全對齊需讓 refund 帶 entryFee/shoesPrice 並在 `revenue/daily` 對稱拆分（未做）。
+- ✅ **補上 refund 明細對稱拆分**（`/health` `2.15.0-refund-split-rental`，commit `d75125f`；E2E 5/5）：入場取消退款的 `type:'refund'` 交易補存 `entryFee`(負)、`shoesPrice`(負，=岩鞋+粉袋)——`cancelCheckIn`（checkinService）與 `cancelCheckin.js`（自助/管理員核准）三處；`revenue/daily` 對「有 entryFee 的 refund」套 checkin 同一拆分公式（rental 允許負值）→ 入場取消時 **entry/rental 欄對稱歸零**，與結帳（排除已取消）完全一致。`pass`/課程退費（`type:'refund'` 無 entryFee 或 `*_refund`）不受影響、仍 foldType 歸原類別。**E2E**：付費入場300+岩鞋100+粉袋50 → 營收 入場300/租借150 → 取消 → refund(entryFee-300/shoes-150/total-450) → 營收 入場0/租借0/合計0。腳本 `scratchpad/refund-split-e2e.mjs`，測後 0 殘留。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

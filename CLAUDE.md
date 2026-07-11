@@ -715,6 +715,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端**：會員 `MemberPassesPage` 展延表單加「停用期間」起訖日（`min=今天`）+ 即時預覽「停用 N 天 → 到期日順延為 X」、超 6 月上限紅字擋 submit；帶 `suspendStart/End`。員工 `PassRequestReviewModal` 展延審核由「填月數」改**唯讀顯示會員停用期間 + 順延後到期日**（舊申請無停用期間才顯示月數輸入）。
 - **E2E（打 Railway，練習會員/票，13/13）**：缺期間/早於今天/結束≤開始/超6月 各自 400 對應 code；45 天 → `extensionDays:45`、核准後票期 2026-10-01→**2026-11-15**、`requestUsed:true`、再申請 `REQUEST_ALREADY_USED`；另一票 拒絕後 `requestUsed` 仍 false、可再次申請 201。腳本 `scratchpad/pass-extension-suspend-e2e.mjs`，測後 0 殘留。
 
+## 目前進度（2026-07-10 續）— 櫃檯掃碼確認：購買定期票標示票種與金額
+> 掃碼「入場資訊確認」入場資格為「購買定期票」時，加標示票種名稱與金額。後端 `/health` `2.07.0-scan-buypass-installment-first-period`；E2E 9/9。commit 後端 `dc53a68`、前端 `9a4c509`。
+- ✅ **後端**（`scanQrCode`）：buy_pass 解析 `buyPassTypeId` → 回 `buyPass{passTypeName, fullPrice, plan, dueNow}`。`dueNow`＝一次付清全額／**分期取首期**（`buildPeriodsFromConfig`，與 confirm 同源）；`totalAmount` 改用 `entryDueNow`（買定期票分期＝首期+加購，修掉原本 pending.amount 存全額致分期顯示全額的問題；一般入場不變）。純掃碼預覽顯示、不影響金流（confirm 另重算）。
+- ✅ **前端**（員工 `CheckinPage` 掃碼預覽）：`scanResult.buyPass` → 入場資格下方加「購買票種」「票種金額」（分期顯示「分期首期 NT$X（全額 NT$Y）」）。
+- **E2E（打 Railway，練習會員/票種，9/9）**：一次付清 → 票種名稱正確、fullPrice/dueNow/totalAmount=7600；分期 40% → plan=installment、fullPrice 7600、dueNow=首期 **3040**、totalAmount 取首期 3040（非全額）。腳本 `scratchpad/scan-buypass-e2e.mjs`，測後 0 殘留。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

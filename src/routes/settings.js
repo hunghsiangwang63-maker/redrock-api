@@ -151,6 +151,31 @@ router.put('/bonus', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /settings/partner-vendor - 特約廠商入場優惠（啟用 + 折扣金額）──────
+router.get('/partner-vendor', async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('systemSettings').doc('partnerVendor').get();
+    const d = doc.exists ? doc.data() : {};
+    res.json({ enabled: d.enabled !== false, discount: Number.isFinite(d.discount) ? d.discount : 20 });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── PUT /settings/partner-vendor（僅 super_admin/admin）──────────────────
+router.put('/partner-vendor', authenticate, async (req, res) => {
+  if (!['super_admin', 'admin'].includes(req.staff?.role))
+    return res.status(403).json({ error: '權限不足' });
+  try {
+    const db = getDb();
+    const n = Math.round(Number(req.body.discount));
+    if (!Number.isFinite(n) || n < 0 || n > 1000)
+      return res.status(400).json({ error: 'INVALID_DISCOUNT', message: '特約折扣金額請填 0~1000 元' });
+    const enabled = !!req.body.enabled;
+    await db.collection('systemSettings').doc('partnerVendor').set({ enabled, discount: n, updatedAt: new Date() }, { merge: true });
+    res.json({ success: true, enabled, discount: n });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /settings/chalk-rental ────────────────────────────────────
 router.get('/chalk-rental', async (req, res) => {
   try {

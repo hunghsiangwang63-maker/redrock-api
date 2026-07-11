@@ -26,8 +26,16 @@ const PRICES = {
 
 // 使用優惠折扣券入場：原價 8 折（兒童不適用）。原價依會員身份取 entryTypes 價格。
 const DISCOUNT_CARD_RATE = 0.8;
-// 特約廠商入場優惠：全票/學生票在「無其他折扣」時定額 −20（兒童不適用；與隊員9折/舊折扣卡8折互斥）
-const PARTNER_VENDOR_DISCOUNT = 20;
+// 特約廠商入場優惠：全票/學生票在「無其他折扣」時定額 −N（兒童不適用；與隊員9折/舊折扣卡8折互斥）。
+// 金額與啟用開關可於員工端「系統設定 → 入場規則」設定（systemSettings/partnerVendor）；讀不到 fallback 啟用+20。
+const PARTNER_VENDOR_DISCOUNT = 20;   // fallback 預設
+const getPartnerVendorConfig = async () => {
+  try {
+    const doc = await getDb().collection('systemSettings').doc('partnerVendor').get();
+    const d = doc.exists ? doc.data() : {};
+    return { enabled: d.enabled !== false, discount: Number.isFinite(d.discount) ? d.discount : PARTNER_VENDOR_DISCOUNT };
+  } catch { return { enabled: true, discount: PARTNER_VENDOR_DISCOUNT }; }
+};
 
 // 取得「原價」（折扣券 8 折的基準）：一般→single_ticket，學生→student_free
 const getOriginalEntryPrice = async (memberType) => {
@@ -101,12 +109,15 @@ const computePaidEntryAmount = async (entryType, member, opts = {}) => {
   let amount = originalAmount;
   if (opts.legacyDiscountCard) amount = Math.round(amount * DISCOUNT_CARD_RATE); // 舊折扣卡 8 折
   if (teamEligible) amount = Math.round(amount * PRICES.team_discount_rate);      // 有效隊員再疊 9 折
-  // 特約廠商：僅當【未套舊折扣卡 且 非有效隊員】且全票/學生票 → 定額 −20（權威互斥，隊員/舊卡任一成立即忽略）
+  // 特約廠商：僅當【未套舊折扣卡 且 非有效隊員】且全票/學生票 → 定額 −N（權威互斥，隊員/舊卡任一成立即忽略；設定停用/金額 0 則不套）
   let partnerVendor = false;
   if (!opts.legacyDiscountCard && !teamEligible && opts.partnerVendor
       && (entryType === 'single_ticket' || entryType === 'student_free')) {
-    amount = Math.max(0, originalAmount - PARTNER_VENDOR_DISCOUNT);
-    partnerVendor = true;
+    const pv = await getPartnerVendorConfig();
+    if (pv.enabled && pv.discount > 0) {
+      amount = Math.max(0, originalAmount - pv.discount);
+      partnerVendor = true;
+    }
   }
   return {
     amount, originalAmount,
@@ -603,6 +614,9 @@ const verifyEntry = async (memberId, gymId) => {
   //  - 排除 course_access（課程免費入場已於上方處理，且其 price=0、memberTypes 空會誤觸免費短路）
   const withTeam = (price) => (isTeam && price >= TEAM_DISCOUNT_MIN_AMOUNT
     ? Math.round(price * PRICES.team_discount_rate) : price);
+  // 特約廠商優惠設定（啟用 + 金額）；停用或金額 0 → eligible 一律 false（前端不顯示勾選）
+  const pvConfig = await getPartnerVendorConfig();
+  const pvOn = pvConfig.enabled && pvConfig.discount > 0;
   const etDoc = await db.collection('systemSettings').doc('entryTypes').get();
   const configuredTypes = (etDoc.exists ? (etDoc.data().types || []) : [])
     .filter(t => t && t.id !== 'course_access' && typeof t.price === 'number' && t.active !== false)
@@ -628,8 +642,8 @@ const verifyEntry = async (memberId, gymId) => {
       price: t.price,
       discountedPrice: withTeam(t.price),
       teamDiscount: isTeam && withTeam(t.price) < t.price,
-      // 特約廠商優惠：全票/學生票且非隊員（隊員 9 折較優、不提供特約）
-      partnerVendorEligible: (t.id === 'single_ticket' || t.id === 'student_free') && !isTeam,
+      // 特約廠商優惠：全票/學生票且非隊員（隊員 9 折較優、不提供特約）；設定停用/金額0 則一律 false
+      partnerVendorEligible: pvOn && (t.id === 'single_ticket' || t.id === 'student_free') && !isTeam,
       available: true,
       requiresPayment: true,
     }));
@@ -651,7 +665,7 @@ const verifyEntry = async (memberId, gymId) => {
       type: singleTypeId, label: singleLabel, price: singlePrice,
       discountedPrice: withTeam(singlePrice),
       teamDiscount: isTeam && withTeam(singlePrice) < singlePrice,
-      partnerVendorEligible: (singleTypeId === 'single_ticket' || singleTypeId === 'student_free') && !isTeam,
+      partnerVendorEligible: pvOn && (singleTypeId === 'single_ticket' || singleTypeId === 'student_free') && !isTeam,
       available: true, requiresPayment: true,
     }];
   }
@@ -660,7 +674,7 @@ const verifyEntry = async (memberId, gymId) => {
     allowed: true, status: 'ok', freeEntry: false,
     requiresPayment: true,
     member: memberInfo,
-    partnerVendorDiscount: PARTNER_VENDOR_DISCOUNT,   // 特約廠商定額折扣（−20，前端顯示）
+    partnerVendorDiscount: pvConfig.discount,   // 特約廠商定額折扣（可設定，前端顯示）
     // 兩段式流程：先選身分(entryTypeOptions)，再選要不要用票券(instruments)
     entryTypeOptions,
     instruments: {

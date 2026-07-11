@@ -670,6 +670,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **不動**：`GET /today`、`PUT /draft`、`POST /`（結帳）行為；draft「當天載回」語意不變。
 - **E2E（打 Railway，假館 `gym-e2e-test`，9/9）**：注入 draft d0/d2/d5 + settled d5（cutoff=今天−3）→ sweep → **只刪 d5 draft**（deleted:1），d0/d2 draft、d5 **settled** 全保留；二次冪等；無認證 401。腳本 `scratchpad/draft-sweep-e2e.mjs`，測後 0 殘留。
 
+## 目前進度（2026-07-10 續）— 修：營收日報表各分類欄位未反映沖銷（顯示 gross）
+> 回報「今日營收已同步結算，但下面日報表還是抓沒沖銷的金額」。純後端 `revenue.js`。`/health` `1.100.0-revenue-fold-refunds`；打正式 API 實資料驗證。commit `f91a9db`。
+- 🔍 **根因**：`/revenue/daily` 與 summary 的 `byType` 直接用 `t.type` 累加 → 沖銷交易自成 `refund`/`*_refund` 類別（前端日報表**無此欄**）→ **入場/課程/定期票 欄位顯示 gross（未沖銷）**，只有「合計」`d.total` 有淨額（本就 Σ 全部含負向）。實例：7/11 `byType{checkin:5290, refund:-5290}` → 入場欄顯 5290、合計 0；7/07 定期票欄 9880（實際 −6840 續約沖銷後應 3040）。
+- ✅ **修**：加 `foldType(t)`——`'refund'` 優先用 `refundCategory`，否則依 notes 推斷（含「入場」→checkin、「定期票/分期/續約」→pass）；`'*_refund'`（course_refund/competition_refund）歸回前綴類別（course/competition）。套用於 `groupByType`（summary 今日/本週/本月 byType）與 `/revenue/daily` 逐日 byType。**合計不變**（本就含負向沖銷）。
+- **驗證（打 Railway 新竹近7天實資料）**：修後 7/11 入場 **5290→0**（合計 0）；7/07 定期票 **9880→3040**（合計 4240＝入場1200＋定期票3040）；各日「殘留 refund」欄全 0，欄位加總＝合計（7/06 差 400 為 `single_entry_ticket` 無獨立欄、非沖銷問題）。
+- 註：export-csv 明細（逐筆列 refund/退費）**不套 fold**（明細本就該逐筆顯示沖銷列，非彙總）；日報表 `count` 仍計入沖銷交易筆數。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

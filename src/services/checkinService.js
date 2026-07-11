@@ -994,14 +994,18 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(pending.buyPassTypeId).get();
     if (ptDoc.exists) {
       const pt = ptDoc.data();
-      buyPassInfo = {
-        passTypeName: pt.name,
-        fullPrice: pt.price,                    // 定期票全額
-        plan: pending.paymentPlan || 'full',    // 'full' | 'installment'
-        dueNow: pending.amount,                 // 本次櫃檯應收（一次付清＝全額；分期＝首期）
-      };
+      const plan = pending.paymentPlan || 'full';
+      // 本次櫃檯應收：一次付清＝全額；分期＝首期（與 confirmCheckIn 分期同一份 buildPeriodsFromConfig）
+      let dueNow = pt.price;
+      if (plan === 'installment' && pt.installment?.enabled && pt.price > 0) {
+        const periods = require('./installmentService').buildPeriodsFromConfig(pt.installment, pt.price, taiwanToday());
+        if (periods && periods.length) dueNow = periods[0].amount;
+      }
+      buyPassInfo = { passTypeName: pt.name, fullPrice: pt.price, plan, dueNow };
     }
   }
+  // 購買定期票分期時，本次入場應收以首期為準（pending.amount 存的是全額）
+  const entryDueNow = buyPassInfo ? buyPassInfo.dueNow : pending.amount;
 
   return {
     qrToken,
@@ -1024,7 +1028,7 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     chalkPrice: pending.chalkPrice || 0,
     // 續約附加：櫃檯此次應收的續約款（一次付清＝折後全額；分期＝首期）
     renewal: renewPreview,
-    totalAmount: pending.amount + pending.shoesPrice + (pending.chalkPrice || 0) + (renewPreview ? renewPreview.dueNow : 0),
+    totalAmount: entryDueNow + pending.shoesPrice + (pending.chalkPrice || 0) + (renewPreview ? renewPreview.dueNow : 0),
     status: pending.status,
     createdAt: pending.createdAt,
   };

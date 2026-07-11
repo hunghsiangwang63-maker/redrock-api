@@ -78,11 +78,15 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     checkinSnap.docs.forEach(d => {
       const data = d.data();
       const amount = data.amountPaid || 0;
-      const entryAmt = data.entryFee ?? amount;
+      const shoes = data.shoesPrice || 0;
+      // 入場費＝純入場（entryFee）；連帶岩鞋/粉袋一律歸「出租」、不算入場。
+      // 無 entryFee 的舊資料退回 amountPaid−岩鞋；租借＝amountPaid−入場（含岩鞋+粉袋）。
+      const entryAmt = (data.entryFee != null) ? data.entryFee : Math.max(0, amount - shoes);
+      const rentalAmt = Math.max(0, amount - entryAmt);
       entryIncome += entryAmt;
       const cat = entryCategory(data);
       entryByType[cat] = (entryByType[cat] || 0) + entryAmt;
-      shoeRentalIncome += data.shoesPrice || 0;
+      shoeRentalIncome += rentalAmt;
       if (data.paymentMethod === 'cash') cashEntry += amount;
       else if (data.paymentMethod === 'linepay') linePayEntry += amount;
       else if (data.paymentMethod === 'jkopay') jkoEntry += amount;

@@ -124,10 +124,12 @@ router.get('/daily',
         const bt = byDate[date].byType;
         const add = (k, v) => { if (v) bt[k] = (bt[k] || 0) + v; };
         if (t.type === 'checkin') {
-          // 入場費與租借拆開：checkin 交易分開存 entryFee / shoesPrice（+chalk）
-          const entry = (t.entryFee != null) ? t.entryFee : amt;
+          // 入場費與租借拆開：入場＝純入場(entryFee)；岩鞋/粉袋一律歸「租借」、不算入場。
+          // 無 entryFee 的舊資料退回 totalAmount−岩鞋；租借＝totalAmount−入場（含岩鞋+粉袋）。
+          const shoes = t.shoesPrice || 0;
+          const entry = (t.entryFee != null) ? t.entryFee : Math.max(0, amt - shoes);
           add('checkin', entry);
-          add('rental', amt - entry);   // 岩鞋/粉袋租借
+          add('rental', Math.max(0, amt - entry));   // 岩鞋 + 粉袋
         } else if (/^rental/.test(t.type)) {
           add('rental', amt);           // 器材租借（/rentals）
         } else {

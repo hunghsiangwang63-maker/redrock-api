@@ -371,7 +371,7 @@ router.get('/:id/waiver', authenticateAny, async (req, res) => {
   }
 });
 
-// ── POST /members/:id/waiver/sign - 簽署免責聲明書 ───────────────
+// ── POST /members/:id/waiver/sign - 簽署風險安全聲明書 ───────────────
 // 會員本人自助簽署，或工作人員於毱台協助操作（authenticateAny）
 router.post('/:id/waiver/sign',
   authenticateAny,
@@ -700,7 +700,7 @@ router.post('/:id/waiver/reset',
         if (ft.passed) {
           return res.status(409).json({
             error: 'FALL_TEST_PASSED_LOCKED',
-            message: '此會員墜落測驗已通過，免責聲明與墜測同意書已鎖定、無法退回重簽（避免誤觸）',
+            message: '此會員墜落測驗已通過，風險安全聲明與墜測同意書已鎖定、無法退回重簽（避免誤觸）',
           });
         }
       }

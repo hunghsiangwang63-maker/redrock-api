@@ -29,7 +29,7 @@ const chunk10 = (arr) => {
 async function checkPrereq(db, memberId) {
   const waiver = await db.collection(COLLECTIONS.WAIVERS).doc(memberId).get();
   if (!waiver.exists || !waiver.data().isComplete) {
-    return { ok: false, code: 'WAIVER_INCOMPLETE', message: '請先完成免責聲明書簽署' };
+    return { ok: false, code: 'WAIVER_INCOMPLETE', message: '請先完成風險安全聲明書簽署' };
   }
   const sig = await db.collection('fallTestSignatures')
     .where('memberId', '==', memberId).limit(1).get();

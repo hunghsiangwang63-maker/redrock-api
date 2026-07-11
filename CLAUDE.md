@@ -721,6 +721,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端**（員工 `CheckinPage` 掃碼預覽）：`scanResult.buyPass` → 入場資格下方加「購買票種」「票種金額」（分期顯示「分期首期 NT$X（全額 NT$Y）」）。
 - **E2E（打 Railway，練習會員/票種，9/9）**：一次付清 → 票種名稱正確、fullPrice/dueNow/totalAmount=7600；分期 40% → plan=installment、fullPrice 7600、dueNow=首期 **3040**、totalAmount 取首期 3040（非全額）。腳本 `scratchpad/scan-buypass-e2e.mjs`，測後 0 殘留。
 
+## 目前進度（2026-07-10 續）— 修：定期票退回後前端仍顯示「已申請過」不能再申請
+> 回報林怡君一張定期票展延被退回，會員畫面仍顯示「已申請過展延」不能再申請。後端本就允許（前一段已驗），純前端 bug。commit 前端 `9e79a81`。
+- 🔍 **根因**（`MemberPassesPage`）：`hasRequestForPass(passId)=myRequests.some(r=>r.passId===passId)` 對**任何**申請（含 `rejected`）都回 true → 退回後按鈕被藏、顯示「已申請過展延/退費/轉讓（限一次）」。與後端不一致（後端 `requestUsed` 只核准時設、退回不佔額度、可重申請）。
+- ✅ **修**：改 `passRequestState(passId)`——有 `approved`→`used`（顯示「已申請過（限一次）」）、有 `pending`→顯示「申請審核中，請等待審核結果」、其餘（**rejected 或無**）→顯示「申請展延／退費／轉讓」鈕。
+- **驗證**（打 Railway，林怡君真資料）：active 學生30日票（extension rejected）→ `none`→**顯示申請鈕**；approved 的 transfer 票→`used`→擋。純前端、已 deploy（快取可能需 `?v=`/無痕）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

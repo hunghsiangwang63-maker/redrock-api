@@ -740,6 +740,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端**（`MemberPassesPage` 轉讓表單）：輸入電話（≥10碼、debounce）→ 打 `/ticket-transfers/recipients?phone=` 查該電話會員（含家庭成員、排除本人）→ 單人顯示「✅ 接收人：姓名（家長/子女）」、**多人下拉選**、查無紅字擋送出；payload 帶 `transferToMemberId`。`PassRequestReviewModal` 顯示「將轉讓至：姓名（電話）」供店員核對。
 - **E2E（打 Railway，8/8）**：未選對象/非會員 id/轉給自己 各自對應 code；轉給 B → 201 存姓名、核准後票 memberId→B、requestUsed=true；**轉給「與家長 B 共用電話的子女 C」→ 核准後票正確落在 C（非 B）**。腳本 `scratchpad/pass-transfer-recipient-e2e.mjs`，測後 0 殘留。
 
+## 目前進度（2026-07-10 續）— 定期票轉讓禁止轉給未滿 13 歲（補齊兒童規則）
+> 回報轉讓可否選 13 歲以下。查：定期票轉讓原**無**年齡擋（與「兒童不能買定期票/接受點數轉移」不一致，卡片轉移早有 `childBlock`）。補上。後端 `/health` `2.10.0-pass-transfer-block-child`；E2E 4/4。commit 後端 `a5070aa`、前端 `fddeabc`。
+- ✅ **後端**：`passAdjustmentService` 引入 `isChild`——`createPassRequest` transfer 驗接收對象 `isChild`→`CHILD_NOT_ALLOWED`「未滿 13 歲無法接收定期票轉讓」；`approvePassRequest` transfer 亦擋（涵蓋舊申請/電話路徑）。`/ticket-transfers/recipients` 回傳加 `under13` 旗標（**附加、不排除**——體驗券可轉子女的用途不受影響，由各消費端自行取捨）。
+- ✅ **前端**（`MemberPassesPage` 轉讓 picker）：依 `recipients.under13` 排除未滿 13 歲、自動選第一位可接收者；全為未滿 13 歲顯示「此電話的會員未滿 13 歲，無法接收定期票轉讓」擋送出；多人時附註「未滿 13 歲已排除」。
+- **E2E（打 Railway，4/4）**：轉給 6 歲子女 C → `CHILD_NOT_ALLOWED`；轉給成人家長 B → 201；recipients `under13`（C=true、B=false）。腳本 `scratchpad/pass-transfer-child-e2e.mjs`，測後 0 殘留。
+- ⚠️ **政策**：以「兒童不能買定期票/接受點數轉移」一致性為由**禁止**轉給未滿 13 歲。若之後要開放（例如家庭把票給小孩用）再調整此擋。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

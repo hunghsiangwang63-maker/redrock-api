@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '2.07.0-scan-buypass-installment-first-period',
+    version: '2.08.0-revenue-daily-split-rental-pass',
   });
 });
 

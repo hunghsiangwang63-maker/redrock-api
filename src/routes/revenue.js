@@ -117,11 +117,21 @@ router.get('/daily',
 
       txns.forEach(t => {
         const date = dayjs((t.recognitionDate || t.paidAt).toDate()).format('YYYY-MM-DD');
-        if (byDate[date]) {
-          byDate[date].total += t.totalAmount || 0;
-          byDate[date].count += 1;
-          const type = foldType(t);   // 沖銷歸回原類別 → 欄位淨額
-          byDate[date].byType[type] = (byDate[date].byType[type] || 0) + (t.totalAmount || 0);
+        if (!byDate[date]) return;
+        const amt = t.totalAmount || 0;
+        byDate[date].total += amt;
+        byDate[date].count += 1;
+        const bt = byDate[date].byType;
+        const add = (k, v) => { if (v) bt[k] = (bt[k] || 0) + v; };
+        if (t.type === 'checkin') {
+          // 入場費與租借拆開：checkin 交易分開存 entryFee / shoesPrice（+chalk）
+          const entry = (t.entryFee != null) ? t.entryFee : amt;
+          add('checkin', entry);
+          add('rental', amt - entry);   // 岩鞋/粉袋租借
+        } else if (/^rental/.test(t.type)) {
+          add('rental', amt);           // 器材租借（/rentals）
+        } else {
+          add(foldType(t), amt);        // 沖銷歸回原類別；pass/course/product 等
         }
       });
 

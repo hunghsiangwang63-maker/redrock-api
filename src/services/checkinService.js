@@ -1007,6 +1007,13 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
   // 購買定期票分期時，本次入場應收以首期為準（pending.amount 存的是全額）
   const entryDueNow = buyPassInfo ? buyPassInfo.dueNow : pending.amount;
 
+  // 使用既有定期票入場：解析所用票種名稱（供櫃檯掃碼確認時標示）
+  let usePassInfo = null;
+  if (pending.entryType === 'pass' && pending.passId) {
+    const mpDoc = await db.collection(COLLECTIONS.MEMBER_PASSES).doc(pending.passId).get();
+    if (mpDoc.exists) usePassInfo = { passTypeName: mpDoc.data().passTypeName || '定期票' };
+  }
+
   return {
     qrToken,
     memberId: pending.memberId,
@@ -1019,6 +1026,7 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     amount: pending.amount,
     originalAmount: pending.originalAmount,
     buyPass: buyPassInfo,                        // 購買定期票：票種名稱 + 金額（供掃碼標示）
+    usePass: usePassInfo,                         // 使用既有定期票入場：所用票種名稱
     isTeamDiscount: pending.isTeamDiscount,
     legacyDiscount: pending.legacyDiscount || false,
     partnerVendor: pending.partnerVendor === true,   // 特約廠商優惠 → 員工端提示出示證件

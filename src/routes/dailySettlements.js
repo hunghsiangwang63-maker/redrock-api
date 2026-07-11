@@ -12,6 +12,24 @@ const { authenticate, checkPermission, requireStationAuth } = require('../middle
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
+// ── 入場費六分類（結帳摘要 GET /today 與月銷售 Excel monthly-export 共用）──────────
+// 折扣為 checkIn 旗標（隊員 isTeamDiscount、優惠券＝舊折扣卡 legacyDiscount 或優惠折扣券卡
+// discount_card 入場），疊加另拆「隊員＋優惠券」；無折扣才依原入場類型（成人/學生/兒童/…）。
+const ENTRY_LABEL = { single_ticket:'成人', single_entry_ticket:'單次入場券', pass:'定期票入場', vip:'VIP', course_access:'課程學員', discount_card:'優惠折扣券', black_card:'黑卡', child_free:'兒童', student_free:'學生', bonus:'紅利', experience:'體驗' };
+const ENTRY_ORDER = ['成人', '學生', '兒童', '個別使用優惠券', '隊員折扣', '隊員＋優惠券'];
+const entryCategory = (data) => {
+  const team = data.isTeamDiscount === true;
+  const coupon = data.legacyDiscount === true || data.entryType === 'discount_card';
+  if (team && coupon) return '隊員＋優惠券';
+  if (team) return '隊員折扣';
+  if (coupon) return '個別使用優惠券';
+  return ENTRY_LABEL[data.entryType] || data.entryType || '其他入場';
+};
+const entryOrderSort = (a, b) => {
+  const ia = ENTRY_ORDER.indexOf(a), ib = ENTRY_ORDER.indexOf(b);
+  return ((ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)) || String(a).localeCompare(String(b));
+};
+
 // ── GET /daily-settlements/today ─────────────────────────────────
 router.get('/today', authenticate, requireStationAuth, async (req, res) => {
   try {
@@ -56,19 +74,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
 
     let entryIncome = 0, shoeRentalIncome = 0;
     let cashEntry = 0, linePayEntry = 0, jkoEntry = 0, twPayEntry = 0;
-    const entryByType = {};   // 入場收入細項（依入場類型 + 折扣分類）
-    const ENTRY_LABEL = { single_ticket:'成人', single_entry_ticket:'單次入場券', pass:'定期票入場', vip:'VIP', course_access:'課程學員', discount_card:'優惠折扣券', black_card:'黑卡', child_free:'兒童', student_free:'學生', bonus:'紅利', experience:'體驗' };
-    // 入場費細分：折扣為 checkIn 旗標（隊員 isTeamDiscount、優惠券＝舊折扣卡 legacyDiscount 或優惠折扣券卡 discount_card 入場）。
-    // 疊加時另拆「隊員＋優惠券」一類；無折扣才依原入場類型（成人/學生/兒童/…）。
-    const ENTRY_ORDER = ['成人', '學生', '兒童', '個別使用優惠券', '隊員折扣', '隊員＋優惠券'];
-    const entryCategory = (data) => {
-      const team = data.isTeamDiscount === true;
-      const coupon = data.legacyDiscount === true || data.entryType === 'discount_card';
-      if (team && coupon) return '隊員＋優惠券';
-      if (team) return '隊員折扣';
-      if (coupon) return '個別使用優惠券';
-      return ENTRY_LABEL[data.entryType] || data.entryType || '其他入場';
-    };
+    const entryByType = {};   // 入場收入細項（依折扣分類，見模組頂 entryCategory）
     checkinSnap.docs.forEach(d => {
       const data = d.data();
       const amount = data.amountPaid || 0;
@@ -145,10 +151,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
         // 細項
         entryItems: Object.entries(entryByType).filter(([, v]) => v > 0)
           .map(([k, v]) => ({ label: k, value: v }))   // k 已是分類標籤
-          .sort((a, b) => {
-            const ia = ENTRY_ORDER.indexOf(a.label), ib = ENTRY_ORDER.indexOf(b.label);
-            return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
-          }),
+          .sort((a, b) => entryOrderSort(a.label, b.label)),
         passItems: Object.entries(passByType).filter(([, v]) => v > 0).map(([k, v]) => ({ label: k, value: v })),
       },
       payment: {
@@ -404,34 +407,27 @@ router.get('/monthly-export', authenticate, async (req, res) => {
       (s.income?.passItems || []).forEach(it => { if (!passLabels.includes(it.label)) passLabels.push(it.label); });
     });
 
-    // 入場細項「拆分」：直接從 checkIns 依「入場類型 + 是否隊員折扣」逐日彙整（畫面顯示維持合併，僅下載檔拆細）
-    const etDoc = await db.collection('systemSettings').doc('entryTypes').get();
-    const ET_NAME = {};
-    (etDoc.exists ? (etDoc.data().types || []) : []).forEach(t => { if (t.id) ET_NAME[t.id] = t.name; });
-    const ENTRY_FALLBACK = { single_ticket:'成人單次入場', student_free:'學生單次入場', child_free:'兒童單次入場', discount_card:'優惠卡入場', buy_discount_card:'購買優惠卡', buy_pass:'購買定期票', pass:'定期票入場', vip:'VIP入場', course_access:'課程學員入場', black_card:'黑卡入場', single_entry_ticket:'單次入場券', bonus:'紅利入場', experience:'體驗入場' };
-    const entryName = (id) => ET_NAME[id] || ENTRY_FALLBACK[id] || id || '其他入場';
+    // 入場細項「拆分」：依模組頂 entryCategory 六分類（成人/學生/兒童/個別使用優惠券/隊員折扣/
+    // 隊員＋優惠券/…）逐日彙整，與結帳摘要 income.entryItems 同一套分類。
     const ciSnap = await db.collection('checkIns')
       .where('checkedInAt', '>=', new Date(`${start}T00:00:00+08:00`))
       .where('checkedInAt', '<=', new Date(`${end}T23:59:59+08:00`)).get();
-    const entryGroups = {}; // key(entryType[|team]) -> { id, team, label, byDate }
+    const entryGroups = {}; // category -> { label, byDate }
     ciSnap.docs.forEach(d => {
       const c = d.data();
       if (c.isCancelled) return;
       if (gymId && c.gymId !== gymId) return;
       if (!c.checkedInAt) return;
       const dt = new Date(c.checkedInAt.toDate().getTime() + 8 * 3600000).toISOString().slice(0, 10);
-      const id = c.entryType || 'other';
-      const team = c.isTeamDiscount === true;
-      const key = id + (team ? '|team' : '');
+      const cat = entryCategory(c);
       const fee = (c.entryFee ?? c.amountPaid ?? 0);
-      if (!entryGroups[key]) entryGroups[key] = { id, team, label: entryName(id) + (team ? '（隊員9折）' : ''), byDate: {} };
-      entryGroups[key].byDate[dt] = (entryGroups[key].byDate[dt] || 0) + fee;
+      if (!entryGroups[cat]) entryGroups[cat] = { label: cat, byDate: {} };
+      entryGroups[cat].byDate[dt] = (entryGroups[cat].byDate[dt] || 0) + fee;
     });
-    // 排序：同入場類型相鄰，隊員列接在一般列後
-    const entryKeys = Object.keys(entryGroups).sort((a, b) => {
-      const A = entryGroups[a], B = entryGroups[b];
-      return A.label.replace('（隊員9折）', '').localeCompare(B.label.replace('（隊員9折）', '')) || (A.team ? 1 : 0) - (B.team ? 1 : 0);
-    });
+    // 只列有金額的分類（比照結帳摘要 value>0）；固定六分類序在前、其餘 fallback 依名稱
+    const entryKeys = Object.keys(entryGroups)
+      .filter(k => Object.values(entryGroups[k].byDate).some(v => v > 0))
+      .sort(entryOrderSort);
 
     const R = (a, b, c, fn) => [a, b, c, ...dates.map(dt => fn ? val(dt, fn) : '')];
     const aoa = [];

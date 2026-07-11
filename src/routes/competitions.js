@@ -189,9 +189,9 @@ router.post('/:id/register',
 // ── GET /competitions/registrations/member/:memberId - 會員自己的報名紀錄 ──
 router.get('/registrations/member/:memberId', authenticateAny, async (req, res) => {
   try {
-    if (req.member && req.member.id !== req.params.memberId) {
-      return res.status(403).json({ error: 'FORBIDDEN', message: '只能查看自己的報名紀錄' });
-    }
+    // 會員只能查自己或子會員的
+    const deny = await checkMemberOwnership(req.member, req.params.memberId, { onMissing: 403, message: '只能查看自己或子會員的報名紀錄' });
+    if (deny) return res.status(deny.status).json(deny.body);
     const registrations = await competitionService.getMemberRegistrations(req.params.memberId);
     res.json({ registrations });
   } catch (err) {

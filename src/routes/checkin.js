@@ -480,9 +480,15 @@ router.get('/history',
     try {
       const db = getDb();
 
-      // 會員只能查自己的；員工可查指定館別
+      // 會員只能查自己或子會員的；員工可查指定館別
       const isMemberToken = !!req.member && !req.staff;
-      const scopedMemberId = isMemberToken ? req.member.id : req.query.memberId;
+      let scopedMemberId = isMemberToken ? req.member.id : req.query.memberId;
+      if (isMemberToken && req.query.memberId && req.query.memberId !== req.member.id) {
+        // 家長代查子女入場紀錄：驗擁有權
+        const deny = await checkMemberOwnership(req.member, req.query.memberId, { onMissing: 403 });
+        if (deny) return res.status(deny.status).json(deny.body);
+        scopedMemberId = req.query.memberId;
+      }
       const gymId = isMemberToken ? null : (req.staff?.role === 'super_admin' ? req.query.gymId : req.staff?.gymId);
       const { ticketId, ticketType, dateFrom, dateTo, limit = 50 } = req.query;
 

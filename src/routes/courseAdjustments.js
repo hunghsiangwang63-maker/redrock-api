@@ -304,10 +304,9 @@ router.get('/member/:memberId', authenticateAny, async (req, res) => {
   try {
     const db = getDb();
     const { memberId } = req.params;
-    // 會員只能查自己的
-    if (req.member && req.member.id !== memberId) {
-      return res.status(403).json({ error: 'FORBIDDEN' });
-    }
+    // 會員只能查自己或子會員的
+    const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
+    if (deny) return res.status(deny.status).json(deny.body);
     const snap = await db.collection(COLLECTIONS.COURSE_ADJUSTMENTS || 'courseAdjustmentRequests')
       .where('memberId', '==', memberId).get();
     const requests = snap.docs.map(d => ({ id: d.id, ...d.data() }))

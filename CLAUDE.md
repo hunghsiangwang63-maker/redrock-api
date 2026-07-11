@@ -688,6 +688,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **前端**：`SettingsPage` 入場規則群組加「特約廠商優惠」分頁（superAdminOnly）——啟用開關 + 折扣金額輸入（0~1000，停用時輸入框淡化）。會員 QR／員工掃碼本就讀後端回傳的 `partnerVendorDiscount`/`partnerVendorEligible`，自動吃新設定、免改。
   - **E2E（打 Railway，練習會員，9/9）**：GET 回 `{enabled:true,discount:20}`；PUT 金額 30 → 入場 300→**270**、verify `discount:30`/eligible:true；**停用** → 特約 300 不套/pv:false、verify eligible:false；金額 2000/−5 → 400。腳本 `scratchpad/partner-vendor-config-e2e.mjs`，測後還原設定（原未設→刪回 fallback）、0 殘留。
 
+## 目前進度（2026-07-10 續）— 修：家長「我的票券/課程」看不到部分子女（子會員判定改用 parentMemberId）
+> 回報父子會員在「我的票券」「我的課程」要列出不同人的項目。查：功能**早已實作**（`MemberPassesPage.loadAll`／`MemberCoursesPage.loadMyEnrollments` 都載入本人＋子女並標持有人），但後端 `/members/my/children` 有 bug。純後端 `/health` `2.02.0-child-by-parentid`；commit `7fcdddd`。
+- 🔍 **根因**：`/members/my/children`（`members.js:48`）與 `checkMemberOwnership`（`utils/memberOwnership.js:35`）都要求 **`parentMemberId==家長` 且 `isChildAccount==true` 雙條件**。有 `parentMemberId` 但**漏設 `isChildAccount:true`** 旗標的子會員 → 家長 `/my/children` 撈不到 → 我的票券/課程**看不到該子女**、也**無法代操作**（退費/請假/轉移 會 403）。實資料 7 名子會員中 6 名有旗標（王登第/王登翰/王登妹＠朱智萩、小明明、貝貝/安安）正常，唯 **林小明（member-003，＠林怡君 member-001）`isChildAccount:false`** → 用測試帳號 林怡君 驗就是空的，才誤以為功能沒做。
+- ✅ **修**：兩處子會員判定**改單以 `parentMemberId===家長`**（唯一定義關係，旗標冗餘）——`/my/children` 移除 `isChildAccount` where（順帶少一個複合索引需求）；`checkMemberOwnership` 條件改 `target.parentMemberId !== member.id`。非子會員（`parentMemberId==null`）不受影響。
+- **驗證（打 Railway，林怡君 member token）**：修前 `/my/children` 回 **(無)**；修後回 **林小明(member-003)**，其 `passes/member` 2 筆、`single-entry` 1 筆可載 → 家長「我的票券」會顯示林小明的票（前端本就標「👦 林小明」）。**前端無需改動/部署**（載入子女邏輯早在 `3b40175`／`ef19b5b` 完成並部署）。
+- 📌 **附記**：`memberService.getMemberByPhone` 的 `isChildAccount` 判斷（挑主帳號用）維持不動、正確；本次只改「列子女／代操作權限」兩處。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

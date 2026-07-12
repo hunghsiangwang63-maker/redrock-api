@@ -209,13 +209,27 @@ const PROVIDER_META = {
 
 // 某館「可用的線上付款方式」= 全域啟用(env PAYMENT_PROVIDERS) ∩ 該館已填金鑰。
 // 分段開放：加入 PAYMENT_PROVIDERS 啟用某 gateway、填某館金鑰啟用某館，皆無需改程式。
+// ── 付款方式開關（權威）─────────────────────────────────────────
+// 與 GET/PUT /settings/payment-methods 同源（systemSettings/paymentMethods.enabled）。
+// 電子支付（linepay/jkopay/taiwanpay）預設關閉，金流 API 對接後由管理員開啟；
+// rail 層在此做「權威驗證」：未開放的 provider 一律擋（不信前端顯示層）。
+const PAYMENT_TOGGLE_DEFAULTS = { cash: true, transfer: true, linepay: false, jkopay: false, taiwanpay: false };
+async function getEnabledPaymentToggles(db) {
+  try {
+    const doc = await db.collection('systemSettings').doc('paymentMethods').get();
+    return { ...PAYMENT_TOGGLE_DEFAULTS, ...(doc.exists ? (doc.data().enabled || {}) : {}) };
+  } catch (e) { return { ...PAYMENT_TOGGLE_DEFAULTS }; }
+}
+
 async function getAvailableMethods(gymId) {
   const db = getDb();
   const settings = await loadGymPaymentSettings(db, gymId);
   const enabled = (process.env.PAYMENT_PROVIDERS || '').split(',').map(s => s.trim()).filter(Boolean);
+  const toggles = await getEnabledPaymentToggles(db); // 系統設定開關（未開放者不列）
   const methods = [];
   for (const key of enabled) {
     const meta = PROVIDER_META[key];
+    if (toggles[key] === false) continue;
     if (meta && meta.credKeys.every(k => settings[k])) {
       methods.push({ key, label: meta.label, icon: meta.icon });
     }
@@ -231,6 +245,11 @@ async function getAvailableMethods(gymId) {
 async function createPayment({ provider = 'mock', orderType, orderRef = {}, gymId = null, memberId = null, memberName = '', amount, returnUrls = {} }) {
   const db = getDb();
   if (!adapters[provider]) throw { code: 'INVALID_PROVIDER', message: '不支援的付款方式' };
+  // 權威驗證：付款方式須於系統設定開放（顯示層 gate 之外的後端把關；mock 僅測試用不受控）
+  if (provider !== 'mock') {
+    const toggles = await getEnabledPaymentToggles(db);
+    if (toggles[provider] === false) throw { code: 'METHOD_DISABLED', message: '此付款方式尚未開放' };
+  }
   if (!orderType) throw { code: 'MISSING_ORDER_TYPE', message: '缺少 orderType' };
   // 已註冊的 orderType 一律後端權威解析金額/場館/會員（前端不送）；未註冊者（mock）沿用傳入值
   let finalAmount = amount, finalGymId = gymId, finalMemberId = memberId, finalMemberName = memberName;

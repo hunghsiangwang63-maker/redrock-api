@@ -869,6 +869,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **修（方案 A：會員產 QR 前先選場館）**：`gymId` 改 state（`localStorage.memberEntryGymId` 記住上次、預設新竹）；頂部加場館選擇器 `GymSelector`（新竹/士林，比照 `MemberSelector` 樣式），切換即 `changeGym`→重新 `doVerify`（verify useEffect 依賴加 `gymId`）＋依此館產碼；**QR 已產生的步驟（step==='qr'）不顯示**選擇器（避免誤觸重置）。後端 `gymId` 比對維持不動（防跨館誤用），本次純前端。
 - **效果**：士林館會員在 QR 頁選「士林館」→ verify/產碼皆士林 → 士林站台掃碼通過；跨館防呆仍在（士林 QR 拿到新竹掃仍正確擋）。
 
+## 目前進度（2026-07-12）— 會員入場流程：先問租借器材、再選付款方式（順序對調）
+> 回報：入場現在先選付款方式、再跳租借岩鞋粉袋，希望對調。純前端 `MemberQRPage`，commit `b0019a6`，member/staff 皆 deploy。
+- **原流程**：選身分 `select_entry` → 選付款/票券方式 `select_method` → **選付款方式 `select_payment` → 租借器材 `shoes`** → 產 QR（從 shoes 按鈕）。
+- **改後**：選身分 → 選付款/票券方式 → **租借器材 `shoes` → 選付款方式 `select_payment`** → 產 QR（從 select_payment 點付款方式即產）。
+- ✅ **改法**：① `select_method` 付費方式（一般付款/優惠券/購券/購定期票）一律先 `setStep('shoes')`（原 requiresPayment→select_payment）；② `shoes` 按鈕：付費入場（`requiresPayment && !freeEntry`）改「下一步：選擇付款方式 →」進 `select_payment`；**免費入場（含加租器材/續約）維持在 shoes 選租借/續約付款後產 QR**（不受影響）；③ `select_payment` 移到 shoes 之後：`onBack` 回 shoes、點付款方式即 `handleGenerateQR(rentShoes,rentChalk,pm.key)`（handleGenerateQR 加 `payMethod` 參數，避免 `setSelectedPayment` 非同步取不到值）、金額摘要補顯示「＋租借器材 NT$X」小計。
+- **不受影響**：免費入場/黑卡/紅利/單次券（本就無 select_payment）、續約付款（在 shoes）、特約廠商勾選與 buy_pass 分期選擇（仍在 select_payment，現為最後一步）。build 兩 target 通過。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

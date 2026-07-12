@@ -492,9 +492,13 @@ router.post('/waiver/parent/:token',
       // 解除會員封鎖
       await memberService.refreshBlockStatus(waiver.memberId);
 
-      // 通知工作人員
-      const emailService = require('../services/emailService');
-      await emailService.notifyParentWaiverComplete(waiver.memberId, waiver.memberName);
+      // 通知工作人員（非關鍵；函式不存在/寄信失敗都不應讓家長簽署 500）
+      try {
+        const emailService = require('../services/emailService');
+        if (typeof emailService.notifyParentWaiverComplete === 'function') {
+          await emailService.notifyParentWaiverComplete(waiver.memberId, waiver.memberName);
+        }
+      } catch (e) { console.error('家長簽署完成通知失敗（簽署已保存）:', e.message); }
 
       res.json({ message: '簽名完成，謝謝您！風險安全聲明書與墜落測驗同意書皆已完成。' });
     } catch (err) {

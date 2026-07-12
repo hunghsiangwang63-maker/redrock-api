@@ -892,7 +892,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **後端修**（`PUT /products/:id`）：儲存前對每個變體補「唯一」id——缺 id 或與同商品其他變體重複 → `uuidv4()`（`seen` 去重）。
 - ✅ **資料修復**（firebase-admin 全庫掃描）：**23 個商品、補 75 個變體 id、負庫存夾 0 共 4 筆**（即先前回報的 −1）；驗證全庫變體 id 皆唯一、無 undefined。
 - ⚠️ **前端無需改**（購物車 key/inCart 以 variant.id 比對，id 唯一後即正確）；但**使用者需清空舊購物車＋重新載入**商品頁（舊 cart 仍握舊的 undefined-id 快照）→ 用先前加的「🗑 清空購物車」即可。
-- 附帶：先前回報的「負庫存 −1」＝手動編輯設入（後端結帳有擋超賣 `products.js:237`、賣不到負），本次一併夾 0。庫存輸入 min=0 前端夾值未做（如需再補）。
+- 附帶：先前回報的「負庫存 −1」＝手動編輯設入（後端結帳有擋超賣 `products.js:237`、賣不到負），本次一併夾 0。
+- ✅ **庫存不接受負數（前後端夾 ≥0，`2.26.0`，commit 後端 `e3d74ef`/前端 `94d7413`）**：前端 `VariantForm` 數字欄位加 `min=0`＋onChange 負值即夾 0、存檔 `stockNum` 走 `Math.max(0,…)`；後端 `PUT` 變體正規化夾 `stock/gymStock/warehouseStock ≥0`、`POST` 建立夾、`restock` 結果夾 ≥0（`warehouse-stock` 端點本就擋負）。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

@@ -841,6 +841,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（15/15）**：未成年登入 → 簽 waiver（墜測未簽→**不寄**）→ 簽墜測（兩份完成→**寄統一 email**、`parentEmailSentAt`）→ GET 家長頁（含墜測內容、pending）→ 家長簽一次→ waiver `isComplete`＋墜測 `guardianSignedAt`＋簽名回填＋家長名 → token 用完 404。
 - ⚠️ **家長 email 來源**：`parentEmail` 於 waiver 簽署步驟收集（註冊只收 parentName/phone/relation）；未成年簽 waiver 時仍需填家長 Email（`PARENT_EMAIL_REQUIRED`）。子會員（`isChildAccount`）不走此流程（家長帳號代管、waiver 直接完成）。
 
+## 目前進度（2026-07-12）— 幽靈帳號自動清除（自助註冊滿15天未完成入場前置）
+> 需求：註冊但一直沒完成 waiver＋墜測同意簽名的幽靈帳號，每 15 天清一次。AskUserQuestion 定調：**15 天寬限期**（註冊滿15天仍未完成才刪、每天檢查）＋**任一未完成即算**（waiver 未完成 或 未簽墜測同意書）。後端 `/health` `2.23.0-ghost-account-sweep`；E2E（打 Railway）dry-run 10/10＋commit 11/11。commit `5222f9b`。
+- ✅ **`ghostAccountService.sweepGhostAccounts({graceDays=15, commit, limit})`**：`registeredBy==='self'` → 記憶體過濾 `createdAt>15天前`、排除 `isChildAccount`/`isTeamMember`/`memberType==='vip'` → 前置未完成（waiver `isComplete!==true` 或 無 `fallTestSignatures`）→ **安全把關**：名下有子女或任一集合有資料（`VALUE_COLLECTIONS` 14 個：checkIns/transactions/memberPasses/discountCards(ownerMemberId)/legacyBlackCards/legacyDiscountCards/singleEntryTickets/discountBonuses/courseEnrollments/experienceBookings/competitionRegistrations/installmentPlans/equipmentRentals/fallTestBookings/fallTests）即保留 → 只刪「真的空」的帳號（member + 殘留 waiver/墜測同意書簽署）。
+- ✅ **排程**：掛每日 09:00（`index.js` `runDailyInstallmentJobs` 尾端，try/catch 不影響其他 sweep）。手動端點 `POST /members/sweep-ghosts`（super_admin，body `{dryRun, graceDays}`，dryRun 只回候選不刪）。
+- **E2E**：dry-run 驗 7 fixtures 分類（無簽/半簽→候選；近期/有入場/已完成/店員建/有子女/子帳號→保留）；commit 驗實刪＋殘留 waiver 一併刪＋保留者不動。
+- ✅ **順手清除真實幽靈 `朱小姐`（0999999999）**：dry-run 發現她符合幽靈條件（自助註冊 2026-06-19、無 waiver/墜測/任何資料），雖先前「刪測試會員」時列為保留，經使用者確認**一併清除**（commit sweep 已刪）。→ 現存會員少一筆；先前 CLAUDE.md「保留 6 筆非測試」中 `朱小姐` 已不適用。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

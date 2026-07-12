@@ -831,6 +831,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - 其餘大量 `dayjs(x.date/startDate/endDate/dueDate…)` 皆為日期字串（安全）。
 - ✅ **員工端稽核（無 Invalid date bug）**：`CheckinPage` 入場歷史 `checkedInAt` 全走 `_seconds`；`PassesPage` 展延歷史 `ts`＝`createdAt._seconds`；`MembersPage` `fmtDate` 吃 `startDate/endDate` 字串、另處 `raw._seconds` 判斷；review 元件 `TicketApprovalModal.fmtDeadline`/`TransferConfirmModal`（`createdAt._seconds`）/`FallTestBookingModal.fmtTime` 皆先 `_seconds`（無則回 null/空、不顯示 Invalid）；`SchedulePage` `rangeStart`、`PassRequestReviewModal` `passEndDateAtRequest`、`CardsPage` `expiresAtISO` 皆字串。**唯一理論風險** `PassAnalyticsPage:120`（`new Date(data.generatedAt)`）＝**未 route 的 dead code**（真實統計在 `PassesPage`）→ **已刪除該檔**（無任何 import/route、不在 bundle 內、build 通過；commit `dce61e7`）。
 
+## 目前進度（2026-07-12）— 未成年家長簽名統一（一封 email、一頁一次簽 waiver＋墜測同意書）
+> 原：未成年 waiver 家長走 email 遠端簽、墜測同意書家長現場簽。改：**兩份都改成家長遠端簽，且統一成一封 email、家長進同一頁簽一次名套用兩份**。後端 `/health` `2.22.0-parent-esign-notify-guard`；E2E（打 Railway）15/15。commit 後端 `1a8bc6a`＋`609596f`、前端 `a3a576e`。
+- ✅ **統一 email 觸發**（`waiverService.maybeSendParentSignEmail`）：未成年會員**本人 waiver 已簽 + 本人墜測同意書已簽 + 家長未簽 + 尚未寄過**（`parentEmailSentAt` 冪等）才寄一封統一連結。在 waiver 簽署端（`signWaiver` 末，取代原本簽 waiver 當下立即寄）與墜測簽署端（`POST /fall-tests/sign` 後）各呼叫一次 → **兩份本人都簽完那刻才寄**（先簽哪份都可）。
+- ✅ **墜測同意書本人簽署**（`POST /fall-tests/sign`）：移除現場家長簽名 pad/要求，改記 `parentRequired`（依 `isMinor(birthday)<18`）、`guardianSignedAt:null`；簽完觸發統一 email。前端 `MemberFallTestPage` 家長 pad → 改提示「完成本人簽署後寄 email 給家長，於同一連結一次簽兩份」。
+- ✅ **家長頁同頁簽兩份**（`GET/POST /auth/waiver/parent/:token` + `ParentWaiverPage`）：GET 一併回傳墜測同意書內容＋`pending`；家長頁顯示 waiver＋墜測兩份文字、**一個簽名 pad**；POST 同一簽名套用兩份——waiver `parentSignedAt/isComplete`＋`fallTestSignatures.guardianSignatureData/guardianSignedAt/guardianName`（家長名）。email 文案改兩份文件、同頁一次簽。
+- ✅ **不需改 gate 邏輯**：waiver gate（`parent_waiver_pending`）本就擋到家長簽 waiver；家長一次簽兩份，故 waiver complete 時墜測 guardian 同步完成。墜測同意書「本人已簽」即 gate 通過（家長簽與否不另擋，靠 waiver gate 卡）。
+- ✅ **順修 pre-existing 500**（`2.22.0`）：`emailService.notifyParentWaiverComplete` **從未定義** → 家長簽署儲存後呼叫即 `TypeError`→500（資料已存、但家長看到錯誤頁）。包 `try/catch`＋`typeof` 檢查，缺函式/寄信失敗都不再 500。
+- **E2E（15/15）**：未成年登入 → 簽 waiver（墜測未簽→**不寄**）→ 簽墜測（兩份完成→**寄統一 email**、`parentEmailSentAt`）→ GET 家長頁（含墜測內容、pending）→ 家長簽一次→ waiver `isComplete`＋墜測 `guardianSignedAt`＋簽名回填＋家長名 → token 用完 404。
+- ⚠️ **家長 email 來源**：`parentEmail` 於 waiver 簽署步驟收集（註冊只收 parentName/phone/relation）；未成年簽 waiver 時仍需填家長 Email（`PARENT_EMAIL_REQUIRED`）。子會員（`isChildAccount`）不走此流程（家長帳號代管、waiver 直接完成）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

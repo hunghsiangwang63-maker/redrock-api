@@ -65,6 +65,15 @@ const COUNTER_PERMS = new Set([
   'courses.attendance', 'products.sell', 'revenue.record', 'competitions.entries',
 ]);
 
+// 強制登出：帳號文件設 forceLogoutAfter 後，該時間點之前簽發的 token 一律失效
+// （供「開始裝置認證管制」等情境，讓既有 token 立即作廢、下次登入走裝置驗證）
+const isTokenRevoked = (docData, decoded) => {
+  const fla = docData?.forceLogoutAfter;
+  if (!fla) return false;
+  const flaMs = fla.toDate ? fla.toDate().getTime() : new Date(fla).getTime();
+  return Number.isFinite(flaMs) && (decoded.iat || 0) * 1000 < flaMs;
+};
+
 // ── Staff token 驗證 ─────────────────────────────────────────────
 const authenticate = async (req, res, next) => {
   try {
@@ -78,6 +87,9 @@ const authenticate = async (req, res, next) => {
     const staffDoc = await db.collection(COLLECTIONS.STAFF).doc(decoded.staffId).get();
     if (!staffDoc.exists || !staffDoc.data().isActive) {
       return res.status(401).json({ error: 'STAFF_INACTIVE', message: '帳號已停用' });
+    }
+    if (isTokenRevoked(staffDoc.data(), decoded)) {
+      return res.status(401).json({ error: 'SESSION_REVOKED', message: '登入已失效，請重新登入' });
     }
     req.staff = { id: decoded.staffId, gymId: decoded.gymId, role: decoded.role, ...staffDoc.data(), type: decoded.type || 'staff', stationId: decoded.stationId || null };
     next();
@@ -103,7 +115,7 @@ const requireStationAuth = (req, res, next) => {
 
 // ── 館別電腦驗證：接受 station（電腦登入）或 operator（已打卡值班）token ──
 // 用於打卡前後都需可呼叫的 shift 端點，避免無認證被任意人查詢/交班
-const authenticateStation = (req, res, next) => {
+const authenticateStation = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
@@ -112,6 +124,15 @@ const authenticateStation = (req, res, next) => {
     const decoded = jwt.verify(authHeader.split(' ')[1], process.env.JWT_SECRET);
     if (decoded.type !== 'station' && decoded.type !== 'operator') {
       return res.status(403).json({ error: 'STATION_REQUIRED', message: '此功能僅限館別電腦使用' });
+    }
+    // 強制登出檢查：station token 查 stations 文件；operator token 查值班員工 staff 文件
+    const db = getDb();
+    const [coll, id] = decoded.type === 'station' ? ['stations', decoded.stationId] : [COLLECTIONS.STAFF, decoded.staffId];
+    if (id) {
+      const doc = await db.collection(coll).doc(id).get();
+      if (doc.exists && isTokenRevoked(doc.data(), decoded)) {
+        return res.status(401).json({ error: 'SESSION_REVOKED', message: '登入已失效，請重新登入' });
+      }
     }
     req.station = { stationId: decoded.stationId || null, gymId: decoded.gymId || null, type: decoded.type };
     next();

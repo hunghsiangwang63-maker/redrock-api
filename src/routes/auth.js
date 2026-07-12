@@ -511,6 +511,31 @@ router.post('/waiver/parent/:token',
   }
 );
 
+// ── POST /auth/staff/force-logout-all - 強制登出全部員工/館別電腦（super_admin）──
+// 用途：開始裝置認證管制前，作廢所有既有 token（super_admin 本人除外）→
+// 員工/站台下次操作即 401 SESSION_REVOKED，重新登入時走裝置綁定驗證。
+router.post('/staff/force-logout-all', authenticate, async (req, res) => {
+  try {
+    if (req.staff?.role !== 'super_admin') {
+      return res.status(403).json({ error: 'FORBIDDEN', message: '僅系統管理員可執行' });
+    }
+    const db = getDb();
+    const now = new Date();
+    const batch = db.batch();
+    let staffCount = 0, stationCount = 0;
+    const staffSnap = await db.collection(COLLECTIONS.STAFF).get();
+    staffSnap.docs.forEach(d => {
+      if (d.data().role === 'super_admin') return; // 系統管理員除外
+      batch.update(d.ref, { forceLogoutAfter: now, updatedAt: now });
+      staffCount++;
+    });
+    const stationSnap = await db.collection('stations').get();
+    stationSnap.docs.forEach(d => { batch.update(d.ref, { forceLogoutAfter: now, updatedAt: now }); stationCount++; });
+    await batch.commit();
+    res.json({ success: true, staffCount, stationCount, forceLogoutAfter: now.toISOString() });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── POST /auth/device/verify-otp - 新裝置驗證碼自助驗證 ──────────
 // 驗證成功後直接核發正式登入token（跟原登入流程同一套token格式）
 router.post('/device/verify-otp',

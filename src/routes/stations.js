@@ -250,16 +250,17 @@ router.get('/shift/current/:stationId', authenticateStation, async (req, res) =>
     const db = getDb();
     const { stationId } = req.params;
 
+    // 避免複合索引（stationId+clockOutAt+clockInAt）：單一 where + 記憶體過濾排序（既有 500 FAILED_PRECONDITION 修復）
     const snap = await db.collection('shiftLogs')
       .where('stationId', '==', stationId)
-      .where('clockOutAt', '==', null)
-      .orderBy('clockInAt', 'desc')
-      .limit(1)
       .get();
+    const open = snap.docs.map(d => d.data())
+      .filter(x => x.clockOutAt == null)
+      .sort((a, b) => (b.clockInAt?.toMillis?.() || 0) - (a.clockInAt?.toMillis?.() || 0));
 
-    if (snap.empty) return res.json({ operator: null });
+    if (open.length === 0) return res.json({ operator: null });
 
-    const shift = snap.docs[0].data();
+    const shift = open[0];
     res.json({
       operator: {
         id: shift.staffId,

@@ -151,6 +151,34 @@ router.put('/bonus', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /settings/payment-methods - 付款方式開關（公開；各付款頁讀取）──────
+// 現金/轉帳預設開放；LinePay/街口/台灣Pay 待金流 API 對接後由管理員開啟。
+const PAYMENT_DEFAULTS = { cash: true, transfer: true, linepay: false, jkopay: false, taiwanpay: false };
+router.get('/payment-methods', async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('systemSettings').doc('paymentMethods').get();
+    const enabled = { ...PAYMENT_DEFAULTS, ...(doc.exists ? (doc.data().enabled || {}) : {}) };
+    res.json({ enabled });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── PUT /settings/payment-methods（僅 super_admin）───────────────────────
+router.put('/payment-methods', authenticate, async (req, res) => {
+  if (!['super_admin', 'admin'].includes(req.staff?.role))
+    return res.status(403).json({ error: '權限不足' });
+  try {
+    const db = getDb();
+    const body = req.body.enabled || {};
+    const enabled = {};
+    for (const k of Object.keys(PAYMENT_DEFAULTS)) enabled[k] = body[k] === true;
+    if (!Object.values(enabled).some(Boolean))
+      return res.status(400).json({ error: 'NO_METHOD', message: '至少須開放一種付款方式' });
+    await db.collection('systemSettings').doc('paymentMethods').set({ enabled, updatedAt: new Date() }, { merge: true });
+    res.json({ success: true, enabled });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /settings/partner-vendor - 特約廠商入場優惠（啟用 + 折扣金額）──────
 router.get('/partner-vendor', async (req, res) => {
   try {

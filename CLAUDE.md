@@ -905,6 +905,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（17/17）**：退費前 course_access 免費入場 → 申請 201＋兩筆報名皆凍結 → verify 即失去學員資格 → 重複退費 409／暫停擋／請假 400／補課 400（皆 REFUND_PENDING）→ 退回後旗標清除＋資格恢復＋可請假 → 再申請 201 → 核准後報名取消 → 注入 legacy 重複 pending 再核准 → 400 NO_ACTIVE_ENROLLMENT。fixtures 全清。
 - 📌 **語意**：凍結只在「審核中」；核准＝報名取消（原有流程）；退回＝完全恢復（含入場資格/請假/補課，額度不受影響）。暫停申請 pending 不觸發凍結（僅退費）。
 
+## 目前進度（2026-07-13）— 全會員資料清空 + 付款方式系統開關
+> 兩項：①刪除所有會員資料（含票券/課程報名，AskUserQuestion 確認「全部刪＋連帶歷史全刪」）②付款方式（現金/轉帳/LinePay/街口/台灣Pay）改由系統管理員設定控制，先只開現金+轉帳。後端 `/health` `2.28.0-payment-method-toggles`；E2E 7/7。commit 後端 `a997737`、前端 `627139e`。
+- ✅ **全會員資料清空（firebase-admin，dry-run→commit）**：**15 會員＋連帶共 693 筆**——members/waivers/墜測(4集合)/checkIns/pendingCheckIns/cancelCheckinRequests/**transactions/productSales（營收歸零）**/memberPasses/passRequests/各式卡券(5集合)/cardTransfers/ticketTransfers/courseEnrollments/courseMakeupRights/courseAdjustmentRequests/experienceBookings/competitionRegistrations/installmentPlans/equipmentRentals/transferRecords 全清空、0 殘留；**42 個課程場次人數歸零**。保留：課程/場次/票種/商品/staff/gyms/設定/公告/排班/dailySettlements（員工結帳快照，非會員資料）。→ **先前「保留真實會員」清單全數作廢**（含林怡君 member-001、朱智萩小蜘蛛人報名）。之後測試需重新註冊帳號。
+- ✅ **付款方式開關**（`GET/PUT /settings/payment-methods`，`systemSettings/paymentMethods.enabled`）：GET 公開（各付款頁讀）、PUT 限 super_admin/admin、**至少須開一種**（全關 400）。**預設僅 現金+轉帳**；LinePay/街口/台灣Pay 待金流 API 對接後由管理員在「系統設定 → 入場規則 → 💳 付款方式」開啟。
+- ✅ **前端統一 gate**（`utils/paymentMethods.js`：`useEnabledPayments` hook＋`filterPayments`，模組快取、讀取失敗安全預設現金/轉帳）。**套用 10 處**：`PaymentSection`（課程/體驗/比賽waiver付款/租借/團隊共用）、`PaymentPlanChoice`（分期）、`MemberQRPage`（入場/續約/免費租借 3 處 render）、`MemberRentalPage`、`MemberCompetitionsPage`、staff `SalesPage` POS、`CheckinPage` 電話入場、`CoursesPage` 員工報名、`InstallmentsPage`（select+chips）、`MembersPage` 入場登記 Modal。關閉的方式全站不顯示；開啟即自動出現（免改码）。
+- ⚠️ **僅前端顯示 gate**：後端各建立端點未逐一驗 paymentMethod 是否開放（金額仍後端權威）；金流 API 對接時可於 rail 層補權威驗證。
+- **E2E（7/7）**：GET 預設現金+轉帳、未登入 PUT 401、PUT 開 linepay 生效+讀回、全關 400、還原僅現金/轉帳。
+- 📌 **admin 帳號**（`admin@redrock.app`）曾被停用致 E2E 401 `STAFF_INACTIVE`，使用者已重新啟用並指定**留作測試用**。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

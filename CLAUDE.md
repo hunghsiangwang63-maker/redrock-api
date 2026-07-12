@@ -886,6 +886,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **查證「全部列出」**：`cart.map(...)`（`SalesPage:548`）本就渲染所有已加入未結帳品項，cart 為 state、結帳/移除前持續保留、無截斷或 maxHeight 隱藏 → 已正確全列（無 bug）。
 - ✅ **加「清空購物車」鍵**：購物車標題右側「🗑 清空購物車」，點擊 → **二次確認**（確定清空／取消，`confirmClear` state），避免誤觸清掉整車；加新品（`addToCart`）自動取消殘留確認；標題另顯示總件數（Σ quantity）。原本僅逐項 ✕（`removeFromCart`）、無清空全部。
 
+## 目前進度（2026-07-12）— 修：商品變體無唯一 id（購物車「已加入」與購物車件數對不起來）
+> 回報：銷售頁變體 modal「已加入」總數（6 件）與購物車件數（2 件）對不起來、且已加入>庫存。後端 `/health` `2.25.0-product-variant-id-unique`；commit 後端 `3ea8154`＋資料修復。
+- 🔍 **根因**：`PUT /products/:id`（`products.js:109`）直接存 `req.body.variants`——前端**新增變體時未帶 id** → 存成 `id: undefined`。購物車 key＝`${productId}_${variant.id}`＝`${productId}_undefined` → **所有 undefined-id 變體衝突成同一購物車項**；`inCart = cart.find(c => c.variantId === v.id)`＝`undefined===undefined` → modal 多個變體列都誤配到同一筆 → 「已加入」件數灌大（3 列各顯 2＝6）、購物車實際只有 1 項（2 件）。全庫多數商品都中（後續加的變體無 id）。**建立（`POST`）本就補 uuid（:82），只有更新漏了**。
+- ✅ **後端修**（`PUT /products/:id`）：儲存前對每個變體補「唯一」id——缺 id 或與同商品其他變體重複 → `uuidv4()`（`seen` 去重）。
+- ✅ **資料修復**（firebase-admin 全庫掃描）：**23 個商品、補 75 個變體 id、負庫存夾 0 共 4 筆**（即先前回報的 −1）；驗證全庫變體 id 皆唯一、無 undefined。
+- ⚠️ **前端無需改**（購物車 key/inCart 以 variant.id 比對，id 唯一後即正確）；但**使用者需清空舊購物車＋重新載入**商品頁（舊 cart 仍握舊的 undefined-id 快照）→ 用先前加的「🗑 清空購物車」即可。
+- 附帶：先前回報的「負庫存 −1」＝手動編輯設入（後端結帳有擋超賣 `products.js:237`、賣不到負），本次一併夾 0。庫存輸入 min=0 前端夾值未做（如需再補）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

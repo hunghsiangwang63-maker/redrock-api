@@ -829,7 +829,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - 直接 `dayjs(Timestamp欄位)`：`MemberFallTestPage` 的 `status.passedAt/expiresAt/expiredAt` 後端回 `YYYY-MM-DD` **字串**（安全）；`signedAt` 已預解析成 Date（安全）。
   - `CheckinPage` 入場歷史 `checkedInAt` 全部走 `_seconds` 解析（安全）；`PendingTasksPage` `i.ts` 為秒數（number，安全）；`MemberPassesPage` 走 `tsToDay` helper（安全）。
   - 其餘大量 `dayjs(x.date/startDate/endDate/dueDate…)` 皆為日期字串（安全）。
-- ✅ **員工端稽核（無 Invalid date bug）**：`CheckinPage` 入場歷史 `checkedInAt` 全走 `_seconds`；`PassesPage` 展延歷史 `ts`＝`createdAt._seconds`；`MembersPage` `fmtDate` 吃 `startDate/endDate` 字串、另處 `raw._seconds` 判斷；review 元件 `TicketApprovalModal.fmtDeadline`/`TransferConfirmModal`（`createdAt._seconds`）/`FallTestBookingModal.fmtTime` 皆先 `_seconds`（無則回 null/空、不顯示 Invalid）；`SchedulePage` `rangeStart`、`PassRequestReviewModal` `passEndDateAtRequest`、`CardsPage` `expiresAtISO` 皆字串。**唯一理論風險** `PassAnalyticsPage:120`（`new Date(data.generatedAt)`）＝**未 route 的 dead code**（真實統計在 `PassesPage`），不影響、未動。
+- ✅ **員工端稽核（無 Invalid date bug）**：`CheckinPage` 入場歷史 `checkedInAt` 全走 `_seconds`；`PassesPage` 展延歷史 `ts`＝`createdAt._seconds`；`MembersPage` `fmtDate` 吃 `startDate/endDate` 字串、另處 `raw._seconds` 判斷；review 元件 `TicketApprovalModal.fmtDeadline`/`TransferConfirmModal`（`createdAt._seconds`）/`FallTestBookingModal.fmtTime` 皆先 `_seconds`（無則回 null/空、不顯示 Invalid）；`SchedulePage` `rangeStart`、`PassRequestReviewModal` `passEndDateAtRequest`、`CardsPage` `expiresAtISO` 皆字串。**唯一理論風險** `PassAnalyticsPage:120`（`new Date(data.generatedAt)`）＝**未 route 的 dead code**（真實統計在 `PassesPage`）→ **已刪除該檔**（無任何 import/route、不在 bundle 內、build 通過；commit `dce61e7`）。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

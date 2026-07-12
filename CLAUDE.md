@@ -848,6 +848,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E**：dry-run 驗 7 fixtures 分類（無簽/半簽→候選；近期/有入場/已完成/店員建/有子女/子帳號→保留）；commit 驗實刪＋殘留 waiver 一併刪＋保留者不動。
 - ✅ **順手清除真實幽靈 `朱小姐`（0999999999）**：dry-run 發現她符合幽靈條件（自助註冊 2026-06-19、無 waiver/墜測/任何資料），雖先前「刪測試會員」時列為保留，經使用者確認**一併清除**（commit sweep 已刪）。→ 現存會員少一筆；先前 CLAUDE.md「保留 6 筆非測試」中 `朱小姐` 已不適用。
 
+## 目前進度（2026-07-12）— 入場前置兩大方框：本人簽完各別顯示「已簽署」
+> 回報：風險安全聲明＋墜測同意簽完後首頁若仍卡兩大方框，各方框要顯示「已簽署」。純前端 `MemberOnboardingGate`，commit `07a3cc6`，member/staff 皆 deploy。
+- 🔍 **根因**：未成年簽完本人 waiver 後仍卡兩大方框（`needsWaiver` 因 `parent_waiver_pending` 仍 true）。原 waiver 方框 `done={!needsWaiver}`＋`waiting={parentPending}`＋`doneText={parentPending?'':'已完成簽署'}` → 走 waiting 分支但文字為空 → **顯示空的橘色徽章**（看起來像沒簽/壞掉）。墜測方框 `done={consentSigned}` 本就顯示綠色「✓ 已簽署同意書」。
+- ✅ **修**：waiver 方框 `done={!needsWaiver || parentPending}`（本人已簽即視為 done、不可再點）、`doneText={parentPending?'已簽署（待家長簽署）':'已完成簽署'}` → 本人簽完顯示綠色「✓ 已簽署（待家長簽署）」；下方「📧 等待家長簽署」橫幅維持。成年不受影響（parentPending 恆 false，同舊行為）。
+- **效果**：兩大方框在本人簽完後**各別顯示已簽署狀態**（waiver「已簽署（待家長簽署）」/ 成年「已完成簽署」；墜測「已簽署同意書」），不再有空徽章。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

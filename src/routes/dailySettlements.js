@@ -77,6 +77,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     // 各付款方式收款（跨入場/租借/商品/課程/定期票，含轉帳）；免費入場+租借等無付款方式者預設歸現金（櫃檯實收）
     const payByMethod = {};
     const addPay = (method, amt) => { if (amt) { const m = method || 'cash'; payByMethod[m] = (payByMethod[m] || 0) + amt; } };
+    const buyPassAmounts = {}; // buyPassTypeId → 票款（入場購定期票一次付清 → 歸「定期票」大項）
     checkinSnap.docs.forEach(d => {
       const data = d.data();
       const amount = data.amountPaid || 0;
@@ -84,11 +85,16 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       // 直接 租借＝岩鞋+粉袋、入場＝amountPaid−租借（entryFee 對 buy_pass 未存、故不倚賴）。
       const rentalAmt = (data.shoesPrice || 0) + (data.chalkPrice || 0);
       const entryAmt = Math.max(0, amount - rentalAmt);
+      shoeRentalIncome += rentalAmt;
+      addPay(data.paymentMethod, amount);   // 免費入場但有租借 → paymentMethod 可能為 null，預設歸現金
+      if (data.entryType === 'buy_pass') {
+        // 入場購買定期票：票款歸「定期票」大項（賣票收入統一一處；分期時 entryAmt=0 首期由分期計畫記）
+        if (entryAmt > 0) { const k = data.buyPassTypeId || '_unknown'; buyPassAmounts[k] = (buyPassAmounts[k] || 0) + entryAmt; }
+        return;
+      }
       entryIncome += entryAmt;
       const cat = entryCategory(data);
       entryByType[cat] = (entryByType[cat] || 0) + entryAmt;
-      shoeRentalIncome += rentalAmt;
-      addPay(data.paymentMethod, amount);   // 免費入場但有租借 → paymentMethod 可能為 null，預設歸現金
     });
 
     // 商品銷售
@@ -129,6 +135,19 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       }
       // type === 'checkin' / 'product' / 'single_entry_ticket' / 'refund' 等
       // 入場/商品已分別由 checkinSnap / salesSnap 統計，此處不重複加總
+    });
+
+    // buy_pass 票款併入定期票大項（依票種名細項；查無票種名 fallback「購買定期票」）
+    const bpIds = Object.keys(buyPassAmounts).filter(k => k !== '_unknown');
+    const bpNames = {};
+    if (bpIds.length) {
+      const refs = bpIds.map(id => db.collection('passTypes').doc(id));
+      (await db.getAll(...refs)).forEach(doc => { if (doc.exists) bpNames[doc.id] = doc.data().name; });
+    }
+    Object.entries(buyPassAmounts).forEach(([k, amt]) => {
+      const nm = bpNames[k] || '購買定期票';
+      passIncome += amt;
+      passByType[nm] = (passByType[nm] || 0) + amt;
     });
 
     const totalIncome = entryIncome + shoeRentalIncome + productIncome + courseIncome + passIncome;
@@ -428,6 +447,7 @@ router.get('/monthly-export', authenticate, async (req, res) => {
       if (c.isCancelled) return;
       if (gymId && c.gymId !== gymId) return;
       if (!c.checkedInAt) return;
+      if (c.entryType === 'buy_pass') return; // 入場購定期票票款歸「定期票」列（結帳存檔 passItems），不列入場費
       const dt = new Date(c.checkedInAt.toDate().getTime() + 8 * 3600000).toISOString().slice(0, 10);
       const cat = entryCategory(c);
       const fee = (c.entryFee ?? c.amountPaid ?? 0);

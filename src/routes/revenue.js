@@ -123,7 +123,12 @@ router.get('/daily',
         byDate[date].count += 1;
         const bt = byDate[date].byType;
         const add = (k, v) => { if (v) bt[k] = (bt[k] || 0) + v; };
-        if (t.type === 'checkin' || (t.type === 'refund' && t.entryFee != null)) {
+        if ((t.type === 'checkin' || (t.type === 'refund' && t.entryFee != null)) && t.entryType === 'buy_pass') {
+          // 入場購定期票：票款(entryFee)歸「定期票」欄（賣票收入統一一處）、租借照拆；沖銷(負值)對稱
+          const bpEntry = (t.entryFee != null) ? t.entryFee : Math.max(0, amt - (t.shoesPrice || 0));
+          add('pass', bpEntry);
+          add('rental', amt - bpEntry);
+        } else if (t.type === 'checkin' || (t.type === 'refund' && t.entryFee != null)) {
           // 入場費與租借拆開：入場＝純入場(entryFee)；岩鞋/粉袋一律歸「租借」、不算入場。
           // 入場取消退款(refund)也帶 entryFee/shoesPrice（負值）→ 用同一公式對稱沖銷 entry/rental。
           // 無 entryFee 的舊資料退回 totalAmount−岩鞋；租借＝totalAmount−入場（允許負值供退款沖銷）。

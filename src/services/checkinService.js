@@ -1270,6 +1270,7 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
       staffName: staffName || '',
       entryFee: buyPassInstallmentApplied ? 0 : (pending.amount || 0), // 分期票價不在此記（由分期計畫記）
       shoesPrice: pending.shoesPrice || 0,
+      entryType: pending.entryType || null, // 供營收分類（buy_pass 票款歸「定期票」大項）
     });
     await db.collection(COLLECTIONS.CHECK_INS).doc(checkInId).update({ transactionId: txn.id });
   }
@@ -1424,6 +1425,7 @@ const cancelCheckIn = async (checkInId, staffId, force = false) => {
     await recordTransaction(db, {
       gymId: checkIn.gymId,
       type: 'refund',
+      entryType: checkIn.entryType || null,
       totalAmount: -checkIn.amountPaid,
       entryFee: -_entryPortion,        // 反向沖入場費
       shoesPrice: -(_shoes + _chalk),  // 反向沖岩鞋+粉袋

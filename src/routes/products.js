@@ -107,6 +107,16 @@ router.put('/:id', authenticate, checkPermission('products.manage'), async (req,
     const allowed = ['name', 'brand', 'description', 'category', 'lowStockAlert', 'variants', 'isActive'];
     const updates = { updatedAt: new Date() };
     allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+    // 確保每個變體都有「唯一」id：前端新增變體常未帶 id → 若缺 id 或與同商品其他變體重複，補 uuid。
+    // （缺 id 會讓購物車 key `${productId}_undefined` 全部衝突 → 已加入件數與購物車對不起來）
+    if (Array.isArray(updates.variants)) {
+      const seen = new Set();
+      updates.variants = updates.variants.map(v => {
+        const id = (v.id && !seen.has(v.id)) ? v.id : uuidv4();
+        seen.add(id);
+        return { ...v, id };
+      });
+    }
     await db.collection('products').doc(req.params.id).update(updates);
     res.json({ message: '商品已更新' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }

@@ -305,7 +305,8 @@ const signParentCompetitionWaiver = async (token, signatureData, ip) => {
   await doc.ref.update({
     parentSignatureUrl, parentSignedAt: now, parentSignedIp: ip || null,
     isComplete: true,
-    parentSignToken: null, parentSignTokenExpiry: null,
+    // 保留 parentSignToken / expiry：讓已簽後再點連結能查到並顯示「已完成簽署」
+    //（重簽由上方 isComplete 擋 ALREADY_SIGNED）
   });
 
   await sendWebhook(doc.id);

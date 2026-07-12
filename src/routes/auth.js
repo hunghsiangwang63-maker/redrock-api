@@ -397,12 +397,13 @@ router.get('/waiver/parent/:token',
 
       const waiver = snapshot.docs[0].data();
 
-      if (dayjs().isAfter(dayjs(waiver.parentSignTokenExpiry.toDate()))) {
-        return res.status(410).json({ error: 'TOKEN_EXPIRED', message: '簽名連結已過期（72小時有效）' });
-      }
-
+      // 已簽署優先於過期判斷：簽完後再點連結（即使已過 72 小時）都顯示「已完成簽署」而非「已過期/無效」
       if (waiver.parentSignedAt) {
         return res.status(409).json({ error: 'ALREADY_SIGNED', message: '已完成簽署' });
+      }
+
+      if (dayjs().isAfter(dayjs(waiver.parentSignTokenExpiry.toDate()))) {
+        return res.status(410).json({ error: 'TOKEN_EXPIRED', message: '簽名連結已過期（72小時有效）' });
       }
 
       // 一併載入該會員的墜落測驗同意書（本人已簽、待家長簽）供同頁簽署
@@ -449,6 +450,9 @@ router.post('/waiver/parent/:token',
       const waiverDoc = snapshot.docs[0];
       const waiver = waiverDoc.data();
 
+      if (waiver.parentSignedAt) {
+        return res.status(409).json({ error: 'ALREADY_SIGNED', message: '已完成簽署' });
+      }
       if (dayjs().isAfter(dayjs(waiver.parentSignTokenExpiry.toDate()))) {
         return res.status(410).json({ error: 'TOKEN_EXPIRED' });
       }
@@ -468,8 +472,8 @@ router.post('/waiver/parent/:token',
         parentSignedIp: req.ip,
         isComplete: true,
         lockedAt: now,
-        parentSignToken: null,   // 用完即廢
-        parentSignTokenExpiry: null,
+        // 保留 parentSignToken / expiry：讓已簽後再點 email 連結能顯示「已完成簽署」
+        //（重簽由上方 parentSignedAt 擋 409 ALREADY_SIGNED，token 只剩唯讀查詢用途）
       });
 
       // 同一簽名一併套用到「墜落測驗同意書」（待家長簽的那份）→ 統一一次簽名兩份都完成

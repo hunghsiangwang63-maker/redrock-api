@@ -73,18 +73,46 @@ const signWaiver = async ({ memberId, memberName, isMinor, isChildAccount, signa
   const memberService = require('./memberService');
   const blockReasons = await memberService.refreshBlockStatus(memberId);
 
-  // 發送家長簽名 Email
+  // 家長簽名 Email：改為「本人 waiver + 墜測同意書皆簽完」才寄一封統一連結（見 maybeSendParentSignEmail）。
+  // 此處不再直接寄；若此時墜測同意書也已簽 → helper 會立即寄，否則等墜測簽完那端觸發。
   if (isMinor && !isChildAccount && parentEmail) {
-    const emailService = require('./emailService');
-    const token = waiver.parentSignToken;
-    try {
-      await emailService.sendParentWaiverLink(memberId, memberName, parentEmail, parentName, token);
-    } catch (e) {
-      console.error('家長簽署Email發送失敗（會員本人簽署已成功保存）:', e.message);
-    }
+    try { await maybeSendParentSignEmail(memberId); }
+    catch (e) { console.error('家長簽署 Email 觸發失敗（會員本人簽署已保存）:', e.message); }
   }
 
   return { waiver, parentRequired: isMinor, blockReasons };
+};
+
+// ── 統一家長簽署 Email ────────────────────────────────────────────
+// 未成年會員的「風險安全聲明書」與「墜落測驗同意書」家長簽名，統一成「本人兩份都簽完後
+// 寄一封 email、家長進同一頁一次簽名套用兩份」。此 helper 在 waiver 簽署端與墜測同意書
+// 簽署端各呼叫一次；只有當「本人 waiver 已簽 + 本人墜測同意書已簽 + 家長尚未簽 + 尚未寄過」
+// 才真正寄出（冪等，避免重複寄；提醒改用 resendParentWaiverLink）。
+const maybeSendParentSignEmail = async (memberId) => {
+  const db = getDb();
+  const waiverDoc = await db.collection(COLLECTIONS.WAIVERS).doc(memberId).get();
+  if (!waiverDoc.exists) return { sent: false, reason: 'no_waiver' };
+  const w = waiverDoc.data();
+  if (!w.parentRequired || w.isComplete || w.parentSignedAt) return { sent: false, reason: 'not_required_or_done' };
+  if (!w.parentEmail) return { sent: false, reason: 'no_parent_email' };
+  if (!w.memberSignedAt && !w.memberSignatureUrl) return { sent: false, reason: 'member_waiver_unsigned' };
+  if (w.parentEmailSentAt) return { sent: false, reason: 'already_sent' }; // 冪等；提醒走 resend
+
+  // 本人墜測同意書是否已簽（任一簽署紀錄存在即可）
+  const ftSnap = await db.collection('fallTestSignatures').where('memberId', '==', memberId).limit(1).get();
+  if (ftSnap.empty) return { sent: false, reason: 'consent_unsigned' };
+
+  // 確保 token 存在
+  let token = w.parentSignToken;
+  if (!token) {
+    token = uuidv4();
+    await waiverDoc.ref.update({ parentSignToken: token, parentSignTokenExpiry: dayjs().add(72, 'hour').toDate() });
+  }
+
+  const emailService = require('./emailService');
+  await emailService.sendParentWaiverLink(memberId, w.memberName, w.parentEmail, w.parentName, token);
+  await waiverDoc.ref.update({ parentEmailSentAt: new Date() });
+  return { sent: true };
 };
 
 // ── 重發家長簽名連結 ──────────────────────────────────────────────
@@ -117,4 +145,4 @@ const resendParentWaiverLink = async (memberId, staffId) => {
   return { message: '已重新發送家長簽名連結' };
 };
 
-module.exports = { signWaiver, uploadSignature, resendParentWaiverLink };
+module.exports = { signWaiver, uploadSignature, resendParentWaiverLink, maybeSendParentSignEmail };

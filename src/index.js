@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '2.20.0-register-birthday-parent-required',
+    version: '2.21.0-unified-parent-esign',
   });
 });
 

@@ -405,11 +405,26 @@ router.get('/waiver/parent/:token',
         return res.status(409).json({ error: 'ALREADY_SIGNED', message: '已完成簽署' });
       }
 
+      // 一併載入該會員的墜落測驗同意書（本人已簽、待家長簽）供同頁簽署
+      let fallTest = null;
+      const ftSnap = await db.collection('fallTestSignatures')
+        .where('memberId', '==', waiver.memberId).get();
+      if (!ftSnap.empty) {
+        const latest = ftSnap.docs
+          .map(d => d.data())
+          .sort((a, b) => (b.signedAt?._seconds || b.signedAt?.seconds || 0) - (a.signedAt?._seconds || a.signedAt?.seconds || 0))[0];
+        fallTest = {
+          content: latest.contentSnapshot || { zh: '', en: '' },
+          pending: latest.parentRequired === true && !latest.guardianSignedAt,
+        };
+      }
+
       // 回傳給前端的 Waiver 頁面資訊
       res.json({
         memberId: waiver.memberId,
         memberName: waiver.memberName,
         parentName: waiver.parentName,
+        fallTest,           // { content:{zh,en}, pending } 或 null
         isValid: true,
       });
     } catch (err) {
@@ -457,6 +472,23 @@ router.post('/waiver/parent/:token',
         parentSignTokenExpiry: null,
       });
 
+      // 同一簽名一併套用到「墜落測驗同意書」（待家長簽的那份）→ 統一一次簽名兩份都完成
+      try {
+        const ftSnap = await db.collection('fallTestSignatures')
+          .where('memberId', '==', waiver.memberId).get();
+        if (!ftSnap.empty) {
+          const target = ftSnap.docs
+            .filter(d => d.data().parentRequired === true && !d.data().guardianSignedAt)
+            .sort((a, b) => (b.data().signedAt?._seconds || 0) - (a.data().signedAt?._seconds || 0))[0]
+            || ftSnap.docs.sort((a, b) => (b.data().signedAt?._seconds || 0) - (a.data().signedAt?._seconds || 0))[0];
+          await target.ref.update({
+            guardianSignatureData: signatureUrl,
+            guardianName: waiver.parentName || null,
+            guardianSignedAt: now,
+          });
+        }
+      } catch (e) { console.error('家長簽名套用墜測同意書失敗（waiver 已完成）:', e.message); }
+
       // 解除會員封鎖
       await memberService.refreshBlockStatus(waiver.memberId);
 
@@ -464,7 +496,7 @@ router.post('/waiver/parent/:token',
       const emailService = require('../services/emailService');
       await emailService.notifyParentWaiverComplete(waiver.memberId, waiver.memberName);
 
-      res.json({ message: '簽名完成，謝謝您！帳號已解除限制。' });
+      res.json({ message: '簽名完成，謝謝您！風險安全聲明書與墜落測驗同意書皆已完成。' });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }

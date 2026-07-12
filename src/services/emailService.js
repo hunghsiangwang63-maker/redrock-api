@@ -224,12 +224,13 @@ const sendParentWaiverLink = async (memberId, memberName, parentEmail, parentNam
   const url = `${CLIENT_URL}/waiver/parent/${token}`;
   return sendEmail({
     to: parentEmail,
-    subject: `【紅石攀岩】請完成 ${memberName} 的家長同意簽署`,
+    subject: `【紅石攀岩】請完成 ${memberName} 的家長同意簽署（風險安全聲明書＋墜落測驗同意書）`,
     html: `
       <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
         <h2 style="color:#8B1A1A">紅石攀岩 RedRock</h2>
         <p>${esc(parentName || '家長')} 您好，</p>
-        <p>未成年會員 <strong>${esc(memberName)}</strong> 已完成風險自負同意書簽署，需法定代理人（家長）一同簽署才能生效。</p>
+        <p>未成年會員 <strong>${esc(memberName)}</strong> 已完成本人簽署，需法定代理人（家長）一同簽署 <strong>風險安全聲明書</strong> 與 <strong>墜落測驗同意書</strong> 才能生效。</p>
+        <p style="color:#666;font-size:13px">點擊下方連結，於同一頁面簽一次名即可完成兩份文件。</p>
         <a href="${url}" style="display:inline-block;margin:20px 0;padding:12px 28px;background:#8B1A1A;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold">前往簽署</a>
         <p style="color:#999;font-size:12px">此連結 72 小時內有效。若非本人操作請忽略此信。</p>
       </div>

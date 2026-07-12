@@ -141,6 +141,11 @@ router.post('/sign', authenticateAny, async (req, res) => {
     if (!agreedParagraphs || !Array.isArray(agreedParagraphs) || agreedParagraphs.length === 0)
       return res.status(400).json({ error: 'MISSING_AGREEMENT', message: '請閱讀並勾選所有條款後再簽署' });
 
+    // 未成年（<18）家長簽名改為遠端：本人只簽自己的，家長於統一 email 連結一次簽 waiver+墜測同意書
+    const { isMinor } = require('../utils/age');
+    const memberDoc = await db.collection('members').doc(memberId).get();
+    const parentRequired = memberDoc.exists ? isMinor(memberDoc.data().birthday) : false;
+
     // 建立簽署紀錄，同時儲存當下條款文字快照（避免未來條款改版後副本顯示錯誤內容）
     const signId = uuidv4();
     await db.collection('fallTestSignatures').doc(signId).set({
@@ -153,10 +158,18 @@ router.post('/sign', authenticateAny, async (req, res) => {
         zh: settings.contentZh || '',
         en: settings.contentEn || '',
       },
-      guardianSignatureData: guardianSignatureData || null,
+      parentRequired,                                          // 未成年需家長遠端簽名
+      guardianSignatureData: guardianSignatureData || null,    // 家長簽名（遠端 email 簽署時回填）
       guardianName: guardianName || null,
+      guardianSignedAt: guardianSignatureData ? new Date() : null,
       signedAt: new Date(),
     });
+
+    // 未成年：本人墜測同意書簽完 → 觸發統一家長簽署 email（waiver 也簽完才會真的寄）
+    if (parentRequired) {
+      try { await require('../services/waiverService').maybeSendParentSignEmail(memberId); }
+      catch (e) { console.error('墜測同意書觸發家長 email 失敗（簽署已保存）:', e.message); }
+    }
 
     res.status(201).json({ signatureId: signId, message: '同意書已簽署，等待工作人員進行測驗' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }

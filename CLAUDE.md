@@ -853,6 +853,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🔍 **根因**：未成年簽完本人 waiver 後仍卡兩大方框（`needsWaiver` 因 `parent_waiver_pending` 仍 true）。原 waiver 方框 `done={!needsWaiver}`＋`waiting={parentPending}`＋`doneText={parentPending?'':'已完成簽署'}` → 走 waiting 分支但文字為空 → **顯示空的橘色徽章**（看起來像沒簽/壞掉）。墜測方框 `done={consentSigned}` 本就顯示綠色「✓ 已簽署同意書」。
 - ✅ **修**：waiver 方框 `done={!needsWaiver || parentPending}`（本人已簽即視為 done、不可再點）、`doneText={parentPending?'已簽署（待家長簽署）':'已完成簽署'}` → 本人簽完顯示綠色「✓ 已簽署（待家長簽署）」；下方「📧 等待家長簽署」橫幅維持。成年不受影響（parentPending 恆 false，同舊行為）。
 - **效果**：兩大方框在本人簽完後**各別顯示已簽署狀態**（waiver「已簽署（待家長簽署）」/ 成年「已完成簽署」；墜測「已簽署同意書」），不再有空徽章。
+- ✅ **續修：對齊「兩份都簽完才寄家長 email」**（commit `f0794f9`）：回報未成年應是 waiver＋墜測同意書**都簽完**才送家長簽名（後端 `maybeSendParentSignEmail` 本就如此）。但上一版 gate 只簽 waiver 就顯示「待家長簽署」→ 誤導（家長其實還沒被通知）。改 `awaitingParent = parentPending && consentSigned`（兩份本人皆簽完才算家長已被通知）：**只簽一份** → 該方框顯示「✓ 已簽署」（不提家長）；**兩份都簽完** → 兩方框皆「✓ 已簽署（待家長簽署）」＋橫幅「兩份文件已完成本人簽署，已寄 email 給家長，同頁一次簽署完成即可入場」。成年不受影響。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

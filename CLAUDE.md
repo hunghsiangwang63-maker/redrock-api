@@ -928,7 +928,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📋 **①查證結論：不重複（金額互斥、總計只算一次），但屬「依購買通路分家」的顯示設計**：
   - **入場細項「購買定期票」**（`income.entryItems`，來源 `checkIns`）＝會員**入場當下購買定期票、一次付清**的票款（buy_pass 的 `amountPaid`，記 `type:'checkin'` 交易、**不會**產生 type:'pass' 交易）。
   - **獨立大項「定期票」**（`income.pass`/`passItems`，來源 `transactions type='pass'`）＝**櫃檯新增定期票（POST /passes）＋分期首期＋續約款**。buy_pass 分期時 checkin 的 amountPaid 不含票價（首期由分期計畫記 type:'pass'）→ 兩邊互斥。
-  - 若要把 buy_pass 一次付清也統一歸「定期票」大項（賣票的錢全在一處），需連動月銷售 Excel 與營收報表分類，屬另一次變更（未做、待使用者決定）。
+  - ✅ **已統一（`2.33.0-buypass-under-pass-category`，commit `c3fa356`；E2E 11/11）**：使用者拍板「賣票收入全在一處」——buy_pass 票款改歸「定期票」大項，三處對齊：
+    - **交易補 `entryType`**：`confirmCheckIn` 的 checkin 交易＋`cancelCheckIn`/`cancelCheckin.js` 的沖銷交易皆存 `entryType`（供營收分類與取消對稱；歷史交易已全清、無相容包袱）。
+    - **結帳 `/today`**：buy_pass 票款（一次付清 `amountPaid−租借`）併入 `passIncome`/`passItems`（**依票種名**，`getAll passTypes` 補名、fallback「購買定期票」）；岩鞋/粉袋照歸出租；分期不變（票款本就由分期計畫記 type:'pass'）。`entryItems` 不再出現「購買定期票」。
+    - **月銷售 Excel**：入場費細項（由 checkIns 重算）排除 buy_pass；票款由結帳存檔 `passItems` 呈現於「定期票」列。
+    - **營收 `/revenue/daily`**：`entryType==='buy_pass'` 的 checkin/沖銷交易 → 票款(`entryFee`)歸「定期票」欄、租借照拆、取消沖銷對稱歸零。
+    - **E2E（11/11）**：假館注入 buy_pass(7700=票7600+鞋100)＋成人300＋buy_pass 沖銷 → 結帳 入場300/出租100/定期票7600（passItems 票種名）/總計8000；營收 入場300、租借與定期票沖銷對稱歸 0；Excel 入場費無「購買定期票」列、成人列仍在。
 - ✅ **②月銷售 Excel「手動輸入金額」區**（`monthly-export`）：當月任一天結帳存有 `incomeManual` → 品項銷售明細後輸出——`入場費(手動)` 逐分類列（當月手動分類聯集、固定六分類序）、`租借費(手動)`/`商品販售(手動)`/`定期票(手動)`/`教學費(手動)`、**手計總額**（與前端 `manualIncomeTotal` 同邏輯：逐項 手動 ?? 系統回退）。無手動輸入的月份不輸出此區（版面不變）。**E2E（8/8）**：注入含 incomeManual 的假館結帳 → 下載解析——手動分類值/租借/定期票手動值正確、手計總額=3200（含空值回退系統）、原系統列不變。
 
 ## 待辦

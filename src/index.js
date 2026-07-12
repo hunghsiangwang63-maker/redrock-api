@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '2.22.0-parent-esign-notify-guard',
+    version: '2.23.0-ghost-account-sweep',
   });
 });
 
@@ -152,6 +152,12 @@ if (require.main === module) {
     try {
       await require('./services/settlementService').sweepStaleSettlementDrafts();
     } catch (e) { console.error('[結帳暫存清理] 失敗', e.message); }
+    // 幽靈帳號清除：自助註冊滿 15 天仍未完成入場前置（waiver 或 墜測同意書任一未完成）
+    // 且名下無任何資料（子女/入場/交易/票券/報名/租借…）→ 刪除空帳號。每日檢查、15 天寬限期。
+    try {
+      const g = await require('./services/ghostAccountService').sweepGhostAccounts();
+      if (g.deleted > 0) console.log(`[幽靈帳號] 刪除 ${g.deleted} 筆（掃描 ${g.scanned}、有資料保留 ${g.skippedWithValue}）`);
+    } catch (e) { console.error('[幽靈帳號清除] 失敗', e.message); }
   };
   // 卡片移轉逾期回沖：每小時掃描（24h 未接收 → 次數回沖來源）
   const runCardTransferExpiry = async () => {

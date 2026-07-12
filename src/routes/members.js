@@ -542,6 +542,23 @@ router.put('/:id',
   }
 );
 
+// ── POST /members/sweep-ghosts - 幽靈帳號清除（super_admin；供手動觸發/測試）──
+// 排程每日自動跑；此端點供手動觸發或 dry-run 預覽。body: { dryRun?:bool, graceDays?:number }
+router.post('/sweep-ghosts',
+  authenticate,
+  async (req, res) => {
+    try {
+      if (req.staff?.role !== 'super_admin') return res.status(403).json({ error: 'FORBIDDEN', message: '僅系統管理員可執行' });
+      const dryRun = req.body?.dryRun === true;
+      const graceDays = Number.isFinite(req.body?.graceDays) ? req.body.graceDays : undefined;
+      const result = await require('../services/ghostAccountService').sweepGhostAccounts({ commit: !dryRun, graceDays });
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // ── DELETE /members/:id - 刪除會員（僅管理員；一併刪其子帳號）─────────
 // 只刪會員檔案本身與其子帳號；入場/交易/票券/報名等歷史紀錄保留（內含 memberId 快照，供對帳）。
 router.delete('/:id',

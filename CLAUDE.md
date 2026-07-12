@@ -812,6 +812,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **員工端**（`CoursesPage`）：課程列表第一層類別卡（同館才前綴）、第二層類別標題、梯次卡；場次管理側欄課程列、場次詳情標題；名單 modal 標題。**課程月曆日格不加**（自行決定排除、避免洗版，與會員月曆一致）。
 - **資料來源**：課程/場次/報名皆帶 `gymId`（enroll-all 存 `gymId: s.gymId||gymId`，courseService 回傳 enrollment 含 gymId）→ 前綴即時可用。build 兩 target 通過。
 
+## 目前進度（2026-07-12）— 自助註冊：生日必填 + 未滿18歲家長資料必填
+> 需求：帳號申請生日改必填、註明未滿18需家長簽名、家長資料（姓名/電話/關係）皆必填。後端 `/health` `2.20.0-register-birthday-parent-required`；E2E（打 Railway）10/10。commit 後端 `5fd43cb`、前端 `a175fc8`。
+- ✅ **後端**：`self-register` validator 生日 `optional`→`notEmpty().bail().isDate()`（必填）；handler 開頭 `isMinor(birthday)`（<18）→ 家長 `parentName/parentPhone/parentRelation` 任一空 → **400 `PARENT_INFO_REQUIRED`**（權威把關）。`memberService.createMember` 儲存 `parentName/parentPhone/parentRelation`。`utils/age.js`（前後端）加 `isMinor(<18)`；`schema.js` memberSchema 補三欄。
+- ✅ **前端**（`MemberRegisterPage`）：生日欄移除「選填」＋`required`＋紅字註明「未滿 18 歲需家長／法定代理人簽署風險安全聲明書，並填寫下方家長資料」；輸入未滿18生日 → 展開「家長／法定代理人資料」區塊（姓名/電話/關係，皆 `required`、擋送出）；未成年才帶 `parent*` 進 payload（成年自動移除）。沿用未滿5歲擋註冊。
+- **範圍**：只改**自助註冊**（帳號申請）；店員建立會員 `POST /members` 不強制（可事後補）。家長資料供日後風險安全聲明書家長簽署流程使用（waiver 另收 parentEmail + 簽名）。
+- **E2E（10/10）**：缺生日→400（生日必填）；成年無家長→201（isMinor=false、無 parentName）；未成年缺家長→400 `PARENT_INFO_REQUIRED`、只填姓名亦 400；未成年+完整家長→201（isMinor=true、三欄已存）；未滿5歲+家長→400 `AGE_UNDER_5`（年齡擋優先）。測後清乾淨。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

@@ -914,6 +914,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（7/7）**：GET 預設現金+轉帳、未登入 PUT 401、PUT 開 linepay 生效+讀回、全關 400、還原僅現金/轉帳。
 - 📌 **admin 帳號**（`admin@redrock.app`）曾被停用致 E2E 401 `STAFF_INACTIVE`，使用者已重新啟用並指定**留作測試用**。
 
+## 目前進度（2026-07-13）— 強制登出全員工/站台 + 開始裝置認證管制
+> 需求：員工（super_admin 除外）與館別電腦全部強制登出，開始裝置認證管制。後端 `/health` `2.30.0`→`2.31.0`；E2E 通過；commit `6a16e54`＋`546b3a9`。**已實際執行：12 員工＋2 站台全數登出、裝置綁定開關＝開啟。**
+- ✅ **強制登出機制（`forceLogoutAfter`）**：帳號文件設此時戳後，**之前簽發的 token 一律 401 `SESSION_REVOKED`**——`authenticate`（staff/operator token，本就每請求讀 staff 文件）＋`authenticateStation`（改 async：station token 查 `stations`、operator token 查 `staff`）都檢查 `decoded.iat*1000 < forceLogoutAfter`。前端 401 interceptor 本就清 token 回登入頁 → 立即登出生效。
+- ✅ **`POST /auth/staff/force-logout-all`**（super_admin）：全部員工（**super_admin 除外**）＋全部館別電腦設 `forceLogoutAfter=now`。可重複執行（重新蓋時戳）。
+- ✅ **裝置綁定管制已開啟**（`systemSettings/security.deviceBindingEnabled=true`；使用者測試期間已先開過一次）：員工/站台**下次登入**須裝置驗證——未授權裝置 → `403 DEVICE_VERIFICATION_REQUIRED`＋寄 OTP 至帳號 Email（自助 `POST /auth/device/verify-otp`）或管理員審核；**super_admin 登入不受綁定影響**（原設計例外）。關閉入口：系統設定 → 員工帳號 → 裝置綁定 toggle。
+- **E2E（實測 Railway）**：force-logout 執行（12 staff＋2 stations）→ 舊站台 token `SESSION_REVOKED`；super_admin token 不受影響；綁定開啟後 站台/員工登入皆 `DEVICE_VERIFICATION_REQUIRED`、super_admin 登入 200。測試臨時員工已刪；測試期間簽發 token 已由最終一次 force-logout 全數作廢。
+- ✅ **順修既有 bug：`GET /stations/shift/current/:stationId` 500**（`2.31.0`）：查詢 `stationId+clockOutAt+orderBy(clockInAt)` 缺複合索引 → `FAILED_PRECONDITION`（E2E 撞見、與本次改動無關）。改單一 where＋記憶體過濾排序（專案慣例）。
+- ⚠️ **實務提醒**：兩館電腦與所有員工下次登入都要走一次裝置驗證（Email OTP 或管理員在裝置審核頁核准）；若現場卡住可暫時關閉裝置綁定開關再排查。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

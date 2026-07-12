@@ -862,6 +862,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **競賽家長簽署同步修**（`competitionService.signParentCompetitionWaiver`）：同樣不再 null token；競賽 GET 本就先查 `isComplete`→ALREADY_SIGNED，保留 token 即可正確顯示。
 - **E2E（5/5）**：未成年簽兩份 → 家長 GET 200 → 家長簽署 200 → **重訪同連結 409 `ALREADY_SIGNED`**（非 404）→ 重複 POST 409 → token 簽署後仍保留。
 
+## 目前進度（2026-07-12）— 會員入場 QR 加場館選擇（修「一律新竹館」→士林館自助入場全被擋）
+> 回報：賴維治產生入場 QR、在士林館掃碼被系統判為「新竹館 QR」擋下。查為會員端 QR 場館寫死問題。純前端 `MemberQRPage`，commit `b356a47`，member/staff 皆 deploy。
+- 🔍 **根因**：`MemberQRPage` 的 `gymId = member?.defaultGymId || 'gym-hsinchu'`，但 **`defaultGymId` 全系統從未被設定過**（僅被讀）→ 每位會員的入場 QR **恆為新竹館**。站台掃碼有 `GYM_MISMATCH` 檢查（1.45.0：`pending.gymId !== staffGymId` 擋，super_admin 例外）→ **任何會員在士林館走自助 QR 一律被擋**（非賴維治個案，是全體士林自助入場壞掉）。
+- **為何 QR 要分場館**：`/checkin/verify` 依「指定館」算資格並烘進 QR（單館定期票僅該館有效、購買定期票 target gym 等），站台掃碼比對同館以防「A 館算的資格拿到 B 館用」。設計本身合理，缺的是「讓會員選館」。
+- ✅ **修（方案 A：會員產 QR 前先選場館）**：`gymId` 改 state（`localStorage.memberEntryGymId` 記住上次、預設新竹）；頂部加場館選擇器 `GymSelector`（新竹/士林，比照 `MemberSelector` 樣式），切換即 `changeGym`→重新 `doVerify`（verify useEffect 依賴加 `gymId`）＋依此館產碼；**QR 已產生的步驟（step==='qr'）不顯示**選擇器（避免誤觸重置）。後端 `gymId` 比對維持不動（防跨館誤用），本次純前端。
+- **效果**：士林館會員在 QR 頁選「士林館」→ verify/產碼皆士林 → 士林站台掃碼通過；跨館防呆仍在（士林 QR 拿到新竹掃仍正確擋）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

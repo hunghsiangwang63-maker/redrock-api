@@ -855,6 +855,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **效果**：兩大方框在本人簽完後**各別顯示已簽署狀態**（waiver「已簽署（待家長簽署）」/ 成年「已完成簽署」；墜測「已簽署同意書」），不再有空徽章。
 - ✅ **續修：對齊「兩份都簽完才寄家長 email」**（commit `f0794f9`）：回報未成年應是 waiver＋墜測同意書**都簽完**才送家長簽名（後端 `maybeSendParentSignEmail` 本就如此）。但上一版 gate 只簽 waiver 就顯示「待家長簽署」→ 誤導（家長其實還沒被通知）。改 `awaitingParent = parentPending && consentSigned`（兩份本人皆簽完才算家長已被通知）：**只簽一份** → 該方框顯示「✓ 已簽署」（不提家長）；**兩份都簽完** → 兩方框皆「✓ 已簽署（待家長簽署）」＋橫幅「兩份文件已完成本人簽署，已寄 email 給家長，同頁一次簽署完成即可入場」。成年不受影響。
 
+## 目前進度（2026-07-12）— 家長簽署後再點 email 連結顯示「已完成簽署」
+> 回報：家長簽完後再點 email 連結顯示「此連結無效」，應顯示「已完成簽署」。後端 `/health` `2.24.0-parent-link-already-signed`；E2E（打 Railway）5/5。commit `4d90ca2`。
+- 🔍 **根因**：家長簽署（`POST /auth/waiver/parent/:token`）後把 `parentSignToken` 設 `null`（用完即廢）→ 重訪 `GET` 以 token 查無 → 回 `404 INVALID_TOKEN`「此連結無效」，走不到 `ALREADY_SIGNED` 判斷。
+- ✅ **修**（`auth.js`）：簽署後**保留 `parentSignToken`/expiry**（不再 null）——重簽由新加的 `parentSignedAt` 檢查擋 `409 ALREADY_SIGNED`（POST）；token 只剩唯讀查詢用途。GET 把「已簽 → 409 ALREADY_SIGNED」移到「過期 → 410」**之前** → 簽完後（即使逾 72h）都顯示「已完成簽署」。前端 `ParentWaiverPage` 本就把 `ALREADY_SIGNED` 顯示為「此聲明書已經完成簽署囉，感謝您！」。
+- ✅ **競賽家長簽署同步修**（`competitionService.signParentCompetitionWaiver`）：同樣不再 null token；競賽 GET 本就先查 `isComplete`→ALREADY_SIGNED，保留 token 即可正確顯示。
+- **E2E（5/5）**：未成年簽兩份 → 家長 GET 200 → 家長簽署 200 → **重訪同連結 409 `ALREADY_SIGNED`**（非 404）→ 重複 POST 409 → token 簽署後仍保留。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

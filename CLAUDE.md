@@ -895,6 +895,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 附帶：先前回報的「負庫存 −1」＝手動編輯設入（後端結帳有擋超賣 `products.js:237`、賣不到負），本次一併夾 0。
 - ✅ **庫存不接受負數（前後端夾 ≥0，`2.26.0`，commit 後端 `e3d74ef`/前端 `94d7413`）**：前端 `VariantForm` 數字欄位加 `min=0`＋onChange 負值即夾 0、存檔 `stockNum` 走 `Math.max(0,…)`；後端 `PUT` 變體正規化夾 `stock/gymStock/warehouseStock ≥0`、`POST` 建立夾、`restock` 結果夾 ≥0（`warehouse-stock` 端點本就擋負）。
 
+## 目前進度（2026-07-12）— 課程退費申請審核中「凍結」（取消學員資格＋擋請假/補課/暫停/重複退費）
+> 由「退費 pending 期間會員能做什麼」查證引出三個縫隙（前端灰鍵不跨重整、後端無重複 pending 擋、重複核准＝重複退款），使用者加碼定調：**送出退費申請後即凍結該課**——取消課程學員入場資格、擋上課/請假/補課/申請暫停/再申請退費；退回（reject）自動全面恢復、核准則取消報名。後端 `/health` `2.27.0-refund-pending-freeze`；E2E（打 Railway）**17/17**。commit 後端 `30b99b2`、前端 `99b9fdf`。
+- ✅ **凍結機制（enrollments.refundPending 旗標）**：`refund-request` 建立後批次標該課所有有效報名 `refundPending:true`＋`refundRequestId`；**reject 清旗標恢復**；approve 走既有 `cancelCourseEnrollments`。
+- ✅ **重複申請擋**：`refund-request`／`pause-request` 建立時查同課程＋同會員已有 `pending` 申請 → **409 `REQUEST_PENDING`**（查詢用 courseId+memberId 兩等值、status 記憶體過濾，避複合索引）；pause 另擋 `refundPending` 報名 → 400 `REFUND_PENDING`。
+- ✅ **權威 gate**：`checkinService.getCourseAccess` 過濾 `refundPending`（**課程學員免費入場資格即時取消**，退回恢復）；`courseService.requestLeave` 擋 `REFUND_PENDING`；`courseService.enrollMakeup` 查原課程有 pending 退費 → 擋 `REFUND_PENDING`（凍結該課衍生補課資格）。
+- ✅ **防重複退款**（approve）：核准退費當下該會員此課程已無有效報名（confirmed/leave/waitlist）→ **400 `NO_ACTIVE_ENROLLMENT`**（堵 legacy 重複 pending 被連續核准 → 重複入帳）。reject 亦補 `ALREADY_PROCESSED` 擋。
+- ✅ **前端**（`MemberCoursesPage`）：`pendingAdjustCourseIds`(Set) → `pendingAdjust`(Map，key=`courseId__memberId`→type)；**載入時從 `/course-adjustments/member/:id`（本人＋子女）回填 pending**（修「重整後灰鍵消失、可重複申請」）；退費審核中課卡顯示「退費審核中」徽章＋紅色說明（操作已暫停、退回自動恢復）、**隱藏請假入口**（展開場次＋下一堂）、補課資格該課顯示「退費審核中」不可用；退費/暫停鍵依型別顯示「退費審核中／暫停審核中」。
+- **E2E（17/17）**：退費前 course_access 免費入場 → 申請 201＋兩筆報名皆凍結 → verify 即失去學員資格 → 重複退費 409／暫停擋／請假 400／補課 400（皆 REFUND_PENDING）→ 退回後旗標清除＋資格恢復＋可請假 → 再申請 201 → 核准後報名取消 → 注入 legacy 重複 pending 再核准 → 400 NO_ACTIVE_ENROLLMENT。fixtures 全清。
+- 📌 **語意**：凍結只在「審核中」；核准＝報名取消（原有流程）；退回＝完全恢復（含入場資格/請假/補課，額度不受影響）。暫停申請 pending 不觸發凍結（僅退費）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

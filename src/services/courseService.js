@@ -539,6 +539,7 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
   const enrollment = enrollDoc.data();
   if (enrollment.memberId !== memberId) throw { code: 'FORBIDDEN' };
   if (enrollment.status !== 'confirmed') throw { code: 'INVALID_STATUS', message: '此報名狀態無法請假' };
+  if (enrollment.refundPending) throw { code: 'REFUND_PENDING', message: '此課程退費申請審核中，暫不可請假' };
 
   const courseDoc = await db.collection(COURSE_COLLECTION).doc(enrollment.courseId).get();
   const course = courseDoc.exists ? courseDoc.data() : {};
@@ -717,6 +718,15 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
   if (makeup.status !== 'available') throw { code: 'MAKEUP_USED', message: '補課資格已使用' };
   if (dayjs().isAfter(dayjs(makeup.expiresAt.toDate()))) {
     throw { code: 'MAKEUP_EXPIRED', message: '補課資格已過期' };
+  }
+
+  // 退費審核中（原課程有 pending 退費申請）→ 凍結此課程衍生的補課資格（退回後恢復可用）
+  if (makeup.courseId) {
+    const reqSnap = await db.collection('courseAdjustmentRequests')
+      .where('courseId', '==', makeup.courseId).where('memberId', '==', memberId).get();
+    if (reqSnap.docs.some(d => { const r = d.data(); return r.type === 'refund' && r.status === 'pending'; })) {
+      throw { code: 'REFUND_PENDING', message: '此課程退費申請審核中，暫不可使用補課資格' };
+    }
   }
 
   const sessionDoc = await db.collection(SESSION_COLLECTION).doc(targetSessionId).get();

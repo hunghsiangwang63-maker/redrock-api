@@ -239,7 +239,8 @@ const getCourseAccess = async (memberId) => {
     .get();
   const enrollments = enrollSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
-    .filter(e => e.pauseStatus !== 'paused'); // 暫停中不計入課程學員資格
+    .filter(e => e.pauseStatus !== 'paused')   // 暫停中不計入課程學員資格
+    .filter(e => e.refundPending !== true);    // 退費審核中：即時取消課程學員入場資格（退回時恢復）
   if (enrollments.length === 0) return [];
 
   const courseIds = [...new Set(enrollments.map(e => e.courseId).filter(Boolean))];

@@ -55,6 +55,13 @@ router.post('/enrollments/:enrollmentId/refund-request',
       const rep = all[0];
       if (rep.pauseStatus === 'paused') return res.status(400).json({ error: 'IS_PAUSED', message: '暫停中的課程請先恢復再申請退費' });
 
+      // 重複申請擋：此課程已有審核中的退費/暫停申請 → 不可再送（避免重複 pending → 重複核准重複退款）
+      const dupSnap = await db.collection('courseAdjustmentRequests')
+        .where('courseId', '==', courseId).where('memberId', '==', memberId).get();
+      if (dupSnap.docs.some(d => d.data().status === 'pending')) {
+        return res.status(409).json({ error: 'REQUEST_PENDING', message: '此課程已有審核中的申請，請等待審核結果' });
+      }
+
       const courseDoc = await db.collection('courses').doc(courseId).get();
       const course = courseDoc.exists ? courseDoc.data() : null;
       // 已付金額：彙總所有報名的 paidAmount，若皆為 0 則退而求其次用 enrollmentFee（避免抓到非持費那筆算成 0）
@@ -106,6 +113,14 @@ router.post('/enrollments/:enrollmentId/refund-request',
         createdAt: new Date(),
         updatedAt: new Date(),
       });
+
+      // 凍結該課程所有有效報名（refundPending）：審核中即取消課程學員入場資格，
+      // 並擋 請假/補課/申請暫停/再申請退費；退回（reject）時清旗標恢復、核准則取消報名。
+      const frz = db.batch();
+      const now = new Date();
+      allSnap.docs.forEach(d => frz.update(d.ref, { refundPending: true, refundRequestId: reqId, updatedAt: now }));
+      await frz.commit();
+
       res.status(201).json({ success: true, requestId: reqId, suggestedRefund, refundNote });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
@@ -139,6 +154,14 @@ router.post('/enrollments/:enrollmentId/pause-request',
 
       if (enrollment.status === 'cancelled') return res.status(400).json({ error: 'ALREADY_CANCELLED', message: '此報名已取消' });
       if (enrollment.pauseStatus === 'paused') return res.status(400).json({ error: 'ALREADY_PAUSED', message: '此課程報名已在暫停中' });
+      if (enrollment.refundPending) return res.status(400).json({ error: 'REFUND_PENDING', message: '此課程退費申請審核中，暫不可申請暫停' });
+
+      // 重複申請擋：此課程已有審核中的申請（退費/暫停）→ 不可再送
+      const dupSnap = await db.collection('courseAdjustmentRequests')
+        .where('courseId', '==', enrollment.courseId).where('memberId', '==', enrollment.memberId).get();
+      if (dupSnap.docs.some(d => d.data().status === 'pending')) {
+        return res.status(409).json({ error: 'REQUEST_PENDING', message: '此課程已有審核中的申請，請等待審核結果' });
+      }
 
       const courseDoc = await db.collection('courses').doc(enrollment.courseId).get();
       const course = courseDoc.exists ? courseDoc.data() : null;
@@ -181,6 +204,13 @@ router.post('/requests/:id/approve',
         // 退款金額 clamp：不可為負、不可超過已付金額（避免竄改／誤操作造成超額退款）
         if (!Number.isFinite(finalRefund)) return res.status(400).json({ error: 'INVALID_REFUND', message: '退款金額無效' });
         finalRefund = Math.max(0, Math.min(finalRefund, Number(request.paidAmount) || 0));
+        // 防重複退款：核准當下該會員此課程須仍有有效報名（若已被另一筆申請核准退費/取消 → 擋）
+        const activeSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+          .where('courseId', '==', request.courseId).where('memberId', '==', request.memberId).get();
+        const hasActive = activeSnap.docs.some(d => ['confirmed', 'leave', 'waitlist'].includes(d.data().status));
+        if (!hasActive) {
+          return res.status(400).json({ error: 'NO_ACTIVE_ENROLLMENT', message: '此會員於本課程已無有效報名（可能已退費或取消），不可重複核准退費' });
+        }
         // 取消該會員此課程「所有」有效報名，釋放名額並遞補候補
         const cancelled = await courseService.cancelCourseEnrollments({
           courseId: request.courseId,
@@ -252,11 +282,27 @@ router.post('/requests/:id/reject',
   async (req, res) => {
     try {
       const db = getDb();
-      await db.collection('courseAdjustmentRequests').doc(req.params.id).update({
+      const reqDoc = await db.collection('courseAdjustmentRequests').doc(req.params.id).get();
+      if (!reqDoc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
+      const request = reqDoc.data();
+      if (request.status !== 'pending') return res.status(400).json({ error: 'ALREADY_PROCESSED', message: '此申請已處理' });
+
+      await reqDoc.ref.update({
         status: 'rejected',
         rejectReason: req.body.reason || '',
         rejectedBy: req.staff.id, rejectedByName: req.staff.name, rejectedAt: new Date(), updatedAt: new Date(),
       });
+
+      // 退費申請被退回 → 解除凍結（refundPending），會員恢復課程學員資格與請假/補課等操作
+      if (request.type === 'refund') {
+        const snap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+          .where('courseId', '==', request.courseId).where('memberId', '==', request.memberId).get();
+        const batch = db.batch();
+        const now = new Date();
+        snap.docs.filter(d => d.data().refundPending === true)
+          .forEach(d => batch.update(d.ref, { refundPending: false, refundRequestId: null, updatedAt: now }));
+        await batch.commit();
+      }
       res.json({ success: true });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }

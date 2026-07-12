@@ -876,6 +876,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **改法**：① `select_method` 付費方式（一般付款/優惠券/購券/購定期票）一律先 `setStep('shoes')`（原 requiresPayment→select_payment）；② `shoes` 按鈕：付費入場（`requiresPayment && !freeEntry`）改「下一步：選擇付款方式 →」進 `select_payment`；**免費入場（含加租器材/續約）維持在 shoes 選租借/續約付款後產 QR**（不受影響）；③ `select_payment` 移到 shoes 之後：`onBack` 回 shoes、點付款方式即 `handleGenerateQR(rentShoes,rentChalk,pm.key)`（handleGenerateQR 加 `payMethod` 參數，避免 `setSelectedPayment` 非同步取不到值）、金額摘要補顯示「＋租借器材 NT$X」小計。
 - **不受影響**：免費入場/黑卡/紅利/單次券（本就無 select_payment）、續約付款（在 shoes）、特約廠商勾選與 buy_pass 分期選擇（仍在 select_payment，現為最後一步）。build 兩 target 通過。
 
+## 目前進度（2026-07-12）— 會員入場 QR 提醒出示證件（特約廠商/學生）
+> 需求：使用特約廠商折扣時，會員端入場 QR 提醒出示廠商證件（與學生一樣）；櫃檯員工端也提醒檢查證件。純前端 `MemberQRPage`，commit `6e7ee8b`，member/staff deploy。
+- ✅ **會員端**（`MemberQRPage` QR 頁）：`pvActive`（特約廠商）或 `entryType==='student_free'`（學生入場）→ 顯示琥珀提醒「🪪 入場時請於櫃檯出示 學生證／特約廠商證件 供核對，未出示或不符將以原價計」（兩者皆符時一起列）。
+- ✅ **員工端**（`CheckinPage` 掃碼預覽，本就有、確認到位）：特約廠商「⚠ 特約廠商優惠（−20）：請會員出示特約廠商證件確認後再放行」（2.00.0）＋學生「🎓 學生入場：請查驗學生證後再放行」（前段新增）。→ 會員端出示、櫃檯端查驗兩邊對齊。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

@@ -820,6 +820,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（10/10）**：缺生日→400（生日必填）；成年無家長→201（isMinor=false、無 parentName）；未成年缺家長→400 `PARENT_INFO_REQUIRED`、只填姓名亦 400；未成年+完整家長→201（isMinor=true、三欄已存）；未滿5歲+家長→400 `AGE_UNDER_5`（年齡擋優先）。測後清乾淨。
 - ✅ **修：墜落測驗同意書家長簽名門檻 12→18**（純前端 `MemberFallTestPage`，commit `0335d00`）：回報確認到此頁家長/監護人簽名還停在「未滿12歲」，與聲明書/課程/比賽/註冊的 18 歲不一致（純前端門檻，後端墜測流程無 12 歲檢查）。改用共用 `isMinor(<18)`：判定 `isUnder12`→`needGuardian`、錯誤訊息/標題/說明文字全部 12→18。build 兩 target 通過。
 
+## 目前進度（2026-07-12）— 修 Invalid date（會員頁）+ 全前端日期渲染稽核
+> 回報會員已簽署聲明書「簽署時間」顯示 Invalid date → 修，並全面稽核其他 Invalid date。純前端 `redrock-web`。
+- ✅ **根因**：`MemberProfilePage` 讀 `memberSignedAt?.seconds`（無底線），但 Firestore Timestamp JSON 序列化為 `{_seconds}` → `.seconds` undefined → `dayjs({_seconds})` = **Invalid date**。同檔入場紀錄時間（`checkedInAt`，589 行）同型 bug。
+- ✅ **修**：抽 `fmtTs(t, format, fallback)`（`_seconds ?? seconds` 解析、無效回 `—`/`''` 不顯示 Invalid date），簽署時間(641)＋入場紀錄時間(589)共用。commit `cea4db1`(簽署時間)＋`9af568b`(入場時間+helper)。
+- ✅ **全前端稽核（無其他 Invalid date）**：
+  - `.seconds` 無 `_seconds` fallback：全 src 僅 `MemberProfilePage` 589/641（已修）＋ `FallTestBookingModal.fmtTime`（**已正確**：`_seconds` 優先、`seconds` fallback）。
+  - 直接 `dayjs(Timestamp欄位)`：`MemberFallTestPage` 的 `status.passedAt/expiresAt/expiredAt` 後端回 `YYYY-MM-DD` **字串**（安全）；`signedAt` 已預解析成 Date（安全）。
+  - `CheckinPage` 入場歷史 `checkedInAt` 全部走 `_seconds` 解析（安全）；`PendingTasksPage` `i.ts` 為秒數（number，安全）；`MemberPassesPage` 走 `tsToDay` helper（安全）。
+  - 其餘大量 `dayjs(x.date/startDate/endDate/dueDate…)` 皆為日期字串（安全）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

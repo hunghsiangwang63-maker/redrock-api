@@ -57,6 +57,10 @@ const memberSchema = {
   studentIdImageUrl: 'string',      // 學生證照片（Storage URL）
 
   isMinor: 'boolean',               // < 18歲（家長waiver用）
+  // 未成年（<18）家長/法定代理人聯絡資料（自助註冊必填；供風險安全聲明書家長簽署）
+  parentName: 'string',
+  parentPhone: 'string',
+  parentRelation: 'string',
   isChildAccount: 'boolean',
   parentMemberId: 'string',
 

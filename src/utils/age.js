@@ -29,4 +29,10 @@ const isChild = (memberOrBirthday) => {
   return age !== null && age < 13;
 };
 
-module.exports = { ageOf, isUnder5, isChild };
+// 未成年：birthday 存在且 <18（需家長/法定代理人簽名）
+const isMinor = (memberOrBirthday) => {
+  const age = ageOf(memberOrBirthday);
+  return age !== null && age < 18;
+};
+
+module.exports = { ageOf, isUnder5, isChild, isMinor };

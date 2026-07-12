@@ -158,6 +158,10 @@ const createMember = async (memberData, staffId, options = {}) => {
     birthday: memberData.birthday || null,
     gender: memberData.gender || null,
     emergencyContact: memberData.emergencyContact || null,
+    // 未成年（<18）家長/法定代理人資料（自助註冊必填；供風險安全聲明書家長簽署流程使用）
+    parentName: memberData.parentName || null,
+    parentPhone: memberData.parentPhone || null,
+    parentRelation: memberData.parentRelation || null,
     qrCode: qrCodeUrl,
     qrCodeId,
     isMinor,

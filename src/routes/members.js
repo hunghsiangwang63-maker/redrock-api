@@ -475,13 +475,21 @@ router.post('/self-register',
   [
     body('name').trim().notEmpty().withMessage('姓名為必填'),
     body('phone').matches(/^09\d{8}$/).withMessage('請輸入有效的台灣手機號碼'),
-    body('birthday').optional({ nullable: true }).isDate().withMessage('生日格式不正確'),
+    body('birthday').notEmpty().withMessage('生日為必填').bail().isDate().withMessage('生日格式不正確'),
     body('email').isEmail().withMessage('Email 格式不正確'),
     body('password').isLength({ min: 8 }).withMessage('密碼至少8碼'),
   ],
   validate,
   async (req, res) => {
     try {
+      // 未滿 18 歲（未成年）→ 家長/法定代理人 姓名/電話/關係 皆必填（後端權威）
+      if (require('../utils/age').isMinor(req.body.birthday)) {
+        const { parentName, parentPhone, parentRelation } = req.body;
+        if (!parentName?.trim() || !parentPhone?.trim() || !parentRelation?.trim()) {
+          return res.status(400).json({ error: 'PARENT_INFO_REQUIRED', message: '未滿 18 歲需填寫家長姓名、電話與關係' });
+        }
+      }
+
       // 密碼雜湊
       const bcrypt = require('bcryptjs');
       const passwordHash = await bcrypt.hash(req.body.password, 10);

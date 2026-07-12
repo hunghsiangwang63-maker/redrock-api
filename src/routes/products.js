@@ -76,7 +76,7 @@ router.post('/', authenticate, checkPermission('products.manage'), async (req, r
       category: category || '一般',
       lowStockAlert: parseInt(lowStockAlert) || 5,
       variants: (variants || []).map(v => {
-        const stockQty = parseInt(v.stock) || 0;
+        const stockQty = Math.max(0, parseInt(v.stock) || 0);
         const gymStock = gymId ? { [gymId]: stockQty } : {};
         return {
           id: uuidv4(),
@@ -87,7 +87,7 @@ router.post('/', authenticate, checkPermission('products.manage'), async (req, r
           promoActive: false,
           stock: stockQty,
           gymStock,
-          warehouseStock: parseInt(v.warehouseStock) || 0,
+          warehouseStock: Math.max(0, parseInt(v.warehouseStock) || 0),
         };
       }),
       isActive: true,
@@ -111,10 +111,17 @@ router.put('/:id', authenticate, checkPermission('products.manage'), async (req,
     // （缺 id 會讓購物車 key `${productId}_undefined` 全部衝突 → 已加入件數與購物車對不起來）
     if (Array.isArray(updates.variants)) {
       const seen = new Set();
+      const nn = (x) => Math.max(0, Number.isFinite(x) ? x : 0); // 庫存夾成 ≥ 0（不接受負庫存）
       updates.variants = updates.variants.map(v => {
         const id = (v.id && !seen.has(v.id)) ? v.id : uuidv4();
         seen.add(id);
-        return { ...v, id };
+        const out = { ...v, id };
+        if (out.stock !== undefined) out.stock = nn(out.stock);
+        if (out.warehouseStock !== undefined) out.warehouseStock = nn(out.warehouseStock);
+        if (out.gymStock && typeof out.gymStock === 'object') {
+          const gs = {}; for (const k of Object.keys(out.gymStock)) gs[k] = nn(out.gymStock[k]); out.gymStock = gs;
+        }
+        return out;
       });
     }
     await db.collection('products').doc(req.params.id).update(updates);
@@ -172,7 +179,7 @@ router.post('/:id/restock', authenticate, checkPermission('products.manage'), as
     const variants = doc.data().variants.map(v => {
       if (v.id !== variantId) return v;
       const currentStock = getGymStock(v, gymId);
-      return setGymStock(v, gymId, currentStock + qty);
+      return setGymStock(v, gymId, Math.max(0, currentStock + qty));
     });
 
     await ref.update({ variants, updatedAt: new Date() });

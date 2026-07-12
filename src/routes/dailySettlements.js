@@ -473,6 +473,48 @@ router.get('/monthly-export', authenticate, async (req, res) => {
     aoa.push(R('教學費', '課程', '', s => s.income?.course));
     aoa.push(R('總計', '', '', s => s.income?.total));
 
+    // ── 手動輸入金額（轉換期 settlementManualInput 逐項手動值；當月任一天有填才輸出此區）──
+    const manVal = (st, key) => { const v = st.incomeManual?.[key]; return (v !== '' && v != null) ? (Number(v) || 0) : ''; };
+    const manEntry = (st, label) => { const v = st.incomeManual?.entryItems?.[label]; return (v !== '' && v != null) ? (Number(v) || 0) : ''; };
+    // 手計總額（與前端 manualIncomeTotal 同邏輯）：入場逐類 手動??系統，其餘項 手動??系統
+    const manualTotalOf = (st) => {
+      const im = st.incomeManual;
+      if (!im || typeof im !== 'object') return '';
+      const income = st.income || {};
+      let entrySum = 0;
+      if (im.entryItems && typeof im.entryItems === 'object') {
+        const labels = new Set([...(income.entryItems || []).map(x => x.label), ...Object.keys(im.entryItems)]);
+        labels.forEach(lb => {
+          const m = im.entryItems[lb];
+          entrySum += (m !== '' && m != null) ? (Number(m) || 0)
+            : ((income.entryItems || []).find(x => x.label === lb)?.value || 0);
+        });
+      } else {
+        entrySum = (im.entry !== '' && im.entry != null) ? (Number(im.entry) || 0) : (income.entry || 0);
+      }
+      return entrySum + ['shoeRental', 'product', 'course', 'pass']
+        .reduce((sum, k) => sum + ((im[k] !== '' && im[k] != null) ? (Number(im[k]) || 0) : (income[k] || 0)), 0);
+    };
+    const anyManual = dates.some(dt => byDate[dt]?.incomeManual && typeof byDate[dt].incomeManual === 'object');
+    if (anyManual) {
+      // 入場手動分類列：當月出現過的手動分類聯集（固定序排列）
+      const manualEntryLabels = [];
+      dates.forEach(dt => { const st = byDate[dt]; if (!st?.incomeManual?.entryItems) return;
+        Object.keys(st.incomeManual.entryItems).forEach(lb => {
+          const v = st.incomeManual.entryItems[lb];
+          if (v !== '' && v != null && !manualEntryLabels.includes(lb)) manualEntryLabels.push(lb);
+        });
+      });
+      manualEntryLabels.sort(entryOrderSort);
+      aoa.push(['手動輸入金額', '', '']);
+      manualEntryLabels.forEach(lb => aoa.push(['入場費(手動)', lb, '', ...dates.map(dt => val(dt, st => manEntry(st, lb)))]));
+      aoa.push(R('租借費(手動)', '岩鞋', '', st => manVal(st, 'shoeRental')));
+      aoa.push(R('商品販售(手動)', '商品', '', st => manVal(st, 'product')));
+      aoa.push(R('定期票(手動)', '', '', st => manVal(st, 'pass')));
+      aoa.push(R('教學費(手動)', '課程', '', st => manVal(st, 'course')));
+      aoa.push(R('手計總額', '', '', st => manualTotalOf(st)));
+    }
+
     const ws = require('../utils/xlsxSafe').sanitizeSheet(XLSX.utils.aoa_to_sheet(aoa));
     ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 6 }, ...dates.map(() => ({ wch: 8 }))];
     const wb = XLSX.utils.book_new();

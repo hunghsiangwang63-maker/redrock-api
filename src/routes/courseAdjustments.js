@@ -69,8 +69,10 @@ router.post('/enrollments/:enrollmentId/refund-request',
         || all.reduce((s, e) => s + (e.enrollmentFee || 0), 0);
       const today = taiwanToday(); // 台灣日期
       const courseStartDate = course?.startDate || null;
-      const perSessionDeduction = course?.perSessionDeduction ?? 850; // 每堂扣除金額，預設850
-      const handlingFeeRate = course?.handlingFeeRate ?? 0.05; // 手續費率，預設5%
+      // 退費規則走班別繼承（梯次可覆寫）：每堂扣除/手續費率
+      const _refundRules = courseService.resolveRules(course || {}, await courseService.getCategoryOf(db, course?.categoryId));
+      const perSessionDeduction = _refundRules.perSessionDeduction;
+      const handlingFeeRate = _refundRules.handlingFeeRate;
 
       let suggestedRefund = 0;
       let refundNote = '';

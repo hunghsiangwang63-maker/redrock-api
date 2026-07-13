@@ -649,7 +649,7 @@ router.put('/:courseId',
     try {
       const db = getDb();
       const allowedFields = [
-        'name', 'description', 'imageUrl', 'price', 'maxStudents', 'maxWaitlist', 'reservedSlots', 'instructor',
+        'name', 'cohortName', 'categoryId', 'description', 'imageUrl', 'price', 'maxStudents', 'maxWaitlist', 'reservedSlots', 'instructor',
         'startDate', 'endDate', 'startTime', 'endTime', 'weekdays',
         'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',
@@ -658,6 +658,17 @@ router.put('/:courseId',
       ];
       const updates = { updatedAt: new Date() };
       allowedFields.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+      // 梯次名稱/班別變更 → 顯示名 name 重組為「班別名 梯次名」
+      if (updates.cohortName !== undefined || updates.categoryId !== undefined) {
+        const curDoc = await db.collection('courses').doc(req.params.courseId).get();
+        const cur = curDoc.exists ? curDoc.data() : {};
+        const cohortName = updates.cohortName ?? cur.cohortName;
+        const categoryId = updates.categoryId ?? cur.categoryId;
+        if (cohortName && categoryId) {
+          const cat = await courseService.getCategoryOf(db, categoryId);
+          if (cat?.name) updates.name = `${cat.name} ${cohortName}`;
+        }
+      }
       // 候補上限：留空('')＝不限候補(null)，否則轉數字
       if (req.body.maxWaitlist !== undefined) {
         updates.maxWaitlist = (req.body.maxWaitlist === '' || req.body.maxWaitlist === null) ? null : Number(req.body.maxWaitlist);

@@ -34,7 +34,9 @@ router.post('/', authenticateAny, async (req, res) => {
       const session = sDoc.data();
       const cDoc = await db.collection('courses').doc(session.courseId).get();
       const course = cDoc.exists ? cDoc.data() : {};
-      if (course.allowTrial !== true) return res.status(400).json({ code:'TRIAL_NOT_ALLOWED', message:'此課程未開放試上' });
+      // 試上開關/試上費走班別規則繼承（梯次可覆寫）
+      const trialRules = courseService.resolveRules(course, await courseService.getCategoryOf(db, course.categoryId));
+      if (trialRules.allowTrial !== true) return res.status(400).json({ code:'TRIAL_NOT_ALLOWED', message:'此課程未開放試上' });
       // 額滿不再直接擋：報名即佔位、滿了列候補（候補也滿由 enrollTrial 擋 WAITLIST_FULL）
       if (req.body.consentSigned !== true) return res.status(400).json({ code:'CONSENT_REQUIRED', message:'請先簽署免責同意書' });
       // 家長代子帳號報名試上：綁定到子會員（驗證擁有權，比照 /checkin/qr/create）。
@@ -59,7 +61,7 @@ router.post('/', authenticateAny, async (req, res) => {
       const _trialMember = await memberService.getMember(trialMemberId).catch(() => null);
       if (isUnder5(_trialMember)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
 
-      const trialFee = course.trialPrice || 0;
+      const trialFee = trialRules.trialPrice || 0;
       const id = `trial_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
 
       // 報名當下即佔名額（pending 待繳費）：滿→候補；逾繳費期限由排程釋放並候補轉正
@@ -141,7 +143,7 @@ router.post('/', authenticateAny, async (req, res) => {
     const _settings = _settingsDoc.exists ? _settingsDoc.data() : defaultSettings();
     const _courseTypes = _settings.courseTypes || defaultSettings().courseTypes;
     const _ct = _courseTypes.find(c => c.id === (courseType || 'general'));
-    if (!_ct) return res.status(400).json({ code:'INVALID_COURSE_TYPE', message:'課程類型不正確' });
+    if (!_ct || _ct.active === false) return res.status(400).json({ code:'INVALID_COURSE_TYPE', message:'此體驗課程類型未開放（請改由課程試上報名）' });
     const _n = participants.length;
     let _unitPrice = 0;
     if (_ct.pricingType === 'tiered' && Array.isArray(_ct.tiers)) {

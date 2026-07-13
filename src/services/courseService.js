@@ -22,6 +22,36 @@ const SESSION_COLLECTION    = 'courseSessions';
 const ENROLLMENT_COLLECTION = 'courseEnrollments';
 const ATTENDANCE_COLLECTION = 'courseAttendance';
 const MAKEUP_COLLECTION     = 'courseMakeupRights';
+const CATEGORY_COLLECTION   = 'courseCategories';
+
+// ── 班別規則繼承 ─────────────────────────────────────────────────
+// 規則存在班別（category）層＝同班別所有梯次共用預設；梯次（course）欄位為 null/undefined＝繼承，
+// 有值＝該梯次個別覆寫。所有讀規則的地方一律走 resolveRules，勿直接讀 course 欄位。
+const RULE_DEFAULTS = {
+  leaveDeadlineHours: 2,       // 上課前 N 小時前須請假
+  maxLeaves: 2,                // 整期可請假次數
+  allowMakeup: true,           // 開放補課
+  makeupDeadlineDays: 60,      // 課程「結束日」後 N 天內補完
+  allowTrial: false,           // 開放試上
+  trialPrice: 0,               // 試上費
+  perSessionDeduction: 850,    // 退費：開課後每堂扣除
+  handlingFeeRate: 0.05,       // 退費：開課前手續費率
+};
+const resolveRules = (course, category) => {
+  const pick = (k) => {
+    const cv = course?.[k];
+    if (cv !== undefined && cv !== null) return cv;
+    const gv = category?.[k];
+    if (gv !== undefined && gv !== null) return gv;
+    return RULE_DEFAULTS[k];
+  };
+  return Object.fromEntries(Object.keys(RULE_DEFAULTS).map(k => [k, pick(k)]));
+};
+const getCategoryOf = async (db, categoryId) => {
+  if (!categoryId) return null;
+  const d = await db.collection(CATEGORY_COLLECTION).doc(categoryId).get();
+  return d.exists ? { id: d.id, ...d.data() } : null;
+};
 
 // ── 建立課程 ──────────────────────────────────────────────────────
 const createCourse = async ({ gymId, staffId, data }) => {
@@ -29,10 +59,18 @@ const createCourse = async ({ gymId, staffId, data }) => {
   const id = uuidv4();
   const now = new Date();
 
+  // 梯次名稱：新架構下 name＝「班別名 梯次名」組合（相容：無 cohortName 則沿用 data.name）
+  let composedName = data.name;
+  let cohortName = data.cohortName || null;
+  if (cohortName && data.categoryId) {
+    const cat = await getCategoryOf(db, data.categoryId);
+    if (cat?.name) composedName = `${cat.name} ${cohortName}`;
+  }
   const course = {
     id,
     gymId,
-    name: data.name,
+    name: composedName,
+    cohortName,                          // 梯次自訂名稱（顯示名 name＝班別名+梯次名）
     description: data.description || '',
     imageUrl: data.imageUrl || '',      // 課程海報（單張，會員卡片＋詳情顯示；走 Storage signed URL）
     type: data.type || 'weekly',        // weekly | workshop
@@ -60,20 +98,20 @@ const createCourse = async ({ gymId, staffId, data }) => {
     unlimitedPracticeStart: data.unlimitedPracticeStart || data.startDate || null,
     unlimitedPracticeEnd: data.unlimitedPracticeEnd ||
       (data.endDate ? dayjs(data.endDate).add(data.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : null),
-    // 退費設定
-    perSessionDeduction: data.perSessionDeduction ?? 850, // 開課後每堂扣除金額
-    handlingFeeRate: data.handlingFeeRate ?? 0.05,        // 開課前手續費率（預設5%）
+    // 退費設定（null＝繼承班別）
+    perSessionDeduction: data.perSessionDeduction ?? null,
+    handlingFeeRate: data.handlingFeeRate ?? null,
     // 暫停規則
     pauseAllowed: data.pauseAllowed !== false,
-    // 請假規則
-    leaveDeadlineHours: data.leaveDeadlineHours || 2,   // 幾小時前截止請假
-    maxLeaves: data.maxLeaves || 2,                      // 整期最多請假次數
-    // 補課規則
-    allowMakeup: data.allowMakeup !== false,
-    makeupDeadlineDays: data.makeupDeadlineDays || 60,  // 課程結束後幾天內補課
-    // 試上規則（週課開放試上：會員可於「體驗課程」報名單堂試上，另收試上費、免保險）
-    allowTrial: data.allowTrial === true,
-    trialPrice: data.trialPrice || 0,
+    // 請假規則（null＝繼承班別）
+    leaveDeadlineHours: data.leaveDeadlineHours ?? null,
+    maxLeaves: data.maxLeaves ?? null,
+    // 補課規則（null＝繼承班別；期限＝課程結束日+N天）
+    allowMakeup: data.allowMakeup ?? null,
+    makeupDeadlineDays: data.makeupDeadlineDays ?? null,
+    // 試上規則（null＝繼承班別；試上比照體驗發單日券、不卡墜測）
+    allowTrial: data.allowTrial ?? null,
+    trialPrice: data.trialPrice ?? null,
     // 上課星期（週課用）0=日 1=一 ... 6=六
     weekdays: data.weekdays || [],
     // 插班加成（剩餘堂數低於一半時）
@@ -543,9 +581,10 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
 
   const courseDoc = await db.collection(COURSE_COLLECTION).doc(enrollment.courseId).get();
   const course = courseDoc.exists ? courseDoc.data() : {};
+  const rules = resolveRules(course, await getCategoryOf(db, course.categoryId));
 
   // 請假截止：上課前 leaveDeadlineHours 小時（以台灣時間為準）
-  const deadlineHours = course.leaveDeadlineHours ?? 2;
+  const deadlineHours = rules.leaveDeadlineHours;
   if (enrollment.date && enrollment.startTime) {
     const classTime = dayjs(`${enrollment.date}T${enrollment.startTime}:00+08:00`);
     if (classTime.isValid() && dayjs().add(deadlineHours, 'hour').isAfter(classTime)) {
@@ -553,8 +592,8 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
     }
   }
 
-  // 請假次數上限：整期＝課程 maxLeaves；插班＝管理員個別填寫的 maxLeavesAllowed（覆蓋課程預設）
-  const maxLeaves = enrollment.maxLeavesAllowed ?? course.maxLeaves ?? 2;
+  // 請假次數上限：整期＝班別/梯次規則；插班＝管理員個別填寫的 maxLeavesAllowed（覆蓋預設）
+  const maxLeaves = enrollment.maxLeavesAllowed ?? rules.maxLeaves;
   const usedLeaves = await db.collection(ENROLLMENT_COLLECTION)
     .where('memberId', '==', memberId)
     .where('courseId', '==', enrollment.courseId)
@@ -578,11 +617,11 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
     });
   }
 
-  // 自動產生補課資格（依課程 makeupDeadlineDays，預設 60 天）
+  // 自動產生補課資格（期限＝課程「結束日」+ makeupDeadlineDays 天；無結束日 fallback 請假堂日期起算）
   let makeup = null;
-  if (course.allowMakeup !== false) {
+  if (rules.allowMakeup !== false) {
     const makeupId = uuidv4();
-    const makeupDays = course.makeupDeadlineDays || 60;
+    const makeupDays = rules.makeupDeadlineDays;
     makeup = {
       id: makeupId,
       memberId,
@@ -593,7 +632,7 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
       gymId: enrollment.gymId,
       tags: course.tags || [],
       status: 'available',
-      expiresAt: dayjs(enrollment.date).add(makeupDays, 'day').toDate(),
+      expiresAt: dayjs(course.endDate || enrollment.date).add(makeupDays, 'day').toDate(),
       usedSessionId: null,
       usedAt: null,
       createdAt: now,
@@ -745,14 +784,21 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
     throw { code: 'SESSION_FULL', message: '此場次已額滿' };
   }
 
-  // 驗證同類別同館
+  // 驗證同「補課群組」同館（班別可設 makeupGroup 讓多班別互補，如小蜘蛛人入門+進階；未設＝各班別自成一組）
   const originalCourseDoc = await db.collection(COURSE_COLLECTION).doc(makeup.courseId).get();
   const targetCourseDoc = await db.collection(COURSE_COLLECTION).doc(session.courseId).get();
   if (originalCourseDoc.exists && targetCourseDoc.exists) {
     const origCourse = originalCourseDoc.data();
     const targetCourse = targetCourseDoc.data();
-    if (origCourse.categoryId && targetCourse.categoryId !== origCourse.categoryId) {
-      throw { code: 'DIFFERENT_CATEGORY', message: '補課只能選擇相同類別的課程' };
+    if (origCourse.categoryId) {
+      const [origCat, targetCat] = await Promise.all([
+        getCategoryOf(db, origCourse.categoryId), getCategoryOf(db, targetCourse.categoryId),
+      ]);
+      const origGroup = origCat?.makeupGroup || origCourse.categoryId;
+      const targetGroup = targetCat?.makeupGroup || targetCourse.categoryId;
+      if (origGroup !== targetGroup) {
+        throw { code: 'DIFFERENT_CATEGORY', message: '補課只能選擇相同班別（或同補課群組）的課程' };
+      }
     }
     const origGym = makeup.gymId || origCourse.gymId;
     const targetGym = session.gymId || targetCourse.gymId;
@@ -926,7 +972,7 @@ const getCourses = async (gymId) => {
   // 類別名對照（供會員端「課程總覽」依類別分組顯示；課程只存 categoryId）
   const catMap = {};
   try {
-    (await db.collection('courseCategories').get()).docs.forEach(d => { catMap[d.id] = d.data().name; });
+    (await db.collection('courseCategories').get()).docs.forEach(d => { catMap[d.id] = d.data(); });
   } catch (e) {}
 
   // 計算各課程目前報名人數（不重複計算同一會員，weekly課程會有多筆場次報名紀錄）
@@ -943,7 +989,15 @@ const getCourses = async (gymId) => {
     const realEnrolled = enrolledByCourse[c.id]?.size || 0;
     // reservedSlots：從 BeClass 等外部帶入的「已佔用正取名額」，計入佔用數（剩餘=max−實報名−reserved）
     const enrolledCount = realEnrolled + (c.reservedSlots || 0);
-    return { ...c, enrolledCount, realEnrolled, categoryName: catMap[c.categoryId] || null, statusLabel: computeStatusLabel(c, enrolledCount) };
+    const cat = catMap[c.categoryId] || null;
+    return {
+      ...c, enrolledCount, realEnrolled,
+      categoryName: cat?.name || null,
+      categoryGroup: cat?.group || null,               // adult | youth | special（大類）
+      categoryDescription: cat?.description || null,   // 班別共用課程介紹
+      categoryImageUrl: cat?.imageUrl || null,         // 班別共用廣告照片
+      statusLabel: computeStatusLabel(c, enrolledCount),
+    };
   });
 };
 
@@ -1199,11 +1253,14 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
   let cq = db.collection(COURSE_COLLECTION);
   if (gymId) cq = cq.where('gymId', '==', gymId);
   const courseSnap = await cq.get();
+  const catSnap = await db.collection(CATEGORY_COLLECTION).get();
+  const cats = {}; catSnap.docs.forEach(d => { cats[d.id] = d.data(); });
   const trialCourses = {};
   courseSnap.docs.forEach(d => {
     const c = d.data();
-    if (c.allowTrial === true && c.status !== 'cancelled') {
-      trialCourses[d.id] = { trialPrice: c.trialPrice || 0, courseName: c.name, instructor: c.instructor || '', maxWaitlist: (c.maxWaitlist ?? null) };
+    const rules = resolveRules(c, cats[c.categoryId]);
+    if (rules.allowTrial === true && c.status !== 'cancelled' && c.isActive !== false) {
+      trialCourses[d.id] = { trialPrice: rules.trialPrice || 0, courseName: c.name, instructor: c.instructor || '', maxWaitlist: (c.maxWaitlist ?? null) };
     }
   });
   if (Object.keys(trialCourses).length === 0) return [];
@@ -1248,14 +1305,16 @@ const getMemberEnrollments = async (memberId) => {
   const courseMaxLeaves = {};
   await Promise.all(courseIds.map(async cid => {
     const cd = await db.collection(COURSE_COLLECTION).doc(cid).get();
-    courseMaxLeaves[cid] = cd.exists ? (cd.data().maxLeaves ?? 2) : 2;
+    if (!cd.exists) { courseMaxLeaves[cid] = RULE_DEFAULTS.maxLeaves; return; }
+    const c = cd.data();
+    courseMaxLeaves[cid] = resolveRules(c, await getCategoryOf(db, c.categoryId)).maxLeaves;
   }));
   const usedByCourse = {};
   enrollments.forEach(e => { if (e.status === 'leave') usedByCourse[e.courseId] = (usedByCourse[e.courseId] || 0) + 1; });
 
   return enrollments.map(e => {
     // 插班學員 maxLeavesAllowed 覆蓋；否則用課程整期預設
-    const leaveLimit = e.maxLeavesAllowed ?? courseMaxLeaves[e.courseId] ?? 2;
+    const leaveLimit = e.maxLeavesAllowed ?? courseMaxLeaves[e.courseId] ?? RULE_DEFAULTS.maxLeaves;
     const leaveUsed = usedByCourse[e.courseId] || 0;
     return {
       ...e,
@@ -1287,6 +1346,7 @@ const getMemberMakeupRights = async (memberId) => {
 };
 
 module.exports = {
+  RULE_DEFAULTS, resolveRules, getCategoryOf,
   createWeeklySessions,
   updateSession,
   createCourse,

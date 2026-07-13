@@ -343,9 +343,10 @@ function defaultSettings() {
         pricingType:'tiered',
         tiers:[{min:1,max:1,price:975},{min:2,max:3,price:875},{min:4,max:5,price:825},{min:6,max:12,price:775}],
         durationNote:'1~2小時' },
-      { id:'children',   label:'小蜘蛛人（兒童）',         active:true, needsInsurance:false, pricingType:'fixed', price:600, durationNote:'1小時' },
-      { id:'skill_fri',  label:'抱石技巧班（週五20:00）',   active:true, needsInsurance:true, pricingType:'fixed', price:1075, durationNote:'2小時' },
-      { id:'skill_sun14',label:'抱石技巧班（週日14:00）',   active:true, needsInsurance:true, pricingType:'fixed', price:900,  durationNote:'1.5小時' },
+      // 以下三種已併入「班別試上」報名（小蜘蛛人入門班/技巧班），體驗預約不再開放
+      { id:'children',   label:'小蜘蛛人（兒童）',         active:false, needsInsurance:false, pricingType:'fixed', price:600, durationNote:'1小時' },
+      { id:'skill_fri',  label:'抱石技巧班（週五20:00）',   active:false, needsInsurance:true, pricingType:'fixed', price:1075, durationNote:'2小時' },
+      { id:'skill_sun14',label:'抱石技巧班（週日14:00）',   active:false, needsInsurance:true, pricingType:'fixed', price:900,  durationNote:'1.5小時' },
     ],
     // 保險名冊一鍵寄送設定
     insuranceRecipientEmail: '',   // 全館共用收件人 email

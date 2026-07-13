@@ -1095,6 +1095,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **按鈕文字對齊新架構**（commit 前端 `6ef6b4f`）：課程列表右上「＋ 新增課程」→「**＋ 加開梯次**」（該鈕開的本就是加開梯次兩步 Modal，僅文字漏改）。語意定案：建班別＝班別管理「＋新增班別」；開梯次＝課程列表「＋加開梯次」。
 - 💡 **教訓**：白底/無底按鈕必須顯式設 `color`——專案 root 有 `color-scheme: light dark`，深色模式下未設色的按鈕文字會變白（同 [[ui-icon-css-not-glyph]] 類的裝置差異坑）。
 
+## 目前進度（2026-07-13 續）— 體驗類型徹底清除 + 編輯梯次下拉修復
+> 兩件收尾。後端 `/health` `2.51.0-experience-general-only`；commit 後端 `895a0db`、前端 `0290904`。
+- ✅ **體驗課程只留「抱石專班體驗課程」（徹底移除、非停用）**：`experienceService.defaultSettings` 刪除 children/skill_fri/skill_sun14 三entry；Firestore `systemSettings/experienceCourses.courseTypes` 同步清除（僅剩 `general`，其 label 本就是「抱石專班體驗課程」）。打正式 API 驗證 courseTypes 只回一種；員工體驗設定頁/會員預約頁皆動態讀設定、自動只剩一種。三種由班別試上承接。歷史 booking 無殘留引用（7/13 會員清空時已清）。
+- ✅ **修：編輯梯次「開放補課/開放試上」下拉改了會跳回**：三態 select 的 value 判斷只認布林（`=== true/false`），但 onChange 存字串 `'true'/'false'` → 一選顯示就回跳「班別預設」（存檔其實會生效、純顯示 bug）。改 `String(v)` 相容布林與字串。加開梯次 Modal 的同型下拉直接綁字串、本就正常。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

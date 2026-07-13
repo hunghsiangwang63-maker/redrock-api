@@ -1008,6 +1008,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **名冊列精簡**（`VipPage` 攀岩隊員管理）：原「繳費兩行＋狀態兩顆膠囊＋隊服文字」→ 繳費壓成單行小字（NT$金額·日期）＋三個置中窄欄 **已收款／正式隊員／隊服領取** 用 ✅/❌（hover title 顯示完整狀態；用 emoji 非 ✓✗ 字元、避 tofu，見 [[ui-icon-css-not-glyph]] 慣例例外：彩色 emoji 安全）。
 - ✅ **隊服領取（新欄位 `jerseyReceived`）**：名冊列**直接點 ✅/❌ 切換**（樂觀更新＋PUT）；尺寸以 9px 小字附註於 icon 下；`noJersey` 顯示「—」不可點。編輯 Modal 加「隊服已領取」勾選（不拿隊服時 disabled）。後端 `PUT /team-members/applications/:id` allowed 加 `jerseyReceived`。
 - ✅ **點列開動作 Modal**（依回饋補回動作鍵，commit 前端 `73c9272`）：移除「操作」欄 → **點會員列**跳 Modal——顯示 收款/隊籍/隊服 三狀態摘要＋動作鍵：**💵 確認收款**（未收款且未退隊才顯示，走既有 `confirm-payment` 端點、冪等）、**✏️ 編輯資料**（開既有編輯 Modal）、**🗑 刪除**（沿用確認流程）。隊服 ✅/❌ 直點切換保留（`stopPropagation` 不觸發列點擊）。
+- ✅ **繳費欄兩列＋表頭對齊**（`dfe5e0a`）：金額（粗體千分位）/日期 上下兩列；會員/繳費 th 與 td padding 統一。
+- ✅ **會員欄三列＋修「編輯存了沒生效」**（`52ee00a`）：會員欄改 姓名/電話/場館 三列。查陳品翰「2700 與隊服存了仍錯」——後端 PUT 實測正常，**根因在前端輸入層**：①繳費金額 `type="number"` 遇無效輸入（貼「2,700」等）onChange 回空字串 → 後端 `Number('')||0` 存 **0**、畫面回退顯示應繳像沒存；②他原勾「不拿隊服」→ 尺寸/已領取欄位**反灰禁用**、改了不進狀態。修：金額輸入改 `text+inputMode numeric`＋onChange 濾非數字。⚠ 除錯過程以 PUT 測試寫入陳品翰＝`paymentAmount 2700、noJersey:false、jerseySize M、jerseyReceived:true`——**隊服部分為測試猜值，請使用者核對**（若他實際不拿隊服需改回）。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

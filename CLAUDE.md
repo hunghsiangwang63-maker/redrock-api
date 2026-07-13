@@ -1012,6 +1012,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **會員欄三列＋修「編輯存了沒生效」**（`52ee00a`）：會員欄改 姓名/電話/場館 三列。查陳品翰「2700 與隊服存了仍錯」——後端 PUT 實測正常，**根因在前端輸入層**：①繳費金額 `type="number"` 遇無效輸入（貼「2,700」等）onChange 回空字串 → 後端 `Number('')||0` 存 **0**、畫面回退顯示應繳像沒存；②他原勾「不拿隊服」→ 尺寸/已領取欄位**反灰禁用**、改了不進狀態。修：金額輸入改 `text+inputMode numeric`＋onChange 濾非數字。⚠ 除錯過程以 PUT 測試寫入陳品翰＝`paymentAmount 2700、noJersey:false、jerseySize M、jerseyReceived:true`——**隊服部分為測試猜值，請使用者核對**（若他實際不拿隊服需改回）。
 - ✅ **繳費欄區分實繳/應繳**（`7ccaae0`）：使用者追問「金額 0 為何顯示 1700」——原 `paymentAmount || expectedFee` 回退把實繳 0 無標示地顯示成應繳（1700＝陳品翰自助申請算的 年中2000−不拿隊服300），混淆兩者。改：**實繳>0 → 深色「NT$X」；實繳 0 → 琥珀色「應繳 NT$Y」**（明確標示未收）。備忘：`expectedFee`（應繳）與 `paymentAmount`（實繳）為獨立欄位，顯示時不可無標示混用。
 
+## 目前進度（2026-07-13）— 入隊申請退回流程補齊（已退回狀態＋Email 通知＋重新上傳）
+> 回報（陳品翰案例）：入隊申請被退回會員零通知；申請後應為「待審核」；退回後應為「已退回」。後端 `/health` `2.43.0-team-apply-reject-flow`；E2E **8/8**。commit 後端 `3907609`、前端 `727109c`。
+- 🔍 **根因**：`transfers` 退回連動的 `REJECTABLE_COLL` **刻意排除 team_member**（1.91.0 註記「活動化流程另計」）→ 員工在待辦退回入隊轉帳單時，`teamApplications` 完全不動、會員零通知。（申請端點本就正確寫 `pending/pending`＝待審核；陳品翰名冊顯示「已收款/正式隊員」是編輯視窗手動誤設，非流程自動。）
+- ✅ **後端**（`transfers.js`）：`REJECTABLE_COLL` 納入 `team_member→teamApplications` —— **退回**：申請標 `status:'rejected'`（已退回）＋`paymentRejectReason`＋**Email 通知會員**（含原因，寄信失敗不阻斷）；**會員重新上傳**：申請回 `status:'pending'`（待審核）＋清退回標記（upload 擁有權檢查一併生效）；**確認收款** side-effect 原本就有（active＋setTeamMember 開通資格）不變。
+- ✅ **前端**：`MemberTeamPage` STATUS 加 `rejected`「已退回」（紅）、pending 文案改「**待審核**」；當年度申請被退回 → 顯示原因＋**匯款日期/末五碼重新上傳表單**（`/transfers/upload` type team_member）。`VipPage` 名冊 stTag／編輯選項／動作 Modal 補「已退回」。
+- ✅ **陳品翰資料修正**：申請改 `rejected/transfer_rejected`＋原因（「不用測試囉!!」，取自被退回的轉帳單）、繳費/隊服欄位還原、**撤銷誤開的隊員資格**（編輯視窗設 active 時 PUT 會 setTeamMember 同步，已 remove）。
+- **E2E（8/8）**：申請→待審核 → 上傳轉帳（FormData，multer 端點）→ 退回→已退回＋原因 → 重新上傳→回待審核＋清標記 → 確認收款→正式隊員＋資格開通 until=2026-12-31。
+- 💡 **教訓**：`/transfers/upload` 走 multer → 測試/呼叫須用 **FormData**（urlencoded 不會被解析、回 NO_PROOF）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

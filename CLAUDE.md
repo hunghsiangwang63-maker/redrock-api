@@ -1036,6 +1036,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **員工端副本＋列印**（`MembersPage`）：Waiver 副本 Modal 與 🖨️ 列印/PDF、墜測同意書副本 Modal 與列印——簽名標題依 `detail.member.isChildAccount` 顯示「法定代理人簽名」（成人維持「本人簽名」）。
 - 📌 **判定依據**：waiver/簽署文件本身無 isChildAccount 欄位 → 檢視/列印時以**會員文件的 `isChildAccount`** 判定；會員端以 URL `forChild` 參數判定。未成年本人帳號的家長遠端共簽（`ParentWaiverPage`）本就標「家長／監護人簽名」、不在此範圍。
 
+## 目前進度（2026-07-13 續）— 全站「家長／監護人簽名」統一改「法定代理人簽名」＋修比賽家長簽署信連結
+> 承子會員標籤改法定代理人：使用者要求**其他需要法定代理人簽名處全部寫清楚、既有「家長／監護人簽名」一律改「法定代理人簽名」**。後端 `/health` `2.45.0-legal-guardian-labels`；commit 後端 `990bb12`、前端 `e51f6d7`，兩端已 deploy。
+- ✅ **前端全面改標籤**（14 檔）：家長遠端簽署頁 `ParentWaiverPage`/`ParentCompetitionWaiverPage`（標題「法定代理人簽署」、聲明「本人作為法定代理人（家長／監護人）」、簽名欄「法定代理人簽名：」）；`MemberFallTestPage`（簽名區/已簽檢視/未成年說明）；`MemberWaiverPage`（未成年資訊區「法定代理人資訊/Email/姓名/聯絡電話」、錯誤與提示文案）；`MemberProfilePage`（已簽檢視「法定代理人簽名」、等待徽章、relation fallback）；`MemberHomePage`/`MemberQRPage`/`MemberOnboardingGate` 等待簽署文案；`MemberRegisterPage`（未成年區塊標題/欄位全改法定代理人）；`MemberCompetitionsPage`/`MemberCoursesPage`「✓ 法定代理人已儲存簽名」；員工端 `MembersPage`（待辦標籤「待法定代理人簽署」、waiver/墜測副本 Modal＋列印、家長簽名區 h3）、`CompetitionsPage`（「待法定代理人簽」）、`FallTestBookingModal`（審核簽名 label）。
+- ✅ **後端使用者可見文案**：`members.js`（PARENT_EMAIL_REQUIRED 訊息、簽署成功訊息）、`checkin/gates.js`（waiver 關卡等待訊息）、`competitions.js`（報名清單「待法定代理人簽名」）、`waiverService`（重發連結訊息）、`emailService`（waiver 家長信主旨「請完成 X 的法定代理人簽署」、稱謂 fallback）。
+- 🐞 **順修 pre-existing bug：比賽未成年報名家長簽署信連結無效**——原呼叫 `sendParentWaiverLink`（連 `/waiver/parent/:token`，該頁查 members 的 waiver token），但**比賽 token 存在 `competitionRegistrations`、專屬頁是 `/competitions/waiver/parent/:token`** → 家長點信中連結必顯示「此連結無效」。新增 `emailService.sendParentCompetitionWaiverLink`（正確 URL、主旨帶賽名、比賽專屬文案），`competitionService` 報名改用之。waiver 流程的 `sendParentWaiverLink` 呼叫端（簽署觸發/重發）不受影響。
+- 📌 DB 欄位（`parentName`/`guardianSignatureData` 等）與 API 參數皆不動、純文案；`parentRelation` 顯示 fallback「監護人」→「法定代理人」。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

@@ -1028,7 +1028,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端首頁橫幅**（`MemberHomePage`）：紅色警示卡（⚠️「<類型>轉帳被退回：<名稱>（👦 子女名）／原因：<原因>，請點此重新上傳」）置於今日已入場橫幅下、身份方框上；點擊導向對應頁（course→/member/courses、experience→/member/experience、competition→/member/competitions、rental→/member/rental、team_member→/member/team）。
 - **E2E（15/15）**：注入練習會員A＋子女C＋體驗訂單(A)/課程報名(C) → 退回兩筆（訂單 transfer_rejected＋原因）→ alerts 回 2 筆（子女標 memberName、link/原因正確）→ 未登入 401 → 會員 FormData 補正體驗（`/transfers/upload`）→ 訂單回 pending_confirm、alerts 剩 1 筆 → 清理 0 殘留。腳本 `scratchpad/reject-alerts-e2e.cjs`。
 - ⚠️ **E2E 細節**：`/transfers/upload` 欄位名是 `bankLastFive`/`paymentDate`（非 last5/transferDate），漏帶且無截圖 → 400 `NO_PROOF`。
-- 📌 體驗/比賽/租借的會員端「被退回→重新上傳」專頁 UI 仍未做（1.91.0 既有缺口）；首頁通知的 link 先導到各功能頁，course/team 已有完整補正 UI。
+- ✅ **體驗/比賽/租借 補正 UI 已補齊**（純前端，commit `c0f43f9`，member/staff 已 deploy；E2E 12/12）：新共用元件 `TransferReuploadModal`（退回原因＋匯款日期/末五碼/截圖擇一，走 `/transfers/upload`）；三頁「我的」清單卡片對 `paymentStatus==='transfer_rejected'` 顯示紅框退回原因＋「重新上傳轉帳」鈕、`pending_confirm` 顯示「轉帳確認中」；比賽 `payStatusBadge` 加對應徽章。course/team 沿用各自既有補正表單。→ **五類型退回→補正 UI 全數到位**。E2E（比賽+租借，打 Railway）：退回→alerts 2 筆→會員補正→pending_confirm＋清標記→alerts 清空→0 殘留。腳本 `scratchpad/reject-reupload-comp-rental-e2e.cjs`。三個「我的」端點（`/experience-bookings/my`、`/competitions/registrations/member/:id`、`/rentals/my`）本就回完整 doc，後端免改。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

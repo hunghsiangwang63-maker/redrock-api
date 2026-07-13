@@ -165,6 +165,30 @@ const claimLegacyTeamMember = async (db, memberId, member) => {
       });
     }
     await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now });
+    // 一併寫入年度隊員名冊（teamApplications，員工端「攀岩隊員管理」名單資料源）
+    try {
+      const year = parseInt(until.slice(0, 4)) || new Date().getFullYear();
+      const raw = String(hit.data().rawName || '');
+      const primaryGym = /士林\/新竹|新竹\/士林/.test(raw) ? '士林/新竹'
+        : /士林/.test(raw) ? '士林紅石' : '新竹紅石';
+      const appId = `team_${memberId}_${year}`;
+      const exist = await db.collection('teamApplications').doc(appId).get();
+      if (!exist.exists) {
+        await db.collection('teamApplications').doc(appId).set({
+          id: appId, memberId, year,
+          memberName: member.name || '', memberPhone: phone, memberEmail: member.email || '',
+          memberGender: member.gender || '', memberBirthday: member.birthday || '',
+          primaryGym,
+          paymentAmount: 0, expectedFee: 0,
+          jerseySize: '', noJersey: false,
+          status: 'active', paymentStatus: 'confirmed',
+          paidConfirmedBy: 'migration', paidConfirmedByName: 'Climbio 移轉',
+          paidAt: now, source: 'climbio-migration',
+          notes: `Climbio 移轉（隊籍至 ${until}，隊費舊系統已繳）`,
+          createdAt: now, updatedAt: now,
+        });
+      }
+    } catch (e) { console.error('隊員名冊寫入失敗（隊員標記已完成）', e.message); }
     console.log(`[隊員遷移] ${member.name}/${phone} 標記攀岩隊員至 ${until}`);
     return { until };
   } catch (e) { console.error('claimLegacyTeamMember 失敗', e.message); return null; }

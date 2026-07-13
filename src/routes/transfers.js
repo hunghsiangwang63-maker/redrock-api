@@ -232,25 +232,31 @@ router.put('/:id/reject', authenticate, async (req, res) => {
           ...(t.orderType === 'team_member' ? { status: 'rejected' } : {}),
           updatedAt: now,
         });
-        // 入隊申請退回 → Email 通知會員（申請頁同步顯示已退回＋原因；寄信失敗不阻斷）
-        if (t.orderType === 'team_member') {
-          try {
-            const app = (await orderRef.get()).data();
-            if (app?.memberEmail) {
-              const { sendEmail, esc } = require('../services/emailService');
-              await sendEmail({
-                to: app.memberEmail,
-                subject: '【紅石攀岩】入隊申請轉帳確認未通過',
-                html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
-                  <h2 style="color:#8B1A1A">紅石攀岩 RedRock</h2>
-                  <p>${esc(app.memberName || '')} 您好，</p>
-                  <p>您的 ${app.year} 年度攀岩隊入隊申請，轉帳資料經確認<strong>未通過</strong>${reason ? `：<br/><strong>${esc(reason)}</strong>` : '。'}</p>
-                  <p>請至會員系統「攀岩隊」頁重新上傳轉帳資料，或聯絡櫃檯協助，謝謝。</p>
-                </div>`,
-              });
-            }
-          } catch (e) { console.error('入隊退回通知信失敗', e.message); }
-        }
+        // 退回 → Email 通知會員（全訂單類型；email 以 members 集合權威解析、寄信失敗不阻斷）
+        try {
+          const order = (await orderRef.get()).data() || {};
+          const memberId = order.memberId || t.memberId;
+          let email = order.memberEmail || order.contactEmail || null;
+          if (!email && memberId) {
+            const mDoc = await db.collection('members').doc(memberId).get();
+            if (mDoc.exists) email = mDoc.data().email || null;
+          }
+          if (email) {
+            const TYPE_LABEL = { course:'課程報名', experience:'體驗預約', competition:'比賽報名', rental:'裝備租借', team_member:'攀岩隊入隊申請' };
+            const orderName = t.orderName || t.courseName || order.courseName || order.competitionName || TYPE_LABEL[t.orderType] || '訂單';
+            const { sendEmail, esc } = require('../services/emailService');
+            await sendEmail({
+              to: email,
+              subject: `【紅石攀岩】${TYPE_LABEL[t.orderType] || ''}轉帳確認未通過`,
+              html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+                <h2 style="color:#8B1A1A">紅石攀岩 RedRock</h2>
+                <p>${esc(order.memberName || t.memberName || '')} 您好，</p>
+                <p>您的「${esc(orderName)}」轉帳資料經確認<strong>未通過</strong>${reason ? `：<br/><strong>${esc(reason)}</strong>` : '。'}</p>
+                <p>請至會員系統重新上傳轉帳資料，或聯絡櫃檯協助，謝謝。</p>
+              </div>`,
+            });
+          }
+        } catch (e) { console.error('轉帳退回通知信失敗', e.message); }
       }
     } catch (e) { console.error('transfer reject side-effect:', e.message); }
     res.json({ message: '已退回，會員可重新上傳轉帳' });

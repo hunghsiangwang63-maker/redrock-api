@@ -79,6 +79,45 @@ router.get('/my/identity', authenticateAny, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /members/my/alerts - 本人（含子女）被退回的轉帳訂單（首頁通知）────
+// 來源＝各訂單集合 paymentStatus==='transfer_rejected'（重新上傳後回 pending_confirm 即消失）。
+router.get('/my/alerts', authenticateAny, async (req, res) => {
+  try {
+    if (!req.member?.id) return res.status(401).json({ error: 'UNAUTHORIZED' });
+    const db = getDb();
+    const kids = await db.collection(COLLECTIONS.MEMBERS).where('parentMemberId', '==', req.member.id).get();
+    const ids = [req.member.id, ...kids.docs.map(d => d.id)];
+    const SOURCES = [
+      { coll: 'courseEnrollments',        type: 'course',      label: '課程報名', link: '/member/courses',     name: (o) => o.courseName },
+      { coll: 'experienceBookings',       type: 'experience',  label: '體驗預約', link: '/member/experience',  name: (o) => o.courseName || o.courseType },
+      { coll: 'competitionRegistrations', type: 'competition', label: '比賽報名', link: '/member/competitions', name: (o) => o.competitionName },
+      { coll: 'equipmentRentals',         type: 'rental',      label: '裝備租借', link: '/member/rental',      name: (o) => o.itemName || o.equipmentName },
+      { coll: 'teamApplications',         type: 'team_member', label: '入隊申請', link: '/member/team',        name: (o) => `${o.year} 年度攀岩隊` },
+    ];
+    const alerts = [];
+    for (const src of SOURCES) {
+      for (const id of ids) {
+        const snap = await db.collection(src.coll)
+          .where('memberId', '==', id).where('paymentStatus', '==', 'transfer_rejected').get();
+        const seen = new Set();
+        snap.docs.forEach(d => {
+          const o = d.data();
+          const key = src.type === 'course' ? `${src.type}|${o.courseId}|${id}` : `${src.type}|${d.id}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+          alerts.push({
+            type: src.type, label: src.label, link: src.link,
+            name: src.name(o) || src.label,
+            reason: o.paymentRejectReason || '',
+            memberName: id === req.member.id ? null : (kids.docs.find(k => k.id === id)?.data()?.name || null),
+          });
+        });
+      }
+    }
+    res.json({ alerts });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /members/my/children - 會員查詢自己的子會員 ────────────────
 router.get('/my/children', authenticateAny, async (req, res) => {
   try {

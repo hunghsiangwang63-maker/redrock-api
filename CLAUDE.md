@@ -960,6 +960,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🛠 **拆分技法備忘**：python 以「頂層 binding 行號區間」逐字搬移；跨模組引用偵測**須先去除註解**（否則註解提到函式名會誤判循環相依）；模組深一層時 lazy `require('../…')`→`require('../../…')` 批次改寫；第二層拆分時注意別把第一層產生的同儕 require 當外部 import 複製（會重複宣告）。
 - 📌 **courseService.js（1314 行）不拆**——使用者明確決定「課程先不做」（2026-07-13）。除非使用者再開口，不要主動拆；屆時循同法（先 smoke 基準→逐字搬移→diff）。
 
+## 目前進度（2026-07-13）— 會員首頁顯示身份別與效期（攀岩隊員/課程學員）
+> 需求：效期內攀岩隊員與課程學員，會員登入後首頁看得到身份別與有效期。後端 `/health` `2.37.0-member-identity-home`；E2E 5/5。commit 後端 `a531853`、前端 `bd3f7f0`。
+- ✅ **後端 `GET /members/my/identity`**（會員本人，authenticateAny＋member guard；置於 `/:id` 之前）：`teamMember`＝`isActiveTeamMember` 權威判定（**效期內才回** `{since, until}`，過期回 null）；`courseAccess`＝`checkinService.getCourseAccess`（本就只回有效入館權益）映射 `{courseName, gymAccessStart, gymAccessEnd}`。
+- ✅ **前端**（`MemberHomePage`）：已入場橫幅下方顯示身份卡——🏅 **攀岩隊員**（藍卡，效期 since～until）、📚 **課程學員 · 課名**（琥珀卡，入館效期起訖，每門課一張）；效期內才出現、一般會員不顯示。
+- **E2E（5/5）**：效期內隊員回 since/until 正確、課程學員含課名＋入館效期（無限練習期間）、**效期外隊員回 null 不顯示**、未登入 401。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

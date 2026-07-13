@@ -420,7 +420,10 @@ router.get('/single-entry/pending',
 // Group A：館別電腦(值班)或管理員；發放後為 pending_approval，管理員審核才生效（已有通知）
 router.post('/single-entry',
   authenticate, requireManagerOrStation,
-  [body('memberId').notEmpty().withMessage('請指定會員')],
+  [
+    body('memberId').notEmpty().withMessage('請指定會員'),
+    body('notes').trim().notEmpty().withMessage('請填寫備註說明（發放原因）'),
+  ],
   validate,
   async (req, res) => {
     try {
@@ -487,6 +490,7 @@ router.post('/single-entry',
         memberName: member.name,
         gymId: req.staff.gymId,
         issuedByStaffName: req.staff.name,
+        notes: req.body.notes || '',
       });
 
       res.status(201).json({

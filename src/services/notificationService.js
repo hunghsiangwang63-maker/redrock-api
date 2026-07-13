@@ -56,9 +56,9 @@ const notifyRoleInGym = async ({ gymId, role, type, title, body, referenceId, re
 };
 
 // ── 單次入場券審核通知 ───────────────────────────────────────────
-const notifySingleEntryTicketApproval = async ({ ticketId, memberName, gymId, issuedByStaffName }) => {
+const notifySingleEntryTicketApproval = async ({ ticketId, memberName, gymId, issuedByStaffName, notes }) => {
   const title = '單次入場券待審核';
-  const body = `${issuedByStaffName} 為會員 ${memberName} 發放了一張單次入場券，請於 24 小時內審核。`;
+  const body = `${issuedByStaffName} 為會員 ${memberName} 發放了一張單次入場券${notes ? `（備註：${notes}）` : ''}，請於 24 小時內審核。`;
 
   // 通知同館 gym_manager
   await notifyRoleInGym({

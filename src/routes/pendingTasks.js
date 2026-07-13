@@ -230,7 +230,7 @@ router.get('/', authenticate, async (req, res) => {
         tasks.push({
           id: `ticket_${d.id}`, type: 'ticket_approval', targetId: d.id,
           title: '單次入場券待審核',
-          desc: `${t.memberName || ''}${t.amount ? ` — NT$${t.amount}` : ''}`,
+          desc: `${t.memberName || ''}${t.amount ? ` — NT$${t.amount}` : ''}${t.soldByStaffName ? `（${t.soldByStaffName} 發放）` : ''}`,
           date: t.issuedAt?._seconds ? new Date(t.issuedAt._seconds*1000).toISOString().slice(0,10) : today,
           createdAt: t.createdAt?._seconds || t.issuedAt?._seconds || 0,
           gymId: t.gymId, memberName: t.memberName,

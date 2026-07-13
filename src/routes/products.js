@@ -150,21 +150,6 @@ router.delete('/:id', authenticate, checkPermission('products.manage'), async (r
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// ── PUT /products/:id/variants/:variantId/promo ───────────────────
-router.put('/:id/variants/:variantId/promo', authenticate, checkPermission('products.manage'), async (req, res) => {
-  try {
-    const db = getDb();
-    const ref = db.collection('products').doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
-    const variants = doc.data().variants.map(v =>
-      v.id === req.params.variantId ? { ...v, promoActive: req.body.promoActive } : v
-    );
-    await ref.update({ variants, updatedAt: new Date() });
-    res.json({ message: '促銷狀態已更新' });
-  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
-});
-
 // ── POST /products/:id/restock - 入庫（指定館別）────────────────
 router.post('/:id/restock', authenticate, checkPermission('products.manage'), async (req, res) => {
   try {
@@ -266,7 +251,7 @@ router.post('/sell', authenticate, auditLog('product.sell'), async (req, res) =>
       const currentStock = getGymStock(variant, gymId);
       if (currentStock < item.quantity)
         return res.status(400).json({ error: 'INSUFFICIENT_STOCK', message: `${product.name} ${variant.size} ${variant.color} 庫存不足（${gymId} 剩 ${currentStock} 件）` });
-      const unitPrice = (variant.promoActive && variant.promoPrice) ? variant.promoPrice : variant.price;
+      const unitPrice = variant.promoPrice ? variant.promoPrice : variant.price;  // 有填促銷價即生效
       const rawSubtotal = unitPrice * item.quantity;
       const discountResult = applyTeamDiscount(rawSubtotal, isTeam);
       const subtotal = discountResult.discounted;
@@ -447,7 +432,7 @@ router.get('/export', authenticate, async (req, res) => {
           '類別': p.category || '', '說明': p.description || '',
           '尺寸': v.size || '', '顏色': v.color || '',
           '原價': v.price || 0, '促銷價': v.promoPrice || '',
-          '促銷狀態': v.promoActive ? '促銷中' : '未促銷',
+          '促銷狀態': v.promoPrice ? '促銷中' : '未促銷',
           '庫存': getGymStock(v, gymId),
           '低庫存警示': p.lowStockAlert || 5,
         });

@@ -1120,6 +1120,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 > 回報「隊員名冊/定期票名單不見」→ 查明＝**整個後端 API 下線**（Railway edge 回 404「Application not found」，非資料問題）。使用者於 Railway dashboard 恢復服務後全面驗證正常。
 - 🔍 **排查**：Railway 平台無事故（官方狀態頁）、程式碼無問題（掛掉前最後三次部署皆純文件）；「Application not found」＝服務被下線的典型回應（最可能為 Hobby 方案用量額度用罄自動暫停——本月部署極頻繁）。
 - ✅ **恢復後驗證**：`/health` `2.52.0`（免重部署）；隊員名冊 25 筆（停機期間又 +1 認領）、定期票報表正常（90日票 16 人＋半年票 1 人）、班別 9 個、體驗設定正常。**資料零遺失**（Firestore 不受影響）。
+- 📋 **Railway 用量組成釐清**：大宗＝**服務 24h 常駐（RAM/CPU × 時間）**，與流量/會員數幾乎無關；頻繁部署有小幅貢獻（build 分鐘＋切換期新舊實例並存）、會員註冊/API 流量可忽略。確認：dashboard Usage 頁看 Compute/Egress/Build 拆分。**用量警示設定**：Workspace Settings → Usage → Usage Limits——Soft Limit（email 警示，建議額度 7 成）＋ Hard Limit（到達直接停服務，**建議不設或設很高**，這次下線即此效果）。正式營運建議升級按量計費（小服務約 $5–10/月），避免無預警斷線。
 - ⚠️ **提醒**：Railway 額度用罄會直接下線服務 → 兩館入場/登入/POS 全停。建議 dashboard 設用量警示或升級方案；日後再遇「所有名單同時消失」先打 `/health` 判斷是否服務層問題。
 
 ## 待辦

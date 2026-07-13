@@ -39,6 +39,26 @@ router.get('/',
   }
 );
 
+// ── GET /members/my/identity - 本人身份別與效期（會員首頁顯示）────────
+// 回：攀岩隊員（效期內才回 since/until）＋ 課程學員（有效課程入館權益，含課名/入館效期）。
+router.get('/my/identity', authenticateAny, async (req, res) => {
+  try {
+    if (!req.member?.id) return res.status(401).json({ error: 'UNAUTHORIZED' });
+    const member = await memberService.getMember(req.member.id);
+    if (!member) return res.status(404).json({ error: 'NOT_FOUND' });
+    const { isActiveTeamMember } = require('../services/teamMemberService');
+    const teamMember = isActiveTeamMember(member)
+      ? { since: member.teamMemberSince || null, until: member.teamMemberUntil || null }
+      : null;
+    const checkinService = require('../services/checkinService');
+    const access = await checkinService.getCourseAccess(req.member.id);
+    const courseAccess = (access || []).map(a => ({
+      courseName: a.courseName, gymAccessStart: a.gymAccessStart || null, gymAccessEnd: a.gymAccessEnd || null,
+    }));
+    res.json({ teamMember, courseAccess });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /members/my/children - 會員查詢自己的子會員 ────────────────
 router.get('/my/children', authenticateAny, async (req, res) => {
   try {

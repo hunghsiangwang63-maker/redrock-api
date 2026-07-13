@@ -210,7 +210,7 @@ router.put('/applications/:id', authenticate, requireManagerOrStation, async (re
     if (!snap.exists) return res.status(404).json({ error: 'NOT_FOUND' });
     const cur = snap.data();
 
-    const allowed = ['memberName', 'memberPhone', 'primaryGym', 'paymentAmount', 'expectedFee', 'paymentDate', 'bankLastFive', 'jerseySize', 'noJersey', 'paymentStatus', 'status'];
+    const allowed = ['memberName', 'memberPhone', 'primaryGym', 'paymentAmount', 'expectedFee', 'paymentDate', 'bankLastFive', 'jerseySize', 'noJersey', 'jerseyReceived', 'paymentStatus', 'status'];
     const updates = { updatedAt: new Date() };
     allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
     if (updates.paymentAmount !== undefined) updates.paymentAmount = Number(updates.paymentAmount) || 0;

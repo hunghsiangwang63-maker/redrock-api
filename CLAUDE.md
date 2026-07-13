@@ -1135,6 +1135,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 未啟用：LinePay/街口/台灣Pay（adapter 骨架待金鑰）；BeClass（逐步取代中）；Climbio（資料已移轉完）。金鑰全在 Railway 環境變數。
 **Railway 停機應變手冊：`docs/outage-playbook.md`**（櫃檯紙本 SOP／管理員恢復程序／用量警示與 UptimeRobot 設定／api.redrocktaiwan.com 自訂網域＋Render 冷備的故障轉移步驟／長期 Cloud Run 選項）。
 
+## 目前進度（2026-07-14）— 員工端課程列表條列式 + 佔用名額透明化
+> 兩項 UI/資料改善。後端 `/health` `2.53.0-reserved-slots-note`；commit 後端 `5fb142f`、前端 `3a9b523`＋`1fe0a5d`；瀏覽器實機驗證通過。
+- ✅ **課程列表改條列式**（原名片式難閱讀）：第一層班別列（名稱｜梯數｜價格範圍｜正取合計｜›）、第二層梯次列（名稱+徽章＋小字 時段/起訖/教練｜價格｜人數｜動作鈕 場次/名單/停用/取消/刪除）；**點梯次列直接開編輯 Modal**（動作鈕 stopPropagation；已取消梯次不可點）。
+- ✅ **佔用名額透明化**（回報「6/6、1/6 是什麼」「查詢為何被佔用」）：人數欄拆兩行「N/上限 人」＋小字「**系統 X＋佔用 Y ⓘ**」（hover 顯示佔用說明）；梯次新增 **`reservedSlotsNote` 佔用說明欄位**（create/PUT 支援、編輯 Modal 可改）；現有 9 個有佔用梯次回填「BeClass 舊系統報名帶入（2026-07-09…實際名單在 BeClass）」。
+- 📋 **人數語意備忘**：`enrolledCount`＝系統實報名＋`reservedSlots`（BeClass 靜態帶入、不自動同步）；會員端「剩 N 位/額滿」同源。佔用「逐人名單」系統沒有——若要可再匯 BeClass 報名表（塞說明或做註冊認領）。
+
 ## 待辦
 - 🛡 **Railway 應變（依 `docs/outage-playbook.md` 依狀況執行）**：①使用者帳號後台——Railway 用量警示（Soft 7成/不設 Hard）＋UptimeRobot 監控 `/health`；②近期——API 自訂網域 `api.redrocktaiwan.com`（Porkbun CNAME＋Railway custom domain 完成後**再通知 Claude 改前端 BASE**）；③Render 冷備（複製環境變數）；④長期金流上線前評估遷 Cloud Run。
 

@@ -1021,6 +1021,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（8/8）**：申請→待審核 → 上傳轉帳（FormData，multer 端點）→ 退回→已退回＋原因 → 重新上傳→回待審核＋清標記 → 確認收款→正式隊員＋資格開通 until=2026-12-31。
 - 💡 **教訓**：`/transfers/upload` 走 multer → 測試/呼叫須用 **FormData**（urlencoded 不會被解析、回 NO_PROOF）。
 
+## 目前進度（2026-07-13）— 轉帳退回：會員首頁通知 + 全類型 Email 通知
+> 承入隊申請退回流程（2.43.0）：使用者要求「退回的資訊，在會員首頁都加入通知，同時 email 通知會員」→ 擴及**全部訂單類型**（課程/體驗/比賽/租借/入隊）。後端 `/health` `2.44.0-reject-home-alerts-email`；E2E（打 Railway）**15/15**。commit 後端 `c39ebc0`、前端已 deploy。
+- ✅ **退回 Email 全類型通用**（`transfers.js` reject）：原只 team_member 寄信 → 改所有 `REJECTABLE_COLL` 類型都寄——email 解析順序 `order.memberEmail || order.contactEmail || members 集合（依 memberId 權威反查）`；主旨「【紅石攀岩】<類型>轉帳確認未通過」含訂單名稱＋退回原因；try/catch 寄信失敗不阻斷退回。
+- ✅ **首頁退回通知端點 `GET /members/my/alerts`**（`members.js`，authenticateAny member、放在 `/:id` 之前）：查**本人＋子女**（`parentMemberId==本人`）五訂單集合（courseEnrollments/experienceBookings/competitionRegistrations/equipmentRentals/teamApplications）`paymentStatus=='transfer_rejected'` → 回 `{type,label,link,name,reason,memberName(子女才有)}`；course 依 courseId 去重。**重新上傳補正（→pending_confirm）後端點即不再回傳、通知自動消失**。
+- ✅ **前端首頁橫幅**（`MemberHomePage`）：紅色警示卡（⚠️「<類型>轉帳被退回：<名稱>（👦 子女名）／原因：<原因>，請點此重新上傳」）置於今日已入場橫幅下、身份方框上；點擊導向對應頁（course→/member/courses、experience→/member/experience、competition→/member/competitions、rental→/member/rental、team_member→/member/team）。
+- **E2E（15/15）**：注入練習會員A＋子女C＋體驗訂單(A)/課程報名(C) → 退回兩筆（訂單 transfer_rejected＋原因）→ alerts 回 2 筆（子女標 memberName、link/原因正確）→ 未登入 401 → 會員 FormData 補正體驗（`/transfers/upload`）→ 訂單回 pending_confirm、alerts 剩 1 筆 → 清理 0 殘留。腳本 `scratchpad/reject-alerts-e2e.cjs`。
+- ⚠️ **E2E 細節**：`/transfers/upload` 欄位名是 `bankLastFive`/`paymentDate`（非 last5/transferDate），漏帶且無截圖 → 400 `NO_PROOF`。
+- 📌 體驗/比賽/租借的會員端「被退回→重新上傳」專頁 UI 仍未做（1.91.0 既有缺口）；首頁通知的 link 先導到各功能頁，course/team 已有完整補正 UI。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

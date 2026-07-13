@@ -635,9 +635,17 @@ const promoteWaitlist = async (sessionId) => {
     updatedAt: new Date(),
   });
 
+  // 試上候補轉正且尚未繳費 → 給「新的繳費期限」（遞補時起算，min(+48h, 上課前)），逾期同樣由 sweep 釋放
+  const promoted = first.data();
+  if (promoted.isTrial === true && promoted.paymentStatus === 'pending') {
+    const sd = sessionDoc.data();
+    const deadline = trialPaymentDeadline(sd);
+    await first.ref.update({ paymentDeadline: deadline, updatedAt: new Date() });
+  }
+
   // TODO: 發 Email 通知遞補成功
-  console.log(`✅ 候補遞補：${first.data().memberName} → confirmed`);
-  return first.data();
+  console.log(`✅ 候補遞補：${promoted.memberName} → confirmed`);
+  return promoted;
 };
 
 // ── 退費：取消某會員某課程所有有效報名並釋放名額 ──────────────────
@@ -1003,7 +1011,7 @@ const getSessions = async (gymId, fromDate, toDate) => {
 
 // ── 試上報名：將會員加入某場次名單（isTrial，佔名額）──────────────────
 // 輕量版（不含分期/插班費計算）；計入預計上課、佔名額；防止重複試上同一場。
-const enrollTrial = async ({ memberId, memberName, sessionId, gymId, trialFee, bookingId, staffId }) => {
+const enrollTrial = async ({ memberId, memberName, sessionId, gymId, trialFee, bookingId, staffId, paymentStatus = 'paid', paymentDeadline = null, maxWaitlist = null }) => {
   const db = getDb();
   const now = new Date();
   const sessionDoc = await db.collection(SESSION_COLLECTION).doc(sessionId).get();
@@ -1016,6 +1024,10 @@ const enrollTrial = async ({ memberId, memberName, sessionId, gymId, trialFee, b
   if (!dup.empty) throw { code: 'ALREADY_ENROLLED', message: '此會員已在該場次名單中' };
 
   const isFull = (session.enrolledCount || 0) >= (session.maxStudents || 0);
+  // 候補上限（course.maxWaitlist）：滿了且候補也滿 → 擋
+  if (isFull && maxWaitlist != null && (session.waitlistCount || 0) >= maxWaitlist) {
+    throw { code: 'WAITLIST_FULL', message: '此場次正取與候補皆已額滿' };
+  }
   const enrollmentId = uuidv4();
   const enrollment = {
     id: enrollmentId, memberId, memberName: memberName || '',
@@ -1025,7 +1037,8 @@ const enrollTrial = async ({ memberId, memberName, sessionId, gymId, trialFee, b
     waitlistPosition: isFull ? (session.waitlistCount || 0) + 1 : null,
     isTrial: true, trialFee: trialFee || 0,
     experienceBookingId: bookingId || null,
-    paymentStatus: 'paid',
+    paymentStatus,                          // 'pending'＝報名即佔位、待繳費（逾期由 sweep 釋放）；'paid'＝已收款
+    paymentDeadline: paymentDeadline || null, // 繳費期限（pending 時有值；逾期釋放名額、候補轉正）
     enrolledBy: staffId || memberId, enrolledAt: now, createdAt: now, updatedAt: now,
   };
   await db.collection(ENROLLMENT_COLLECTION).doc(enrollmentId).set(enrollment);
@@ -1045,12 +1058,69 @@ const removeTrialEnrollment = async (enrollmentId) => {
   const e = doc.data();
   await ref.update({ status: 'cancelled', cancelledAt: now, updatedAt: now });
   const sDoc = await db.collection(SESSION_COLLECTION).doc(e.sessionId).get();
+  let releasedConfirmed = false;
   if (sDoc.exists) {
     const s = sDoc.data();
-    if (e.status === 'confirmed') await sDoc.ref.update({ enrolledCount: Math.max(0, (s.enrolledCount || 0) - 1), updatedAt: now });
+    if (e.status === 'confirmed') { releasedConfirmed = true; await sDoc.ref.update({ enrolledCount: Math.max(0, (s.enrolledCount || 0) - 1), updatedAt: now }); }
     else if (e.status === 'waitlist') await sDoc.ref.update({ waitlistCount: Math.max(0, (s.waitlistCount || 0) - 1), updatedAt: now });
   }
+  // 釋出正取名額 → 未過期場次自動遞補第一位候補（試上遞補者在 promoteWaitlist 內取得新繳費期限）
+  if (releasedConfirmed && sDoc.exists && (sDoc.data().date || '') >= taiwanToday()) {
+    try { await promoteWaitlist(e.sessionId); } catch (err) { console.error('promoteWaitlist 失敗', err.message); }
+  }
   return { removed: true };
+};
+
+// ── 試上繳費期限：報名/遞補當下起算 48 小時，且不得晚於上課開始時間 ─────
+const trialPaymentDeadline = (session) => {
+  const plus48 = new Date(Date.now() + 48 * 3600 * 1000);
+  const start = session?.date
+    ? new Date(`${session.date}T${session.startTime || '00:00'}:00+08:00`)
+    : null;
+  return (start && start < plus48) ? start : plus48;
+};
+
+// ── 試上逾期未繳費清理（每小時排程）：釋放名額 + 取消預約 + 候補轉正 ─────
+// 冪等：只處理 status 仍 confirmed/waitlist 且 paymentStatus='pending' 且期限已過者。
+const sweepExpiredTrialPayments = async () => {
+  const db = getDb();
+  const now = new Date();
+  const snap = await db.collection(ENROLLMENT_COLLECTION)
+    .where('isTrial', '==', true)
+    .where('paymentStatus', '==', 'pending')
+    .get();
+  const toMs = (v) => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
+  const expired = snap.docs.filter(d => {
+    const e = d.data();
+    return ['confirmed', 'waitlist'].includes(e.status) && toMs(e.paymentDeadline) && toMs(e.paymentDeadline) < now.getTime();
+  });
+  const affectedSessions = new Set();
+  let cancelled = 0;
+  for (const d of expired) {
+    const e = d.data();
+    await d.ref.update({ status: 'cancelled', cancelReason: 'payment_expired', cancelledAt: now, updatedAt: now });
+    const sDoc = await db.collection(SESSION_COLLECTION).doc(e.sessionId).get();
+    if (sDoc.exists) {
+      const sd = sDoc.data();
+      if (e.status === 'confirmed') { await sDoc.ref.update({ enrolledCount: Math.max(0, (sd.enrolledCount || 0) - 1), updatedAt: now }); affectedSessions.add(e.sessionId); }
+      else await sDoc.ref.update({ waitlistCount: Math.max(0, (sd.waitlistCount || 0) - 1), updatedAt: now });
+    }
+    // 對應體驗預約標逾期取消（會員端可見原因）
+    if (e.experienceBookingId) {
+      await db.collection('experienceBookings').doc(e.experienceBookingId)
+        .update({ status: 'cancelled', cancelReason: 'payment_expired', cancelledAt: now, updatedAt: now })
+        .catch(() => {});
+    }
+    cancelled++;
+  }
+  // 釋出的場次（未過期者）候補轉正
+  for (const sid of affectedSessions) {
+    try {
+      const sDoc = await db.collection(SESSION_COLLECTION).doc(sid).get();
+      if (sDoc.exists && (sDoc.data().date || '') >= taiwanToday()) await promoteWaitlist(sid);
+    } catch (err) { console.error('試上逾期遞補失敗', err.message); }
+  }
+  return { cancelled, promotedSessions: affectedSessions.size };
 };
 
 // ── 設定某場次代班教練（覆寫該堂 instructor + 記錄原教練 + 通知）──────
@@ -1133,7 +1203,7 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
   courseSnap.docs.forEach(d => {
     const c = d.data();
     if (c.allowTrial === true && c.status !== 'cancelled') {
-      trialCourses[d.id] = { trialPrice: c.trialPrice || 0, courseName: c.name, instructor: c.instructor || '' };
+      trialCourses[d.id] = { trialPrice: c.trialPrice || 0, courseName: c.name, instructor: c.instructor || '', maxWaitlist: (c.maxWaitlist ?? null) };
     }
   });
   if (Object.keys(trialCourses).length === 0) return [];
@@ -1142,13 +1212,19 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
   const to = toDate || dayjs(from).add(60, 'day').format('YYYY-MM-DD');
   const sessions = await getSessions(gymId, from, to);
   return sessions
-    // 額滿（含補課佔滿）自動排除→不提供試上選項；試上佔名額
-    .filter(s => trialCourses[s.courseId] && s.status !== 'cancelled'
-      && (s.enrolledCount || 0) < (s.maxStudents || 0))
+    // 額滿仍可候補（waitlist 未滿）→ 保留列出（前端標「額滿・可候補」）；正取+候補皆滿才排除
+    .filter(s => {
+      if (!trialCourses[s.courseId] || s.status === 'cancelled') return false;
+      const full = (s.enrolledCount || 0) >= (s.maxStudents || 0);
+      if (!full) return true;
+      const mw = trialCourses[s.courseId].maxWaitlist;
+      return mw == null || (s.waitlistCount || 0) < mw; // 候補未滿仍列出
+    })
     .map(s => ({
       ...s,
       trialPrice: trialCourses[s.courseId].trialPrice,
       remaining: Math.max(0, (s.maxStudents || 0) - (s.enrolledCount || 0)),
+      isFull: (s.enrolledCount || 0) >= (s.maxStudents || 0),
     }));
 };
 
@@ -1218,6 +1294,8 @@ module.exports = {
   enrollCourse,
   requestLeave,
   promoteWaitlist,
+  trialPaymentDeadline,
+  sweepExpiredTrialPayments,
   cancelCourseEnrollments,
   sweepExpiredCoursePayments,
   enrollMakeup,

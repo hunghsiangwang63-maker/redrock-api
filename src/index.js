@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '2.33.0-buypass-under-pass-category',
+    version: '2.34.0-trial-seat-hold-waitlist',
   });
 });
 
@@ -181,6 +181,10 @@ if (require.main === module) {
       runShiftReminderJob();
     }
     runCardTransferExpiry(); // 每小時掃一次逾期移轉
+    // 試上逾期未繳費：釋放名額 + 取消預約 + 候補轉正（每小時）
+    require('./services/courseService').sweepExpiredTrialPayments()
+      .then(r => { if (r.cancelled > 0) console.log(`[試上逾期] 釋放 ${r.cancelled} 筆、遞補 ${r.promotedSessions} 場次`); })
+      .catch(e => console.error('[試上逾期] 失敗', e.message));
   }, 60 * 60 * 1000);
 }
 

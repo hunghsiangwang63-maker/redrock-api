@@ -40,7 +40,7 @@ router.post('/', authenticateAny, async (req, res) => {
       const cDoc = await db.collection('courses').doc(session.courseId).get();
       const course = cDoc.exists ? cDoc.data() : {};
       if (course.allowTrial !== true) return res.status(400).json({ code:'TRIAL_NOT_ALLOWED', message:'此課程未開放試上' });
-      if ((session.enrolledCount||0) >= (session.maxStudents||0)) return res.status(400).json({ code:'SESSION_FULL', message:'此場次已額滿，無法試上' });
+      // 額滿不再直接擋：報名即佔位、滿了列候補（候補也滿由 enrollTrial 擋 WAITLIST_FULL）
       if (req.body.consentSigned !== true) return res.status(400).json({ code:'CONSENT_REQUIRED', message:'請先簽署免責同意書' });
       // 家長代子帳號報名試上：綁定到子會員（驗證擁有權，比照 /checkin/qr/create）。
       // booking / 名單 / 單日券的 memberId 皆綁子會員，入場時子帳號才拿得到自己的券。
@@ -66,6 +66,23 @@ router.post('/', authenticateAny, async (req, res) => {
 
       const trialFee = course.trialPrice || 0;
       const id = `trial_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+
+      // 報名當下即佔名額（pending 待繳費）：滿→候補；逾繳費期限由排程釋放並候補轉正
+      const paymentDeadline = courseService.trialPaymentDeadline(session);
+      let trialEnroll;
+      try {
+        trialEnroll = await courseService.enrollTrial({
+          memberId: trialMemberId, memberName: trialName,
+          sessionId: req.body.trialSessionId, gymId: session.gymId,
+          trialFee, bookingId: id, staffId: null,
+          paymentStatus: 'pending', paymentDeadline,
+          maxWaitlist: course.maxWaitlist ?? null,
+        });
+      } catch (e) {
+        const code = e.code || 'TRIAL_ENROLL_FAILED';
+        return res.status(400).json({ code, message: e.message || '試上報名失敗' });
+      }
+      const isWaitlist = trialEnroll.status === 'waitlist';
       await db.collection('experienceBookings').doc(id).set({
         id, memberId: trialMemberId, bookedByMemberId: memberId, gymId: session.gymId, kind: 'trial',
         trialCourseId: session.courseId, trialSessionId: req.body.trialSessionId, courseName: session.courseName,
@@ -80,9 +97,17 @@ router.post('/', authenticateAny, async (req, res) => {
         paymentDate: paymentDate||null, bankLastFive: bankLastFive||null, paymentMethod: req.body.paymentMethod || 'transfer',
         consentSigned: true, needsInsurance: false,
         notes: notes||'',
+        trialEnrollmentId: trialEnroll.enrollmentId,
+        isWaitlist, paymentDeadline,
         status: 'pending', createdAt: new Date(), updatedAt: new Date(),
       });
-      return res.status(201).json({ success:true, id, isTrial:true, totalFee: trialFee, message:'試上預約已送出，請完成付款' });
+      return res.status(201).json({
+        success:true, id, isTrial:true, totalFee: trialFee,
+        isWaitlist, paymentDeadline: paymentDeadline.toISOString(),
+        message: isWaitlist
+          ? '此場次已額滿，已為您排入候補；有名額釋出將依序轉正'
+          : '試上預約已送出，名額已為您保留，請於期限內完成付款',
+      });
     }
 
     if (!gymId) return res.status(400).json({ code:'MISSING_GYM', message:'請選擇場館' });
@@ -348,9 +373,22 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
     if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
     const booking = { id: doc.id, ...doc.data() };
 
-    // ── 試上預約：確認收款→加入該場次名單（isTrial，佔名額），不建課/排班 ──
+    // ── 試上預約：確認收款 ──
+    // 新流程：報名當下已佔位（pending）→ 確認收款只標 paymentStatus:'paid'；
+    // 若名單已因逾期釋放（cancelled）→ 擋，請會員重新報名。
     if (booking.kind === 'trial') {
-      if (booking.trialEnrollmentId) return res.json({ success:true, isTrial:true, message:'已確認收款（已在名單中）' });
+      if (booking.trialEnrollmentId) {
+        const enDoc = await db.collection('courseEnrollments').doc(booking.trialEnrollmentId).get();
+        if (!enDoc.exists || enDoc.data().status === 'cancelled') {
+          return res.status(400).json({ error: 'TRIAL_EXPIRED', message: '此試上名額已因逾期未繳費釋出，請會員重新報名' });
+        }
+        await enDoc.ref.update({ paymentStatus: 'paid', paymentDeadline: null, updatedAt: new Date() });
+        await ref.update({ status: 'confirmed', confirmedBy: req.staff.id, confirmedByName: req.staff.name, confirmedAt: new Date(), updatedAt: new Date() });
+        if (booking.contactEmail) {
+          emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking).catch(e => console.error('[Email]', e.message));
+        }
+        return res.json({ success:true, isTrial:true, enrollmentStatus: enDoc.data().status, message: enDoc.data().status === 'waitlist' ? '已確認收款（目前為候補，名額釋出將自動轉正）' : '已確認收款' });
+      }
       let trialResult;
       try {
         trialResult = await courseService.enrollTrial({

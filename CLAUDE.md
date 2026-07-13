@@ -958,7 +958,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **驗證**：拆前先建 smoke 基準（16 項唯讀呼叫＋fixture，輸出 286 行 JSON）→ 拆後 diff **完全一致**（僅隨機 fixture id 差異）；`loop-test` 90/90；部署後打正式 API 全鏈 E2E（verify→QR 建立→掃碼→確認→取消→沖銷 −400）**6/6**。
 - ✅ **experienceBookings.js 896 行 → 路由 551 行＋`services/experienceService.js` 359 行**：搬出 課程/排班建立與清理（add/reassign/cleanup）、體驗入場券（sync/void）、保險名冊 Excel（buildInsuranceXlsBuffer）、`COURSE_TYPES`/`courseTypeLabel`/`parseBookingTime`/`defaultSettings`。部署後 E2E（settings/試上報名佔位/確認/列表 courseTypes/取消釋位）**7/7**。
 - 🛠 **拆分技法備忘**：python 以「頂層 binding 行號區間」逐字搬移；跨模組引用偵測**須先去除註解**（否則註解提到函式名會誤判循環相依）；模組深一層時 lazy `require('../…')`→`require('../../…')` 批次改寫；第二層拆分時注意別把第一層產生的同儕 require 當外部 import 複製（會重複宣告）。
-- 📌 **courseService.js（1314 行）未拆**——本輪風險預算用盡，之後要拆可循同法（先 smoke 基準→逐字搬移→diff）。
+- 📌 **courseService.js（1314 行）不拆**——使用者明確決定「課程先不做」（2026-07-13）。除非使用者再開口，不要主動拆；屆時循同法（先 smoke 基準→逐字搬移→diff）。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

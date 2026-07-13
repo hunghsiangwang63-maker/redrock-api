@@ -1075,6 +1075,19 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端**（`SalesPage`）：POS 加購物車單價、商品卡價格範圍、購物車促銷標示、變體 modal 價格全改 `promoPrice` 判定；商品清單「開啟/促銷中」toggle 按鈕改**靜態「促銷中」標籤**（有填即顯示）、移除 `handleTogglePromo`。要停促銷＝編輯變體清空促銷價。
 - **E2E（打 Railway 假商品，5/5）**：v1 促銷 1800/v2 無促銷 3000 → `/products/sell` 收 **1800＋3000＝4800**（促銷生效、無促銷原價）；測後 sale/交易/商品清乾淨。
 
+## 目前進度（2026-07-13 續）— 課程樹狀架構全面改造（大類→班別→梯次＋規則繼承）
+> 使用者逐項確認後的大改造（趁零報名窗口）。後端 `/health` `2.50.0-course-tree-category-rules`；E2E（打 Railway）**25/25**。commit 後端 `289dc73`、前端 `ed4f4bc`；資料歸位腳本 `scratchpad/course-tree-migrate.cjs`（已 commit 執行）。
+- **最終規格（五點+追加確認）**：樹＝館別→**大類四個**（adult 成人班／youth 青少年兒童班／special 專班課程／workshop 工作坊）→班別→梯次（自訂名稱 `cohortName`，顯示名 `name`＝班別名+梯次名，改名自動重組）→場次；兩館共用班別定義。
+- ✅ **班別層（courseCategories 重寫）＝共用**：課程介紹＋廣告照片（上傳走 Storage `/course-categories/:id/image`）＋八項規則（試上開關/試上費、請假截止/次數、補課開關/期限、退費每堂扣除/手續費率）＋**補課群組 `makeupGroup`**＋大類 `group`＋`sortOrder`；`DELETE ?permanent=1`（底下有梯次擋 409）。
+- ✅ **規則繼承（courseService `RULE_DEFAULTS`+`resolveRules`）**：梯次欄位 **null＝繼承班別、有值＝覆寫**；讀取點全改——請假（`requestLeave` 截止/次數）、補課（產生開關/期限）、試上（`getTrialSessions`＋experience 試上分支）、退費（`courseAdjustments` 每堂扣除/費率）、會員報名卡請假上限顯示。**勿再直接讀 course 規則欄位**。
+- ✅ **補課兩變更**：期限改「**課程結束日**＋N天」（原請假堂日期起算）；範圍改「**同補課群組**＋同館」（原同類別）——小蜘蛛人入門+進階同群組 `makeup-spider` 可互補。
+- ✅ **體驗預約只留「抱石體驗課程」**：children/skill_fri/skill_sun14 標 `active:false`（settings+defaultSettings），建立預約後端擋 `INVALID_COURSE_TYPE`；由班別試上承接（小蜘蛛人入門班試上600、技巧班1075 週日梯開梯時覆寫900）。試上流程沿用（佔位/候補/發單日券不卡墜測）。
+- ✅ **資料歸位（migrate 腳本，已執行）**：建 9 班別（成人5：入門/進階/技巧/週期訓練/矯正；青少年兒童4：青少年/青少年進階/小蜘蛛人入門/小蜘蛛人進階）；11 梯 reassign＋`cohortName`＋規則歸零(null)；小蜘蛛人海報/介紹（276字）搬入門+進階班別；**刪一A(7-8)閎重複梯＋9場次、刪全部舊類別**；佔用名額/教練/價格不動。
+- ✅ **員工端**（`CoursesPage`）：「類別管理」→「**班別管理**」（大類分組列表＋完整班別表單 Modal：大類/名稱/介紹/照片/規則/補課群組）；「新增課程」→「**加開梯次**」兩步 Modal（1 班別 optgroup+梯次名稱+類型+館別+複製 → 2 梯次資料+插班加成+分期+**收合「覆寫班別規則」區**，placeholder 顯示班別預設值）；編輯梯次改覆寫語意（留空=班別預設、三態 select）、移除說明/海報；課程列表加大類分區。
+- ✅ **會員端**（`MemberCoursesPage`）：課程總覽**三層**（大類標題→班別卡→梯次列→報名）；班別層海報/介紹改讀 `categoryImageUrl/categoryDescription`（getCourses 新回傳，fallback 舊 course 欄位）；體驗頁 fallback 類型只留抱石體驗。
+- **E2E（25/25）**：9班別/大類/補課群組/試上費600·1075 → 課程帶班別資訊/海報 → 入門班53場進試上清單$600、進階班不在 → 請假繼承（2次上限、第3次擋）→ 補課期限=結束日+60 → **補課跨群組驗證**（補成人入門擋 DIFFERENT_CATEGORY、補小蜘蛛人進階 200）→ 退費 850×2堂 → 加開梯次 name 組合/覆寫 maxLeaves=5 其餘 null/改名重組 → 體驗 children 擋。fixtures 全清（含進階場次計數還原）。
+- ⚠️ **注意**：①規則读取一律走 `resolveRules`（course 欄位 null 是常態）；②工作坊未來開設放 workshop 大類；③`docs/course-experience-features.md` 尚未依新架構改寫（下次動課程文件時一併）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

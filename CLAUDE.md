@@ -950,6 +950,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **試上列表**（`getTrialSessions`）：額滿但候補未滿**仍列出**（回 `isFull`）；前端場次卡標「**額滿・可候補**」；報名成功訊息帶繳費期限／候補說明。
 - **E2E（13/13）**：max1/候補1 場次——M1 報名即佔位(期限≈+48h)→額滿列表 isFull→M2 候補→M3 WAITLIST_FULL→M1 期限改過去+sweep→M1 名單/預約標 payment_expired、**M2 轉正＋新期限**、計數正取1/候補0→confirm M2 → paid＋期限清除→逾期 M1 再確認 → TRIAL_EXPIRED。fixtures 全清。
 
+## 目前進度（2026-07-13）— refactor：後端大檔案拆分（checkinService＋experienceBookings）
+> 使用者指定「後端大檔案拆分」。原則：**函式本體逐字搬移、行為零改動、對外門面/路徑不變**（外部引用檔零修改）。後端 `/health` `2.35.0`→`2.36.0`；commit `a64621e`＋`35dc69f`。
+- ✅ **checkinService.js 1523 行 → 門面（33 行）＋ 6 模組**（`src/services/checkin/`）：
+  - `pricing`(110)＝票價/會員身份/折扣（隊員9折・舊卡8折・特約）｜`eligibility`(193)＝定期票（購買/續約資訊）/課程學員/VIP/單次券｜`gates`(234)＝墜測（效期/遞延/同意書）/waiver/runEntryGates｜`verify`(256)＝verifyEntry 權威判定｜`flow`(592)＝QR 建立/掃碼/確認/今日統計｜`cancel`(181)＝取消入場/續約還原。
+  - 相依為**單向 DAG**（pricing←eligibility←gates←verify/flow/cancel，無循環）；`checkinService.js` 門面 re-export 原 19 個 API，4 個引用路由（checkin/members/fallTests/cancelCheckin）**零改動**。
+  - **驗證**：拆前先建 smoke 基準（16 項唯讀呼叫＋fixture，輸出 286 行 JSON）→ 拆後 diff **完全一致**（僅隨機 fixture id 差異）；`loop-test` 90/90；部署後打正式 API 全鏈 E2E（verify→QR 建立→掃碼→確認→取消→沖銷 −400）**6/6**。
+- ✅ **experienceBookings.js 896 行 → 路由 551 行＋`services/experienceService.js` 359 行**：搬出 課程/排班建立與清理（add/reassign/cleanup）、體驗入場券（sync/void）、保險名冊 Excel（buildInsuranceXlsBuffer）、`COURSE_TYPES`/`courseTypeLabel`/`parseBookingTime`/`defaultSettings`。部署後 E2E（settings/試上報名佔位/確認/列表 courseTypes/取消釋位）**7/7**。
+- 🛠 **拆分技法備忘**：python 以「頂層 binding 行號區間」逐字搬移；跨模組引用偵測**須先去除註解**（否則註解提到函式名會誤判循環相依）；模組深一層時 lazy `require('../…')`→`require('../../…')` 批次改寫；第二層拆分時注意別把第一層產生的同儕 require 當外部 import 複製（會重複宣告）。
+- 📌 **courseService.js（1314 行）未拆**——本輪風險預算用盡，之後要拆可循同法（先 smoke 基準→逐字搬移→diff）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

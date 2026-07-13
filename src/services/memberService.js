@@ -387,14 +387,17 @@ const verifyEmail = async (token) => {
   const doc = snapshot.docs[0];
   const member = doc.data();
 
-  if (dayjs().isAfter(dayjs(member.emailVerifyExpiry.toDate()))) {
+  // 冪等：已驗證再點（重複點擊、信箱程式預抓、多封信其一已成功）→ 直接回成功，不看效期
+  if (member.emailVerified) return { memberId: doc.id, already: true };
+
+  if (member.emailVerifyExpiry && dayjs().isAfter(dayjs(member.emailVerifyExpiry.toDate()))) {
     throw { code: 'TOKEN_EXPIRED', message: '驗證連結已過期，請重新申請' };
   }
 
+  // token 保留（不再用完即毀）：同一連結重複點擊由上方 emailVerified 冪等處理，
+  // 避免「信箱安全掃描先開連結消耗 token → 本人再點顯示無效」的誤判
   await doc.ref.update({
     emailVerified: true,
-    emailVerifyToken: null,
-    emailVerifyExpiry: null,
     updatedAt: new Date(),
   });
 

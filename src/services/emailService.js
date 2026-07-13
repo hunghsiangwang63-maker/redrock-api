@@ -53,12 +53,17 @@ const sendEmail = async ({ to, subject, html, text, attachments }) => {
 const sendEmailVerification = async (memberId, email, name) => {
   const { getDb, COLLECTIONS } = require('../config/firebase');
   const db = getDb();
-  const token = require('crypto').randomBytes(32).toString('hex');
+  // 沿用未過期的既有 token（重寄多封信連結一致、點任一封都有效），過期/沒有才換新
+  const mDoc = await db.collection(COLLECTIONS.MEMBERS).doc(memberId).get();
+  const cur = mDoc.exists ? mDoc.data() : {};
+  const curExpiry = cur.emailVerifyExpiry?.toDate?.() || null;
+  let token = (cur.emailVerifyToken && curExpiry && curExpiry > new Date()) ? cur.emailVerifyToken : null;
   const expiry = new Date(Date.now() + 24 * 3600 * 1000);
+  if (!token) token = require('crypto').randomBytes(32).toString('hex');
 
   await db.collection(COLLECTIONS.MEMBERS).doc(memberId).update({
     emailVerifyToken: token,
-    emailVerifyExpiry: expiry,
+    emailVerifyExpiry: expiry,   // 效期一律展延 24 小時
   });
 
   const verifyUrl = `${process.env.API_URL || 'https://redrock-api-production.up.railway.app'}/members/verify-email/${token}`;

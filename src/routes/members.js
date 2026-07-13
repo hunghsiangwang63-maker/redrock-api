@@ -726,8 +726,8 @@ router.get('/verify-email/:token',
   async (req, res) => {
     try {
       const result = await memberService.verifyEmail(req.params.token);
-      // 重導向到前端成功頁
-      res.redirect(`${process.env.CLIENT_URL}/member/verify?status=success&memberId=${result.memberId}`);
+      // 重導向到前端成功頁（already＝本就已驗證，重複點擊/預抓也顯示成功）
+      res.redirect(`${process.env.CLIENT_URL}/member/verify?status=success${result.already ? '&already=1' : ''}`);
     } catch (err) {
       res.redirect(`${process.env.CLIENT_URL}/member/verify?status=error&code=${err.code}`);
     }

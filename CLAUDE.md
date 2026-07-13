@@ -1123,6 +1123,17 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📋 **Railway 用量組成釐清**：大宗＝**服務 24h 常駐（RAM/CPU × 時間）**，與流量/會員數幾乎無關；頻繁部署有小幅貢獻（build 分鐘＋切換期新舊實例並存）、會員註冊/API 流量可忽略。確認：dashboard Usage 頁看 Compute/Egress/Build 拆分。**用量警示設定**：Workspace Settings → Usage → Usage Limits——Soft Limit（email 警示，建議額度 7 成）＋ Hard Limit（到達直接停服務，**建議不設或設很高**，這次下線即此效果）。正式營運建議升級按量計費（小服務約 $5–10/月），避免無預警斷線。
 - ⚠️ **提醒**：Railway 額度用罄會直接下線服務 → 兩館入場/登入/POS 全停。建議 dashboard 設用量警示或升級方案；日後再遇「所有名單同時消失」先打 `/health` 判斷是否服務層問題。
 
+## 系統依賴盤點（2026-07-14）
+| 服務 | 用途 | 備註 |
+|---|---|---|
+| Firebase（`redrock-dev-a35c1`） | Firestore 資料庫／Hosting 前端兩站／Storage 圖檔 | 免費額度內 |
+| Railway | 後端 API（GitHub push 自動部署，24h 常駐） | **主要付費點＋唯一全站單一故障點**（7/14 額度下線事故） |
+| Resend | 所有 Email（Railway 封鎖 SMTP 故走 REST API） | 免費 100 封/天 |
+| Porkbun | 網域 `redrocktaiwan.com`（app./staff. DNS → Firebase Hosting） | 年費 |
+| GitHub | 兩 repo（api push 觸發 Railway 部署） | 免費 |
+
+未啟用：LinePay/街口/台灣Pay（adapter 骨架待金鑰）；BeClass（逐步取代中）；Climbio（資料已移轉完）。金鑰全在 Railway 環境變數。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

@@ -1003,6 +1003,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **回填已認領 19 位**（firebase-admin，`paidAt/createdAt` 沿用認領時間）；驗證 `GET /team-members/members?year=2026` 回 **20 筆**（19 Climbio 移轉＋1 既有陳品翰）、館別/狀態正確。
 - 📌 認領進度此時 **19/41**（陳楚狄於統計後註冊完成）。
 
+## 目前進度（2026-07-13）— 2026 隊員名冊精簡（✅/❌ 欄）＋隊服領取欄位
+> 需求：名冊的已收款/正式隊員/隊服領取改 ✅❌ 顯示、縮小列面積。後端 `/health` `2.42.0-jersey-received`；commit 後端 `5661fb9`＋`db1155b`、前端 `35c8454`。
+- ✅ **名冊列精簡**（`VipPage` 攀岩隊員管理）：原「繳費兩行＋狀態兩顆膠囊＋隊服文字」→ 繳費壓成單行小字（NT$金額·日期）＋三個置中窄欄 **已收款／正式隊員／隊服領取** 用 ✅/❌（hover title 顯示完整狀態；用 emoji 非 ✓✗ 字元、避 tofu，見 [[ui-icon-css-not-glyph]] 慣例例外：彩色 emoji 安全）。
+- ✅ **隊服領取（新欄位 `jerseyReceived`）**：名冊列**直接點 ✅/❌ 切換**（樂觀更新＋PUT）；尺寸以 9px 小字附註於 icon 下；`noJersey` 顯示「—」不可點。編輯 Modal 加「隊服已領取」勾選（不拿隊服時 disabled）。後端 `PUT /team-members/applications/:id` allowed 加 `jerseyReceived`。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

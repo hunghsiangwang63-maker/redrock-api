@@ -1100,6 +1100,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **體驗課程只留「抱石專班體驗課程」（徹底移除、非停用）**：`experienceService.defaultSettings` 刪除 children/skill_fri/skill_sun14 三entry；Firestore `systemSettings/experienceCourses.courseTypes` 同步清除（僅剩 `general`，其 label 本就是「抱石專班體驗課程」）。打正式 API 驗證 courseTypes 只回一種；員工體驗設定頁/會員預約頁皆動態讀設定、自動只剩一種。三種由班別試上承接。歷史 booking 無殘留引用（7/13 會員清空時已清）。
 - ✅ **修：編輯梯次「開放補課/開放試上」下拉改了會跳回**：三態 select 的 value 判斷只認布林（`=== true/false`），但 onChange 存字串 `'true'/'false'` → 一選顯示就回跳「班別預設」（存檔其實會生效、純顯示 bug）。改 `String(v)` 相容布林與字串。加開梯次 Modal 的同型下拉直接綁字串、本就正常。
 
+## 目前進度（2026-07-14）— 舊系統 90 日票名單移轉（BeClass Numbers 檔 → 註冊認領＋回填）
+> 使用者提供 `~/Downloads/294fdfd677f8ff564b6d83958178.numbers`（BeClass 90日票購買名單，Numbers 檔以 `numbers-parser` 解析）。定案：**註冊時自動認領＋發 90 日定期票（全館通用、沿用名單原起訖日、嚴格檢查效期）＋通知系統管理員＋進會員定期票列表**。後端 `/health` `2.52.0-legacy-90day-pass-claim`；E2E（打 Railway）**10/10**。commit `1d8a3ef`。
+- **名單內容**：23 筆有效 90 日票（新竹 21／士林 2；效期 2026-07-14 ~ 10-05 之間到期；另 1 筆 2025 舊紀錄忽略）。
+- ✅ **`legacyPasses` 集合**（doc id `90day-<項次>`，冪等匯入）：seq/name/phone/email/gymId/invoice/paymentMethod/startDate/endDate/claimed。腳本 `scratchpad/import-legacy-passes.cjs`。
+- ✅ **`memberService.claimLegacyPass`**（createMember 內、接在隊員認領後）：電話+`legacyNameMatch` 比對、`claimed!==true`、**`endDate>=今日` 才發**（過期不發不標記）→ 建 memberPass（票種對照「90日定期票」、`scope:'shared'` 全館、**startDate/endDate 沿用名單原值不重算**、`source:'legacy-90day'`、notes 帶 BeClass 項次+發票號）→ 名單標 claimed → `notifyRoleInGym` 通知同館 gym_manager＋super_admin（type `legacy_pass_claimed`）。全程 try/catch 不阻斷註冊。
+- ✅ **回填已註冊 15 位**（柯景倫/黃凱聖/傅伊雯/黃淵暐/黎家豪/李錦州/Raissa/丁厚獻/陳錦漩/林祺堂/曾聖發/田一宏/楊雅雯/曹惟森/謝旻恩）：直接發放＋標記＋通知 3 位管理員；**未註冊 8 位**（李應崇/林芝韻/劉泓予/謝佑欣/廖有福/曾宥勝/林修維/黃永豪）待註冊自動認領。
+- **E2E（10/10）**：注入有效/過期兩筆假名單 → 自助註冊 → 有效者自動發票（原效期/shared/active）＋名單標記＋管理員通知 3 則；過期者不發不標記；會員 `/passes/member/:id` 列表可見（顯示為**臨時休館補償後**到期日、`baseEndDate` 保留原值）。fixtures 全清。
+- 📌 **Numbers 檔解析法**：`.numbers` 為 IWA zip，本機無 Apple Numbers → scratchpad venv `pip install numbers-parser` 直接讀表格（`Document(...).sheets[0].tables[0].rows(values_only=True)`）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

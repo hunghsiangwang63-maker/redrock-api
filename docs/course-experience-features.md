@@ -58,15 +58,18 @@
 - 課程表單（`CoursesPage.jsx`，僅週課）：「**開放試上**」勾選 + 「**試上費用**」
 - 課程欄位：`allowTrial`(bool)、`trialPrice`(number)（`createCourse` + `PUT /courses/:id` 白名單）
 
-### 會員報名
-- **可試上場次**：`GET /courses/trial-sessions?gymId=` → 開放試上且**未額滿**的近期場次（含試上費/剩餘名額/教練）
-  - 額滿（含補課佔滿）**自動排除**（試上佔名額）
+### 會員報名（2026-07-13 改版：報名即佔位）
+- **可試上場次**：`GET /courses/trial-sessions?gymId=` → 開放試上的近期場次（含試上費/剩餘名額/`isFull`/教練）
+  - **額滿仍列出**（會員端標「額滿・可候補」）；正取＋候補（`course.maxWaitlist`）皆滿才排除
 - **報名**：`POST /experience-bookings`，body 帶 `{ trialSessionId, consentSigned, paymentMethod, paymentDate, bankLastFive }`
+  - **報名當下即佔名額**（`enrollTrial` paymentStatus:'pending'）：有位→正取保留；滿→**候補**；候補也滿→擋 `WAITLIST_FULL`
+  - **繳費期限**＝min(報名＋48 小時, 上課開始時間)（`trialPaymentDeadline`）；回傳 `paymentDeadline`/`isWaitlist`
   - 費用 = `course.trialPrice`（**後端權威**）；`needsInsurance:false`（試上免保險）；需勾選免責同意
   - 會員端 `MemberExperiencePage.jsx`「課程試上」分頁 + 試上報名 modal
-- **確認**：`POST /experience-bookings/:id/confirm`（kind=trial 分支）→ 呼叫 `enrollTrial` 把會員加入該場次名單（`isTrial:true`、**佔名額**、滿則候補），**不建課/排班**
+- **確認收款**：`POST /experience-bookings/:id/confirm`（kind=trial）→ 名單已存在，只標 `paymentStatus:'paid'`、清期限；名單已因逾期釋放 → **400 `TRIAL_EXPIRED`**（請會員重新報名）
   - 發單日體驗入場券沿用既有「發放入場券」流程；入場**不卡墜落測驗完成**（試上券＝體驗券）
-- **取消**：`removeTrialEnrollment` 移除名單並釋放名額
+- **逾期釋放＋候補轉正**：`sweepExpiredTrialPayments`（**每小時排程**）——期限已過仍 pending → 名單取消(`payment_expired`)＋釋放名額＋預約標逾期取消＋`promoteWaitlist` 候補轉正（**遞補者取得新的繳費期限**，同樣逾期釋放）
+- **取消**：`removeTrialEnrollment` 移除名單並釋放名額，**未過期場次自動遞補候補**
 - **人數影響**：試上者計入 `expectedCount`（預計上課），不計入 `registeredCount`（報名）
 - **檔案**：`services/courseService.js`（`getTrialSessions`/`enrollTrial`/`removeTrialEnrollment`）、`routes/courses.js`、`routes/experienceBookings.js`
 

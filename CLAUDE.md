@@ -942,6 +942,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **清理**：硬刪 test 課程＋其 **8 場次**（先驗 0 報名）；清 1 筆孤兒場次。
 - ✅ **驗證對齊**：場次 109→**100 筆**、全部對應到現有 12 門課程（0 未對齊）；各館分佈＝**新竹館 100、士林館 0**（現有課程全在新竹）→ 月曆與資料完全吻合。
 
+## 目前進度（2026-07-13）— 試上名額改「報名即佔位、額滿候補、逾期釋放轉正」
+> 承「週課開放試上名額流程」查證，使用者拍板改制：**報名後名額先佔著、後續報名列候補、繳費期限過後釋出名額候補轉正**。後端 `/health` `2.34.0-trial-seat-hold-waitlist`；E2E **13/13**。commit 後端 `454d78e`、前端 `af2c580`；`docs/course-experience-features.md` 第 5 節已同步改版。
+- ✅ **報名即佔位**（`POST /experience-bookings` trial 分支）：報名當下呼叫 `enrollTrial`（`paymentStatus:'pending'`）——有位→正取保留、滿→**候補**（不再擋 SESSION_FULL）、候補也滿（`course.maxWaitlist`）→ 400 `WAITLIST_FULL`。**繳費期限＝min(報名+48h, 上課開始)**（`trialPaymentDeadline`）；booking 存 `trialEnrollmentId/isWaitlist/paymentDeadline`。
+- ✅ **確認收款**（confirm trial 分支）：名單已存在 → 只標 `paymentStatus:'paid'`＋清期限；名單已因逾期釋放 → **400 `TRIAL_EXPIRED`** 請重新報名。（無 `trialEnrollmentId` 的舊預約沿用舊路徑。）
+- ✅ **逾期釋放＋候補轉正**（`sweepExpiredTrialPayments`，掛**每小時**排程）：期限過仍 pending → 名單取消 `payment_expired`＋釋放名額＋預約標逾期取消＋`promoteWaitlist` 轉正；**遞補者取得新期限**（遞補時起算 min(+48h, 上課前)）。冪等。取消預約（`removeTrialEnrollment`）釋位也自動遞補。
+- ✅ **試上列表**（`getTrialSessions`）：額滿但候補未滿**仍列出**（回 `isFull`）；前端場次卡標「**額滿・可候補**」；報名成功訊息帶繳費期限／候補說明。
+- **E2E（13/13）**：max1/候補1 場次——M1 報名即佔位(期限≈+48h)→額滿列表 isFull→M2 候補→M3 WAITLIST_FULL→M1 期限改過去+sweep→M1 名單/預約標 payment_expired、**M2 轉正＋新期限**、計數正取1/候補0→confirm M2 → paid＋期限清除→逾期 M1 再確認 → TRIAL_EXPIRED。fixtures 全清。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

@@ -88,6 +88,7 @@ const createCourse = async ({ gymId, staffId, data }) => {
       ? null : Number(data.maxWaitlist),
     // 已佔用正取名額（外部帶入，如 BeClass 既有報名）：剩餘＝maxStudents−實報名−reservedSlots
     reservedSlots: data.reservedSlots ? Number(data.reservedSlots) : 0,
+    reservedSlotsNote: data.reservedSlotsNote || '',   // 佔用原因說明（誰佔的/來源，員工端顯示）
     price: data.price || 0,
     totalSessions: data.totalSessions || 0,   // 總堂數（建立後可更新）
     durationMinutes: data.durationMinutes || 90,

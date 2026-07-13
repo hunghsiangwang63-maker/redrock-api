@@ -1043,6 +1043,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🐞 **順修 pre-existing bug：比賽未成年報名家長簽署信連結無效**——原呼叫 `sendParentWaiverLink`（連 `/waiver/parent/:token`，該頁查 members 的 waiver token），但**比賽 token 存在 `competitionRegistrations`、專屬頁是 `/competitions/waiver/parent/:token`** → 家長點信中連結必顯示「此連結無效」。新增 `emailService.sendParentCompetitionWaiverLink`（正確 URL、主旨帶賽名、比賽專屬文案），`competitionService` 報名改用之。waiver 流程的 `sendParentWaiverLink` 呼叫端（簽署觸發/重發）不受影響。
 - 📌 DB 欄位（`parentName`/`guardianSignatureData` 等）與 API 參數皆不動、純文案；`parentRelation` 顯示 fallback「監護人」→「法定代理人」。
 
+## 目前進度（2026-07-13 續）— 會員自助註冊電話開放國際格式
+> 原自助註冊只收台灣手機 `^09\d{8}$`（外籍會員只能由店員建立）。改與店員建立會員同規則。後端 `/health` `2.46.0-self-register-intl-phone`；E2E 4/4。commit 後端 `48fd2b1`、前端 `6476726`。
+- ✅ **`POST /members/self-register` 與 `/:id/promote`（子會員升級）**：電話 regex 改 `^09\d{8}$|^\+\d{7,15}$`（台灣手機 或 `+` 開頭 7~15 碼國際格式），錯誤訊息一併說明兩種格式。店員 `POST /members` 本就支援、不動。
+- ✅ **前端**（`MemberRegisterPage`）：電話欄 placeholder 加註「外籍：+ 開頭國際格式」。
+- **E2E（打 Railway）**：`+85291234567` 註冊 201、台灣 `09…` 仍 201、`12345`／`+123` 皆 400；測試會員已 DELETE 清乾淨。
+- 📌 電話唯一性、子會員共用電話、登入 identifier 解析皆不受影響（存字串比對、與格式無關）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

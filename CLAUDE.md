@@ -965,6 +965,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **後端 `GET /members/my/identity`**（會員本人，authenticateAny＋member guard；置於 `/:id` 之前）：`teamMember`＝`isActiveTeamMember` 權威判定（**效期內才回** `{since, until}`，過期回 null）；`courseAccess`＝`checkinService.getCourseAccess`（本就只回有效入館權益）映射 `{courseName, gymAccessStart, gymAccessEnd}`。
 - ✅ **前端**（`MemberHomePage`）：已入場橫幅下方顯示身份卡——🏅 **攀岩隊員**（藍卡，效期 since～until）、📚 **課程學員 · 課名**（琥珀卡，入館效期起訖，每門課一張）；效期內才出現、一般會員不顯示。
 - **E2E（5/5）**：效期內隊員回 since/until 正確、課程學員含課名＋入館效期（無限練習期間）、**效期外隊員回 null 不顯示**、未登入 401。
+- ✅ **使用者實機驗證通過**（建臨時展示帳號 0900101101 登入正式站）：首頁兩張身份卡（🏅隊員效期／📚課程學員入館效期）顯示正確。附帶釐清：**首頁右上角圓圈＝頭像（姓名第一個字、點入個人頁）**——展示帳號名「【練習】…」故顯示「【」，正式會員顯示姓氏，非 bug、使用者確認不改。展示資料（會員/waiver/墜測/課程/場次/報名/pendingCheckIn 共 8 筆）測後全清、0 殘留。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

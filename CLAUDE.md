@@ -1030,6 +1030,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ⚠️ **E2E 細節**：`/transfers/upload` 欄位名是 `bankLastFive`/`paymentDate`（非 last5/transferDate），漏帶且無截圖 → 400 `NO_PROOF`。
 - ✅ **體驗/比賽/租借 補正 UI 已補齊**（純前端，commit `c0f43f9`，member/staff 已 deploy；E2E 12/12）：新共用元件 `TransferReuploadModal`（退回原因＋匯款日期/末五碼/截圖擇一，走 `/transfers/upload`）；三頁「我的」清單卡片對 `paymentStatus==='transfer_rejected'` 顯示紅框退回原因＋「重新上傳轉帳」鈕、`pending_confirm` 顯示「轉帳確認中」；比賽 `payStatusBadge` 加對應徽章。course/team 沿用各自既有補正表單。→ **五類型退回→補正 UI 全數到位**。E2E（比賽+租借，打 Railway）：退回→alerts 2 筆→會員補正→pending_confirm＋清標記→alerts 清空→0 殘留。腳本 `scratchpad/reject-reupload-comp-rental-e2e.cjs`。三個「我的」端點（`/experience-bookings/my`、`/competitions/registrations/member/:id`、`/rentals/my`）本就回完整 doc，後端免改。
 
+## 目前進度（2026-07-13）— 家庭成員文件簽名標籤改「法定代理人簽名」（純前端）
+> 需求：家庭成員（子會員）的風險安全聲明書/墜落測驗同意書，簽名欄不寫「本人簽名」、改「法定代理人簽名」，轉出（列印/PDF）文件也是。純前端 `redrock-web`，commit `0e7e8f7`，member/staff 皆 deploy。
+- ✅ **會員端代簽頁**（`?forChild` 模式）：`MemberWaiverPage` 簽名區加標題（代簽→「✍️ 法定代理人簽名」、本人→「✍️ 本人簽名」）；`MemberFallTestPage` 簽名區標題/已簽檢視標籤/錯誤訊息三處依 `forChildId` 切換。
+- ✅ **員工端副本＋列印**（`MembersPage`）：Waiver 副本 Modal 與 🖨️ 列印/PDF、墜測同意書副本 Modal 與列印——簽名標題依 `detail.member.isChildAccount` 顯示「法定代理人簽名」（成人維持「本人簽名」）。
+- 📌 **判定依據**：waiver/簽署文件本身無 isChildAccount 欄位 → 檢視/列印時以**會員文件的 `isChildAccount`** 判定；會員端以 URL `forChild` 參數判定。未成年本人帳號的家長遠端共簽（`ParentWaiverPage`）本就標「家長／監護人簽名」、不在此範圍。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

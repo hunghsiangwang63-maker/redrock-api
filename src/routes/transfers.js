@@ -22,6 +22,7 @@ const REJECTABLE_COLL = {
   experience: 'experienceBookings',
   competition: 'competitionRegistrations',
   rental: 'equipmentRentals',
+  team_member: 'teamApplications',  // 入隊申請：退回→已退回＋通知會員；補正→回待審核
 };
 
 // POST /transfers/upload - 會員提交轉帳待確認（截圖或填寫資料皆可，擇一即可）
@@ -99,6 +100,7 @@ router.post('/upload', authenticateAny, upload.single('screenshot'), async (req,
       try {
         await db.collection(linkedColl).doc(resolvedRefId).update({
           paymentStatus: 'pending_confirm',
+          ...(resolvedOrderType === 'team_member' ? { status: 'pending' } : {}),
           paymentRejectReason: null,
           paymentRejectedAt: null,
           paymentConfirmed: false,
@@ -220,13 +222,35 @@ router.put('/:id/reject', authenticate, async (req, res) => {
     // → 會員可重新上傳轉帳（走 /transfers/upload）；course 期限一過仍未確認由 sweep 自動取消。
     try {
       if (t.orderType && t.refId && REJECTABLE_COLL[t.orderType]) {
-        await db.collection(REJECTABLE_COLL[t.orderType]).doc(t.refId).update({
+        const orderRef = db.collection(REJECTABLE_COLL[t.orderType]).doc(t.refId);
+        await orderRef.update({
           paymentStatus: 'transfer_rejected',
           paymentRejectReason: reason,
           paymentRejectedAt: now,
           paymentConfirmed: false,
+          // 入隊申請：狀態明確標「已退回」（會員端申請紀錄顯示、名冊顯示已退回）
+          ...(t.orderType === 'team_member' ? { status: 'rejected' } : {}),
           updatedAt: now,
         });
+        // 入隊申請退回 → Email 通知會員（申請頁同步顯示已退回＋原因；寄信失敗不阻斷）
+        if (t.orderType === 'team_member') {
+          try {
+            const app = (await orderRef.get()).data();
+            if (app?.memberEmail) {
+              const { sendEmail, esc } = require('../services/emailService');
+              await sendEmail({
+                to: app.memberEmail,
+                subject: '【紅石攀岩】入隊申請轉帳確認未通過',
+                html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+                  <h2 style="color:#8B1A1A">紅石攀岩 RedRock</h2>
+                  <p>${esc(app.memberName || '')} 您好，</p>
+                  <p>您的 ${app.year} 年度攀岩隊入隊申請，轉帳資料經確認<strong>未通過</strong>${reason ? `：<br/><strong>${esc(reason)}</strong>` : '。'}</p>
+                  <p>請至會員系統「攀岩隊」頁重新上傳轉帳資料，或聯絡櫃檯協助，謝謝。</p>
+                </div>`,
+              });
+            }
+          } catch (e) { console.error('入隊退回通知信失敗', e.message); }
+        }
       }
     } catch (e) { console.error('transfer reject side-effect:', e.message); }
     res.json({ message: '已退回，會員可重新上傳轉帳' });

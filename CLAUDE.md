@@ -1107,6 +1107,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **`memberService.claimLegacyPass`**（createMember 內、接在隊員認領後）：電話+`legacyNameMatch` 比對、`claimed!==true`、**`endDate>=今日` 才發**（過期不發不標記）→ 建 memberPass（票種對照「90日定期票」、`scope:'shared'` 全館、**startDate/endDate 沿用名單原值不重算**、`source:'legacy-90day'`、notes 帶 BeClass 項次+發票號）→ 名單標 claimed → `notifyRoleInGym` 通知同館 gym_manager＋super_admin（type `legacy_pass_claimed`）。全程 try/catch 不阻斷註冊。
 - ✅ **回填已註冊 15 位**（柯景倫/黃凱聖/傅伊雯/黃淵暐/黎家豪/李錦州/Raissa/丁厚獻/陳錦漩/林祺堂/曾聖發/田一宏/楊雅雯/曹惟森/謝旻恩）：直接發放＋標記＋通知 3 位管理員；**未註冊 8 位**（李應崇/林芝韻/劉泓予/謝佑欣/廖有福/曾宥勝/林修維/黃永豪）待註冊自動認領。
 - **E2E（10/10）**：注入有效/過期兩筆假名單 → 自助註冊 → 有效者自動發票（原效期/shared/active）＋名單標記＋管理員通知 3 則；過期者不發不標記；會員 `/passes/member/:id` 列表可見（顯示為**臨時休館補償後**到期日、`baseEndDate` 保留原值）。fixtures 全清。
+- 📣 **已產出 8 位未註冊者群組通知文案**（內部含電話對照表＋隱電話群組版；依票到期排序，**李應崇 7/18 最急**）：李應崇/林芝韻/劉泓予(士林)/謝佑欣/廖有福/曾宥勝/林修維/黃永豪。查最新認領進度：掃 `legacyPasses` 的 `claimed` 旗標。
 - 📌 **Numbers 檔解析法**：`.numbers` 為 IWA zip，本機無 Apple Numbers → scratchpad venv `pip install numbers-parser` 直接讀表格（`Document(...).sheets[0].tables[0].rows(values_only=True)`）。
 
 ## 待辦

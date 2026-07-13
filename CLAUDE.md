@@ -1063,6 +1063,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   3. **驗證冪等**（`memberService.verifyEmail`）：已驗證再點任何連結 → 回成功（帶 already）；token 保留不再 null（重複點擊由 emailVerified 冪等擋，預抓消耗 token 的誤判消失）。
 - **E2E（13/13）**：註冊→未驗證登入 403→重寄 token 沿用→點連結 302 success→emailVerified/token 保留→重複點 success&already→登入 200→假 token error 頁→前端頁 200；測試會員清乾淨。
 
+## 目前進度（2026-07-13 續）— 單次入場券發放：備註必填 + 審核可見發放值班人員
+> 需求：票券單次發放要多備註說明填寫、自動記錄值班人員、管理員審核通知看得到。查證：發放表單本有選填備註、後端本就存 `soldByStaffId/Name`（值班 operator token 即該員工）——缺的是**必填**與**審核端顯示**。後端 `/health` `2.48.0-ticket-issue-notes-required`；E2E 10/10。commit 後端 `99c9f62`、前端 `631d1bd`。
+- ✅ **備註改必填**（後端權威）：`POST /passes/single-entry` validator `notes` trim 後不可空 → 400「請填寫備註說明（發放原因）」；前端發放 Modal 標籤改「備註說明（必填，發放原因；管理員審核時會看到）」＋送出前擋。
+- ✅ **管理員審核三處可見**：①站內**通知內文**帶「（備註：…）」（原本只有發放人＋會員名）②**待辦清單** desc 帶「（XX 發放）」③**審核 Modal**（`TicketApprovalModal`）加「發放人員（值班登記）」與「備註說明」兩列（未填寫顯紅字——僅舊資料會出現）。
+- **E2E（10/10）**：無備註/空白備註 400 → 有備註 201 → 票券存 notes＋soldByStaffName → 待辦 task.record 含兩者、desc 帶發放人 → 通知內文含備註；測試資料（會員/票券/通知/交易）清乾淨。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

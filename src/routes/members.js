@@ -60,7 +60,22 @@ router.get('/my/identity', authenticateAny, async (req, res) => {
     const fallTest = ft?.passed
       ? { status: 'passed', expiresAt: ft.expiresAt || null }
       : (ft?.reason === 'expired' ? { status: 'expired', expiredAt: ft.expiredAt || null } : null);
-    res.json({ teamMember, courseAccess, fallTest });
+    // 有效定期票（含臨時休館補償後到期日；已生效且未過期）
+    const db = getDb();
+    const today = taiwanToday();
+    const passSnap = await db.collection(COLLECTIONS.MEMBER_PASSES)
+      .where('memberId', '==', req.member.id).where('status', '==', 'active').get();
+    const withEff = await require('../services/passExpiryService').attachEffectiveEndDates(
+      passSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+    const passes = withEff
+      .filter(p => (p.effectiveEndDate || p.endDate || '') >= today && (!p.startDate || p.startDate <= today))
+      .map(p => ({
+        passTypeName: p.passTypeName || '定期票',
+        startDate: p.startDate || null,
+        endDate: p.effectiveEndDate || p.endDate || null,
+        credits: p.credits ?? null, // 回數票剩餘次數（時間票為 null）
+      }));
+    res.json({ teamMember, courseAccess, fallTest, passes });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

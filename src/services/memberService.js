@@ -127,6 +127,65 @@ const claimLegacyFallTest = async (db, memberId, member) => {
 // ── 舊系統攀岩隊員自動認領（Climbio 名單，隊籍至 2026-12-31）────────────
 // 建立會員時電話+姓名比對 legacyTeamMembers → 標記隊員（isTeamMember/since/until），
 // 並確保墜測有效（隊員墜測效期與隊籍同步至 until；若 claimLegacyFallTest 已先認領則不重複建）。
+// ── 舊系統 90 日票自動認領（BeClass 名單 legacyPasses）────────────
+// 電話+姓名比對命中且【票尚在效期內】→ 依名單「原起訖日」發放 90 日定期票（全館通用）
+// 到會員定期票列表（memberPasses），並站內通知管理員（同館 gym_manager + super_admin）。
+const claimLegacyPass = async (db, memberId, member) => {
+  try {
+    if (member.isChildAccount) return null;
+    const phone = (member.phone || '').trim();
+    if (!phone || !member.name) return null;
+    const snap = await db.collection('legacyPasses').where('phone', '==', phone).get();
+    if (snap.empty) return null;
+    const today = taiwanToday();
+    const hit = snap.docs.find(d => {
+      const x = d.data();
+      return x.claimed !== true && legacyNameMatch(x.name, member.name)
+        && String(x.endDate || '') >= today;   // 注意有效期限：已過期不發
+    });
+    if (!hit) return null;
+    const legacy = hit.data();
+    const now = new Date();
+    // 票種：90日定期票（全館 shared）；找不到票種仍發放（欄位快照為主）
+    let passTypeId = null, passTypeName = '90日定期票';
+    const ptSnap = await db.collection('passTypes').where('name', '==', '90日定期票').limit(1).get();
+    if (!ptSnap.empty) { passTypeId = ptSnap.docs[0].id; passTypeName = ptSnap.docs[0].data().name; }
+    const passId = uuidv4();
+    await db.collection('memberPasses').doc(passId).set({
+      id: passId, memberId, memberName: member.name || '',
+      gymId: legacy.gymId || 'gym-hsinchu',           // 售出館（付款館別）
+      passTypeId, passTypeName,
+      scope: 'shared', targetGymId: null,             // 全館通用
+      startDate: legacy.startDate, endDate: legacy.endDate,   // 沿用名單原效期、不重算
+      credits: null, originalCredits: null,
+      status: 'active', paymentStatus: 'confirmed', paymentId: null,
+      soldByStaffId: 'legacy-90day-migration',
+      source: 'legacy-90day',
+      notes: `舊系統 90 日票移轉（BeClass #${legacy.seq || ''}，發票 ${legacy.invoice || '—'}）`,
+      createdAt: now, updatedAt: now,
+    });
+    await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now });
+    // 通知管理員（同館 gym_manager + super_admin）
+    try {
+      const { notifyRoleInGym } = require('./notificationService');
+      const payload = {
+        gymId: legacy.gymId || 'gym-hsinchu',
+        type: 'legacy_pass_claimed',
+        title: '舊系統 90 日票已認領',
+        body: `${member.name}（${phone}）註冊會員，已自動發放 90 日定期票（${legacy.startDate} ~ ${legacy.endDate}，全館通用）。`,
+        referenceId: passId, referenceType: 'memberPass',
+      };
+      await notifyRoleInGym({ ...payload, role: 'gym_manager' });
+      await notifyRoleInGym({ ...payload, role: 'super_admin' });
+    } catch (e) { console.error('90日票認領通知失敗（票已發放）:', e.message); }
+    console.log(`✅ 舊系統90日票認領: ${member.name} ${phone} → ${legacy.startDate}~${legacy.endDate}`);
+    return passId;
+  } catch (e) {
+    console.error('claimLegacyPass 失敗（不阻斷建立會員）:', e.message);
+    return null;
+  }
+};
+
 const claimLegacyTeamMember = async (db, memberId, member) => {
   try {
     if (member.isChildAccount) return null;
@@ -265,6 +324,8 @@ const createMember = async (memberData, staffId, options = {}) => {
   await claimLegacyFallTest(db, memberId, member);
   // 攀岩隊員自動認領（Climbio 名單；隊員墜測效期同步至隊籍到期日）
   await claimLegacyTeamMember(db, memberId, member);
+  // 舊系統 90 日票自動認領（BeClass 名單；效期內才發、沿用原起訖日、通知管理員）
+  await claimLegacyPass(db, memberId, member);
 
   // 計算並更新封鎖狀態
   const blockReasons = await getBlockReasons(memberId, member);

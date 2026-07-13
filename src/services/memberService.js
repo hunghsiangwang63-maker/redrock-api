@@ -75,6 +75,17 @@ const getBlockReasons = async (memberId, memberData) => {
 // 舊系統墜測效期遷移：(重新)註冊時以「電話+姓名」比對 legacyFallTests，
 // 命中且效期未過、未被認領 → 在新帳號補建 passed 墜測（免重測），並標記已認領（一次性，防冒用/重複）。
 // 其餘舊資料一律不匯入，會員仍須重簽 Waiver、重填資料、重簽墜測同意書。
+// Climbio 姓名清理：去除所有括號註記（暱稱/攀岩隊標記），供比對。例
+// "Allen林祺堂(新竹攀岩隊-2026/12/31)" → "Allen林祺堂"；"歐武龍(Uno)" → "歐武龍"
+const cleanLegacyName = (n) => String(n || '').replace(/[（(][^）)]*[）)]/g, '').replace(/[()（）]/g, '').replace(/\s/g, '').trim();
+// 比對規則：清理後互相包含（≥2字）——Climbio 名常帶英文暱稱前後綴（Allen林祺堂/郭芳妤Kate），
+// 會員註冊用中文本名，完全相等會漏配；包含式仍防共用電話冒領（姓名無關者不會互含）。
+const legacyNameMatch = (legacyName, registeredName) => {
+  const a = cleanLegacyName(legacyName), b = cleanLegacyName(registeredName);
+  if (a.length < 2 || b.length < 2) return false;
+  return a === b || a.includes(b) || b.includes(a);
+};
+
 const claimLegacyFallTest = async (db, memberId, member) => {
   try {
     if (member.isChildAccount) return null;            // 子帳號共用電話，不自動認領（避免認錯人）
@@ -87,7 +98,7 @@ const claimLegacyFallTest = async (db, memberId, member) => {
     const hit = snap.docs.find(d => {
       const x = d.data();
       if (x.claimed === true) return false;
-      if ((x.name || '').replace(/\s/g, '') !== name) return false;  // 姓名必須相符（防共用電話冒領）
+      if (!legacyNameMatch(x.name, name)) return false;  // 姓名相符（去括號+包含式；防共用電話冒領）
       const exp = String(x.fallTestExpiresAt || '').slice(0, 10);
       return exp && exp >= today;                                     // 仍在效期內
     });
@@ -111,6 +122,52 @@ const claimLegacyFallTest = async (db, memberId, member) => {
     console.log(`[墜測遷移] ${name}/${phone} 認領舊效期至 ${exp}`);
     return { fallTestId: ftId, expiresAt: exp };
   } catch (e) { console.error('claimLegacyFallTest 失敗', e.message); return null; }
+};
+
+// ── 舊系統攀岩隊員自動認領（Climbio 名單，隊籍至 2026-12-31）────────────
+// 建立會員時電話+姓名比對 legacyTeamMembers → 標記隊員（isTeamMember/since/until），
+// 並確保墜測有效（隊員墜測效期與隊籍同步至 until；若 claimLegacyFallTest 已先認領則不重複建）。
+const claimLegacyTeamMember = async (db, memberId, member) => {
+  try {
+    if (member.isChildAccount) return null;
+    const phone = (member.phone || '').trim();
+    if (!phone || !member.name) return null;
+    const snap = await db.collection('legacyTeamMembers').where('phone', '==', phone).get();
+    if (snap.empty) return null;
+    const hit = snap.docs.find(d => {
+      const x = d.data();
+      return x.claimed !== true && legacyNameMatch(x.name, member.name)
+        && String(x.until || '') >= taiwanToday(); // 隊籍仍有效才認領
+    });
+    if (!hit) return null;
+    const until = String(hit.data().until || '2026-12-31').slice(0, 10);
+    const now = new Date();
+    await db.collection(COLLECTIONS.MEMBERS).doc(memberId).update({
+      isTeamMember: true,
+      teamMemberSince: taiwanToday(),
+      teamMemberUntil: until,
+      updatedAt: now,
+    });
+    // 墜測與隊籍同步（若尚無有效墜測紀錄才建；Climbio 認領已建者略過）
+    const ft = await db.collection('fallTests').where('memberId', '==', memberId).get();
+    const hasPassed = ft.docs.some(d => d.data().result === 'passed');
+    if (!hasPassed) {
+      const ftId = uuidv4();
+      await db.collection('fallTests').doc(ftId).set({
+        id: ftId, memberId, result: 'passed',
+        testedBy: 'migration', testedByName: '攀岩隊員轉移',
+        testedAt: now, expiresAt: new Date(until + 'T00:00:00+08:00'),
+        source: 'climbio-team', notes: `攀岩隊員（隊籍至 ${until}）墜測同步`,
+        createdAt: now, updatedAt: now,
+      });
+      await db.collection(COLLECTIONS.MEMBERS).doc(memberId).update({
+        fallTestPassed: true, fallTestExpiresAt: new Date(until + 'T00:00:00+08:00'), updatedAt: now,
+      });
+    }
+    await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now });
+    console.log(`[隊員遷移] ${member.name}/${phone} 標記攀岩隊員至 ${until}`);
+    return { until };
+  } catch (e) { console.error('claimLegacyTeamMember 失敗', e.message); return null; }
 };
 
 const createMember = async (memberData, staffId, options = {}) => {
@@ -182,6 +239,8 @@ const createMember = async (memberData, staffId, options = {}) => {
 
   // 舊系統墜測效期自動認領（電話+姓名比對，命中即免重測）→ 在算封鎖狀態前完成，避免被誤判需墜測
   await claimLegacyFallTest(db, memberId, member);
+  // 攀岩隊員自動認領（Climbio 名單；隊員墜測效期同步至隊籍到期日）
+  await claimLegacyTeamMember(db, memberId, member);
 
   // 計算並更新封鎖狀態
   const blockReasons = await getBlockReasons(memberId, member);

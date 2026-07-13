@@ -142,7 +142,7 @@ const resendParentWaiverLink = async (memberId, staffId) => {
     token
   );
 
-  return { message: '已重新發送家長簽名連結' };
+  return { message: '已重新發送法定代理人簽名連結' };
 };
 
 module.exports = { signWaiver, uploadSignature, resendParentWaiverLink, maybeSendParentSignEmail };

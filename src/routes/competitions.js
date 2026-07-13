@@ -261,7 +261,7 @@ router.get('/:id/registrations/download',
       const csvRows = [headers.join(',')];
       rows.forEach((r, i) => {
         const paid = r.paymentStatus === 'confirmed' ? '已確認' : r.paymentStatus === 'refunded' ? '已退費' : '待確認';
-        const signed = r.isComplete ? '已完成' : r.parentRequired ? '待家長簽名' : '未完成';
+        const signed = r.isComplete ? '已完成' : r.parentRequired ? '待法定代理人簽名' : '未完成';
         const cols = [
           i + 1,
           `"${r.memberName || ''}"`,

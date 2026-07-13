@@ -274,7 +274,7 @@ const registerForCompetition = async ({
   if (isMinor && parentEmail) {
     const emailService = require('./emailService');
     try {
-      await emailService.sendParentWaiverLink(registrationId, memberName, parentEmail, parentName, registration.parentSignToken);
+      await emailService.sendParentCompetitionWaiverLink({ memberName, competitionName: competition.name, parentEmail, parentName, token: registration.parentSignToken });
     } catch (e) {
       console.error('比賽報名家長簽署Email發送失敗（會員本人報名已成功保存）:', e.message);
     }

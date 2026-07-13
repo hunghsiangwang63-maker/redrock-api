@@ -175,7 +175,7 @@ const runEntryGates = async (memberId, gymId, { skipDuplicate = false, expTicket
       blocked: true, member,
       reason: isPendingParent ? 'parent_waiver_pending' : 'waiver_required',
       status: 'blocked', httpStatus: 403, code: 'WAIVER_REQUIRED',
-      message: isPendingParent ? '已完成簽署，等待家長/監護人完成簽署' : 'Waiver 尚未完成，請先完成簽署',
+      message: isPendingParent ? '已完成簽署，等待法定代理人完成簽署' : 'Waiver 尚未完成，請先完成簽署',
     };
   }
 

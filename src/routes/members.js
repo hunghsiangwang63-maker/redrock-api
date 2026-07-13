@@ -476,7 +476,7 @@ router.post('/:id/waiver/sign',
       }
 
       if (member.isMinor && !member.isChildAccount && !parentEmail) {
-        return res.status(400).json({ error: 'PARENT_EMAIL_REQUIRED', message: '未成年會員需提供家長/監護人 Email' });
+        return res.status(400).json({ error: 'PARENT_EMAIL_REQUIRED', message: '未成年會員需提供法定代理人 Email' });
       }
 
       const result = await waiverService.signWaiver({
@@ -497,7 +497,7 @@ router.post('/:id/waiver/sign',
       });
 
       res.json({
-        message: member.isMinor ? '簽署成功，已發送 Email 通知家長/監護人共同簽署' : '簽署成功',
+        message: member.isMinor ? '簽署成功，已發送 Email 通知法定代理人共同簽署' : '簽署成功',
         ...result,
       });
     } catch (err) {

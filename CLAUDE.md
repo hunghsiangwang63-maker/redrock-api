@@ -984,6 +984,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **`/members/my/identity` 加 `fallTest`**（權威 `checkFallTest`，**含遞延後 `currentExpiresAt`**）：passed→`{status:'passed', expiresAt}`；過期→`{status:'expired', expiredAt}`；未測→null。
 - ✅ **首頁**（`MemberHomePage` 問候語下）：通過→小字「🧗 墜落測驗有效至 YYYY-MM-DD」（灰綠）；過期→紅字「🧗 墜落測驗已到期，請重新測驗」；未測不顯示（onboarding gate 本就會擋）。
 - **E2E（2/2）**：有效會員回 passed+2026-12-31、過期會員回 expired。
+- ✅ **使用者實機驗證通過**（臨時隊員展示帳號 0900202202 登入正式站）：首頁墜測效期小字＋🏅隊員身份卡顯示正確。依回饋調整字級（commit 前端 `610a9e2`）：**問候語名字 12→15px 加粗深色**（「嗨，」維持灰）、**墜測效期 11→10px**。展示資料（會員/waiver/墜測/同意書 4 筆）測後全清、0 殘留。
 
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

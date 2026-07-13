@@ -55,7 +55,12 @@ router.get('/my/identity', authenticateAny, async (req, res) => {
     const courseAccess = (access || []).map(a => ({
       courseName: a.courseName, gymAccessStart: a.gymAccessStart || null, gymAccessEnd: a.gymAccessEnd || null,
     }));
-    res.json({ teamMember, courseAccess });
+    // 墜測效期（權威 checkFallTest，含遞延後 currentExpiresAt）：passed→expiresAt；過期→expired+expiredAt；未測→null
+    const ft = await checkinService.checkFallTest(req.member.id);
+    const fallTest = ft?.passed
+      ? { status: 'passed', expiresAt: ft.expiresAt || null }
+      : (ft?.reason === 'expired' ? { status: 'expired', expiredAt: ft.expiredAt || null } : null);
+    res.json({ teamMember, courseAccess, fallTest });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

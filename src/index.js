@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '2.38.0-climbio-team-falltest-claim',
+    version: '2.39.0-home-falltest-expiry',
   });
 });
 

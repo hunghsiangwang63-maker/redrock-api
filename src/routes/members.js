@@ -553,7 +553,7 @@ router.post('/',
 router.post('/self-register',
   [
     body('name').trim().notEmpty().withMessage('姓名為必填'),
-    body('phone').matches(/^09\d{8}$/).withMessage('請輸入有效的台灣手機號碼'),
+    body('phone').matches(/^09\d{8}$|^\+\d{7,15}$/).withMessage('請輸入台灣手機（09 開頭 10 碼）或國際格式（+ 開頭 7~15 碼）'),
     body('birthday').notEmpty().withMessage('生日為必填').bail().isDate().withMessage('生日格式不正確'),
     body('email').isEmail().withMessage('Email 格式不正確'),
     body('password').isLength({ min: 8 }).withMessage('密碼至少8碼'),
@@ -742,7 +742,7 @@ router.get('/verify-email/:token',
 // ── POST /members/:id/promote - 子會員升級為正式會員 ──────────────
 router.post('/:id/promote', authenticate, checkPermission('members.create'),
   [
-    body('phone').matches(/^09\d{8}$/).withMessage('請輸入有效的台灣手機號碼'),
+    body('phone').matches(/^09\d{8}$|^\+\d{7,15}$/).withMessage('請輸入台灣手機（09 開頭 10 碼）或國際格式（+ 開頭 7~15 碼）'),
     body('email').isEmail().withMessage('Email 格式不正確'),
     body('password').optional().isLength({ min: 8 }).withMessage('密碼至少8碼'),
   ],

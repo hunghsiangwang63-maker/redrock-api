@@ -997,6 +997,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **未註冊 24 位**（士林 9／新竹 15，含賴維治——其早上舊帳號已隨全清空刪除）名單已列給使用者供群組點名；已確認**無漏網**（未認領名單中無人已註冊，不存在「先註冊後上機制」的漏標）。
 - 📌 之後查最新進度：掃 `legacyTeamMembers` 的 `claimed` 旗標即可（claimedBy/claimedAt 有完整記錄）。
 
+## 目前進度（2026-07-13）— 認領隊員同步寫入員工端「2026 攀岩隊員名單」
+> 需求：已註冊的隊員也要出現在員工端攀岩隊員管理的 2026 名單。名單資料源＝`teamApplications`（year=2026），自動認領原只寫 member 文件 → 補。後端 `/health` `2.41.0-team-claim-roster`；commit `081a6cb`。
+- ✅ **`claimLegacyTeamMember` 擴充**：認領時同步 upsert `teamApplications/team_{memberId}_{year}`——`status:active`＋`paymentStatus:confirmed`（隊費舊系統已繳）＋`source:'climbio-migration'`＋`primaryGym` 依 Climbio 標記（新竹紅石／士林紅石／士林/新竹）；已存在不覆寫。之後註冊的隊員自動出現在名單。
+- ✅ **回填已認領 19 位**（firebase-admin，`paidAt/createdAt` 沿用認領時間）；驗證 `GET /team-members/members?year=2026` 回 **20 筆**（19 Climbio 移轉＋1 既有陳品翰）、館別/狀態正確。
+- 📌 認領進度此時 **19/41**（陳楚狄於統計後註冊完成）。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

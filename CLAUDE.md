@@ -1050,6 +1050,19 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（打 Railway）**：`+85291234567` 註冊 201、台灣 `09…` 仍 201、`12345`／`+123` 皆 400；測試會員已 DELETE 清乾淨。
 - 📌 電話唯一性、子會員共用電話、登入 identifier 解析皆不受影響（存字串比對、與格式無關）。
 
+## 目前進度（2026-07-13 續）— 修 Email 驗證「要試好幾次才成功」（姜凱文/王內均回報）
+> 回報：點信箱驗證連結後，登入資料要重填、重新驗證連續試好幾次才成功。查明為三個缺陷疊加的故障鏈。後端 `/health` `2.47.0-email-verify-result-page`；E2E（打 Railway）**13/13**。commit 後端 `1e65779`、前端 `c3bed01`。
+- 🔍 **根因（三缺陷疊加）**：
+  1. **前端根本沒有 `/member/verify` 這個 route**——後端驗證後 redirect 到 `CLIENT_URL/member/verify?status=…`，被 SPA catch-all 丟回登入頁 → **驗證成功或失敗零回饋**，會員以為沒成功。
+  2. **重寄驗證信每次換新 token** → 舊信連結全部失效；信箱裡多封信點到舊的 → 「無效」（也一樣被丟回登入頁看不到錯誤）。
+  3. **token 用完即毀 + 不冪等**：驗證成功把 token 設 null，重複點擊/信箱安全掃描預抓 → 查無 token → INVALID_TOKEN。
+  - 「資料要重填」＝每輪重試都回到空白登入頁重打帳密＋重寄面板；「試好幾次」＝多封信只有最新一封有效。兩位會員資料最終皆 `emailVerified:true`、各僅一帳號，無資料損壞。
+- ✅ **修法**：
+  1. **新增前端結果頁 `MemberVerifyResultPage`**（route `/member/verify`，公開）：成功／已驗證過（`already=1`）／連結無效／連結過期 四態＋「前往登入」。
+  2. **重寄沿用未過期原 token**（`sendEmailVerification` 先讀既有 token，未過期就沿用、效期展延 24h）→ 多封信連結一致、點任一封皆有效；過期才換新。
+  3. **驗證冪等**（`memberService.verifyEmail`）：已驗證再點任何連結 → 回成功（帶 already）；token 保留不再 null（重複點擊由 emailVerified 冪等擋，預抓消耗 token 的誤判消失）。
+- **E2E（13/13）**：註冊→未驗證登入 403→重寄 token 沿用→點連結 302 success→emailVerified/token 保留→重複點 success&already→登入 200→假 token error 頁→前端頁 200；測試會員清乾淨。
+
 ## 待辦
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。

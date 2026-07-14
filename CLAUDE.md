@@ -1199,6 +1199,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📌 **範圍決策**：續約**不疊**隊員折（走票種續約折扣，避免折上折）——**要不要疊之後再議**；櫃檯購優惠卡（10格卡）為店員自由輸入價、無定價來源可自動折（店員輸入折後價；要固定卡價+自動折再說）。
 - **E2E**：隊員/一般 verify 顯示 540/600、3600/4000 → 購券 pending 540+標記 → 購半年票 pending 6840、掃碼全額 6840 → 櫃檯賣 90 日票隊員 3600（備註隊員9折）/一般 4000；fixtures 全清。
 
+## 目前進度（2026-07-14 晚）— Railway 應變執行（①②完成、③進行中）
+> 依 `docs/outage-playbook.md` 逐步執行（使用者帳號後台操作、Claude 盯流程）。
+- ✅ **① Railway 用量警示**：Compute hard limit $150（實質不觸發、不再無預警斷站）＋ email alert $25；Agent hard $5/alert $10（Agent 未使用、警示高於上限不會響，無妨）。
+- ✅ **② UptimeRobot**：監控 `https://redrock-api-production.up.railway.app/health`，5 分鐘間隔＋email——任何原因掛站 5 分鐘內通知（上次事故靠現場發現的空窗解決）。
+- 🔄 **③ API 自訂網域 `api.redrocktaiwan.com`**（進行中）：Railway custom domain 已加（CNAME 目標 `fox82bz0.up.railway.app`、port 8080 與 magic domain 一致）；Porkbun CNAME 已設、公網 DNS 已解析（21:01）、無 CAA 阻擋——**等 Railway DNS 檢查轉綠＋簽憑證**。⚠️ **通了之後要改前端 `src/api/client.js` BASE → `https://api.redrocktaiwan.com` 並 build/deploy**（背景監測 `/health` 200 觸發）。之後故障轉移＝Porkbun 改一筆 CNAME。
+- 🔄 **附帶：計分系統自訂網域 `comp.redrocktaiwan.com`**（進行中）：Firebase Console（計分系統專案）custom domain 走新版單筆 CNAME 流程（`comp` → `redrock-comp.web.app`）；Porkbun 已設、DNS 已解析，等 Firebase 簽憑證。（原議 score. 後定案 comp.）
+- ⬜ **④ Render 冷備**：待 ③ 完成後擇日（同 GitHub repo 自動雙部署、環境變數需手動同步——之後動環境變數時提醒同步）。
+
 ## 待辦
 - 🛡 **Railway 應變（依 `docs/outage-playbook.md` 依狀況執行）**：①使用者帳號後台——Railway 用量警示（Soft 7成/不設 Hard）＋UptimeRobot 監控 `/health`；②近期——API 自訂網域 `api.redrocktaiwan.com`（Porkbun CNAME＋Railway custom domain 完成後**再通知 Claude 改前端 BASE**）；③Render 冷備（複製環境變數）；④長期金流上線前評估遷 Cloud Run。
 

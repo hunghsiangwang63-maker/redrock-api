@@ -1190,6 +1190,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **E2E（8/8）**：取 token→掃描預覽→**非比賽日擋**→暫改比賽日今天→報到成功（**會員無墜測紀錄仍通過＝豁免驗證**）→checkedInAt+0元入場紀錄→重複報到 409；測後比賽日還原 8/30。
 - 🧹 測試會員（0900123123）連同報名/退費通知3則/收款交易/waiver/墜測全清 0 殘留；賽事回到 0 報名乾淨狀態。
 
+## 目前進度（2026-07-14 續）— 隊員購買優惠券/定期票 9 折
+> 先查證：原本隊員 9 折只適用 按次入場/商品POS/比賽報名費，購券購票皆原價。使用者拍板：**購買優惠折扣券與定期票都套隊員 9 折**。後端 `/health` `2.62.0-team-discount-buy-card-pass`；E2E 實質 12/12（半年票無分期設定屬正確行為非 bug）。commit `37ec77e`。
+- ✅ **入場購券 buy_discount_card**：改**後端權威計價**（原「維持呼叫端帶入值」）——券價 600、有效隊員 ×0.9＝540（沿用 `TEAM_DISCOUNT_MIN_AMOUNT` 門檻）；pending 帶 `isTeamDiscount`。
+- ✅ **入場購票 buy_pass**：票種原價→隊員 ×0.9（pending 權威）；**掃碼預覽/確認開票/分期計畫全部以折後價**（`pending.amount ?? pt.price` 相容舊 pending）。
+- ✅ **櫃檯賣票 POST /passes**：依買者 `isActiveTeamMember` 折價 `salePrice`；分期 `buildPeriodsFromConfig` 與交易記帳皆用折後、備註標「（隊員9折）」。
+- ✅ **verify 顯示價**：`buyDiscountCard.price`／`buyPass.passTypes[].price` 帶折後（附 `originalPrice`），會員 QR 介面自動顯示折後價、免改前端。
+- 📌 **範圍決策**：續約**不疊**隊員折（走票種續約折扣，避免折上折）——**要不要疊之後再議**；櫃檯購優惠卡（10格卡）為店員自由輸入價、無定價來源可自動折（店員輸入折後價；要固定卡價+自動折再說）。
+- **E2E**：隊員/一般 verify 顯示 540/600、3600/4000 → 購券 pending 540+標記 → 購半年票 pending 6840、掃碼全額 6840 → 櫃檯賣 90 日票隊員 3600（備註隊員9折）/一般 4000；fixtures 全清。
+
 ## 待辦
 - 🛡 **Railway 應變（依 `docs/outage-playbook.md` 依狀況執行）**：①使用者帳號後台——Railway 用量警示（Soft 7成/不設 Hard）＋UptimeRobot 監控 `/health`；②近期——API 自訂網域 `api.redrocktaiwan.com`（Porkbun CNAME＋Railway custom domain 完成後**再通知 Claude 改前端 BASE**）；③Render 冷備（複製環境變數）；④長期金流上線前評估遷 Cloud Run。
 

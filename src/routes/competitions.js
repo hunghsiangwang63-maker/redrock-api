@@ -175,9 +175,9 @@ router.post('/:id/register',
       });
       res.status(201).json({
         registration,
-        message: registration.parentRequired
-          ? '報名已送出，已寄送簽署連結給家長，待家長完成簽署後即報名完成'
-          : '報名成功',
+        message: registration.isComplete
+          ? '報名成功'
+          : '報名已送出，已寄送簽署連結給法定代理人，待其完成簽署後即報名完成',
       });
     } catch (err) {
       if (err.code) return res.status(400).json(err);

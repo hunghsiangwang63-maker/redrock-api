@@ -186,6 +186,46 @@ const claimLegacyPass = async (db, memberId, member) => {
   }
 };
 
+// ── BeClass 比賽報名自動認領 ─────────────────────────────────────
+// 匯入的比賽報名（memberId:null＋claimPhone/claimName）：會員註冊時電話+姓名比對命中
+// → 報名掛上帳號（App 顯示我的比賽、可用報到 QR）＋通知管理員。
+const claimLegacyCompetitionReg = async (db, memberId, member) => {
+  try {
+    if (member.isChildAccount === true && !member.parentMemberId) return null;
+    const phone = (member.phone || '').trim();
+    if (!phone || !member.name) return null;
+    const snap = await db.collection('competitionRegistrations')
+      .where('claimPhone', '==', phone).get();
+    if (snap.empty) return null;
+    let claimed = 0;
+    for (const d of snap.docs) {
+      const r = d.data();
+      if (r.memberId) continue;                                   // 已認領
+      if (!legacyNameMatch(r.memberName, member.name)) continue;  // 姓名相符（防共用電話冒領）
+      await d.ref.update({ memberId, claimedAt: new Date(), updatedAt: new Date() });
+      claimed++;
+      try {
+        const { notifyRoleInGym } = require('./notificationService');
+        const comp = (await db.collection('competitions').doc(r.competitionId).get()).data();
+        const payload = {
+          gymId: comp?.gymId || 'gym-hsinchu',
+          type: 'competition_reg_claimed',
+          title: 'BeClass 比賽報名已認領',
+          body: `${member.name}（${phone}）註冊會員，已自動掛上「${r.competitionName || ''}」報名（${r.divisionName || ''}）。`,
+          referenceId: d.id, referenceType: 'competitionRegistration',
+        };
+        await notifyRoleInGym({ ...payload, role: 'gym_manager' });
+        await notifyRoleInGym({ ...payload, role: 'super_admin' });
+      } catch (e) { console.error('比賽報名認領通知失敗', e.message); }
+      console.log(`✅ BeClass比賽報名認領: ${member.name} ${phone} → ${r.competitionName}`);
+    }
+    return claimed || null;
+  } catch (e) {
+    console.error('claimLegacyCompetitionReg 失敗（不阻斷建立會員）:', e.message);
+    return null;
+  }
+};
+
 const claimLegacyTeamMember = async (db, memberId, member) => {
   try {
     if (member.isChildAccount) return null;
@@ -326,6 +366,8 @@ const createMember = async (memberData, staffId, options = {}) => {
   await claimLegacyTeamMember(db, memberId, member);
   // 舊系統 90 日票自動認領（BeClass 名單；效期內才發、沿用原起訖日、通知管理員）
   await claimLegacyPass(db, memberId, member);
+  // BeClass 比賽報名自動認領（memberId 空的匯入報名掛上帳號）
+  await claimLegacyCompetitionReg(db, memberId, member);
 
   // 計算並更新封鎖狀態
   const blockReasons = await getBlockReasons(memberId, member);

@@ -1159,6 +1159,9 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端**（`CoursesPage` 班別管理）：頂部「補課類型」管理區（chip 列表＋新增/刪除）；班別 Modal「適用補課類型（可多選）」勾選；列表標籤顯示掛的類型名。
 - **E2E（10/10）**：類型 CRUD/重名/使用中刪除 → 掛類型 → 實測補課「無共同類型擋 DIFFERENT_CATEGORY／同類型（小蜘蛛人入門→進階）通過」→ 卸除後刪除成功；fixtures 全清（含場次計數還原）。
 
+## 狀態確認（2026-07-14）— QR 入場付款方式（無異動）
+- 📋 **入場 QR 不顯示「轉帳」**：`MemberQRPage` 的付款選項清單本身只有 現金/LinePay/街口/台灣Pay（無 transfer），再與系統付款開關（現開 現金+轉帳）取交集 → **目前入場/續約頭款/免費入場租借實際只顯示「現金」**。「轉帳」只出現在走 `PaymentSection` 的預約型流程（課程/體驗/比賽/租借/入隊，先報名後匯款、員工確認收款）。使用者確認維持現狀。
+
 ## 待辦
 - 🛡 **Railway 應變（依 `docs/outage-playbook.md` 依狀況執行）**：①使用者帳號後台——Railway 用量警示（Soft 7成/不設 Hard）＋UptimeRobot 監控 `/health`；②近期——API 自訂網域 `api.redrocktaiwan.com`（Porkbun CNAME＋Railway custom domain 完成後**再通知 Claude 改前端 BASE**）；③Render 冷備（複製環境變數）；④長期金流上線前評估遷 Cloud Run。
 

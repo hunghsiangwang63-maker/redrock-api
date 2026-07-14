@@ -1216,6 +1216,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 > 使用者刪除 Firebase 舊原型專案 livescore（30 天緩衝期內可還原）。**刪前查證安全**：計分系統前端＋Firestore 都在 `redrock-comp` 專案（index.html `projectId:"redrock-comp"`）、對接不受影響。本機作廢金鑰檔 `~/Downloads/livescore-master-2d181-…json` 已刪；舊原型源碼 `~/livescore-master` 保留由使用者決定。
 - 🔄 兩條自訂網域仍等憑證（api=Railway／comp=Firebase）；Railway 若「Waiting for DNS update」逾時建議刪掉 domain 重加。
 
+## 目前進度（2026-07-14 晚）— ③自訂網域完成＋前端切換＋今日入場清單修正
+> Railway 應變 ③ 完成；順修 super_admin 今日入場顯示兩項。後端 `/health` `2.63.0`→`2.64.0`。
+- ✅ **`api.redrocktaiwan.com` 生效（22:02）**：卡點＝Railway 要求 **CNAME＋TXT 兩筆**（TXT 名稱 `_railway-verify.api`，與 CNAME 不同名故無衝突；先前只設 CNAME 等了近 1 小時）。**教訓：Railway custom domain 要看「Configure DNS Records」是否列了 TXT 驗證列。**
+- ✅ **前端 API 位址全面切換**（commit 前端 `b4cb1d2`）：`src/api/client.js` BASE＋6 處頁面 fallback（Competitions/DailySettlement/Passes/Finance×2/ExperienceBookings）→ `https://api.redrocktaiwan.com`；新網域全鏈驗證（登入/今日入場/班別/賽事 200）。**故障轉移現在＝Porkbun 改一筆 CNAME、前端免重發**。
+- ✅ **`comp.redrocktaiwan.com` 生效（21:49）**：計分系統自訂網域（Firebase 單筆 CNAME 流程）。
+- ✅ **修 super_admin 今日入場**（後端 `86860d9`＋前端 `7d927f3`/`a9bfee0`）：①紀錄清單依館別**上下分段**（館名標頭＋件數；站台/館長單館不變）②回報「統計 25/18 但清單 15/15 名單不齊」→ 改**全量回傳**（清單數＝統計數）、每館區塊內捲動。
+- 📌 建議待辦：UptimeRobot 加第二個監測 `api.redrocktaiwan.com/health`（DNS 層故障也可偵測）；④ Render 冷備擇日。
+
 ## 待辦
 - 🛡 **Railway 應變（依 `docs/outage-playbook.md` 依狀況執行）**：①使用者帳號後台——Railway 用量警示（Soft 7成/不設 Hard）＋UptimeRobot 監控 `/health`；②近期——API 自訂網域 `api.redrocktaiwan.com`（Porkbun CNAME＋Railway custom domain 完成後**再通知 Claude 改前端 BASE**）；③Render 冷備（複製環境變數）；④長期金流上線前評估遷 Cloud Run。
 

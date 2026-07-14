@@ -140,7 +140,7 @@ const getCompetition = async (competitionId) => {
 
 const registerForCompetition = async ({
   competitionId, memberId, memberName, isMinor, birthday, divisionId,
-  customFieldValues, signatureData, parentEmail, parentName, parentPhone, parentRelation,
+  customFieldValues, signatureData, guardianSignature, parentEmail, parentName, parentPhone, parentRelation,
   // 保險用欄位
   idNumber, emergencyContact, emergencyRelation, emergencyPhone,
   // 比賽用欄位
@@ -208,6 +208,13 @@ const registerForCompetition = async ({
   try {
     memberSignatureUrl = await uploadSignature(`competition_${registrationId}`, 'member', signatureData);
   } catch (sigErr) { /* 簽名上傳失敗不影響報名，後續補簽 */ }
+  // 未成年「現場法定代理人簽名」（報名表單同頁簽）：有簽即完成，不必再走 email 遠端
+  let guardianSignatureUrl = null;
+  if (isMinor && guardianSignature) {
+    try {
+      guardianSignatureUrl = await uploadSignature(`competition_${registrationId}`, 'guardian', guardianSignature);
+    } catch (sigErr) { /* 同上，不阻斷 */ }
+  }
 
   const registration = {
     id: registrationId, competitionId, competitionName: competition.name,
@@ -238,17 +245,25 @@ const registerForCompetition = async ({
     paidConfirmedBy: null,
     memberSignatureUrl, memberSignedAt: now, memberSignedIp: ip || null,
     parentRequired: !!isMinor,
-    isComplete: !isMinor,
+    // 未成年：現場法定代理人簽名（guardianSignature）→ 報名即完成；否則待 email 遠端簽署
+    guardianSignatureUrl: guardianSignatureUrl || null,
+    guardianSignedAt: guardianSignatureUrl ? now : null,
+    isComplete: !isMinor || !!guardianSignatureUrl,
     webhookStatus: 'pending', webhookSentAt: null, webhookError: null,
     registeredAt: now,
   };
 
-  if (isMinor) {
+  if (isMinor && !guardianSignatureUrl) {
     const token = uuidv4();
     const expiry = dayjs().add(parseInt(process.env.WAIVER_PARENT_TOKEN_HOURS) || 72, 'hour').toDate();
     Object.assign(registration, {
       parentName: parentName || null, parentEmail, parentPhone: parentPhone || null, parentRelation: parentRelation || null,
       parentSignToken: token, parentSignTokenExpiry: expiry,
+    });
+  } else if (isMinor) {
+    Object.assign(registration, {
+      parentName: parentName || null, parentEmail: parentEmail || null,
+      parentPhone: parentPhone || null, parentRelation: parentRelation || null,
     });
   }
 
@@ -271,15 +286,16 @@ const registerForCompetition = async ({
     tx.set(regRef, registration);
   });
 
-  if (isMinor && parentEmail) {
+  if (isMinor && !guardianSignatureUrl && parentEmail) {
+    // 未成年且未現場簽 → 寄法定代理人遠端簽署連結（備用路徑）
     const emailService = require('./emailService');
     try {
       await emailService.sendParentCompetitionWaiverLink({ memberName, competitionName: competition.name, parentEmail, parentName, token: registration.parentSignToken });
     } catch (e) {
       console.error('比賽報名家長簽署Email發送失敗（會員本人報名已成功保存）:', e.message);
     }
-  } else {
-    // 成年人報名，立即完成，觸發webhook
+  } else if (registration.isComplete) {
+    // 成年人、或未成年已現場簽 → 報名即完成，觸發webhook
     await sendWebhook(registrationId);
   }
 

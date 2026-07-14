@@ -181,6 +181,7 @@ router.post('/:id/register',
         // 付款
         paymentMethod: req.body.paymentMethod,
         paymentDate: req.body.paymentDate,
+        bankName: req.body.bankName,
         bankLastFive: req.body.bankLastFive,
         ip: req.ip,
       });
@@ -273,7 +274,7 @@ router.get('/:id/registrations/download',
         '序號','姓名','性別','生日','手機','Email',
         '身分證/護照','緊急聯絡人','緊急聯絡人關係','緊急聯絡人手機',
         '身高','臂展','組別','榮譽參賽','報名費',
-        '付款狀態','匯款日期','匯款末五碼',
+        '付款狀態','匯款銀行','匯款/繳款日期','匯款末五碼',
         '簽署狀態','是否候補','備註','報名時間'
       ];
 
@@ -298,8 +299,11 @@ router.get('/:id/registrations/download',
           r.isHonorary ? '是' : '否',
           r.registrationFee || '',
           paid,
-          r.paymentDate || '',
-          r.bankLastFive || '',
+          r.paymentMethod === 'cash' ? '臨櫃繳款' : `"${r.bankName || ''}"`,
+          r.paymentMethod === 'cash'
+            ? (r.paidAt?._seconds ? new Date(r.paidAt._seconds * 1000).toLocaleDateString('zh-TW') : (r.paidAt?.toDate ? r.paidAt.toDate().toLocaleDateString('zh-TW') : ''))
+            : (r.paymentDate || ''),
+          r.paymentMethod === 'cash' ? '' : (r.bankLastFive || ''),
           signed,
           r.status === 'waitlist' ? '是' : '否',
           `"${(r.customFieldValues?.notes || '').replace(/"/g, '""')}"`,

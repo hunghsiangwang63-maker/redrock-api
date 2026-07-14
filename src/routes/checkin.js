@@ -457,12 +457,14 @@ router.get('/monthly-daily-counts', authenticate, checkPermission('checkin.read'
       .where('checkedInAt', '>=', new Date(`${prevStart}T00:00:00+08:00`))
       .where('checkedInAt', '<=', new Date(`${curEnd}T23:59:59+08:00`)).get();
     const countMap = {};
+    const gymCountMap = { 'gym-hsinchu': {}, 'gym-shilin': {} }; // 本月各館每日（不受 gymId 過濾，供 super_admin 兩館分線）
     snap.docs.forEach(d => {
       const r = d.data();
       if (r.isCancelled === true || r.status === 'cancelled') return;
-      if (gymId && r.gymId !== gymId) return;
       if (!r.checkedInAt) return;
       const dt = new Date(r.checkedInAt.toDate().getTime() + 8 * 3600000).toISOString().slice(0, 10);
+      if (gymCountMap[r.gymId]) gymCountMap[r.gymId][dt] = (gymCountMap[r.gymId][dt] || 0) + 1;
+      if (gymId && r.gymId !== gymId) return;
       countMap[dt] = (countMap[dt] || 0) + 1;
     });
     const dCur = dayjs(curStart).daysInMonth(), dPrev = dayjs(prevStart).daysInMonth();
@@ -473,6 +475,8 @@ router.get('/monthly-daily-counts', authenticate, checkPermission('checkin.read'
         day,
         current: day <= dCur ? (countMap[`${month}-${pad(day)}`] || 0) : null,
         previous: day <= dPrev ? (countMap[`${prevMonth}-${pad(day)}`] || 0) : null,
+        hsinchu: day <= dCur ? (gymCountMap['gym-hsinchu'][`${month}-${pad(day)}`] || 0) : null,
+        shilin: day <= dCur ? (gymCountMap['gym-shilin'][`${month}-${pad(day)}`] || 0) : null,
       });
     }
     res.json({ month, prevMonth, curLabel: dayjs(curStart).format('M月'), prevLabel: dayjs(prevStart).format('M月'), data });

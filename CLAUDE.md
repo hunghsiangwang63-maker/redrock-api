@@ -1162,6 +1162,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 ## 狀態確認（2026-07-14）— QR 入場付款方式（無異動）
 - 📋 **入場 QR 不顯示「轉帳」**：`MemberQRPage` 的付款選項清單本身只有 現金/LinePay/街口/台灣Pay（無 transfer），再與系統付款開關（現開 現金+轉帳）取交集 → **目前入場/續約頭款/免費入場租借實際只顯示「現金」**。「轉帳」只出現在走 `PaymentSection` 的預約型流程（課程/體驗/比賽/租借/入隊，先報名後匯款、員工確認收款）。使用者確認維持現狀。
 
+## 目前進度（2026-07-14 續）— 清除舊制 makeupGroup 殘留（純資料）
+> 使用者查「makeup-spider 在哪」→ 查明＝小蜘蛛人入門/進階兩班別文件上第一版（班別互勾）遷移殘留的 `makeupGroup:'makeup-spider'`，與新制 `makeupTypeIds` 並存。經確認清除（設 null，全庫 0 殘留）。
+- **理由**：補課判定留有「舊 makeupGroup 同 key 放行」相容邏輯——若不清，日後 UI 取消勾選類型想退出互補，舊欄位仍會悄悄放行、行為與畫面不符。新制類型「小蜘蛛人」已完整覆蓋互補（保留不動）。
+- 📌 現全系統無任何班別使用 `makeupGroup`（欄位與相容判斷保留供未來相容，資料面已歸零）；`makeup-spider` 僅存於本文件歷史記錄。
+
 ## 待辦
 - 🛡 **Railway 應變（依 `docs/outage-playbook.md` 依狀況執行）**：①使用者帳號後台——Railway 用量警示（Soft 7成/不設 Hard）＋UptimeRobot 監控 `/health`；②近期——API 自訂網域 `api.redrocktaiwan.com`（Porkbun CNAME＋Railway custom domain 完成後**再通知 Claude 改前端 BASE**）；③Render 冷備（複製環境變數）；④長期金流上線前評估遷 Cloud Run。
 

@@ -421,9 +421,9 @@ router.get('/today',
         return { gymId: gym.id, gymName: gym.name, total: gymRecords.length, counts };
       });
 
-      // 每館各取最新 15 筆（super_admin 兩館並列時避免單館洗掉另一館）
+      // 今日全部紀錄（依館分組排列；當日量級小、全量回傳讓清單與統計數一致）
       const recent = targetGyms.flatMap(gym =>
-        records.filter(r => r.gymId === gym.id).slice(0, 15).map(r => ({
+        records.filter(r => r.gymId === gym.id).map(r => ({
           id: r.id, memberName: r.memberName, gymId: r.gymId,
           entryType: r.entryType || r.passType, checkedInAt: r.checkedInAt,
         }))

@@ -795,10 +795,16 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
       const [origCat, targetCat] = await Promise.all([
         getCategoryOf(db, origCourse.categoryId), getCategoryOf(db, targetCourse.categoryId),
       ]);
-      const origGroup = origCat?.makeupGroup || origCourse.categoryId;
-      const targetGroup = targetCat?.makeupGroup || targetCourse.categoryId;
-      if (origGroup !== targetGroup) {
-        throw { code: 'DIFFERENT_CATEGORY', message: '補課只能選擇相同班別（或同補課群組）的課程' };
+      const sameCategory = targetCourse.categoryId === origCourse.categoryId;
+      // 補課類型（named 實體、班別多選）：兩班別有任一共同類型即可互補
+      const origTypes = origCat?.makeupTypeIds || [];
+      const targetTypes = targetCat?.makeupTypeIds || [];
+      const sharedType = origTypes.some(t => targetTypes.includes(t));
+      // 舊制相容：同 makeupGroup key 亦放行
+      const legacyGroup = origCat?.makeupGroup && origCat.makeupGroup !== origCourse.categoryId
+        && origCat.makeupGroup === targetCat?.makeupGroup;
+      if (!sameCategory && !sharedType && !legacyGroup) {
+        throw { code: 'DIFFERENT_CATEGORY', message: '補課只能選擇相同班別（或同補課類型）的課程' };
       }
     }
     const origGym = makeup.gymId || origCourse.gymId;

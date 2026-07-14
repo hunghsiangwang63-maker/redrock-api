@@ -22,13 +22,63 @@ const validate = (req, res, next) => {
 
 // 班別可編輯欄位（規則欄位＝該班別所有梯次的預設，梯次可個別覆寫）
 const EDITABLE = [
-  'name', 'group', 'description', 'color', 'isActive', 'makeupGroup',
+  'name', 'group', 'description', 'color', 'isActive', 'makeupGroup', 'makeupTypeIds',
   'allowTrial', 'trialPrice',
   'leaveDeadlineHours', 'maxLeaves',
   'allowMakeup', 'makeupDeadlineDays',   // 補課期限＝課程「結束日」+ N 天
   'perSessionDeduction', 'handlingFeeRate',
   'sortOrder',
 ];
+
+// ══ 補課類型（named 群組實體；班別多選掛類型、同類型班別可互相補課）══
+// 注意：這些路由必須在 /:id 之前註冊。
+
+// GET /course-categories/makeup-types
+router.get('/makeup-types', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('makeupTypes').get();
+    const types = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-Hant'));
+    res.json({ types });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// POST /course-categories/makeup-types
+router.post('/makeup-types',
+  authenticate, checkPermission('courses.manage'),
+  [body('name').trim().notEmpty().withMessage('請輸入類型名稱')],
+  validate,
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const dup = await db.collection('makeupTypes').where('name', '==', req.body.name.trim()).limit(1).get();
+      if (!dup.empty) return res.status(409).json({ error: 'NAME_EXISTS', message: '此類型名稱已存在' });
+      const id = uuidv4();
+      const type = { id, name: req.body.name.trim(), createdBy: req.staff.id, createdAt: new Date() };
+      await db.collection('makeupTypes').doc(id).set(type);
+      res.status(201).json({ type, message: '補課類型已建立' });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
+// DELETE /course-categories/makeup-types/:typeId — 仍有班別掛此類型 → 409
+router.delete('/makeup-types/:typeId',
+  authenticate, checkPermission('courses.manage'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const used = await db.collection('courseCategories')
+        .where('makeupTypeIds', 'array-contains', req.params.typeId).limit(5).get();
+      if (!used.empty) {
+        const names = used.docs.map(d => d.data().name).join('、');
+        return res.status(409).json({ error: 'TYPE_IN_USE', message: `仍有班別掛此類型（${names}），請先取消勾選` });
+      }
+      await db.collection('makeupTypes').doc(req.params.typeId).delete();
+      res.json({ message: '補課類型已刪除' });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
 
 // GET /course-categories
 router.get('/', authenticate, async (req, res) => {
@@ -61,7 +111,8 @@ router.post('/',
         description: req.body.description || '',
         imageUrl: req.body.imageUrl || '',
         color: req.body.color || '#8B1A1A',
-        makeupGroup: req.body.makeupGroup || id,   // 預設自成一組（同群組班別可互補課）
+        makeupGroup: req.body.makeupGroup || id,   // 舊制相容（現行判定以 makeupTypeIds 為主）
+        makeupTypeIds: Array.isArray(req.body.makeupTypeIds) ? req.body.makeupTypeIds : [],  // 適用補課類型（多選；同類型班別可互補）
         // 規則預設（null＝用系統預設；梯次可再覆寫）
         allowTrial: req.body.allowTrial ?? null,
         trialPrice: req.body.trialPrice ?? null,

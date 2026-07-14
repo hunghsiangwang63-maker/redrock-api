@@ -300,9 +300,7 @@ router.get('/:id/registrations/download',
           r.registrationFee || '',
           paid,
           r.paymentMethod === 'cash' ? '臨櫃繳款' : `"${r.bankName || ''}"`,
-          r.paymentMethod === 'cash'
-            ? (r.paidAt?._seconds ? new Date(r.paidAt._seconds * 1000).toLocaleDateString('zh-TW') : (r.paidAt?.toDate ? r.paidAt.toDate().toLocaleDateString('zh-TW') : ''))
-            : (r.paymentDate || ''),
+          r.paymentDate || '',
           r.paymentMethod === 'cash' ? '' : (r.bankLastFive || ''),
           signed,
           r.status === 'waitlist' ? '是' : '否',

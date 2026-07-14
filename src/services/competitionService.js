@@ -228,6 +228,9 @@ const registerForCompetition = async ({
   if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(email).trim())) {
     throw { code: 'MISSING_EMAIL', message: '請填寫有效的 Email' };
   }
+  if (paymentMethod === 'cash' && !paymentDate) {
+    throw { code: 'MISSING_PAYMENT_DATE', message: '請填寫臨櫃繳款日期' };
+  }
 
   // 驗證必填自訂欄位
   for (const f of competition.customFields) {

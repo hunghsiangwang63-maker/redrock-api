@@ -1224,6 +1224,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **修 super_admin 今日入場**（後端 `86860d9`＋前端 `7d927f3`/`a9bfee0`）：①紀錄清單依館別**上下分段**（館名標頭＋件數；站台/館長單館不變）②回報「統計 25/18 但清單 15/15 名單不齊」→ 改**全量回傳**（清單數＝統計數）、每館區塊內捲動。
 - 📌 建議待辦：UptimeRobot 加第二個監測 `api.redrocktaiwan.com/health`（DNS 層故障也可偵測）；④ Render 冷備擇日。
 
+## 目前進度（2026-07-14 晚）— 實體優惠卡入場標籤 + 入場/結帳全對帳
+> 回報查 Sergio/潘彥宇 入場方式（皆士林櫃檯「舊折扣卡8折」現金 240）引出：8 折入場顯示為「單次」不易辨識。後端 `/health` `2.65.0-legacy-card-label`；commit 後端 `3153e37`、前端 `e5f3d52`。
+- ✅ **實體優惠卡獨立標籤**（顯示層看 `legacyDiscount` 旗標、不動資料）：今日統計 counts 獨立一類 `legacy_physical_card`「實體優惠卡」（不再混入單次）；今日紀錄/歷史入場/CSV 匯出/會員端紀錄三處 → 共用 `entryLabelOf(rec)`（`utils/entryLabel.js`：legacyDiscount 優先於 entryType）。驗證：士林今日 7 筆正確歸類。
+- ✅ **入場 vs 結帳全對帳（兩館逐類核對，全部吻合）**：士林 entry 3750（成人1200/優惠券1680/隊員270/購券600）＋商品220=3970 ✓；新竹 entry 4455＋出租300＋定期票10840=15595 ✓。註：結帳「個別使用優惠券」＝系統優惠卡入場＋實體卡8折**兩者合計**（既定定義）；**隊員買半年票 9 折（6840）當天上線當天即有真實成交**、正確落定期票大項。
+- ⏰ 另 Render 冷備延後（見待辦）。
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

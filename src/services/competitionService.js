@@ -188,6 +188,15 @@ const registerForCompetition = async ({
     throw { code: 'INVALID_DIVISION', message: '組別不正確' };
   }
 
+  // 重複報名擋（權威）：同會員同賽事已有有效（非取消）報名 → 不可重複；家庭其他成員不受影響
+  const dupSnap = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations')
+    .where('competitionId', '==', competitionId)
+    .where('memberId', '==', memberId)
+    .get();
+  if (dupSnap.docs.some(d => d.data().status !== 'cancelled')) {
+    throw { code: 'ALREADY_REGISTERED', message: `${memberName || '此會員'} 已報名此賽事` };
+  }
+
   // 檢查組別人數上限
   const division = competition.divisions.find(d => d.id === divisionId);
   const existingSnap = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations')

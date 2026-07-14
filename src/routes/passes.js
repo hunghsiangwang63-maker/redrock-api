@@ -257,6 +257,11 @@ router.post('/',
       const passTypeDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(req.body.passTypeId).get();
       if (!passTypeDoc.exists) return res.status(404).json({ error: 'PASS_TYPE_NOT_FOUND' });
       const passType = passTypeDoc.data();
+      // 有效隊員購買定期票 9 折（後端權威，依買者身份）
+      const { isActiveTeamMember, TEAM_DISCOUNT_MIN_AMOUNT } = require('../services/teamMemberService');
+      const _isTeamBuyer = _buyer && isActiveTeamMember(_buyer);
+      const salePrice = (_isTeamBuyer && (passType.price || 0) >= TEAM_DISCOUNT_MIN_AMOUNT)
+        ? Math.round(passType.price * 0.9) : (passType.price || 0);
       const passId = uuidv4();
       const now = new Date();
       const endDate = computePassEndDate(req.body.startDate, passType);
@@ -277,10 +282,10 @@ router.post('/',
       // 分期：票種有開分期規則且會員選「分期」→ 建立分期計畫（各期收款日即時認列），第一期簽約當下收
       const usePassInstallment = passType.installment?.enabled && req.body.paymentPlan === 'installment' && !req.body.deferPayment;
       let passPlan = null;
-      if (passType.price > 0 && usePassInstallment) {
+      if (salePrice > 0 && usePassInstallment) {
         const installmentService = require('../services/installmentService');
         const today = taiwanToday();
-        const periods = installmentService.buildPeriodsFromConfig(passType.installment, passType.price, today);
+        const periods = installmentService.buildPeriodsFromConfig(passType.installment, salePrice, today);
         if (periods) {
           passPlan = await installmentService.createInstallmentPlan({
             memberId: req.body.memberId, memberName: req.body.memberName || '',
@@ -291,17 +296,17 @@ router.post('/',
         }
       }
       // 記錄交易（一次付清；分期改由計畫逐期記帳，此處略過；deferPayment 由付款 callback 記）
-      if (passType.price > 0 && !req.body.deferPayment && !passPlan) {
+      if (salePrice > 0 && !req.body.deferPayment && !passPlan) {
         const { recordTransaction } = require('../utils/revenueLedger');
         await recordTransaction(db, {
           gymId: req.staff.gymId,
           type: 'pass',
-          totalAmount: passType.price,
+          totalAmount: salePrice,
           paymentMethod: req.body.paymentMethod || 'cash',
           memberId: req.body.memberId,
           memberName: req.body.memberName || '',
           relatedId: passId,
-          notes: `定期票購買：${passType.name}`,
+          notes: `定期票購買：${passType.name}${_isTeamBuyer && salePrice < (passType.price||0) ? '（隊員9折）' : ''}`,
           staffId: req.staff.id,
           staffName: req.staff.name,
         });

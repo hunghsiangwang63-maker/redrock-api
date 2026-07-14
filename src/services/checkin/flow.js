@@ -127,6 +127,19 @@ const createPendingCheckIn = async ({
     finalAmount = 0;
     finalTeam = false;
   }
+  // 後端權威：購買優惠折扣券入場——固定券價；有效隊員 9 折（不信前端傳值）
+  if (entryType === 'buy_discount_card') {
+    const base = PRICES.discount_card;
+    finalOriginal = base;
+    const isTeamBuy = isActiveTeamMember(member);
+    if (isTeamBuy && base >= TEAM_DISCOUNT_MIN_AMOUNT) {
+      finalAmount = Math.round(base * PRICES.team_discount_rate);
+      finalTeam = true;
+    } else {
+      finalAmount = base;
+      finalTeam = false;
+    }
+  }
   // 後端權威：購買新定期票入場——金額取票種原價、單館票僅限該館（不信前端傳值）
   if (entryType === 'buy_pass') {
     if (!buyPassTypeId) throw { code: 'PASS_TYPE_REQUIRED', message: '請選擇要購買的定期票種' };
@@ -138,8 +151,15 @@ const createPendingCheckIn = async ({
       throw { code: 'PASS_GYM_MISMATCH', message: '此為單館定期票，僅限適用場館購買入場' };
     }
     finalOriginal = pt.price;
-    finalAmount = pt.price;
-    finalTeam = false;
+    // 有效隊員購買定期票 9 折
+    const isTeamBuyPass = isActiveTeamMember(member);
+    if (isTeamBuyPass && pt.price >= TEAM_DISCOUNT_MIN_AMOUNT) {
+      finalAmount = Math.round(pt.price * PRICES.team_discount_rate);
+      finalTeam = true;
+    } else {
+      finalAmount = pt.price;
+      finalTeam = false;
+    }
   }
 
   // 後端權威：續約附加（到期前 14 天）——驗票屬本人 / 到期窗 / 場館，快照折後價與新到期日
@@ -256,13 +276,15 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     if (ptDoc.exists) {
       const pt = ptDoc.data();
       const plan = pending.paymentPlan || 'full';
+      // 全額基準＝pending.amount（已含隊員 9 折的後端權威金額；相容舊 pending 回退票種原價）
+      const basePrice = pending.amount ?? pt.price;
       // 本次櫃檯應收：一次付清＝全額；分期＝首期（與 confirmCheckIn 分期同一份 buildPeriodsFromConfig）
-      let dueNow = pt.price;
-      if (plan === 'installment' && pt.installment?.enabled && pt.price > 0) {
-        const periods = require('../installmentService').buildPeriodsFromConfig(pt.installment, pt.price, taiwanToday());
+      let dueNow = basePrice;
+      if (plan === 'installment' && pt.installment?.enabled && basePrice > 0) {
+        const periods = require('../installmentService').buildPeriodsFromConfig(pt.installment, basePrice, taiwanToday());
         if (periods && periods.length) dueNow = periods[0].amount;
       }
-      buyPassInfo = { passTypeName: pt.name, fullPrice: pt.price, plan, dueNow };
+      buyPassInfo = { passTypeName: pt.name, fullPrice: basePrice, originalPrice: pt.price, plan, dueNow, isTeamDiscount: pending.isTeamDiscount === true };
     }
   }
   // 購買定期票分期時，本次入場應收以首期為準（pending.amount 存的是全額）
@@ -347,9 +369,10 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     const newPassId = uuidv4();
     // 分期？票種有開分期規則 && 會員選分期 && 有價（比照 POST /passes 的 usePassInstallment）
     let passPlan = null;
-    if (pending.paymentPlan === 'installment' && pt.installment?.enabled && pt.price > 0) {
+    const buyPassPrice = pending.amount ?? pt.price;   // 折後權威金額（隊員 9 折）
+    if (pending.paymentPlan === 'installment' && pt.installment?.enabled && buyPassPrice > 0) {
       const installmentService = require('../installmentService');
-      const periods = installmentService.buildPeriodsFromConfig(pt.installment, pt.price, startDate);
+      const periods = installmentService.buildPeriodsFromConfig(pt.installment, buyPassPrice, startDate);
       if (periods) {
         passPlan = await installmentService.createInstallmentPlan({
           memberId: pending.memberId, memberName: pending.memberName || '',

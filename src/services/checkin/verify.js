@@ -191,9 +191,10 @@ const verifyEntry = async (memberId, gymId) => {
         tickets: singleEntryTickets.map(t => ({ id: t.id, expiresAt: t.expiresAt })),
       },
       // 兒童不適用折扣券 → 不提供「購買」選項
-      buyDiscountCard: { available: memberType !== 'child', price: PRICES.discount_card },
+      buyDiscountCard: { available: memberType !== 'child', price: withTeam(PRICES.discount_card), originalPrice: PRICES.discount_card },
       // 入場當下購買新定期票（比照購買折扣券）；單館票僅該館可買，QR 綁該館
-      buyPass: { available: buyablePassTypes.length > 0, passTypes: buyablePassTypes },
+      buyPass: { available: buyablePassTypes.length > 0,
+        passTypes: buyablePassTypes.map(pt => ({ ...pt, originalPrice: pt.price, price: withTeam(pt.price) })) },
     },
     // 舊欄位（相容）：扁平清單
     availableOptions: [

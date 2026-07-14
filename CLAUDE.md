@@ -1242,6 +1242,20 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **更正當日被誤收的 3 筆**（使用者指認 林子雲/吳旻珊/彭芮妍，皆士林 phone 入場）：checkIn 改 `course_access`/fee 0/`correctionNote`，刪誤記 checkin 交易（300/300/270，款項實際未收）→ 統計 +3 課程學員、營收/結帳 −870。林子雲另兩筆已取消紀錄（+300/−300 成對沖銷、淨 0）保留當稽核軌跡。
 - 📌 學員名單匯入後系統即可自動認出課程學員（電話搜尋/會員 QR 皆免費）；名單匯入仍待使用者提供（先前「先不做」）。
 
+## 目前進度（2026-07-14 深夜）— 士林建課幽靈修復 + 入場頁右欄調整 + 比賽報名五連發
+> 連續多項。後端 `/health` `2.67.0`→`2.72.0`；各項皆打 Railway E2E＋部分瀏覽器實機。
+- ✅ **修：士林館「沒辦法建立課程」＝gymId 空值幽靈課**（`2.67.0`，commit 後端 `7935ddf`、前端 `f0d59a4`）：加開梯次 Modal 館別下拉「顯示」`effectiveGymId` fallback 但**表單值沒跟著設**——super_admin 沒手動點過下拉 → 送出 `gymId:''`、後端 `req.staff.gymId` 又是 null → 建出 **gymId=null 任何館別都看不到的課**。使用者當晚在士林中招 5 次（技巧班×3/入門班/矯正班全重試）。修：①前端開 Modal 預帶檢視館別＋送出 fallback ②後端 `POST /courses` 權威擋空 gymId → 400 `MISSING_GYM`。資料修復：「技巧班 7-8月週日班」＋8 場次歸士林館；重複嘗試（技巧班×2、矯正班×1，參數全同 0 報名）與使用者自刪的入門班清乾淨 → 課程分佈 新竹16/士林2、null 0。
+- ✅ **入場頁右欄**（`2.68.0`，commit 後端 `1917a8c`、前端 `a4707f5`；實機驗證）：①移除右側「今日入場紀錄」卡（與「今日入場」分頁重複）②「每日入場數」super_admin 改**兩館分線（新竹紅 #8B1A1A／士林藍 #185FA5）**＋上月全館灰線——`monthly-daily-counts` 回傳補本月 `hsinchu/shilin` 每日序列（不受 gymId 過濾）；單館帳號維持本月/上月、線色依館別。③統計標籤補 `legacy_physical_card`實體優惠卡/`competition`比賽報到（前端 `79e8fe1`）。
+- ✅ **比賽報名表加 性別/生日/手機/Email（四欄必填、自動帶入、進計分系統）**（`2.69.0`，commit 後端＋前端；E2E 11/11）：
+  - **自動帶入**：route 讀報名對象 member doc（性別/生日/手機/Email；子女無手機Email帶家長）；表單開啟/切換對象時 prefill、可編輯。**會員資料缺性別/生日 → 表單補填、報名成功後回寫會員文件**（下次自動帶入）。
+  - **後端權威必填**：`MISSING_GENDER/BIRTHDAY/PHONE/EMAIL`（gender 限 male/female、email regex）。
+  - **計分系統**：`competitionSyncService.mapAthlete` athlete payload 補 `birthday/phone/email`（gender 原有）；名單 CSV 四欄（原本就有、現在有值）。
+- ✅ **比賽現金＝臨櫃繳款**（`2.70.0`→`2.71.0`；E2E 8/8＋4/4）：名單 CSV 新增「匯款銀行」欄（現金→**臨櫃繳款**、轉帳→報名新存的 `bankName`）、「匯款/繳款日期」欄；**繳款日期由會員報名時自填**（付款步驟現金顯示「臨櫃繳款日期 *」必填、後端 `MISSING_PAYMENT_DATE` 權威擋、CSV 讀自填值）；我的比賽卡顯示「繳費方式：臨櫃繳款＋繳款日期」（未確認收款另標請至櫃檯繳費）。
+- ✅ **修：家庭一人報名全家被擋「已報名」**（`2.72.0`，E2E 5/5）：
+  - **前端**：`alreadyRegistered` 原把本人＋子女報名混在一起判 → 任一人報名整張賽事卡變「✓ 已報名」藏按鈕。改**按人判斷**——卡片列「已報名：名單」＋按鈕「為其他家庭成員報名」（全家報完才隱藏）；「為誰報名」picker 已報名者標「・已報名」反灰不可選、自動預選首位未報名成員；step1 驗證擋已報名對象。
+  - **後端補真漏洞**：`registerForCompetition` **原本完全沒有重複報名檢查**（前端誤擋是唯一防線）→ 加權威去重：同會員同賽事有效（非取消）報名 → `ALREADY_REGISTERED`；家庭其他成員不受影響。E2E：家長報名→本人重複擋→**代子女報名成功**→子女重複擋。
+- 🧪 **比賽測試會員**：`0900123123`/`test1234`（【練習】比賽報名測試，性別留空供實測補填流程）——**不用時記得刪**（member doc＋waiver＋fallTests）。
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

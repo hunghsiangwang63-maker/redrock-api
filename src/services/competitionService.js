@@ -160,6 +160,7 @@ const getCompetition = async (competitionId) => {
 
 const registerForCompetition = async ({
   competitionId, memberId, memberName, isMinor, birthday, divisionId,
+  gender, phone, email,
   customFieldValues, signatureData, guardianSignature, parentEmail, parentName, parentPhone, parentRelation,
   // 保險用欄位
   idNumber, emergencyContact, emergencyRelation, emergencyPhone,
@@ -214,6 +215,20 @@ const registerForCompetition = async ({
     ? (isEarlyBird ? fees.childEarlyBird : fees.childRegular) || 950
     : (isEarlyBird ? fees.adultEarlyBird : fees.adultRegular) || 1100;
 
+  // 必填：性別/生日/手機/Email（自動帶會員資料、會員資料缺漏由報名表補填；帶進計分系統與保險名冊）
+  if (gender !== 'male' && gender !== 'female') {
+    throw { code: 'MISSING_GENDER', message: '請選擇性別' };
+  }
+  if (!birthday) {
+    throw { code: 'MISSING_BIRTHDAY', message: '請填寫生日' };
+  }
+  if (!phone || !String(phone).trim()) {
+    throw { code: 'MISSING_PHONE', message: '請填寫手機號碼' };
+  }
+  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(email).trim())) {
+    throw { code: 'MISSING_EMAIL', message: '請填寫有效的 Email' };
+  }
+
   // 驗證必填自訂欄位
   for (const f of competition.customFields) {
     if (f.required && !customFieldValues?.[f.key]) {
@@ -242,6 +257,9 @@ const registerForCompetition = async ({
     status: isWaitlist ? 'waitlist' : 'confirmed',
     waitlistPosition: isWaitlist ? waitlistCount + 1 : null,
     customFieldValues: customFieldValues || {},
+    // 選手基本資料（必填；帶進計分系統/保險名冊/名單 CSV）
+    gender, birthday: birthday || null,
+    phone: String(phone).trim(), email: String(email).trim(),
     // 保險用欄位
     idNumber: idNumber || null,
     emergencyContact: emergencyContact || null,

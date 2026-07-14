@@ -137,19 +137,30 @@ router.post('/:id/register',
       const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 404 });
       if (deny) return res.status(deny.status).json(deny.body);
 
-      // 取報名對象的真實生日（服務端據此計算兒童費率，不信任前端傳值）
+      // 取報名對象會員資料：生日權威（兒童費率）＋ 性別/手機/Email 自動帶入（會員資料缺漏由表單補填）
       let registrantBirthday = null;
+      let registrantData = {};
       try {
         const _mDoc = await getDb().collection('members').doc(memberId).get();
-        if (_mDoc.exists) registrantBirthday = _mDoc.data().birthday || null;
+        if (_mDoc.exists) {
+          registrantData = _mDoc.data();
+          registrantBirthday = registrantData.birthday || null;
+        }
       } catch (e) {}
+      const regGender = req.body.gender || registrantData.gender || null;
+      const regBirthday = registrantBirthday || req.body.birthday || null;
+      const regPhone = req.body.phone || registrantData.phone || req.member?.phone || null;
+      const regEmail = req.body.email || registrantData.email || req.member?.email || null;
 
       const registration = await competitionService.registerForCompetition({
         competitionId: req.params.id,
         memberId,
         memberName: req.body.memberName || req.member?.name,
         isMinor: req.body.isMinor,
-        birthday: registrantBirthday,
+        birthday: regBirthday,
+        gender: regGender,
+        phone: regPhone,
+        email: regEmail,
         divisionId: req.body.divisionId,
         customFieldValues: req.body.customFieldValues,
         signatureData: req.body.signatureData,
@@ -173,6 +184,14 @@ router.post('/:id/register',
         bankLastFive: req.body.bankLastFive,
         ip: req.ip,
       });
+
+      // 會員資料缺性別/生日 → 以本次報名補填回會員文件（下次自動帶入）
+      try {
+        const patch = {};
+        if (!registrantData.gender && regGender) patch.gender = regGender;
+        if (!registrantData.birthday && regBirthday) patch.birthday = regBirthday;
+        if (Object.keys(patch).length) await getDb().collection('members').doc(memberId).update(patch);
+      } catch (e) {}
       res.status(201).json({
         registration,
         message: registration.isComplete

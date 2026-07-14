@@ -3,7 +3,7 @@
  * scoringSystem === 'competition_management_v2' 的賽事，跨專案直寫 Redrock-comp 的 `competitions` collection。
  *
  * 計分系統資料模型：一場賽事＝一個 `competitions` 文件
- *   { eventName, categories:[{name,color,rounds{賽制細節}}], athletes:{ <key>:{name,catIdx,round,bib,order,gender,team,origId} }, visible, ... }
+ *   { eventName, categories:[{name,color,rounds{賽制細節}}], athletes:{ <key>:{name,catIdx,round,bib,order,gender,birthday,phone,email,team,origId} }, visible, ... }
  *   選手是巢狀在賽事文件的 athletes map（非獨立 collection）。
  *
  * 分工：RedRock 建「賽事 + 組別(categories 名稱) + 報名名單(athletes)」；rounds 賽制/評審/分數細節由計分系統那邊設定。
@@ -31,6 +31,9 @@ const mapAthlete = (competition, registration) => {
     bib: '',                 // 號碼布由計分系統排
     order: 0,
     gender: registration.gender || cf.gender || cf['性別'] || '',
+    birthday: registration.birthday || '',
+    phone: registration.phone || '',
+    email: registration.email || '',
     team: cf.team || cf['隊伍'] || cf['隊伍名稱'] || '',
   };
 };
@@ -81,6 +84,9 @@ const syncCompAthlete = async (competition, registration) => {
         [`athletes.${key}.name`]: ath.name,
         [`athletes.${key}.catIdx`]: ath.catIdx,
         [`athletes.${key}.gender`]: ath.gender,
+        [`athletes.${key}.birthday`]: ath.birthday,
+        [`athletes.${key}.phone`]: ath.phone,
+        [`athletes.${key}.email`]: ath.email,
         [`athletes.${key}.team`]: ath.team,
         [`athletes.${key}.origId`]: ath.origId,
       });

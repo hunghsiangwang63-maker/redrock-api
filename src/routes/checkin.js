@@ -409,13 +409,15 @@ router.get('/today',
         course_access: '課程學員', child_free: '兒童免費', student_free: '學生免費', other: '其他',
         pass: '定期票', discount_card: '優惠折扣券', single_entry_ticket: '單次入場券',
         buy_discount_card: '購買優惠券', buy_pass: '購買定期票',
+        legacy_physical_card: '實體優惠卡', competition: '比賽報到',
       };
 
       const statsByGym = targetGyms.map(gym => {
         const gymRecords = records.filter(r => r.gymId === gym.id);
         const counts = {};
         gymRecords.forEach(r => {
-          const t = r.entryType || r.passType || 'other';
+          // 舊折扣卡 8 折（實體優惠卡）獨立一類，不混入「單次」
+          const t = r.legacyDiscount === true ? 'legacy_physical_card' : (r.entryType || r.passType || 'other');
           counts[t] = (counts[t] || 0) + 1;
         });
         return { gymId: gym.id, gymName: gym.name, total: gymRecords.length, counts };
@@ -426,6 +428,7 @@ router.get('/today',
         records.filter(r => r.gymId === gym.id).map(r => ({
           id: r.id, memberName: r.memberName, gymId: r.gymId,
           entryType: r.entryType || r.passType, checkedInAt: r.checkedInAt,
+          legacyDiscount: r.legacyDiscount === true,
         }))
       );
 

@@ -1151,6 +1151,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **課程列「場次」鍵直達該梯次**（commit 前端 `c59dbbe`，實機驗證）：場次管理側欄「選擇課程」平鋪清單改**下拉選單**，從課程列按「場次」進頁即鎖定該梯（實測週日A班直達 8 堂列表）；按鍵時重置前梯殘留的場次/名單選取。
 - ✅ **小蜘蛛人 10 梯無限練習統一 2026-07-01~08-31**（firebase-admin 直改，入門8+進階2；原各梯依開課日參差 7/1~9/1）：期間內報名學員任日入場皆「課程學員」免費身份。個別調整走編輯梯次「無限練習期間」。
 
+## 目前進度（2026-07-14 續）— 補課群組改「補課類型」二層模型
+> 使用者指正設計：先建「補課類型」（named 實體）、班別再各自**多選**掛類型（取代中途做過的班別互勾單群組版）。後端 `/health` `2.54.0-makeup-types`；E2E（打 Railway）**10/10**。commit 後端 `c791108`、前端 `5c8f156`＋`ba6c941`；實機驗證通過。
+- ✅ **`makeupTypes` 集合 + CRUD**（`/course-categories/makeup-types`，**路由須在 `/:id` 之前**）：GET/POST（重名 409）/DELETE（仍有班別掛 → 409 `TYPE_IN_USE` 列班別名）。
+- ✅ **班別 `makeupTypeIds`（多選陣列）**：EDITABLE/POST 支援；**補課判定（`enrollMakeup`）＝同班別 恆可 or 兩班別有任一共同類型**（＋同館）；舊 `makeupGroup` 同 key 仍相容放行（欄位保留不再主用）。
+- ✅ **遷移**：建類型「小蜘蛛人」掛到入門/進階兩班別（行為與先前群組版一致）；其餘班別 `makeupTypeIds:[]`。
+- ✅ **前端**（`CoursesPage` 班別管理）：頂部「補課類型」管理區（chip 列表＋新增/刪除）；班別 Modal「適用補課類型（可多選）」勾選；列表標籤顯示掛的類型名。
+- **E2E（10/10）**：類型 CRUD/重名/使用中刪除 → 掛類型 → 實測補課「無共同類型擋 DIFFERENT_CATEGORY／同類型（小蜘蛛人入門→進階）通過」→ 卸除後刪除成功；fixtures 全清（含場次計數還原）。
+
 ## 待辦
 - 🛡 **Railway 應變（依 `docs/outage-playbook.md` 依狀況執行）**：①使用者帳號後台——Railway 用量警示（Soft 7成/不設 Hard）＋UptimeRobot 監控 `/health`；②近期——API 自訂網域 `api.redrocktaiwan.com`（Porkbun CNAME＋Railway custom domain 完成後**再通知 Claude 改前端 BASE**）；③Render 冷備（複製環境變數）；④長期金流上線前評估遷 Cloud Run。
 

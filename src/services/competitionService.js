@@ -122,9 +122,29 @@ const getCompetitions = async (status) => {
   let ref = db.collection(COLLECTIONS.COMPETITIONS);
   if (status) ref = ref.where('status', '==', status);
   const snap = await ref.get();
-  return snap.docs
+  const comps = snap.docs
     .map(d => ({ id: d.id, ...d.data() }))
     .sort((a, b) => (b.createdAt?._seconds || 0) - (a.createdAt?._seconds || 0));
+  // 各組即時報名數（正取/候補）→ 會員端顯示「剩 N 位/額滿」
+  for (const c of comps) {
+    try {
+      const regs = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS)
+        .where('competitionId', '==', c.id).get();
+      const byDiv = {};
+      regs.docs.forEach(rd => {
+        const r = rd.data();
+        if (!byDiv[r.divisionId]) byDiv[r.divisionId] = { confirmed: 0, waitlist: 0 };
+        if (r.status === 'confirmed') byDiv[r.divisionId].confirmed++;
+        else if (r.status === 'waitlist') byDiv[r.divisionId].waitlist++;
+      });
+      c.divisions = (c.divisions || []).map(d => ({
+        ...d,
+        enrolledCount: byDiv[d.id]?.confirmed || 0,
+        waitlistCount: byDiv[d.id]?.waitlist || 0,
+      }));
+    } catch (e) { /* 統計失敗不影響清單 */ }
+  }
+  return comps;
 };
 
 const getCompetition = async (competitionId) => {

@@ -571,10 +571,14 @@ router.post('/phone', authenticate, requireManagerOrStation, async (req, res) =>
     // 前端送了免費類型但權威判定「非免費」者，改用權威付費類型（防白嫖，判斷更安全）。
     const alreadyPaid = req.body.alreadyPaid === true;
     if (!alreadyPaid) {
-      const FREE_TYPES = ['vip', 'pass', 'course_access'];
+      const FREE_TYPES = ['vip', 'pass'];
       const elig = await checkinService.verifyEntry(memberId, gymId);
       if (elig.freeEntry && elig.entryType) {
         entryType = elig.entryType;                     // 權威免費類型（覆寫前端值）
+      } else if (entryType === 'course_access') {
+        // 員工手動指定「課程學員」：尊重櫃檯判斷、以課程學員免費入場（0 元）。
+        // 系統可能尚未匯入該期學員名單（如 Climbio/BeClass 搬遷期），權威查無報名不代表非學員；
+        // 此路徑為值班/管理員限定（員工本就可用「已付費放行」0 元入場），非新的權限洞。
       } else if (FREE_TYPES.includes(entryType)) {
         const paidTypes = (elig.entryTypeOptions || []).map(o => o.type);
         entryType = paidTypes[0] || 'single_ticket';    // 前端偽造免費 → 改回權威付費身分

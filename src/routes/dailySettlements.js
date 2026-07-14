@@ -15,7 +15,7 @@ const dayjs = require('dayjs');
 // ── 入場費六分類（結帳摘要 GET /today 與月銷售 Excel monthly-export 共用）──────────
 // 折扣為 checkIn 旗標（隊員 isTeamDiscount、優惠券＝舊折扣卡 legacyDiscount 或優惠折扣券卡
 // discount_card 入場），疊加另拆「隊員＋優惠券」；無折扣才依原入場類型（成人/學生/兒童/…）。
-const ENTRY_LABEL = { single_ticket:'成人', single_entry_ticket:'單次入場券', pass:'定期票', buy_pass:'購買定期票', buy_discount_card:'購買優惠折扣券', vip:'VIP', course_access:'課程學員', discount_card:'優惠折扣券', black_card:'黑卡', child_free:'兒童', student_free:'學生', bonus:'紅利', experience:'體驗' };
+const ENTRY_LABEL = { single_ticket:'成人', single_entry_ticket:'單次入場券', pass:'定期票', competition: '比賽報到', buy_pass:'購買定期票', buy_discount_card:'購買優惠折扣券', vip:'VIP', course_access:'課程學員', discount_card:'優惠折扣券', black_card:'黑卡', child_free:'兒童', student_free:'學生', bonus:'紅利', experience:'體驗' };
 const ENTRY_ORDER = ['成人', '學生', '兒童', '個別使用優惠券', '隊員折扣', '隊員＋優惠券'];
 const entryCategory = (data) => {
   const team = data.isTeamDiscount === true;

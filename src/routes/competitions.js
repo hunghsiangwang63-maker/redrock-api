@@ -4,7 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
-const { authenticate, authenticateAny, checkPermission } = require('../middleware/auth');
+const { authenticate, authenticateAny, checkPermission , requireManagerOrStation } = require('../middleware/auth');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const competitionService = require('../services/competitionService');
@@ -403,5 +403,93 @@ router.post('/registrations/:regId/refund',
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );
+
+// ══ 比賽報到（會員出示 QR、員工掃描）══════════════════════════════
+// 報到只驗「報名資格」：confirmed＋簽署完成＋比賽日當天＋未重複報到；
+// 【不卡墜落測驗】（比賽入場豁免；風險已由參賽同意書涵蓋）。報到建 checkIns 紀錄（entryType: competition、0 元）。
+const { v4: _uuidv4 } = require('uuid');
+
+// POST /competitions/registrations/:regId/checkin-token - 會員取得報到 QR token（本人/子女）
+router.post('/registrations/:regId/checkin-token', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(req.params.regId).get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名記錄' });
+    const reg = doc.data();
+    if (req.member) {
+      const deny = await checkMemberOwnership(req.member, reg.memberId, { onMissing: 403, message: '只能取得自己或子會員的報到 QR' });
+      if (deny) return res.status(deny.status).json(deny.body);
+    }
+    if (reg.status === 'cancelled') return res.status(400).json({ error: 'CANCELLED', message: '此報名已取消' });
+    let token = reg.checkinToken;
+    if (!token) {
+      token = _uuidv4();
+      await doc.ref.update({ checkinToken: token, updatedAt: new Date() });
+    }
+    res.json({ token: `compchk:${token}`, checkedInAt: reg.checkedInAt || null });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// 以 token 撈報名＋賽事（共用）
+const findRegByCheckinToken = async (db, raw) => {
+  const token = String(raw || '').replace(/^compchk:/, '');
+  if (!token) return null;
+  const snap = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS)
+    .where('checkinToken', '==', token).limit(1).get();
+  if (snap.empty) return null;
+  const reg = { id: snap.docs[0].id, ...snap.docs[0].data() };
+  const comp = (await db.collection(COLLECTIONS.COMPETITIONS).doc(reg.competitionId).get()).data() || {};
+  return { reg, comp };
+};
+
+// POST /competitions/checkin/scan - 員工掃報到 QR（預覽；值班/管理員）
+router.post('/checkin/scan', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const hit = await findRegByCheckinToken(db, req.body.token);
+    if (!hit) return res.status(404).json({ error: 'QR_NOT_FOUND', message: '無效的報到 QR' });
+    const { reg, comp } = hit;
+    res.json({
+      registrationId: reg.id, memberName: reg.memberName,
+      competitionName: reg.competitionName || comp.name, divisionName: reg.divisionName,
+      eventDate: comp.eventDate, status: reg.status, isComplete: reg.isComplete,
+      paymentStatus: reg.paymentStatus, registrationFee: reg.registrationFee,
+      checkedInAt: reg.checkedInAt || null,
+    });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// POST /competitions/checkin/confirm - 確認報到（值班/管理員；不卡墜測）
+router.post('/checkin/confirm', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const hit = await findRegByCheckinToken(db, req.body.token);
+    if (!hit) return res.status(404).json({ error: 'QR_NOT_FOUND', message: '無效的報到 QR' });
+    const { reg, comp } = hit;
+    if (reg.status === 'cancelled') return res.status(400).json({ error: 'CANCELLED', message: '此報名已取消' });
+    if (reg.status !== 'confirmed') return res.status(400).json({ error: 'NOT_CONFIRMED', message: '此報名非正取（候補請先遞補）' });
+    if (!reg.isComplete) return res.status(400).json({ error: 'NOT_COMPLETE', message: '尚未完成簽署（未成年待法定代理人簽署）' });
+    const { taiwanToday } = require('../utils/taiwanDate');
+    const today = taiwanToday();
+    if (comp.eventDate && comp.eventDate !== today) {
+      return res.status(400).json({ error: 'NOT_EVENT_DAY', message: `比賽日為 ${comp.eventDate}，今日不可報到` });
+    }
+    if (reg.checkedInAt) return res.status(409).json({ error: 'ALREADY_CHECKED_IN', message: '此選手已完成報到' });
+    const now = new Date();
+    await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(reg.id).update({
+      checkedInAt: now, checkedInBy: req.staff.id, checkedInByName: req.staff.name, updatedAt: now,
+    });
+    // 入場紀錄（0 元、entryType competition；供今日入場統計/稽核；不觸發墜測/waiver 關卡）
+    const checkInId = _uuidv4();
+    await db.collection('checkIns').doc(checkInId).set({
+      id: checkInId, memberId: reg.memberId, memberName: reg.memberName,
+      gymId: comp.gymId || req.staff.gymId || null,
+      entryType: 'competition', amountPaid: 0, paymentMethod: null,
+      isCompetitionCheckin: true, competitionId: reg.competitionId, registrationId: reg.id,
+      checkedInAt: now, confirmedBy: req.staff.id, createdAt: now,
+    });
+    res.json({ success: true, message: `${reg.memberName} 報到完成（${reg.divisionName || ''}）`, checkInId });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
 
 module.exports = router;

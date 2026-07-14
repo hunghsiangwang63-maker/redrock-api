@@ -105,6 +105,26 @@ router.get('/', authenticate, async (req, res) => {
       });
     } catch(e) {}
 
+    // 比賽退費待處理（會員取消報名且已收過款 → 需人工匯退款；員工按「退費已處理」後消失）
+    try {
+      const snap = await db.collection('competitionRegistrations')
+        .where('refundRequested', '==', true).get();
+      snap.forEach(d => {
+        const r = d.data();
+        if (r.status !== 'cancelled' || r.paymentStatus !== 'confirmed') return; // 未收款取消不需退；已退費(refunded)自然排除
+        tasks.push({
+          id: `compRefund_${d.id}`, type: 'competition_refund', targetId: d.id,
+          title: '比賽退費待處理',
+          desc: `${r.memberName} — ${r.competitionName || ''}（已收 NT$${r.paidAmount || r.registrationFee || ''}；退費帳號 ${r.refundBankCode || ''}-${r.refundAccount || ''}）`,
+          date: r.cancelledAt?._seconds ? new Date(r.cancelledAt._seconds*1000).toISOString().slice(0,10) : today,
+          createdAt: r.cancelledAt?._seconds || 0,
+          gymId: null, memberName: r.memberName,
+          link: '/staff/competitions',
+          record: { id: d.id, ...r },
+        });
+      });
+    } catch(e) {}
+
     // 5. 攀岩隊申請待確認
     try {
       const snap = await db.collection('teamMembers').where('status', '==', 'pending').get();

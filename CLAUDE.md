@@ -1207,6 +1207,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🔄 **附帶：計分系統自訂網域 `comp.redrocktaiwan.com`**（進行中）：Firebase Console（計分系統專案）custom domain 走新版單筆 CNAME 流程（`comp` → `redrock-comp.web.app`）；Porkbun 已設、DNS 已解析，等 Firebase 簽憑證。（原議 score. 後定案 comp.）
 - ⬜ **④ Render 冷備**：待 ③ 完成後擇日（同 GitHub repo 自動雙部署、環境變數需手動同步——之後動環境變數時提醒同步）。
 
+## 目前進度（2026-07-14 晚）— 計分系統 favicon + 源碼基準釐清
+> 計分系統（redrock-comp.web.app）加 favicon。⚠️ **重要發現**：本機所有計分系統源碼副本（`~/redrock-comp-livescore` git repo、iCloud、Downloads 快照）**都比線上舊**（線上 246,755 bytes vs 本機最大 228,913）——線上版由別處部署。處理：**抓線上版當基準**覆蓋回 repo（單檔 HTML 應用，零回退風險）再加 favicon 部署。
+- ✅ **favicon＝琥珀水晶 R**（使用者提供 IMG_0199.PNG）：512px favicon.png＋180px apple-touch-icon，`<head>` 加 link 標籤；與主系統紅 R 區分。已部署＋repo commit。
+- 📌 **計分系統源碼位置備忘**：`~/redrock-comp-livescore`（git repo，deploy `firebase deploy --only hosting --project redrock-comp`）；`~/redrock-comp` 為空殼。**動它之前先比對線上 index.html 的 md5**（本機可能落後線上）；現 repo 已同步至線上版＋favicon（此後以 repo 為準）。
+
 ## 待辦
 - 🛡 **Railway 應變（依 `docs/outage-playbook.md` 依狀況執行）**：①使用者帳號後台——Railway 用量警示（Soft 7成/不設 Hard）＋UptimeRobot 監控 `/health`；②近期——API 自訂網域 `api.redrocktaiwan.com`（Porkbun CNAME＋Railway custom domain 完成後**再通知 Claude 改前端 BASE**）；③Render 冷備（複製環境變數）；④長期金流上線前評估遷 Cloud Run。
 

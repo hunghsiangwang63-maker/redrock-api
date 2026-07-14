@@ -1230,6 +1230,18 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **入場 vs 結帳全對帳（兩館逐類核對，全部吻合）**：士林 entry 3750（成人1200/優惠券1680/隊員270/購券600）＋商品220=3970 ✓；新竹 entry 4455＋出租300＋定期票10840=15595 ✓。註：結帳「個別使用優惠券」＝系統優惠卡入場＋實體卡8折**兩者合計**（既定定義）；**隊員買半年票 9 折（6840）當天上線當天即有真實成交**、正確落定期票大項。
 - ⏰ 另 Render 冷備延後（見待辦）。
 
+## 目前進度（2026-07-14 晚）— 修入場頁黑屏 + 電話入場「課程學員」尊重櫃檯判斷
+> 兩事故連續處理。後端 `/health` `2.66.0-phone-course-access-honored`；E2E（打 Railway）6/6。commit 後端 `820896e`、前端 hotfix `4c3973a`＋`79e8fe1`。
+- 🐞 **修：員工入場頁整頁黑屏**（回報「突然黑屏？」）：實體優惠卡標籤功能（`e5f3d52`）在 `CheckinPage` 加了 `entryLabelOf(c)` 用法，但 **import 注入的 python regex 沒匹配到就默默跳過**（該檔用 local `ENTRY_TYPE_LABEL`、原本沒 import utils/entryLabel）→ 開頁即 `ReferenceError: entryLabelOf is not defined` → React 整樹崩潰黑屏。**vite/rolldown build 對自由識別字不報錯**（當 global），build 過了不代表沒 ReferenceError。hotfix 補 import（`4c3973a`），瀏覽器實測恢復。
+  - 💡 **教訓**：python 批次改碼的「import 注入」regex **絕不能 `if m:` 默默跳過**——要 `assert` 匹配（同 heredoc 慣例）；改完前端最好瀏覽器實際開那頁（build 通過抓不到 ReferenceError）。
+- ✅ **附帶修：今日統計顯示原始 `legacy_physical_card`**：`CheckinPage` 統計側欄 local `typeLabel` map 缺新 key → 補 `legacy_physical_card:'實體優惠卡'`、`competition:'比賽報到'`（前端 `79e8fe1`）。
+- ✅ **電話入場員工選「課程學員」改記學員免費**（回報「應計入學員免費而非單次入場」）：
+  - **根因**：`/checkin/phone` 的免費資格權威覆核（1.56 防白嫖）把 `course_access` 也列入——員工選課程學員、後端查 `courseEnrollments` 無報名（**7-8月學員名單尚未匯入、系統現 0 筆有效報名**）→ 判「偽造免費」自動降成 `single_ticket` 收費。
+  - **修**：員工手動選 `course_access` → **尊重櫃檯判斷**，記課程學員、費 0（`computePaidEntryAmount('course_access')` 依 entryTypes price 0）。此路徑限值班/管理員（員工本可用「已付費放行」0 元），非新權限洞；**偽 VIP／偽定期票降級防護保留**（FREE_TYPES 剩 `['vip','pass']`）。
+  - **E2E 6/6**：fixture 會員（waiver 需 `waivers.doc(memberId)` keyed，非 add）選課程學員 → `course_access`/fee 0；偽 VIP 仍降 `single_ticket`；0 殘留。
+- ✅ **更正當日被誤收的 3 筆**（使用者指認 林子雲/吳旻珊/彭芮妍，皆士林 phone 入場）：checkIn 改 `course_access`/fee 0/`correctionNote`，刪誤記 checkin 交易（300/300/270，款項實際未收）→ 統計 +3 課程學員、營收/結帳 −870。林子雲另兩筆已取消紀錄（+300/−300 成對沖銷、淨 0）保留當稽核軌跡。
+- 📌 學員名單匯入後系統即可自動認出課程學員（電話搜尋/會員 QR 皆免費）；名單匯入仍待使用者提供（先前「先不做」）。
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

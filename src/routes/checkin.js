@@ -421,10 +421,13 @@ router.get('/today',
         return { gymId: gym.id, gymName: gym.name, total: gymRecords.length, counts };
       });
 
-      const recent = records.slice(0, 20).map(r => ({
-        id: r.id, memberName: r.memberName, gymId: r.gymId,
-        entryType: r.entryType || r.passType, checkedInAt: r.checkedInAt,
-      }));
+      // 每館各取最新 15 筆（super_admin 兩館並列時避免單館洗掉另一館）
+      const recent = targetGyms.flatMap(gym =>
+        records.filter(r => r.gymId === gym.id).slice(0, 15).map(r => ({
+          id: r.id, memberName: r.memberName, gymId: r.gymId,
+          entryType: r.entryType || r.passType, checkedInAt: r.checkedInAt,
+        }))
+      );
 
       res.json({ statsByGym, total: records.length, recent });
     } catch (err) {

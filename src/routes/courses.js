@@ -62,8 +62,14 @@ router.post('/',
       if (req.body.gymId && req.body.gymId !== req.staff.gymId && req.staff.role !== 'super_admin') {
         return res.status(403).json({ error: 'CROSS_GYM_FORBIDDEN', message: '不可為其他館別建立課程' });
       }
+      // super_admin 個人帳號 staff.gymId 為 null：前端漏帶 gymId 時會建出 gymId=null 幽靈課
+      // （任何館別檢視都看不到）→ 權威擋下，要求明確指定館別
+      const resolvedGymId = req.body.gymId || req.staff.gymId;
+      if (!resolvedGymId) {
+        return res.status(400).json({ error: 'MISSING_GYM', message: '請指定課程所屬館別' });
+      }
       const course = await courseService.createCourse({
-        gymId: req.body.gymId || req.staff.gymId,
+        gymId: resolvedGymId,
         staffId: req.staff.id,
         data: req.body,
       });

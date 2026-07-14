@@ -114,6 +114,22 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
         });
       }
     }
+    // 待補文件：未成年比賽報名待法定代理人簽署（本人+子女；簽署完成即消失）
+    for (const id of ids) {
+      const snap = await db.collection('competitionRegistrations')
+        .where('memberId', '==', id).get();
+      snap.docs.forEach(d => {
+        const o = d.data();
+        if (o.status === 'cancelled' || !o.parentRequired || o.isComplete) return;
+        alerts.push({
+          type: 'competition_guardian_sign', kind: 'action',
+          label: '比賽報名', link: '/member/competitions',
+          name: o.competitionName || '比賽',
+          reason: '未成年報名待法定代理人簽署參賽同意書',
+          memberName: id === req.member.id ? null : (kids.docs.find(k => k.id === id)?.data()?.name || null),
+        });
+      });
+    }
     res.json({ alerts });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

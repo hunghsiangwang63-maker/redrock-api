@@ -1180,6 +1180,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **下載名單確認**：`GET /:id/registrations/download` 200、UTF-8 BOM CSV、22 欄（含簽署狀態/候補/緊急聯絡人三欄組）。
 - ✅ **計分系統對接確認＋正式賽已啟動**：金鑰 `COMP_FIREBASE_SA` 有效（測試賽有成功紀錄）；202608 已對接（`compDocId EofnXQf4ArzTNgqNP2pR`、兩組別帶入、scoringEnabled 由計分端開）→ 之後完成簽署的正取即時推送、取消同步移除、候補遞補自動補推。
 
+## 目前進度（2026-07-14 續）— 全館輪播公告＋賽事說明全文＋比賽報到 QR
+> 三項連續需求。後端 `/health` `2.57.0-competition-checkin-qr`；E2E 8/8。commit 後端 `16b1531`、前端 `6e8c839`＋`3670dd6`。
+- ✅ **全館首頁輪播公告**（純資料）：「202608 紅石成人抱石賽 開放報名！」（`gymId:null` 全館＋`showOnBanner:true`；**`publishUntil` 8/23 23:59 報名截止自動下架**）。會員首頁輪播/最新公告已確認顯示（標【全館】）。id `b012a629`。
+- ✅ **會員賽事卡說明欄完整顯示**：原硬截 120 字加「...」→ 全文＋pre-wrap 分行＋靠左＋底色區塊。
+- ✅ **比賽報到 QR（不卡墜測）**：
+  - **後端**：`POST /registrations/:regId/checkin-token`（本人/子女，`compchk:<uuid>` 存 registration）；`/checkin/scan`（值班/管理員，預覽 選手/賽事/比賽日/繳費/簽署/已報到）；`/checkin/confirm`——驗 **正取＋isComplete＋比賽日當天（NOT_EVENT_DAY）＋未重複（ALREADY_CHECKED_IN 409）**，標記 `checkedInAt` ＋ 建 **0 元 checkIns**（`entryType:'competition'`、`isCompetitionCheckin`）；**刻意不走 runEntryGates＝不卡墜測/waiver**（參賽同意書已涵蓋風險）。結帳/入場統計標籤補「比賽報到」。
+  - **會員端**：我的比賽報名正取卡「🎫 比賽報到 QR」→ Modal 顯示 QR（已報到顯示 ✅）；**員工端**：入場頁掃描器（掃描槍/相機同一入口）掃到 `compchk:` 前綴自動分流「比賽報到」預覽（未收款紅字警示）→「確認報到」；報到成功面板無 checkin id 時隱藏取消鈕。
+  - **E2E（8/8）**：取 token→掃描預覽→**非比賽日擋**→暫改比賽日今天→報到成功（**會員無墜測紀錄仍通過＝豁免驗證**）→checkedInAt+0元入場紀錄→重複報到 409；測後比賽日還原 8/30。
+- 🧹 測試會員（0900123123）連同報名/退費通知3則/收款交易/waiver/墜測全清 0 殘留；賽事回到 0 報名乾淨狀態。
+
 ## 待辦
 - 🛡 **Railway 應變（依 `docs/outage-playbook.md` 依狀況執行）**：①使用者帳號後台——Railway 用量警示（Soft 7成/不設 Hard）＋UptimeRobot 監控 `/health`；②近期——API 自訂網域 `api.redrocktaiwan.com`（Porkbun CNAME＋Railway custom domain 完成後**再通知 Claude 改前端 BASE**）；③Render 冷備（複製環境變數）；④長期金流上線前評估遷 Cloud Run。
 

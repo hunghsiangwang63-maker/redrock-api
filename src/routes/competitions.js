@@ -404,6 +404,35 @@ router.post('/registrations/:regId/refund',
   }
 );
 
+// ── POST /competitions/registrations/:regId/guardian-sign - 補簽法定代理人同意書 ──
+// 未成年報名（parentRequired 且未完成）由家長於 App 內補簽（本人/子女擁有權）→ 完成並推計分系統。
+router.post('/registrations/:regId/guardian-sign', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(req.params.regId).get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名記錄' });
+    const reg = doc.data();
+    if (req.member && reg.memberId) {
+      const deny = await checkMemberOwnership(req.member, reg.memberId, { onMissing: 403, message: '只能為自己或子會員的報名補簽' });
+      if (deny) return res.status(deny.status).json(deny.body);
+    }
+    if (!reg.parentRequired) return res.status(400).json({ error: 'NOT_REQUIRED', message: '此報名不需法定代理人簽署' });
+    if (reg.isComplete) return res.status(409).json({ error: 'ALREADY_SIGNED', message: '已完成簽署' });
+    if (!req.body.signatureData) return res.status(400).json({ error: 'NO_SIGNATURE', message: '請提供法定代理人簽名' });
+    const { uploadSignature } = require('../services/waiverService');
+    const url = await uploadSignature(`competition_${req.params.regId}`, 'guardian', req.body.signatureData);
+    const now = new Date();
+    await doc.ref.update({
+      guardianSignatureUrl: url, guardianSignedAt: now,
+      parentName: req.body.parentName || reg.parentName || null,
+      isComplete: true, updatedAt: now,
+    });
+    // 完成 → 推計分系統（失敗不阻斷）
+    try { await competitionService.sendWebhook(req.params.regId); } catch (e) { console.error('補簽後推送失敗', e.message); }
+    res.json({ success: true, message: '法定代理人簽署完成，報名已生效' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ══ 比賽報到（會員出示 QR、員工掃描）══════════════════════════════
 // 報到只驗「報名資格」：confirmed＋簽署完成＋比賽日當天＋未重複報到；
 // 【不卡墜落測驗】（比賽入場豁免；風險已由參賽同意書涵蓋）。報到建 checkIns 紀錄（entryType: competition、0 元）。

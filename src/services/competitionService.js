@@ -240,6 +240,12 @@ const registerForCompetition = async ({
   if (paymentMethod === 'cash' && !paymentDate) {
     throw { code: 'MISSING_PAYMENT_DATE', message: '請填寫臨櫃繳款日期' };
   }
+  if (paymentDate) {
+    const maxDate = dayjs(taiwanToday()).add(3, 'day').format('YYYY-MM-DD');
+    if (paymentDate < taiwanToday() || paymentDate > maxDate) {
+      throw { code: 'INVALID_PAYMENT_DATE', message: '繳費日期須為報名日起 3 日內' };
+    }
+  }
 
   // 驗證必填自訂欄位
   for (const f of competition.customFields) {
@@ -526,7 +532,7 @@ const getMemberRegistrations = async (memberId) => {
     .where('memberId', '==', memberId)
     .get();
   return snap.docs
-    .map(d => ({ id: d.id, ...d.data() }))
+    .map(d => { const { staffNote, ...rest } = d.data(); return { id: d.id, ...rest }; }) // staffNote＝員工內部備註，不回傳會員
     .sort((a, b) => (b.registeredAt?._seconds || b.createdAt?._seconds || 0) - (a.registeredAt?._seconds || a.createdAt?._seconds || 0));
 };
 

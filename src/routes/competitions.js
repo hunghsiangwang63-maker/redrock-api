@@ -387,6 +387,7 @@ router.post('/registrations/:regId/confirm-payment',
       await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations')
         .doc(req.params.regId).update({
           paymentStatus: 'confirmed',
+          ...(req.body.staffNote != null && String(req.body.staffNote).trim() ? { staffNote: String(req.body.staffNote).trim() } : {}),
           paidAmount: req.body.amount || null,
           paidAt: new Date(),
           paidConfirmedBy: req.staff.id,
@@ -400,6 +401,80 @@ router.post('/registrations/:regId/confirm-payment',
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );
+
+// ── POST /competitions/registrations/:regId/reject-payment - 退回繳費資訊（報名者需重新填寫）──
+// reason＝退回原因（必填，會員看得到＋Email 通知）；staffNote＝員工內部備註（選填，會員看不到）
+router.post('/registrations/:regId/reject-payment',
+  authenticate, checkPermission('competitions.manage'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const reason = String(req.body.reason || '').trim();
+      if (!reason) return res.status(400).json({ error: 'MISSING_REASON', message: '請填寫退回原因' });
+      const ref = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations').doc(req.params.regId);
+      const doc = await ref.get();
+      if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+      const reg = doc.data();
+      if (reg.paymentStatus === 'confirmed') return res.status(400).json({ error: 'ALREADY_CONFIRMED', message: '已確認收款，不可退回；如需處理請走退費' });
+      const staffNote = String(req.body.staffNote || '').trim();
+      await ref.update({
+        paymentStatus: 'transfer_rejected',
+        paymentRejectReason: reason,
+        paymentRejectedAt: new Date(),
+        ...(staffNote ? { staffNote } : {}),
+        updatedAt: new Date(),
+      });
+      // Email 通知報名者（失敗不阻斷）
+      try {
+        const email = reg.email || (await db.collection('members').doc(reg.memberId).get()).data()?.email;
+        if (email) {
+          const emailService = require('../services/emailService');
+          await emailService.sendEmail({
+            to: email,
+            subject: '【紅石攀岩】比賽報名繳費資訊未通過確認',
+            html: `<p>您好，您報名「${reg.competitionName || '比賽'}」的繳費資訊未通過確認。</p><p>原因：${reason}</p><p>請登入會員系統，至「比賽報名 → 我的報名」重新填寫繳費資訊。</p>`,
+          });
+        }
+      } catch (e) { console.error('比賽退回通知信失敗', e.message); }
+      res.json({ success: true, message: '已退回，報名者需重新填寫繳費資訊' });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
+// ── POST /competitions/registrations/:regId/payment-info - 會員重新填寫繳費資訊（被退回後補正）──
+router.post('/registrations/:regId/payment-info', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations').doc(req.params.regId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+    const reg = doc.data();
+    const deny = await checkMemberOwnership(req.member, reg.memberId, { onMissing: 403, message: '只能修改自己或子會員的報名' });
+    if (deny) return res.status(deny.status).json(deny.body);
+    if (!['transfer_rejected', 'pending'].includes(reg.paymentStatus)) {
+      return res.status(400).json({ error: 'NOT_EDITABLE', message: '此報名的繳費狀態不可修改' });
+    }
+    const paymentMethod = req.body.paymentMethod;
+    if (!['cash', 'transfer'].includes(paymentMethod)) return res.status(400).json({ error: 'INVALID_METHOD', message: '付款方式須為現金或轉帳' });
+    const paymentDate = String(req.body.paymentDate || '').trim();
+    const { taiwanToday } = require('../utils/taiwanDate');
+    const today = taiwanToday();
+    const maxDate = require('dayjs')(today).add(3, 'day').format('YYYY-MM-DD');
+    if (!paymentDate) return res.status(400).json({ error: 'MISSING_PAYMENT_DATE', message: '請填寫繳費日期' });
+    if (paymentDate < today || paymentDate > maxDate) return res.status(400).json({ error: 'INVALID_PAYMENT_DATE', message: '繳費日期須為 3 日內' });
+    await ref.update({
+      paymentMethod,
+      paymentDate,
+      bankName: paymentMethod === 'transfer' ? (String(req.body.bankName || '').trim() || null) : null,
+      bankLastFive: paymentMethod === 'transfer' ? (String(req.body.bankLastFive || '').trim() || null) : null,
+      paymentStatus: 'pending',
+      paymentRejectReason: null,
+      paymentRejectedAt: null,
+      updatedAt: new Date(),
+    });
+    res.json({ success: true, message: '繳費資訊已更新，請等待館方確認' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
 
 // ── POST /competitions/registrations/:regId/refund - 退費 ──
 router.post('/registrations/:regId/refund',

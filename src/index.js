@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '2.77.0-cash-confirm-station-settlement-adjust',
+    version: '2.78.0-experience-settings-manager-only',
   });
 });
 

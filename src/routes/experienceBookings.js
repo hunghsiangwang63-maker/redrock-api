@@ -2,7 +2,7 @@ const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const dayjs = require('dayjs');
-const { authenticate, authenticateAny } = require('../middleware/auth');
+const { authenticate, authenticateAny, requireManager } = require('../middleware/auth');
 const { getDb, getStorage } = require('../config/firebase');
 const XLSX = require('xlsx');
 const { sanitizeSheet } = require('../utils/xlsxSafe');
@@ -522,7 +522,7 @@ router.get('/settings', authenticateAny, async (req, res) => {
 });
 
 // ── PUT /experience-bookings/settings - 更新課程設定 ──────────────
-router.put('/settings', authenticate, async (req, res) => {
+router.put('/settings', authenticate, requireManager, async (req, res) => {
   try {
     const db = getDb();
     await db.collection('systemSettings').doc('experienceCourses').set({

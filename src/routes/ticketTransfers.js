@@ -217,8 +217,16 @@ router.get('/pending', authenticateAny, async (req, res) => {
       .where('toMemberId', 'in', ids)
       .where('status', '==', 'pending')
       .get();
-    const transfers = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    let transfers = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => (b.createdAt?._seconds || 0) - (a.createdAt?._seconds || 0));
+    // 補送出方姓名（供收件端顯示「來自 XXX」）
+    const fromIds = [...new Set(transfers.map(t => t.fromMemberId).filter(Boolean))];
+    if (fromIds.length) {
+      const fromDocs = await Promise.all(fromIds.map(id => db.collection('members').doc(id).get()));
+      const nameMap = {};
+      fromDocs.forEach(d => { if (d.exists) nameMap[d.id] = d.data().name; });
+      transfers = transfers.map(t => ({ ...t, fromMemberName: nameMap[t.fromMemberId] || '會員' }));
+    }
     res.json({ transfers });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

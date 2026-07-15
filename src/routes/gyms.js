@@ -41,6 +41,18 @@ const announceGymGuard = (req, res, next) => {
   next();
 };
 
+// 休館／特殊營業時間有票期補償財務副作用 → 限管理員（super_admin / gym_manager）；
+// 值班 operator（full/part 角色）僅可發一般／輪播／路線更換。
+const MANAGER_ONLY_TYPES = ['closure', 'special_hours'];
+const announceTypeGuard = (req, res, next) => {
+  const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+  if (isManager) return next();
+  if (MANAGER_ONLY_TYPES.includes(req.body?.type)) {
+    return res.status(403).json({ error: 'MANAGER_ONLY_TYPE', message: '休館／特殊營業時間公告限管理員發布' });
+  }
+  next();
+};
+
 // 會員可見的「發布時段」判定：publishAt <= now <= publishUntil（兩者皆選填）。
 // ⚠ 僅供「顯示給會員」的過濾。getGymStatusForDate（休館判定／定期票臨停補償來源）
 //   只看 publishAt、不套此函式——否則發布時段一過會讓休館「不算數」，補償錯亂。
@@ -345,7 +357,7 @@ router.put('/:id/hours',
 // POST /gyms/:id/announcements - 新增公告
 router.post('/:id/announcements',
   authenticate,
-  requireManagerOrStation, announceGymGuard,
+  requireManagerOrStation, announceGymGuard, announceTypeGuard,
   auditLog('announcement.create'),
   [
     body('title').notEmpty().withMessage('請輸入公告標題'),
@@ -395,7 +407,7 @@ router.post('/:id/announcements',
 // PUT /gyms/:id/announcements/:aid - 編輯公告
 router.put('/:id/announcements/:aid',
   authenticate,
-  requireManagerOrStation, announceGymGuard,
+  requireManagerOrStation, announceGymGuard, announceTypeGuard,
   auditLog('announcement.update'),
   async (req, res) => {
     try {
@@ -426,6 +438,14 @@ router.delete('/:id/announcements/:aid',
   async (req, res) => {
     try {
       const db = getDb();
+      // 值班（非管理員）不可下架休館／特殊營業時間公告（會反向影響票期補償）
+      const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+      if (!isManager) {
+        const cur = await db.collection(ANNOUNCE_COLLECTION).doc(req.params.aid).get();
+        if (cur.exists && MANAGER_ONLY_TYPES.includes(cur.data().type)) {
+          return res.status(403).json({ error: 'MANAGER_ONLY_TYPE', message: '休館／特殊營業時間公告限管理員下架' });
+        }
+      }
       // 軟刪除：設定為未發布
       await db.collection(ANNOUNCE_COLLECTION).doc(req.params.aid).update({
         isPublished: false,

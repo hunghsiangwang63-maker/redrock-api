@@ -613,6 +613,45 @@ router.post('/device/pending/:id/approve', authenticate, checkPermission('device
   }
 });
 
+// ── GET /auth/device/trusted - 已核准（信任）裝置清單 ─────────────
+router.get('/device/trusted', authenticate, checkPermission('devices.manage'), async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('trustedDevices').get();
+    const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // 權威補帳號名稱（staff / stations）
+    const staffSnap = await db.collection(COLLECTIONS.STAFF).get();
+    const stationSnap = await db.collection('stations').get();
+    const staffMap = Object.fromEntries(staffSnap.docs.map(d => [d.id, d.data()]));
+    const stationMap = Object.fromEntries(stationSnap.docs.map(d => [d.id, d.data()]));
+    const devices = rows.map(r => {
+      const acc = r.accountType === 'station' ? stationMap[r.accountId] : staffMap[r.accountId];
+      return {
+        id: r.id, accountType: r.accountType, accountId: r.accountId,
+        accountName: acc ? (acc.name || acc.gymName || r.accountId) : `${r.accountId}（帳號已不存在）`,
+        accountRole: acc?.role || null,
+        deviceLabel: r.deviceLabel || '',
+        approvedBy: r.approvedBy || '',
+        approvedAt: r.approvedAt || null,
+        lastUsedAt: r.lastUsedAt || null,
+      };
+    }).sort((a, b) => (a.accountType || '').localeCompare(b.accountType || '') || (a.accountName || '').localeCompare(b.accountName || ''));
+    res.json({ devices });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── DELETE /auth/device/trusted/:id - 移除信任裝置（該裝置下次登入需重新驗證）──
+router.delete('/device/trusted/:id', authenticate, checkPermission('devices.manage'), async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection('trustedDevices').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此裝置' });
+    await ref.delete();
+    res.json({ success: true, message: '已移除信任裝置，該裝置下次登入需重新驗證' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 router.post('/device/pending/:id/reject', authenticate, checkPermission('devices.manage'), async (req, res) => {
   try {
     const deviceAuthService = require('../services/deviceAuthService');

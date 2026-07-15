@@ -76,7 +76,7 @@ router.post('/request', authenticateAny, async (req, res) => {
       discount_card: 'discountCards',
       legacy_discount_card: 'legacyDiscountCards',
       black_card: 'legacyBlackCards',
-      bonus: 'bonusCards',
+      bonus: 'discountBonuses',
       single_entry: 'singleEntryTickets',
     };
     const colName = collectionMap[ticketType];
@@ -85,7 +85,9 @@ router.post('/request', authenticateAny, async (req, res) => {
     const ticketDoc = await db.collection(colName).doc(ticketId).get();
     if (!ticketDoc.exists) return res.status(404).json({ error: 'TICKET_NOT_FOUND' });
     const ticket = ticketDoc.data();
-    if (ticket.memberId !== requesterId)
+    // 紅利用 ownerMemberId，其餘票券用 memberId（bonus 存於 discountBonuses、欄位不同）
+    const ownerField = ticketType === 'bonus' ? 'ownerMemberId' : 'memberId';
+    if (ticket[ownerField] !== requesterId)
       return res.status(403).json({ error: 'NOT_OWNER', message: '此票券不屬於你' });
 
     // 建立移轉申請
@@ -133,7 +135,7 @@ router.post('/:id/accept', authenticateAny, async (req, res) => {
       discount_card: 'discountCards',
       legacy_discount_card: 'legacyDiscountCards',
       black_card: 'legacyBlackCards',
-      bonus: 'bonusCards',
+      bonus: 'discountBonuses',
       single_entry: 'singleEntryTickets',
     };
     const colName = collectionMap[transfer.ticketType];
@@ -144,9 +146,10 @@ router.post('/:id/accept', authenticateAny, async (req, res) => {
     const rule = TRANSFER_RULES[transfer.ticketType];
     const newFields = rule ? rule(ticket) : {};
 
-    // 更新票券持有人
+    // 更新票券持有人（紅利用 ownerMemberId，其餘用 memberId）
+    const ownerField = transfer.ticketType === 'bonus' ? 'ownerMemberId' : 'memberId';
     await ticketRef.update({
-      memberId: transfer.toMemberId,
+      [ownerField]: transfer.toMemberId,
       ...newFields,
       updatedAt: new Date(),
     });

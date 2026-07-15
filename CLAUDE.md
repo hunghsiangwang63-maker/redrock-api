@@ -1331,6 +1331,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **卡固定非零值（如 31%）→ 加 `playsinline: 1`**：`initPlayer` 的 `playerVars` 原 `{rel:0,modestbranding:1}` **缺 `playsinline:1`** → iOS Safari 點播放**強制跳原生全螢幕**、iframe 內 `getCurrentTime()` 停住 → 進度定格在跳全螢幕前的值。加 `playsinline:1` 讓 iOS 頁面內播放、進度持續前進。（桌機/Android 本就 inline、不受影響；需清快取/無痕重載。）commit（redrock-web）。
 - 📌 **未做（使用者選只加 playsinline）**：進度算法仍是「累積實際經過的整數秒」→ 切背景/鎖屏（setInterval 被節流暫停）與快轉跳看仍會表現為卡住。若再有回報，方向＝改「已達最大播放時間÷總長」或「累計觀看秒數」寬容化。
 
+## 狀態確認（2026-07-15）— 場館電腦看不到公告 UI ＝快取（無程式異動）
+- 📋 回報館別電腦看不到「場館設置/公告」UI。查證：程式已上線（線上 bundle 確認含「場館公告」tab），值班 operator 邏輯正確（`canOwnGymAnnounce` 對 operator 為 true、`GymsPage` 會選到自己館、能發自己館公告）。**根因＝館別電腦載到舊版快取**（使用者確認「看到舊畫面」）。**無需改程式**——館別電腦網址加 `?v=1`/無痕/清快取重載即可（PWA 圖示開的要刪圖示重加）。前提：需先打卡值班（純站台被「請先打卡上班」遮罩擋住整個畫面）；後端公告端點用 `authenticate`（需 staffId）→ 純站台 token 無 staffId 本就打不到，須 operator。
+
+## 目前進度（2026-07-15 續）— 修：入場統計/營收「學生免費·兒童免費」標籤誤導
+> 回報：今日統計的「學生免費」是什麼狀況？查證——`student_free`/`child_free` 是 entryType 的**歷史 id**（早年可能免費），實際學生單次入場收 250、兒童 150（近3天 8 筆 student_free 全有收費、無 0 元）。純標籤誤導、計費正常。後端 `/health` `2.83.0`→`2.84.0`。
+- ✅ **四處標籤 學生免費/兒童免費 → 學生入場/兒童入場**（純文字、不動計費）：①前端 `CheckinPage` 今日統計 typeLabel ②後端 `/checkin/today` 統計標籤（`2.83.0`）③前端 `RevenuePage` 入場分類 ④後端 `/revenue` byType 標籤（`2.84.0`）。全域掃描確認顯示層 0 殘留（僅 `checkin/pricing.js` 一行內部註解保留、不顯示）。系統其他處（掃碼預覽/今日紀錄/歷史/結帳/會員紀錄）本就用「學生入場/兒童入場」，現全一致。
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

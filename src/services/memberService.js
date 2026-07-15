@@ -394,6 +394,14 @@ const sanitizeMember = (m) => {
   return out;
 };
 
+// 清單專用：在 sanitizeMember 基礎上再移除 qrCode（靜態 base64 QR 圖，~4.6KB/筆）。
+// 全前端清單無人讀（入場走動態 qrToken）；詳情 getMember 仍保留 qrCode。
+const sanitizeMemberForList = (m) => {
+  const out = sanitizeMember(m);
+  if (out) delete out.qrCode;
+  return out;
+};
+
 // ── 搜尋會員 ─────────────────────────────────────────────────────
 const searchMembers = async ({ query, gymId, role, limit = 20, cursor }) => {
   const db = getDb();
@@ -410,11 +418,11 @@ const searchMembers = async ({ query, gymId, role, limit = 20, cursor }) => {
       m.name?.includes(query) ||
       m.phone?.includes(query) ||
       m.email?.includes(query)
-    ).slice(0, limit).map(sanitizeMember);
+    ).slice(0, limit).map(sanitizeMemberForList);
   }
 
   snapshot = await ref.orderBy('createdAt', 'desc').limit(limit).get();
-  return snapshot.docs.map(d => sanitizeMember({ id: d.id, ...d.data() }));
+  return snapshot.docs.map(d => sanitizeMemberForList({ id: d.id, ...d.data() }));
 };
 
 // ── 取得單一會員 ──────────────────────────────────────────────────

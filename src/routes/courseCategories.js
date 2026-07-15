@@ -145,6 +145,22 @@ router.put('/:id',
       const updates = { updatedAt: new Date() };
       EDITABLE.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
       await db.collection('courseCategories').doc(req.params.id).update(updates);
+
+      // 班別改名 → 連帶重組旗下所有梯次的顯示名（name＝班別名 梯次名）
+      // 否則梯次 name 為建立時存死的舊值，改名後畫面仍顯示舊班別名
+      if (updates.name !== undefined) {
+        const kids = await db.collection('courses').where('categoryId', '==', req.params.id).get();
+        const batch = db.batch();
+        let n = 0;
+        kids.docs.forEach(d => {
+          const c = d.data();
+          if (!c.cohortName) return;                       // 無梯次名者不重組
+          const composed = `${updates.name} ${c.cohortName}`;
+          if (composed !== c.name) { batch.update(d.ref, { name: composed, updatedAt: new Date() }); n++; }
+        });
+        if (n > 0) await batch.commit();
+      }
+
       res.json({ message: '班別已更新' });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }

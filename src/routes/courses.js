@@ -839,48 +839,16 @@ router.post('/:courseId/enroll-all',
         return res.status(400).json({ error: 'NO_SESSIONS', message: '此課程已無未來場次' });
       }
 
-      // 去重防護：此會員已在本課程有 confirmed / waitlist 報名 → 擋下（避免前端重複送出造成整期重複報名+重複收費）
-      const existing = await db.collection('courseEnrollments')
-        .where('memberId', '==', memberId)
-        .where('courseId', '==', courseId)
-        .where('status', 'in', ['confirmed', 'waitlist'])
-        .limit(1).get();
-      if (!existing.empty) {
-        return res.status(409).json({ error: 'ALREADY_ENROLLED', message: '您已報名此課程，請勿重複報名' });
-      }
-
       const courseDoc = await db.collection('courses').doc(courseId).get();
       const course = courseDoc.data();
       const { v4: uuidv4 } = require('uuid');
+      const { FieldValue } = require('firebase-admin').firestore;
       const now = new Date();
-      const batch = db.batch();
-
-      // ── 名額 / 候補控管（以整門課「不重複會員數」為準）──
-      // 滿 maxStudents → 進候補；候補也滿(maxWaitlist；null=不限) → 擋 COURSE_FULL。候補報名不收費，遞補後才收。
-      const courseEnrollSnap = await db.collection('courseEnrollments')
-        .where('courseId', '==', courseId)
-        .where('status', 'in', ['confirmed', 'waitlist'])
-        .get();
-      const confirmedMembers = new Set(), waitlistMembers = new Set();
-      courseEnrollSnap.forEach(d => {
-        const e = d.data();
-        (e.status === 'waitlist' ? waitlistMembers : confirmedMembers).add(e.memberId);
-      });
       const maxStudents = course.maxStudents || Infinity;
-      const occupied = confirmedMembers.size + (course.reservedSlots || 0); // 含外部帶入的已佔用名額
-      let enrollStatus = 'confirmed';
-      if (occupied >= maxStudents) {
-        const wcap = (course.maxWaitlist === null || course.maxWaitlist === undefined) ? Infinity : course.maxWaitlist;
-        if (waitlistMembers.size >= wcap) {
-          return res.status(409).json({ error: 'COURSE_FULL', message: '此課程正取與候補皆已額滿' });
-        }
-        enrollStatus = 'waitlist';
-      }
-      const isWaitlist = enrollStatus === 'waitlist';
-      const waitlistPosition = isWaitlist ? waitlistMembers.size + 1 : null;
 
       // 後端權威計算費用（不信任前端傳入的金額），邏輯與前端顯示一致：
       // 插班報名按剩餘場次比例計收，低於一半加成；隊員身份再套用九折（滿NT$100適用）
+      // ── fee 為純讀取、與名額/候補無關 → 置於交易外先算好 ──
       const allActiveSessions = sessionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       const completedCount = allActiveSessions.filter(s => s.date < today).length;
       const totalCount = allActiveSessions.length;
@@ -902,51 +870,91 @@ router.post('/:courseId/enroll-all',
       } catch (e) { /* 查無會員不影響報名，視為非隊員 */ }
       const discountResult = applyTeamDiscount(baseFee, isTeam);
       const fee = discountResult.discounted;
-
-      // 轉帳付款期限：會員轉帳報名 → 報名時間 +2 天（僅主報名 idx===0、非候補、非分期、fee>0）。
-      // 現金於櫃檯即時確認、不設期限。逾期未確認由每日 sweepExpiredCoursePayments 自動取消釋名額。
       const willInstallment = course.installment?.enabled && req.body.paymentPlan === 'installment' && !req.body.deferPayment;
-      const wantsPaymentDeadline = paymentMethod === 'transfer' && !isWaitlist && !req.body.deferPayment && !willInstallment && fee > 0;
-      const paymentDeadline = wantsPaymentDeadline ? require('dayjs')(now).add(2, 'day').toDate() : null;
 
+      // ── 交易：去重 + 名額/候補判定 + 建立報名（原子，杜絕並發雙擊造成重複報名/重複收費）──
+      // tx.get(query) 讓 Firestore 對查詢範圍做樂觀鎖：兩並發請求會有一方 abort+retry、
+      // 重讀後看到對方寫入的報名 → 去重與候補位次皆正確。場次計數用 FieldValue.increment 避免並發丟失。
       let firstEnrollmentId = null;
-      futureSessions.forEach((s, idx) => {
-        const enrollmentId = uuidv4();
-        if (idx === 0) firstEnrollmentId = enrollmentId;
-        batch.set(db.collection('courseEnrollments').doc(enrollmentId), {
-          id: enrollmentId,
-          memberId,
-          // 報名對象姓名：優先用傳入的 targetName（子女報名時＝子女名），否則登入者本人
-          memberName: req.body.memberName || req.member?.name || '',
-          sessionId: s.id,
-          courseId,
-          courseName: course.name,
-          gymId: s.gymId || gymId,
-          date: s.date,
-          startTime: s.startTime,
-          endTime: s.endTime,
-          status: enrollStatus,
-          waitlistPosition: isWaitlist ? waitlistPosition : null,
-          // 候補不收費（遞補為正取後才收）；正取維持原本第一筆收費、其餘 0
-          enrollmentFee: isWaitlist ? 0 : (idx === 0 ? fee : 0),
-          paymentMethod: (isWaitlist || idx !== 0) ? null : paymentMethod,
-          paymentStatus: isWaitlist ? 'na' : (idx === 0 ? 'pending' : 'na'),
-          // 付款期限只掛在主報名（idx===0）；sweep 依此取消整門課、釋放各場次名額
-          paymentDeadline: idx === 0 ? paymentDeadline : null,
-          gymAccessStart: s.date,
-          gymAccessEnd: require('dayjs')(s.date).add(course.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD'),
-          enrolledBy: memberId,
-          enrolledAt: now,
-          createdAt: now,
-          updatedAt: now,
-        });
-        batch.update(db.collection('courseSessions').doc(s.id),
-          isWaitlist
-            ? { waitlistCount: (s.waitlistCount || 0) + 1, updatedAt: now }
-            : { enrolledCount: (s.enrolledCount || 0) + 1, updatedAt: now });
-      });
+      let enrollStatus = 'confirmed';
+      let isWaitlist = false;
+      let waitlistPosition = null;
+      let paymentDeadline = null;
+      await db.runTransaction(async (tx) => {
+        // 讀取（交易內所有讀取須在寫入之前）
+        // 去重：本課程已有 confirmed / waitlist / leave（請假中）報名 → 擋（避免重複報名+重複收費）
+        const dupSnap = await tx.get(
+          db.collection('courseEnrollments')
+            .where('memberId', '==', memberId)
+            .where('courseId', '==', courseId)
+            .where('status', 'in', ['confirmed', 'waitlist', 'leave'])
+        );
+        if (!dupSnap.empty) { const e = new Error('您已報名此課程，請勿重複報名'); e.code = 'ALREADY_ENROLLED'; throw e; }
 
-      await batch.commit();
+        // 名額 / 候補（以整門課「不重複會員數」為準）：滿 maxStudents → 候補；候補也滿(maxWaitlist；null=不限) → COURSE_FULL
+        const courseEnrollSnap = await tx.get(
+          db.collection('courseEnrollments')
+            .where('courseId', '==', courseId)
+            .where('status', 'in', ['confirmed', 'waitlist'])
+        );
+        const confirmedMembers = new Set(), waitlistMembers = new Set();
+        courseEnrollSnap.forEach(d => {
+          const e = d.data();
+          (e.status === 'waitlist' ? waitlistMembers : confirmedMembers).add(e.memberId);
+        });
+        const occupied = confirmedMembers.size + (course.reservedSlots || 0); // 含外部帶入的已佔用名額
+        enrollStatus = 'confirmed';
+        if (occupied >= maxStudents) {
+          const wcap = (course.maxWaitlist === null || course.maxWaitlist === undefined) ? Infinity : course.maxWaitlist;
+          if (waitlistMembers.size >= wcap) { const e = new Error('此課程正取與候補皆已額滿'); e.code = 'COURSE_FULL'; throw e; }
+          enrollStatus = 'waitlist';
+        }
+        isWaitlist = enrollStatus === 'waitlist';
+        waitlistPosition = isWaitlist ? waitlistMembers.size + 1 : null;
+
+        // 轉帳付款期限：會員轉帳報名 → 報名時間 +2 天（僅主報名 idx===0、非候補、非分期、fee>0）。
+        // 現金於櫃檯即時確認、不設期限。逾期未確認由每日 sweepExpiredCoursePayments 自動取消釋名額。
+        const wantsPaymentDeadline = paymentMethod === 'transfer' && !isWaitlist && !req.body.deferPayment && !willInstallment && fee > 0;
+        paymentDeadline = wantsPaymentDeadline ? require('dayjs')(now).add(2, 'day').toDate() : null;
+
+        // 寫入
+        firstEnrollmentId = null;
+        futureSessions.forEach((s, idx) => {
+          const enrollmentId = uuidv4();
+          if (idx === 0) firstEnrollmentId = enrollmentId;
+          tx.set(db.collection('courseEnrollments').doc(enrollmentId), {
+            id: enrollmentId,
+            memberId,
+            // 報名對象姓名：優先用傳入的 targetName（子女報名時＝子女名），否則登入者本人
+            memberName: req.body.memberName || req.member?.name || '',
+            sessionId: s.id,
+            courseId,
+            courseName: course.name,
+            gymId: s.gymId || gymId,
+            date: s.date,
+            startTime: s.startTime,
+            endTime: s.endTime,
+            status: enrollStatus,
+            waitlistPosition: isWaitlist ? waitlistPosition : null,
+            // 候補不收費（遞補為正取後才收）；正取維持原本第一筆收費、其餘 0
+            enrollmentFee: isWaitlist ? 0 : (idx === 0 ? fee : 0),
+            paymentMethod: (isWaitlist || idx !== 0) ? null : paymentMethod,
+            paymentStatus: isWaitlist ? 'na' : (idx === 0 ? 'pending' : 'na'),
+            // 付款期限只掛在主報名（idx===0）；sweep 依此取消整門課、釋放各場次名額
+            paymentDeadline: idx === 0 ? paymentDeadline : null,
+            gymAccessStart: s.date,
+            gymAccessEnd: require('dayjs')(s.date).add(course.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD'),
+            enrolledBy: memberId,
+            enrolledAt: now,
+            createdAt: now,
+            updatedAt: now,
+          });
+          tx.update(db.collection('courseSessions').doc(s.id),
+            isWaitlist
+              ? { waitlistCount: FieldValue.increment(1), updatedAt: now }
+              : { enrolledCount: FieldValue.increment(1), updatedAt: now });
+        });
+      });
 
       // 營收認列在最後一堂課（course.endDate；無則用無限練習迄日/最後場次日）
       const courseRecognitionDate = course.endDate
@@ -1023,6 +1031,12 @@ router.post('/:courseId/enroll-all',
         teamDiscountAmount: isWaitlist ? 0 : discountResult.discount,
       });
     } catch (err) {
+      if (err && err.code === 'ALREADY_ENROLLED') {
+        return res.status(409).json({ error: 'ALREADY_ENROLLED', message: err.message || '您已報名此課程，請勿重複報名' });
+      }
+      if (err && err.code === 'COURSE_FULL') {
+        return res.status(409).json({ error: 'COURSE_FULL', message: err.message || '此課程正取與候補皆已額滿' });
+      }
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }
   }

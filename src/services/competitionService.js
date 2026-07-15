@@ -327,6 +327,16 @@ const registerForCompetition = async ({
   // 原子化容量判斷 + 寫入：交易內重新讀取計數，避免並發超賣（前面的檢查僅為快速失敗）
   const regRef = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(registrationId);
   await db.runTransaction(async (tx) => {
+    // 權威去重（交易內原子，杜絕並發雙擊重複報名/重複收費）：同會員同賽事已有非取消報名 → 擋。
+    // 上方 191 行的同款檢查僅為快速失敗（避免對明顯重複者先上傳簽名）；此處為權威把關。
+    const dupTx = await tx.get(
+      db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS)
+        .where('competitionId', '==', competitionId)
+        .where('memberId', '==', memberId)
+    );
+    if (dupTx.docs.some(d => d.data().status !== 'cancelled')) {
+      throw { code: 'ALREADY_REGISTERED', message: `${memberName || '此會員'} 已報名此賽事` };
+    }
     const q = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS)
       .where('competitionId', '==', competitionId)
       .where('divisionId', '==', divisionId)

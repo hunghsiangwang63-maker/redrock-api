@@ -1373,6 +1373,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **班別改名連帶重組梯次顯示名**（`2.95.0-category-rename-recompose-cohorts`，commit `bf5e45c`）：回報新竹館「小蜘蛛人入門班」要改「小蜘蛛人初級班」。查明班別（courseCategory `ebf83b51`）名稱**其實早已是初級班**，但梯次顯示名 `name` 是**建立時存死的**（`courseService` create 存 `班別名+梯次名`、getCourses 讀取不重組）、改名不回寫 → 新竹館 8 梯停在舊「小蜘蛛人入門班 週X班」（士林那筆後建、已正確）。根因＝`PUT /course-categories/:id` 只更 category 文件、不回寫子梯次。**修**：PUT 班別改名（`updates.name!==undefined`）時 batch 重組旗下所有有 `cohortName` 的梯次 `name`＝新班別名+梯次名；一次性校正現有 8 個 stale 梯次。
 - 📋 **產出各館課程正確名稱清單（匯入課程學員用）**：`~/Downloads/課程名稱清單_<日期>.csv`（21 active 梯次，欄位 館別/大類/班別/梯次名/**課程完整名稱(匯入用)**/星期時間/開課迄日/教練/courseId）。匯入注意：①「小蜘蛛人初級班」新竹＋士林都有梯次 → 對應務必帶館別或用 courseId ②矯正班兩梯僅差括號教練名（晉瑋教練/閎聿教練）為不同梯次。腳本走 firebase-admin。
 
+## 目前進度（2026-07-16）— 課程整期/比賽報名改 transaction 原子去重 + 課程去重補 leave 狀態
+> 回報「課程或比賽會有重複報名嗎？」查證：兩者本有後端去重（課程 `ALREADY_ENROLLED`、比賽 `ALREADY_REGISTERED`），但都是**讀後寫、非交易** → 並發雙擊（同 ~100–300ms 兩請求都先過查詢才各自寫入）理論上仍可能各建一筆（2026-07-08 朱智萩重複收費事故即同型）。改成 transaction 杜絕。後端 `/health` `2.96.0-enroll-register-transaction-dedup`；E2E（打正式 API 並發）**9/9**。commit `8b4fca7`。
+- ✅ **課程 `POST /courses/:courseId/enroll-all` 全面交易化**（`courses.js`）：去重查詢 + 名額/候補判定 + 建立整期報名 + 場次計數包進 `db.runTransaction`。用 **`tx.get(query)`**（Firestore 對查詢範圍做樂觀鎖）→ 兩並發請求會有一方 abort+retry、重讀後看到對方已寫入的報名 → **去重與候補位次皆正確**。fee 計算為純讀取（隊員折扣/插班比例）**移到交易外**先算好；`willInstallment` 交易外算、`paymentDeadline` 依 isWaitlist 交易內算。場次計數由 `(s.count||0)+1` 改 **`FieldValue.increment(1)`**（避免多會員並發時計數丟失）。業務錯誤（`ALREADY_ENROLLED`/`COURSE_FULL`）於交易內 `throw new Error` 帶 `.code`、catch 映射 **409**。
+- ✅ **課程去重補 `leave`（請假中）狀態**：去重狀態由 `['confirmed','waitlist']` → `['confirmed','waitlist','leave']`（請假中也算已報名、擋重複；索引需求不變）。
+- ✅ **比賽 `registerForCompetition` 去重移進既有交易**（`competitionService.js`）：原本容量判定已在 `runTransaction` 內，但**去重查詢在交易外**（191 行，僅快速失敗）→ 把「同會員同賽事非取消報名」的 `tx.get` 加進同一交易頂端當**權威把關**（並發雙擊只成立一筆）。交易外的快速失敗保留（避免對明顯重複者先上傳簽名）。
+- **E2E（打正式 API，臨時會員注入 bcrypt 密碼登入，9/9）**：課程並發 6 請求 → **僅 1 成功、5 個 409 ALREADY_ENROLLED、DB 只建一組報名(=場次數)、場次計數=1**；`leave` 中再報名擋 409；比賽並發 6 請求 → 僅 1 成功(201)、5 個 ALREADY_REGISTERED、DB 只一筆有效報名。腳本 `scratchpad/dedup-tx-e2e.cjs`，測後 0 殘留。
+- 💡 **教訓**：讀後寫的去重/名額判定在並發下不可靠；Firestore `tx.get(query)` 會把查詢結果納入交易讀取集，任何並發寫入落在查詢範圍 → abort+retry，天然序列化（同時解決去重 + 位次/計數正確）；跨文件計數優先 `FieldValue.increment`。E2E 繳費日期要用**台灣今天**（UTC 日期會早一天觸發 `INVALID_PAYMENT_DATE`）。
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

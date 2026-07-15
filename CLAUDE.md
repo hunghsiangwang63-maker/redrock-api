@@ -1344,6 +1344,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端**（`CheckinPage`，僅 super_admin 視角）：上月由單一灰線 → **上月新竹淡紅 `#E0A6A6`、上月士林淡藍 `#A6C3E5`，細虛線**（strokeWidth 1、`strokeDasharray 3 3`，畫在本月兩館實線後方當背景參考）；圖例四項（新竹/士林實線＋上月新竹/上月士林淡色虛線）。**單館帳號（站台/館長）維持本月實線＋上月灰線不變**。
 - 📌 目前上月（6月）資料量少、虛線貼底不明顯；8 月看 7 月資料時會清楚。
 
+## 目前進度（2026-07-15 續）— 修：會員端紅利轉移一直失效（Timo Volz 案例）
+> 回報 Timo Volz 轉移紅利給 0963290219（黄倫玄）失效。查證：紅利完好（未用/未過期/isActive）、`ticketTransfers` 全空＝申請根本沒送出成功。後端 `/health` `2.86.0`；E2E（打 Railway）8/8。
+- 🔍 **三個 bug（會員端紅利轉移從未成功過）**：會員 App 紅利走 `POST /ticket-transfers/request`（兩段式），但該端點對 `bonus` 型別——① `collectionMap` 把 bonus 對應到**`bonusCards`**（空集合），實際紅利在 **`discountBonuses`** → 申請即 404 `TICKET_NOT_FOUND`（Timo 卡在這）；② 擁有權檢查用 `ticket.memberId`，但紅利用 **`ownerMemberId`**（無 memberId 欄）→ `NOT_OWNER` 403；③ 接收時更新 `memberId`，但 `getMemberBonuses` 查 `ownerMemberId` → 收件人看不到。此通用流程為「用 memberId 的票券（單次券）」寫的，紅利欄位不同、三處皆錯。
+- ✅ **修**（`ticketTransfers.js`，request＋accept）：bonus 集合改 `discountBonuses`（兩處）；擁有權與接收持有人更新改用 `ownerMemberId`（`ownerField = ticketType==='bonus' ? 'ownerMemberId':'memberId'`）。單次券等用 memberId 者不受影響。
+- **E2E（8/8）**：臨時 A→B＋紅利（discountBonuses）→ A 申請 201 → B 接收 200 → 紅利 `ownerMemberId` 改 B、A 查無、B 查得到。fixtures 全清。
+- 📌 Timo 紅利完好可用（到期 2027-01-15），請其自行在 App 重新申請轉移給黄倫玄（對方 24h 內接收）；未代操作。
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

@@ -1287,6 +1287,23 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📊 **有效會員 121**（主帳號 119＋子會員 2；全自助註冊、Email 已驗證 118；隊員 26；前置全完成 118、3 位卡待辦）。
 - 🧹 已清「【練習】V隊」（e2e-vt，連帶 waiver＋墜測 2 筆）；「【練習】比賽報名測試」保留測試用。
 
+## 目前進度（2026-07-15 續）— 裝置驗證信收件人防呆 + 信任裝置管理 + 比賽現金收款
+> 承裝置驗證信修復，處理王登第回報「重寄驗證信收不到」引出的資料/防呆，並補信任裝置清單管理、比賽現金收款開放值班+寫結帳。
+- ✅ **修：王登第重寄驗證信收不到**（後端 `/health` `2.75.0`）：查出其員工帳號 `notificationEmail` 被誤填 `"see"`（非合法 email）→ 驗證碼寄到垃圾位址。**資料修復**：清除該 `notificationEmail`（回退主 email `tengti.wang0110@gmail.com`）。**程式防呆**：`auth.js` 建立裝置驗證時 `accountEmail` 改「`notificationEmail` 須通過 email regex 才用，否則退回主 `email`」（`5fd..` 同型：垃圾值不再吞驗證碼）。commit `redrock-api`。
+- ✅ **信任裝置清單＋移除**（後端 `/health` `2.76.0`，commit 後端＋前端）：新增 `GET /auth/device/trusted`（回帳號名/裝置/核准/最後使用，權威補 staff/stations 名稱）＋`DELETE /auth/device/trusted/:id`（devices.manage）。設定 →「裝置審核」分頁待審核卡下方加「已核准裝置（N）」清單＋「移除」鈕（移除後該裝置下次登入需重新驗證）。實機驗證 8 筆＋移除鈕。
+- 🧹 **清信任裝置殘留**：孤兒 3 筆（舊測試員工 `uuriibjJt24…`×2、`staff-ft-hc`）＋陳莉涵完全重複 1 筆＋現金 E2E 殘留 2 筆（`e2e-cash-station`/`e2e-cash-op`）。陳莉涵剩 2 筆為**不同 deviceToken**（同手機兩瀏覽器 session）＝合法多裝置、保留。現存 9 筆真實裝置。
+- ✅ **比賽/課程臨櫃現金收款：開放值班確認＋自動寫結帳加減項**（後端 `/health` `2.77.0`，E2E 9/9）：
+  - **比賽現金收款開放值班**：`POST /competitions/registrations/:id/confirm-payment` 由 `checkPermission('competitions.manage')`（管理員）→ 現金比照課程「值班 operator/館別電腦 或管理員」、轉帳仍限管理員；加**冪等**（已 confirmed 不重複記帳）。前端待辦頁 `competition_payment` 改 per-task 分權（現金→值班/管理員、轉帳→管理員）。
+  - **現金收款→自動寫當日結帳加減項**：新增 `settlementService.addCashAdjustment({gymId,amount,note})`——比賽/課程臨櫃現金收款確認時，金額寫入該館**今日結帳** `deductions` 一筆「**＋現金補入**」（`note`＝人名＋活動名、`auto:true`）；無今日 doc → 建暫存檔（draft、店員開結帳頁自動載入）、已有 → 附加。接入 `transfers.js`（course/competition 現金 confirm）與 `competitions.js`（confirm-payment 現金）。
+  - **E2E（9/9）**：值班 operator 確認比賽現金 200＋加減項寫入「＋現金補入 990 人名+賽名」、重複確認冪等、值班確認轉帳被擋 403、課程現金 confirm 寫假館結帳暫存加減項。
+- ✅ **關閉員工體驗課程設定權限**（後端 `/health` `2.78.0`，E2E 5/5，commit 後端＋前端）：體驗課程設定（試上費/保費/課程類型/保險收件人）原 `PUT /experience-bookings/settings` 只 `authenticate`（**全員工含值班皆可改**）→ 改 `requireManager`（**僅系統/館別管理員**，正職/兼職/值班皆擋 403 `MANAGER_REQUIRED`）；GET 讀取不變（員工操作預約仍需讀設定）。前端「體驗課程」頁「⚙ 課程設定」分頁對非管理員隱藏＋防呆不渲染。E2E：正職讀取 200/改設定 403/管理員改 200。
+
+## 📋 權限盤點（2026-07-15，無程式異動，供對照）
+- **五角色**：`super_admin`（系統管理員·跨兩館）/ `gym_manager`（館別管理員·單館，**目前 0 位**）/ `full_time`（正職）/ `part_time`（兼職）/ `member`（會員）。實際員工 15：super 3（Sean/Debby/系統管理員）、full 5、part 7。
+- **關鍵分水嶺＝值班**：正職/兼職個人帳號登入（type=staff）只能辦公類（課程/庫存/班表檢視）；櫃檯操作（入場/發券/收款/結帳/POS）須在館別電腦打卡值班（type=operator）取得整組 `COUNTER_PERMS`。管理員不受此限。
+- **三層 gate**：`checkPermission`（矩陣，super 一律過、operator 值班享 COUNTER_PERMS）/ `requireManagerOrStation`（管理員或值班）/ `requireManager`（僅管理員，值班也擋）/ `requireStationAuth`（operator 或 super——**每日結帳連館別管理員也需值班**）。
+- **產出兩份 Artifact**（依 `src/middleware/auth.js` 矩陣+各路由 gate）：①依功能分類 ②依頁面（每頁×5角色）。狀態 ●完整/◐需值班/◔檢視部分/—無。
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

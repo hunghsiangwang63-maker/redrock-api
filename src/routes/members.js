@@ -90,7 +90,7 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
     const SOURCES = [
       { coll: 'courseEnrollments',        type: 'course',      label: '課程報名', link: '/member/courses',     name: (o) => o.courseName },
       { coll: 'experienceBookings',       type: 'experience',  label: '體驗預約', link: '/member/experience',  name: (o) => o.courseName || o.courseType },
-      { coll: 'competitionRegistrations', type: 'competition', label: '比賽報名', link: '/member/competitions', name: (o) => o.competitionName },
+      { coll: 'competitionRegistrations', type: 'competition', label: '比賽報名', link: '/member/competitions?tab=my', name: (o) => o.competitionName },
       { coll: 'equipmentRentals',         type: 'rental',      label: '裝備租借', link: '/member/rental',      name: (o) => o.itemName || o.equipmentName },
       { coll: 'teamApplications',         type: 'team_member', label: '入隊申請', link: '/member/team',        name: (o) => `${o.year} 年度攀岩隊` },
     ];
@@ -123,7 +123,7 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
         if (o.status === 'cancelled' || !o.parentRequired || o.isComplete) return;
         alerts.push({
           type: 'competition_guardian_sign', kind: 'action',
-          label: '比賽報名', link: '/member/competitions',
+          label: '比賽報名', link: '/member/competitions?tab=my',
           name: o.competitionName || '比賽',
           reason: '未成年報名待法定代理人簽署參賽同意書',
           memberName: id === req.member.id ? null : (kids.docs.find(k => k.id === id)?.data()?.name || null),

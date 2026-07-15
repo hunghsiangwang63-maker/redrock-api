@@ -334,15 +334,18 @@ router.post('/registrations/:regId/cancel',
       if (reg.status === 'cancelled')
         return res.status(400).json({ error: 'ALREADY_CANCELLED', message: '此報名已取消' });
 
+      // 已繳費(confirmed)的取消才算「申請退費」→ 標記 refundRequested + 存退費帳號、建待辦通知管理員；
+      // 未繳費(pending)是純「取消報名」→ 無款可退，不標記退費、不通知（避免會員以為在等退費、櫃檯卻看不到）
+      const isPaidReg = reg.paymentStatus === 'confirmed';
       await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(req.params.regId).update({
         status: 'cancelled',
         cancelledAt: new Date(),
         cancelReason: req.body.reason || '會員申請取消',
-        refundRequested: true,
-        refundBankName: req.body.refundBankName || null,
-        refundBankCode: req.body.refundBankCode || null,
-        refundAccount: req.body.refundAccount || null,
-        refundAccountName: req.body.refundAccountName || null,
+        refundRequested: isPaidReg,
+        refundBankName: isPaidReg ? (req.body.refundBankName || null) : null,
+        refundBankCode: isPaidReg ? (req.body.refundBankCode || null) : null,
+        refundAccount: isPaidReg ? (req.body.refundAccount || null) : null,
+        refundAccountName: isPaidReg ? (req.body.refundAccountName || null) : null,
         updatedAt: new Date(),
       });
 
@@ -373,7 +376,9 @@ router.post('/registrations/:regId/cancel',
           await notifyRoleInGym({ ...payload, role: 'super_admin' });
         } catch (e) { console.error('比賽退費通知失敗', e.message); }
       }
-      res.json({ success: true, message: '報名已取消，名額已釋出。退費將於比賽結束後一週內統一處理。' });
+      res.json({ success: true, message: isPaidReg
+        ? '報名已取消，名額已釋出。退費將於比賽結束後一週內統一處理。'
+        : '報名已取消，名額已釋出。（尚未繳費，無需退費）' });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );

@@ -267,6 +267,18 @@ const sendInstallmentReminders = async () => {
   return { reminderSent: 0, overdueSent: 0, adminNotified: 0 };
 };
 
+// 裝置驗證碼（員工/站台新裝置登入 OTP；效期 10 分鐘）
+const sendDeviceVerificationCode = async (email, name, code) => {
+  return sendEmail({
+    to: email,
+    subject: '【紅石攀岩】新裝置登入驗證碼',
+    html: `<p>${esc(name || '')} 您好，</p>
+<p>您正在新的裝置上登入紅石攀岩館系統，驗證碼：</p>
+<p style="font-size:28px;font-weight:700;letter-spacing:6px;">${esc(code)}</p>
+<p>驗證碼 10 分鐘內有效。若非您本人操作，請忽略此信並通知管理員。</p>`,
+  });
+};
+
 module.exports = {
   esc, // HTML 跳脫（供各路由組信件時共用）
   sendEmail,
@@ -280,4 +292,5 @@ module.exports = {
   sendInstallmentReminders,
   sendParentWaiverLink,
   sendParentCompetitionWaiverLink,
+  sendDeviceVerificationCode,
 };

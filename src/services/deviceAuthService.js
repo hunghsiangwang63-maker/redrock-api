@@ -59,6 +59,13 @@ const createDeviceVerification = async ({ accountType, accountId, accountName, a
     if (!existing.empty) {
       const doc = existing.docs[0];
       if (dayjs(toDate(doc.data().otpExpiresAt)).isAfter(dayjs())) {
+        // 沿用未過期驗證單，並「重寄」同一組驗證碼（使用者再按一次登入＝重寄；登入已有限流）
+        if (accountEmail) {
+          try {
+            const emailService = require('./emailService');
+            await emailService.sendDeviceVerificationCode(accountEmail, accountName, doc.data().otpCode);
+          } catch (e) { console.error('裝置驗證碼Email重寄失敗:', e.message); }
+        }
         return { verificationId: doc.id };
       }
     }

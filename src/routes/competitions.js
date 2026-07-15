@@ -39,6 +39,15 @@ router.post('/',
   }
 );
 
+// ── POST /competitions/sweep-expired-payments - 手動觸發逾期剔除（super_admin，供測試/補跑）──
+router.post('/sweep-expired-payments', authenticate, async (req, res) => {
+  try {
+    if (req.staff?.role !== 'super_admin') return res.status(403).json({ error: 'FORBIDDEN' });
+    const r = await competitionService.sweepExpiredCompetitionPayments();
+    res.json({ success: true, ...r });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── PUT /competitions/:id - 修改賽事 ───────────────────────────────
 router.put('/:id', authenticate, checkPermission('competitions.manage'), async (req, res) => {
   try {

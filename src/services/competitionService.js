@@ -21,7 +21,7 @@ const SCORING_SYSTEMS = ['rating_system', 'competition_management_v2'];
 // 賽事管理
 // ══════════════════════════════════════════════════════
 
-const createCompetition = async ({ name, description, gymId, registrationStart, registrationEnd, earlyBirdDeadline, eventDate, divisions, customFields, waiverContent, scoringSystem, webhookUrl, fees, refundPolicies, status, staffId }) => {
+const createCompetition = async ({ name, description, gymId, registrationStart, registrationEnd, earlyBirdDeadline, eventDate, divisions, customFields, waiverContent, scoringSystem, webhookUrl, fees, refundPolicies, status, paymentDeadlineDays, staffId }) => {
   if (!SCORING_SYSTEMS.includes(scoringSystem)) {
     throw { code: 'INVALID_SCORING_SYSTEM', message: 'scoringSystem 必須為 rating_system 或 competition_management_v2' };
   }
@@ -50,6 +50,8 @@ const createCompetition = async ({ name, description, gymId, registrationStart, 
       teamMemberDiscount: 0.9,
       childAgeLimit: 15, // 幾歲以下算兒童
     },
+    // 繳款期限：報名日 + N 天內須完成繳費（含臨櫃繳款），逾期由排程自動剔除名單。預設 3 天。
+    paymentDeadlineDays: (paymentDeadlineDays === undefined || paymentDeadlineDays === null || paymentDeadlineDays === '') ? 3 : Math.max(1, parseInt(paymentDeadlineDays) || 3),
     // 退費政策（多組截止日+退款計算）
     refundPolicies: refundPolicies || [],
     customFields: (customFields || []).map(f => ({
@@ -103,9 +105,12 @@ const updateCompetition = async (competitionId, updates) => {
   }
 
   const allowed = ['name', 'description', 'gymId', 'registrationStart', 'registrationEnd', 'earlyBirdDeadline', 'eventDate',
-    'divisions', 'customFields', 'waiverContent', 'scoringSystem', 'webhookUrl', 'status', 'fees', 'refundPolicies'];
+    'divisions', 'customFields', 'waiverContent', 'scoringSystem', 'webhookUrl', 'status', 'fees', 'refundPolicies', 'paymentDeadlineDays'];
   const payload = { updatedAt: new Date() };
   allowed.forEach(f => { if (updates[f] !== undefined) payload[f] = updates[f]; });
+  if (payload.paymentDeadlineDays !== undefined) {
+    payload.paymentDeadlineDays = (payload.paymentDeadlineDays === null || payload.paymentDeadlineDays === '') ? 3 : Math.max(1, parseInt(payload.paymentDeadlineDays) || 3);
+  }
 
   await ref.update(payload);
   const merged = { id: competitionId, ...doc.data(), ...payload };
@@ -350,6 +355,11 @@ const registerForCompetition = async ({
     const willWaitlist = cCount >= maxParticipants;
     registration.status = willWaitlist ? 'waitlist' : 'confirmed';
     registration.waitlistPosition = willWaitlist ? wCount + 1 : null;
+    // 繳款期限：正取且有費用 → 報名日 + N 天內須完成繳費（含臨櫃繳款），逾期由排程自動剔除。候補不設（遞補時才設）。
+    if (!willWaitlist && registrationFee > 0) {
+      const N = competition.paymentDeadlineDays || 3;
+      registration.paymentDeadline = dayjs(now).add(N, 'day').toDate();
+    }
     tx.set(regRef, registration);
   });
 
@@ -513,7 +523,14 @@ const promoteNextWaitlist = async (competitionId, divisionId) => {
         (a.waitlistPosition || 9999) - (b.waitlistPosition || 9999) ||
         ((a.registeredAt?.seconds || a.registeredAt?._seconds || 0) - (b.registeredAt?.seconds || b.registeredAt?._seconds || 0)));
     const next = sorted[0];
-    tx.update(next.ref, { status: 'confirmed', waitlistPosition: null, promotedAt: new Date(), updatedAt: new Date() });
+    // 遞補為正取 → 起算繳款期限（報名日制不適用，改以遞補日 + N 天）；已收款或免費者不設
+    const promoteUpdate = { status: 'confirmed', waitlistPosition: null, promotedAt: new Date(), updatedAt: new Date() };
+    if (next.paymentStatus !== 'confirmed' && (next.registrationFee || 0) > 0) {
+      const comp = (await tx.get(db.collection(COLLECTIONS.COMPETITIONS).doc(competitionId))).data();
+      const N = (comp && comp.paymentDeadlineDays) || 3;
+      promoteUpdate.paymentDeadline = dayjs().add(N, 'day').toDate();
+    }
+    tx.update(next.ref, promoteUpdate);
     // 其餘候補位置往前遞移
     for (let i = 1; i < sorted.length; i++) {
       tx.update(sorted[i].ref, { waitlistPosition: i, updatedAt: new Date() });
@@ -583,7 +600,47 @@ const recordCompetitionRevenue = async ({ db, regId, sign = 1, refund = false, s
   if (sign > 0) await regRef.update({ revenueRecorded: true });
 };
 
+// 逾期未繳費自動剔除名單：正取 + 未繳費 + 「未填匯款資料」+ 有費用 + 逾繳款期限 → 取消、釋名額、遞補候補、Email 通知。
+// 只剔除「未填匯款資料」者（pending 且無末五碼）；已填待確認(pending_confirm/有末五碼)、已收款、免費者不剔除。
+const sweepExpiredCompetitionPayments = async () => {
+  const db = getDb();
+  const now = new Date();
+  const snap = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS)
+    .where('status', '==', 'confirmed')
+    .where('paymentStatus', '==', 'pending')
+    .get();
+  let cancelled = 0;
+  for (const doc of snap.docs) {
+    const r = doc.data();
+    if (!(r.registrationFee > 0)) continue;   // 免費（榮譽）不剔除
+    if (r.bankLastFive) continue;             // 已填匯款資料（待確認）→ 不剔除（球在櫃檯）
+    if (!r.paymentDeadline) continue;
+    const dl = r.paymentDeadline.toDate ? r.paymentDeadline.toDate()
+      : new Date(r.paymentDeadline._seconds ? r.paymentDeadline._seconds * 1000 : r.paymentDeadline);
+    if (dl >= now) continue;
+    try {
+      await doc.ref.update({ status: 'cancelled', cancelReason: 'payment_expired', paymentExpiredAt: now, updatedAt: now });
+      const comp = (await db.collection(COLLECTIONS.COMPETITIONS).doc(r.competitionId).get()).data();
+      const { isCompScoring, removeCompAthlete } = require('./competitionSyncService');
+      if (comp && isCompScoring(comp)) { try { await removeCompAthlete(comp, doc.id); } catch (e) {} }
+      try { await promoteNextWaitlist(r.competitionId, r.divisionId); } catch (e) {}
+      const email = r.email || (await db.collection('members').doc(r.memberId).get()).data()?.email;
+      if (email) {
+        try {
+          const emailService = require('./emailService');
+          await emailService.sendEmail({ to: email, subject: '【紅石攀岩】比賽報名已逾期取消',
+            html: `<p>您好，您報名「${r.competitionName || '比賽'}」因逾繳款期限未完成繳費，已自動取消、釋出名額。</p><p>如仍要參賽請重新報名（額滿可能改候補）。</p>` });
+        } catch (e) {}
+      }
+      cancelled++;
+    } catch (e) { console.error('sweepExpiredCompetitionPayments 單筆失敗', doc.id, e.message); }
+  }
+  if (cancelled > 0) console.log(`[比賽逾期] 取消 ${cancelled} 筆未繳費報名`);
+  return { cancelled };
+};
+
 module.exports = {
+  sweepExpiredCompetitionPayments,
   SCORING_SYSTEMS,
   createCompetition, updateCompetition, getCompetitions, getCompetition,
   registerForCompetition, signParentCompetitionWaiver,

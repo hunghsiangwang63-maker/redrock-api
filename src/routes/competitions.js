@@ -380,12 +380,24 @@ router.post('/registrations/:regId/cancel',
 
 
 router.post('/registrations/:regId/confirm-payment',
-  authenticate, checkPermission('competitions.manage'),
+  authenticate,
   async (req, res) => {
     try {
       const db = getDb();
-      await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations')
-        .doc(req.params.regId).update({
+      const regRef = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations').doc(req.params.regId);
+      const regDoc = await regRef.get();
+      if (!regDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+      const reg = regDoc.data();
+      // 收款確認權限：臨櫃現金→值班 operator/館別電腦 或管理員；轉帳→僅管理員（與課程收款規則一致）
+      const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+      const isStationMode = ['operator', 'station'].includes(req.staff?.type);
+      if (reg.paymentMethod === 'cash') {
+        if (!isManager && !isStationMode) return res.status(403).json({ error: 'MANAGER_OR_STATION_REQUIRED', message: '現金收款確認限值班人員或管理員' });
+      } else if (!isManager) {
+        return res.status(403).json({ error: 'MANAGER_REQUIRED', message: '轉帳收款確認限管理員' });
+      }
+      if (reg.paymentStatus === 'confirmed') return res.json({ success: true, message: '已確認收款' }); // 冪等：避免重複記帳/重複加減項
+      await regRef.update({
           paymentStatus: 'confirmed',
           ...(req.body.staffNote != null && String(req.body.staffNote).trim() ? { staffNote: String(req.body.staffNote).trim() } : {}),
           paidAmount: req.body.amount || null,
@@ -394,6 +406,17 @@ router.post('/registrations/:regId/confirm-payment',
           paidConfirmedByName: req.staff.name,
           updatedAt: new Date(),
         });
+      // 臨櫃現金 → 金額寫入賽事館別當日結帳加減項（＋現金補入，note＝人名＋活動名）
+      if (reg.paymentMethod === 'cash') {
+        try {
+          const compDoc = await db.collection(COLLECTIONS.COMPETITIONS || 'competitions').doc(reg.competitionId).get();
+          await require('../services/settlementService').addCashAdjustment({
+            gymId: compDoc.data()?.gymId,
+            amount: Number(req.body.amount) || reg.registrationFee || 0,
+            note: `${reg.memberName || ''} ${reg.competitionName || ''}`.trim(),
+          });
+        } catch (e) { console.error('比賽現金寫入結帳加減項失敗', e.message); }
+      }
       // 記營收（預收，認列在比賽前一天）
       try { await competitionService.recordCompetitionRevenue({ db, regId: req.params.regId, sign: 1, staffId: req.staff.id, staffName: req.staff.name }); }
       catch (e) { console.error('比賽記帳失敗', e.message); }

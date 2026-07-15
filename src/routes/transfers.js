@@ -198,6 +198,15 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
           });
         }
       }
+      // 比賽/課程「臨櫃現金」收款確認 → 金額寫入該館當日結帳加減項（＋現金補入，note＝人名＋活動名）
+      if (t.paymentMethod === 'cash' && ['course', 'competition'].includes(t.orderType)) {
+        try {
+          await require('../services/settlementService').addCashAdjustment({
+            gymId: t.gymId, amount: t.amount,
+            note: `${t.memberName || ''} ${t.orderName || t.courseName || ''}`.trim(),
+          });
+        } catch (e) { console.error('現金收款寫入結帳加減項失敗', e.message); }
+      }
     } catch (e) { console.error('transfer confirm side-effect:', e.message); }
     res.json({ message: '已確認收款' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }

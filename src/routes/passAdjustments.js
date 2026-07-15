@@ -262,7 +262,7 @@ router.get('/analytics', authenticate, requireManagerOrStation, async (req, res)
       db.collection('discountCards').get(),
       db.collection('legacyBlackCards').get(),
       db.collection('singleEntryTickets').get(),
-      db.collection('memberBonuses').get(),
+      db.collection('discountBonuses').get(),
     ]);
 
     // 定期票
@@ -325,14 +325,18 @@ router.get('/analytics', authenticate, requireManagerOrStation, async (req, res)
       pending: tickets.filter(t => t.status === 'pending').length,
     };
 
-    // 紅利
+    // 紅利（discountBonuses：優惠卡用完送「一次免費入場」；一次性、非天數制）
     const bonuses = bonusSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const bExpDate = (ts) => {
+      const ms = ts?._seconds != null ? ts._seconds*1000 : (ts?.seconds != null ? ts.seconds*1000 : (typeof ts?.toDate==='function' ? ts.toDate().getTime() : (ts ? new Date(ts).getTime() : null)));
+      return ms != null ? new Date(ms + 8*3600000).toISOString().slice(0,10) : null; // 台灣日
+    };
+    const bExpired = (b) => { const d = bExpDate(b.expiresAt); return d != null && d < today; };
     const bonusStats = {
       total: bonuses.length,
-      active: bonuses.filter(b => b.remainingDays > 0).length,
-      totalDaysIssued: bonuses.reduce((s,b) => s + (b.totalDays||0), 0),
-      totalDaysUsed: bonuses.reduce((s,b) => s + ((b.totalDays||0)-(b.remainingDays||0)), 0),
-      totalDaysRemaining: bonuses.reduce((s,b) => s + (b.remainingDays||0), 0),
+      active: bonuses.filter(b => b.isActive !== false && !b.isUsed && !bExpired(b)).length,
+      used: bonuses.filter(b => b.isUsed === true).length,
+      expired: bonuses.filter(b => !b.isUsed && bExpired(b)).length,
     };
 
     res.json({ passStats, discountStats, blackStats, ticketStats, bonusStats, generatedAt: new Date() });
@@ -407,11 +411,28 @@ router.get('/analytics/download', authenticate, requireManagerOrStation, async (
         return [i+1, `"${t.memberName||''}"`, t.status||'', t.expiryDate||'', t.usedAt?._seconds?new Date(t.usedAt._seconds*1000).toLocaleDateString('zh-TW'):'', `"${t.issuedByName||''}"`, t.gymId||''].join(',');
       });
     } else if (type === 'bonuses') {
-      const snap = await db.collection('memberBonuses').get();
-      headers = ['序號','會員姓名','剩餘天數','總天數','到期日'];
-      rows = snap.docs.map((d,i) => {
-        const b = d.data();
-        return [i+1, `"${b.memberName||''}"`, b.remainingDays||0, b.totalDays||0, b.expiryDate||''].join(',');
+      // 現行紅利 discountBonuses（一次免費入場）：持有人 ownerMemberId、原購買者 originalOwnerMemberId 反查姓名
+      const snap = await db.collection('discountBonuses').get();
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const uniqIds = [...new Set(docs.flatMap(b => [b.ownerMemberId, b.originalOwnerMemberId]).filter(Boolean))];
+      const nameMap = {};
+      for (let i = 0; i < uniqIds.length; i += 50) {
+        await Promise.all(uniqIds.slice(i, i + 50).map(async id => {
+          const md = await db.collection(COLLECTIONS.MEMBERS).doc(id).get();
+          if (md.exists) { const m = md.data(); nameMap[id] = { name: m.name || '', phone: m.phone || '' }; }
+        }));
+      }
+      const tsMs = (ts) => ts?._seconds != null ? ts._seconds*1000 : (ts?.seconds != null ? ts.seconds*1000 : (typeof ts?.toDate==='function' ? ts.toDate().getTime() : (ts ? new Date(ts).getTime() : null)));
+      const fmtDate = (ts) => { const ms = tsMs(ts); return ms ? new Date(ms + 8*3600000).toISOString().slice(0,10) : ''; };
+      const gymLabel = (g) => g === 'gym-hsinchu' ? '新竹館' : g === 'gym-shilin' ? '士林館' : (g || '');
+      const csv = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const bExpiredDl = (b) => { const d = fmtDate(b.expiresAt); return d && d < today; };
+      headers = ['序號','持有人','持有人電話','原購買者','狀態','到期日','使用日','使用館別','建立日'];
+      rows = docs.map((b, i) => {
+        const owner = nameMap[b.ownerMemberId] || {};
+        const orig = nameMap[b.originalOwnerMemberId] || {};
+        const status = b.isUsed ? '已使用' : (b.isActive === false ? '已移轉/停用' : (bExpiredDl(b) ? '已過期' : '有效'));
+        return [i+1, csv(owner.name), owner.phone || '', csv(orig.name), status, fmtDate(b.expiresAt), fmtDate(b.usedAt), gymLabel(b.usedAtGymId), fmtDate(b.createdAt)].join(',');
       });
     }
 

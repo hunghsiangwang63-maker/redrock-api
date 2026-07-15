@@ -1359,6 +1359,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📌 **紅利移轉現端到端完整**（`2.86.0` 送出＋`2.87.0` 收件）；一併修好單次券/體驗券收件（同走此套、原也缺 UI）。
 - ✅ **實況（查證）**：Timo 已於修好後（7/15 11:53）**重新申請成功**——`ticketTransfers` 有 1 筆 pending bonus（Timo→黄倫玄，期限 7/16 11:53）；紅利 pending 階段仍掛 Timo 名下（兩段式正常）。**只差黄倫玄在「我的票券」頁上方按接收**（需載到新版；逾期回沖需再申請）。無代操作。
 
+## 目前進度（2026-07-15 續）— 會員查詢效能優化 + 紀錄卡「載入中」修復 + 入場類型中文
+> 三件：①清單/詳情 payload 與耗時優化 ②員工會員查詢左側「紀錄查詢」永遠卡載入中 ③紀錄入場類型改中文。後端 `/health` `2.88.0`→`2.91.0`。
+- ✅ **任務1 清單移除靜態 qrCode**（`2.88.0`，commit `c739733`）：驗證全前端無人讀 `member.qrCode`（入場走動態 qrToken）→ `searchMembers` 用 `sanitizeMemberForList`（額外 delete qrCode），**詳情 getMember 保留**。量測：單筆 **5309→663 B**、50 筆 **257KB→31KB**。
+- ✅ **任務2 詳情查詢並行 + 移簽名圖**（`2.89.0`→`2.91.0`，commit `32826b2`+`2926ddd`+`fb74d37`）：①GET /members/:id 的 waiver/fallTests/passes/children/sig/refreshBlockStatus 由**逐項序列 await 改 `Promise.all`**；定期票改單 `where(memberId)`+記憶體過濾（避複合索引 FAILED_PRECONDITION）②詳情 payload 66KB 是 `waiver.memberSignatureUrl` base64 簽名圖——詳情頁只讀狀態布林、簽名圖只在「查看副本」modal 另打 `/members/:id/waiver` 取 → **strip 簽名圖欄位＋跳過 signFields 網路簽章**③`getBlockReasons` 內部 waiver＋墜測查詢並行。量測：**1.96s→~1.2–1.4s、60–80KB→13–14KB**；副本 modal 的 `/waiver` 仍含簽名（未壞）。
+- ✅ **任務3（前端）紀錄查詢卡載入中**（commit `redrock-web` `0ce7daa`）：根因＝`MembersPage.handleSelect` **從未呼叫 `loadMemberRecords`（dead code）** → `memberRecords` 恆 null，render 第三分支 `!loading && !records` 也寫成「載入中...」→ 永遠卡。修：handleSelect 選會員時 `setMemberRecords(null)+setRecordsLoading(true)`＋併發 `loadMemberRecords(id)`（含 `Promise.allSettled`+`finally`）、切換會員重載；render 假載入中改「紀錄載入失敗，請重新點選會員」。實機：黃耀弘 入場(1) 正常顯示、切林子雲 入場(3) 跟著換無殘留。
+- ✅ **入場類型顯示中文**（前端 commit `51ba80f`）：`MembersPage` 的 `MemberRecords` 入場列原顯示原始 `c.entryType`（discount_card…）→ 套共用 `entryLabelOf`（discount_card→優惠折扣券/single_ticket→單次購票/實體優惠卡…）。實機：黃耀弘「新竹館 · 優惠折扣券」。
+- 💡 教訓：後端「清單」與「詳情」共用 sanitize 時，大欄位（qrCode/簽名圖）應只在詳情/專屬端點回傳；序列 await 的多查詢 handler 優先 `Promise.all`；dead function（grep 只有定義）常是「該呼叫沒呼叫」的 bug 訊號。
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

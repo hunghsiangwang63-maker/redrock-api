@@ -1356,7 +1356,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端**（`MemberPassesPage`）：新增「🎁 待接收的票券移轉」區塊（列 `/ticket-transfers/pending`）——每筆顯示 類型（紅利入場/單次入場券/優惠卡…）＋來自誰＋24h 期限＋「接收」「拒絕」鈕；接收 `POST /ticket-transfers/:id/accept`、拒絕 `/reject`，完成後 `loadTransfers`＋`reloadCards` 刷新。`tXferIn` state、`loadTransfers` 併載 pending。
 - ✅ **後端**：`/ticket-transfers/pending` 補 `fromMemberName`（批次反查 members，供顯示「來自 XXX」）。
 - **E2E（8/8）**：A 申請紅利 → B pending 有此筆＋fromMemberName 正確 → B 接收 → 紅利 ownerMemberId 改 B、B pending 清空、B「我的票券」看得到。
-- 📌 **紅利移轉現端到端完整**（`2.86.0` 送出＋`2.87.0` 收件）；一併修好單次券/體驗券收件（同走此套、原也缺 UI）。Timo 重新申請、黄倫玄到「我的票券」頁上方按接收即可。
+- 📌 **紅利移轉現端到端完整**（`2.86.0` 送出＋`2.87.0` 收件）；一併修好單次券/體驗券收件（同走此套、原也缺 UI）。
+- ✅ **實況（查證）**：Timo 已於修好後（7/15 11:53）**重新申請成功**——`ticketTransfers` 有 1 筆 pending bonus（Timo→黄倫玄，期限 7/16 11:53）；紅利 pending 階段仍掛 Timo 名下（兩段式正常）。**只差黄倫玄在「我的票券」頁上方按接收**（需載到新版；逾期回沖需再申請）。無代操作。
 
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。

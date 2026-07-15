@@ -396,9 +396,16 @@ router.get('/:id',
       // 同步 waiverSigned（背景寫、不阻斷回應）
       db.collection(COLLECTIONS.MEMBERS).doc(req.params.id).update({ waiverSigned: liveWaiverSigned }).catch(() => {});
 
-      const waiverOut = waiverDoc.exists
-        ? await require('../utils/storageUrl').signFields(waiverDoc.data(), ['memberSignatureUrl', 'parentSignatureUrl'])
-        : null;
+      // 詳情頁只用 waiver 的狀態布林（isComplete/parentRequired/parentSignedAt…）；
+      // 66KB 的簽名 base64 圖只在「查看副本/列印」modal 才需要（另打 GET /members/:id/waiver）。
+      // → strip 簽名圖欄位（省 ~66KB payload＋跳過 signFields 網路簽章）。
+      let waiverOut = null;
+      if (waiverDoc.exists) {
+        const w = { ...waiverDoc.data() };
+        delete w.memberSignatureUrl; delete w.parentSignatureUrl;
+        delete w.memberSignatureData; delete w.parentSignatureData;
+        waiverOut = w;
+      }
       res.json({
         member,
         waiver: waiverOut,

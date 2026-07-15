@@ -1392,7 +1392,17 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **E2E（16/16）**：退回缺原因 400→退回 200＋formReturned＋名額保留＋首頁通知→會員改 B組＋改兒童生日→費用重算 990→**840**＋清 formReturned→未退回再改 400→駁回 200＋cancelled＋formRejected→已取消再駁回 400。腳本 `scratchpad/comp-returnreject-e2e.cjs`，0 殘留。
 - 💡 **教訓**：`/transfers/upload` 要末五碼或截圖擇一，空白會 NO_PROOF；比賽待收款待辦讀 registration 文件（非 transferRecords），故補填只需更新 registration；「無條件設 refundRequested」是這次的根因型 bug（狀態旗標要跟實際金流狀態一致）。
 
+## 目前進度（2026-07-16 續2）— 比賽退回/退費一輪打磨（承上）
+> 由「莊振翔案例」延伸的一連串小修，前後端各自 commit/deploy。後端 `/health` `2.98.0`→`3.00.0`。
+- ✅ **擋重複退回報名表**（`2.99.0-block-double-return-form`，commit 後端 `3158a12`、前端 `4ef245b`；正式 API 驗證 2/2）：已 `formReturned`（等會員修改中）再退回 → **400 `ALREADY_RETURNED`**；員工報名名單該筆「退回修改」按鈕收起、改顯示「已退回・等待會員修正」，**保留「駁回取消」**。會員修改重送清 `formReturned` 後按鈕復現。
+- ✅ **已繳費取消（退費申請）後端強制退費帳號**（`3.00.0-refund-account-required`，commit `05d66d1`；E2E 3/3）：`cancel` 端點對 `paymentStatus==='confirmed'` 的取消，缺退費銀行代碼或帳號 → **400 `MISSING_REFUND_ACCOUNT`**（原本只有前端擋、後端信任前端；補上權威層，避免空白帳號退費申請進待辦、櫃檯無從匯款）。前端本就必填銀行代碼+帳號（戶名/銀行名選填）。
+- ✅ **比賽報名名單加付款方式標籤**（純前端 commit `fd486e7`）：每筆報名顯示 **臨櫃繳款**（藍）/ **轉帳**（灰）標籤，一眼分辨。
+- 🧹 **刪除莊振翔錯誤報名**：`75c0414c`（V2-V3 組・報錯組別・cancelled・未繳費）整筆刪除（無連帶 transferRecords）；保留有效的 V4-V5 組（confirmed、**繳費被退回 transfer_rejected**，待他重填繳費資訊）。
+  - 📋 **釐清**：莊振翔那筆取消**本質是「取消報名」不是「退費申請」**——`paymentStatus=pending`（從未繳費），是舊版 bug（未繳費也無條件標 refundRequested+讓填退費帳號）誤導；`2.97.0` 已修，資料已清。
+- 📌 **決策記錄**：使用者確認**「退回修改」與「退回繳費資訊」維持兩個分開、不整合**（一個修報名資料/`formReturned`、一個修匯款證明/`transfer_rejected`，修正對象不同）。**退費申請審核**（退回退費資訊/駁回退費申請）功能**暫不做**（莊振翔案例其實是取消報名、非退費，無此需求；日後有真正已繳費退費申請再議）。
+
 ## 待辦
+- 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 
 - 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。

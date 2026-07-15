@@ -359,7 +359,7 @@ router.get('/:id',
       const today = dayjs().format('YYYY-MM-DD');
 
       // 獨立查詢一次並行（原本逐項序列 await ~2s）；查詢失敗個別退回空、不阻斷整體
-      const [waiverDoc, ftSnap, passesSnap, childrenSnap, fallTestSigSnap, blockReasons] = await Promise.all([
+      const [waiverDoc, ftSnap, passesSnap, childrenSnap, fallTestSigSnap, blockReasons, discCards, legacyDiscCards, blackCards, singleTickets, bonuses] = await Promise.all([
         db.collection(COLLECTIONS.WAIVERS).doc(req.params.id).get(),
         db.collection(COLLECTIONS.FALL_TESTS).where('memberId', '==', req.params.id).get().catch(() => ({ empty: true, docs: [] })),
         // 定期票：改單 where(memberId) + 記憶體過濾 endDate/status（避免 memberId+endDate+status 複合索引造成偶發 FAILED_PRECONDITION）
@@ -367,6 +367,12 @@ router.get('/:id',
         db.collection(COLLECTIONS.MEMBERS).where('parentMemberId', '==', req.params.id).get().catch(() => ({ docs: [] })),
         db.collection('fallTestSignatures').where('memberId', '==', req.params.id).get().catch(() => ({ empty: true })),
         memberService.refreshBlockStatus(req.params.id).catch(() => []),
+        // 各類有效票券摘要（沿用既有權威 getter，各自 catch 不阻斷）
+        require('../services/discountCardService').getMemberDiscountCards(req.params.id).catch(() => []),
+        require('../services/legacyDiscountCardService').getMemberLegacyDiscountCards(req.params.id).catch(() => []),
+        require('../services/legacyCardService').getMemberBlackCards(req.params.id).catch(() => []),
+        require('../services/checkinService').getValidSingleEntryTickets(req.params.id).catch(() => []),
+        require('../services/bonusService').getMemberBonuses(req.params.id).catch(() => []),
       ]);
 
       // 最近墜落測驗（記憶體排序取最新）
@@ -385,6 +391,15 @@ router.get('/:id',
         .filter(p => p.status === 'active' && (p.endDate || '') >= today);
 
       const hasFallTestSignature = !fallTestSigSnap.empty;
+
+      // 各類有效票券摘要（getter 已做權威有效判定）
+      const activeCards = [
+        ...(discCards || []).map(c => ({ kind: 'discount', id: c.id, remainingCredits: c.remainingCredits ?? 0, source: c.source || null, expiresAt: c.expiresAtFormatted || null })),
+        ...(legacyDiscCards || []).map(c => ({ kind: 'legacy', id: c.id, remainingCredits: c.remainingCredits ?? 0, source: c.source || 'legacy', expiresAt: c.expiresAtFormatted || null })),
+        ...(blackCards || []).map(c => ({ kind: 'black', id: c.id, remainingCredits: c.remainingCredits ?? 0, source: c.source || null, expiresAt: c.expiresAtFormatted || null })),
+      ];
+      const activeSingleTickets = (singleTickets || []).map(t => ({ id: t.id, ticketType: t.ticketType || 'single', validDate: t.validDate || null, expiresAt: t.expiresAt || null }));
+      const activeBonuses = (bonuses || []).map(b => ({ id: b.id, expiresAt: b.expiresAtFormatted || null }));
 
       // waiver 簽署狀態（供顯示）
       const waiverData = waiverDoc.exists ? waiverDoc.data() : null;
@@ -411,6 +426,9 @@ router.get('/:id',
         waiver: waiverOut,
         latestFallTest,
         activePasses,
+        activeCards,
+        activeSingleTickets,
+        activeBonuses,
         children: childrenSnap.docs.map(d => ({ id: d.id, name: d.data().name, birthday: d.data().birthday, memberType: d.data().memberType, isChildAccount: d.data().isChildAccount !== false })),
         hasFallTestSignature,
       });

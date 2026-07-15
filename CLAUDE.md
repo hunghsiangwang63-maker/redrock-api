@@ -1316,6 +1316,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 > 回報：會員首頁「比賽轉帳被退回」通知點「前往處理」導向 `/member/competitions`，但比賽頁預設開「開放中報名」tab，被退回的報名在「我的比賽報名」tab → 會員看不到要補的那筆。後端 `/health` `2.81.0`。
 - ✅ **修**：後端 `/members/my/alerts` 比賽退回通知＋未成年家長簽署通知的 `link` 改 `/member/competitions?tab=my`；前端 `MemberCompetitionsPage` tab 初始值讀 `?tab=my`（用 `window.location.search`，因 `useLocation()` 在 useState 之後才宣告，避免 TDZ）。→ 點通知直接開「我的比賽報名」看到退回原因＋「重新填寫繳費資訊」鈕。
 
+## 目前進度（2026-07-15 續）— 新購優惠折扣卡使用期限改可設定（暫定無限期）
+> 回報確認「新購優惠折扣卡有一年期限」（`CARD_VALIDITY_MONTHS=12` 寫死）→ 要求改可由系統管理員設定、暫定無限期、已售出的一起取消效期、設定只影響之後售出。後端 `/health` `2.82.0`；E2E 7/7。
+- ✅ **可設定**：`discountCardService.getDiscountCardValidityMonths()` 讀 `systemSettings/discountCard.validityMonths`——未設定/0/讀取失敗 → **null（無限期，暫定）**、1~60 → 月數。`purchaseDiscountCard` 改 `expiresAt = validityMonths ? add(n,'month') : null`；**櫃檯新增（`POST /cards/discount/purchase`）與入場購買（`buy_discount_card`，flow.js 也呼叫 purchaseDiscountCard）兩入口共用**。`CARD_VALIDITY_MONTHS` 常數保留供參照、不再用作 fallback。
+- ✅ **設定端點**（`settings.js`，照 bonus 模式）：`GET /settings/discount-card-validity`（公開讀，回 `{validityMonths: null|1~60}`）、`PUT`（super_admin，空/0＝無限期存 null、1~60、超範圍 400）。前端設定→入場規則加「🎟️ 優惠卡期限」分頁（superAdminOnly，留空＝無限期、顯示「目前：無限期/N 個月」、註明只影響之後售出、轉入卡本就無期限不受影響）。
+- ✅ **一次性取消已售出卡效期**：firebase-admin 掃 `discountCards` `expiresAt!=null` 共 6 張（皆 `source:new` 真實會員 10 次卡、原一年期）→ 設 `expiresAt:null`＋`expiryCancelledNote`；清後 0 張有效期。轉入/綁定卡本就 null、不動。
+- ✅ **不追溯**：`purchaseDiscountCard` 售出當下讀設定定 expiresAt，之後改設定不影響已售出（設計本然，UI 註明）。
+- **E2E（7/7）**：GET 預設 null、PUT 12→存值、PUT 0/空→null、PUT 61→400、還原無限期。
+- 📌 **現行卡效期規則更新**：新購優惠卡＝**依系統設定（目前無限期）**｜轉入/綁定優惠卡＝無限期｜綁定黑卡＝無限期｜點數移轉＝跟隨原卡。（原「新購＝一年」已作廢。）
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

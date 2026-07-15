@@ -504,6 +504,165 @@ router.post('/registrations/:regId/payment-info', authenticateAny, async (req, r
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── POST /competitions/registrations/:regId/return-form - 管理員退回報名表給會員修改（保留名額、可修改重送）──
+// reason 必填（會員看得到＋Email）；不釋出名額（會員修正後重送）。與「退回繳費」不同：這是整張報名表資料有誤。
+router.post('/registrations/:regId/return-form',
+  authenticate, checkPermission('competitions.manage'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const reason = String(req.body.reason || '').trim();
+      if (!reason) return res.status(400).json({ error: 'MISSING_REASON', message: '請填寫退回原因' });
+      const ref = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations').doc(req.params.regId);
+      const doc = await ref.get();
+      if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+      const reg = doc.data();
+      if (reg.status === 'cancelled') return res.status(400).json({ error: 'ALREADY_CANCELLED', message: '此報名已取消' });
+      const staffNote = String(req.body.staffNote || '').trim();
+      await ref.update({
+        formReturned: true,
+        formReturnReason: reason,
+        formReturnedAt: new Date(),
+        formReturnedBy: req.staff.id,
+        ...(staffNote ? { staffNote } : {}),
+        updatedAt: new Date(),
+      });
+      try {
+        const email = reg.email || (await db.collection('members').doc(reg.memberId).get()).data()?.email;
+        if (email) {
+          const emailService = require('../services/emailService');
+          await emailService.sendEmail({
+            to: email,
+            subject: '【紅石攀岩】比賽報名表需修正',
+            html: `<p>您好，您報名「${reg.competitionName || '比賽'}」的報名資料需要修正。</p><p>原因：${reason}</p><p>請登入會員系統，至「比賽報名 → 我的報名」點「修改報名資料」修正後重新送出。名額仍為您保留。</p>`,
+          });
+        }
+      } catch (e) { console.error('比賽退回報名表通知信失敗', e.message); }
+      res.json({ success: true, message: '已退回報名表，會員可修改後重送（名額保留）' });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
+// ── POST /competitions/registrations/:regId/reject-form - 管理員駁回取消此報名（釋出名額）──
+// reason 必填。直接作廢：釋出名額、遞補候補、移除計分系統；已收款者標退費待處理。
+router.post('/registrations/:regId/reject-form',
+  authenticate, checkPermission('competitions.manage'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const reason = String(req.body.reason || '').trim();
+      if (!reason) return res.status(400).json({ error: 'MISSING_REASON', message: '請填寫駁回原因' });
+      const ref = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations').doc(req.params.regId);
+      const doc = await ref.get();
+      if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+      const reg = doc.data();
+      if (reg.status === 'cancelled') return res.status(400).json({ error: 'ALREADY_CANCELLED', message: '此報名已取消' });
+      const wasPaid = reg.paymentStatus === 'confirmed';
+      await ref.update({
+        status: 'cancelled',
+        cancelReason: `管理員駁回：${reason}`,
+        formRejected: true,
+        formReturned: false,
+        rejectedByStaff: req.staff.id,
+        cancelledAt: new Date(),
+        // 已收款者標退費待處理（走既有退費待辦 / 退費流程）
+        refundRequested: wasPaid,
+        updatedAt: new Date(),
+      });
+      // 釋出名額：正取 → 計分系統移除 + 遞補候補
+      if (reg.status === 'confirmed') {
+        try {
+          const comp = (await db.collection(COLLECTIONS.COMPETITIONS).doc(reg.competitionId).get()).data();
+          const { isCompScoring, removeCompAthlete } = require('../services/competitionSyncService');
+          if (isCompScoring(comp)) await removeCompAthlete(comp, req.params.regId);
+        } catch (e) { console.error('[計分系統] 駁回移除失敗', e.message); }
+        try { await competitionService.promoteNextWaitlist(reg.competitionId, reg.divisionId); }
+        catch (e) { console.error('比賽駁回候補遞補失敗:', e.message); }
+      }
+      try {
+        const email = reg.email || (await db.collection('members').doc(reg.memberId).get()).data()?.email;
+        if (email) {
+          const emailService = require('../services/emailService');
+          await emailService.sendEmail({
+            to: email,
+            subject: '【紅石攀岩】比賽報名未通過',
+            html: `<p>您好，您報名「${reg.competitionName || '比賽'}」未通過審核，已取消。</p><p>原因：${reason}</p>${wasPaid ? '<p>已收款項將另行退費處理。</p>' : ''}<p>如有疑問請洽館方。</p>`,
+          });
+        }
+      } catch (e) { console.error('比賽駁回通知信失敗', e.message); }
+      res.json({ success: true, message: wasPaid ? '已駁回並釋出名額；已收款項請至退費待辦處理' : '已駁回並釋出名額' });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
+// ── POST /competitions/registrations/:regId/update-form - 會員修改報名資料後重送（限被退回後）──
+router.post('/registrations/:regId/update-form', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations').doc(req.params.regId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+    const reg = doc.data();
+    const deny = await checkMemberOwnership(req.member, reg.memberId, { onMissing: 403, message: '只能修改自己或子會員的報名' });
+    if (deny) return res.status(deny.status).json(deny.body);
+    if (!reg.formReturned) return res.status(400).json({ error: 'NOT_RETURNED', message: '此報名未被退回，無法修改' });
+    if (reg.status === 'cancelled') return res.status(400).json({ error: 'ALREADY_CANCELLED', message: '此報名已取消' });
+
+    const b = req.body;
+    // 必填驗證（比照報名）
+    if (b.gender !== 'male' && b.gender !== 'female') return res.status(400).json({ error: 'MISSING_GENDER', message: '請選擇性別' });
+    if (!b.birthday) return res.status(400).json({ error: 'MISSING_BIRTHDAY', message: '請填寫生日' });
+    if (!b.phone || !String(b.phone).trim()) return res.status(400).json({ error: 'MISSING_PHONE', message: '請填寫手機號碼' });
+    if (!b.email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(b.email).trim())) return res.status(400).json({ error: 'MISSING_EMAIL', message: '請填寫有效的 Email' });
+
+    const comp = (await db.collection(COLLECTIONS.COMPETITIONS).doc(reg.competitionId).get()).data();
+    // 組別（可改）：驗證存在；若改組且新組已滿正取 → 轉候補
+    const newDivisionId = b.divisionId || reg.divisionId;
+    const division = (comp.divisions || []).find(d => d.id === newDivisionId);
+    if (!division) return res.status(400).json({ error: 'INVALID_DIVISION', message: '組別不正確' });
+    let newStatus = reg.status, newWaitlistPos = reg.waitlistPosition;
+    if (newDivisionId !== reg.divisionId) {
+      const snap = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS)
+        .where('competitionId', '==', reg.competitionId).where('divisionId', '==', newDivisionId)
+        .where('status', 'in', ['confirmed', 'waitlist']).get();
+      const cCount = snap.docs.filter(d => d.data().status === 'confirmed').length;
+      const wCount = snap.docs.filter(d => d.data().status === 'waitlist').length;
+      const maxP = division.maxParticipants || 40, wMax = division.waitlistMax || 5;
+      if (cCount >= maxP && wCount >= wMax) return res.status(400).json({ error: 'DIVISION_FULL', message: '欲改的組別已滿（含候補）' });
+      newStatus = cCount >= maxP ? 'waitlist' : 'confirmed';
+      newWaitlistPos = newStatus === 'waitlist' ? wCount + 1 : null;
+    }
+    // 後端權威重算費用（生日→兒童、早鳥）
+    const fees = comp.fees || {};
+    const { taiwanToday } = require('../utils/taiwanDate');
+    const today = taiwanToday();
+    const isEarly = comp.earlyBirdDeadline && today <= comp.earlyBirdDeadline;
+    const age = b.birthday ? require('dayjs')().diff(require('dayjs')(b.birthday), 'year') : null;
+    const isChild = age !== null && age < (fees.childAgeLimit || 15);
+    const registrationFee = isChild
+      ? (isEarly ? fees.childEarlyBird : fees.childRegular) || 950
+      : (isEarly ? fees.adultEarlyBird : fees.adultRegular) || 1100;
+
+    await ref.update({
+      divisionId: newDivisionId, divisionName: division.name,
+      status: newStatus, waitlistPosition: newWaitlistPos,
+      gender: b.gender, birthday: b.birthday,
+      phone: String(b.phone).trim(), email: String(b.email).trim(),
+      idNumber: b.idNumber || reg.idNumber || null,
+      emergencyContact: b.emergencyContact || null,
+      emergencyRelation: b.emergencyRelation || null,
+      emergencyPhone: b.emergencyPhone || null,
+      height: b.height || null, armSpan: b.armSpan || null,
+      isHonorary: !!b.isHonorary,
+      registrationFee, isEarlyBird: !!isEarly,
+      // 清除退回旗標
+      formReturned: false, formReturnReason: null, formReturnedAt: null,
+      updatedAt: new Date(),
+    });
+    res.json({ success: true, message: '報名資料已更新，請等待館方確認' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── POST /competitions/registrations/:regId/refund - 退費 ──
 router.post('/registrations/:regId/refund',
   authenticate, checkPermission('competitions.manage'),

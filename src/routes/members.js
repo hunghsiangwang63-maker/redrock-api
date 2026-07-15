@@ -120,14 +120,27 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
         .where('memberId', '==', id).get();
       snap.docs.forEach(d => {
         const o = d.data();
-        if (o.status === 'cancelled' || !o.parentRequired || o.isComplete) return;
-        alerts.push({
-          type: 'competition_guardian_sign', kind: 'action',
-          label: '比賽報名', link: '/member/competitions?tab=my',
-          name: o.competitionName || '比賽',
-          reason: '未成年報名待法定代理人簽署參賽同意書',
-          memberName: id === req.member.id ? null : (kids.docs.find(k => k.id === id)?.data()?.name || null),
-        });
+        const kidName = id === req.member.id ? null : (kids.docs.find(k => k.id === id)?.data()?.name || null);
+        // 未成年報名待法定代理人簽署
+        if (o.status !== 'cancelled' && o.parentRequired && !o.isComplete) {
+          alerts.push({
+            type: 'competition_guardian_sign', kind: 'action',
+            label: '比賽報名', link: '/member/competitions?tab=my',
+            name: o.competitionName || '比賽',
+            reason: '未成年報名待法定代理人簽署參賽同意書',
+            memberName: kidName,
+          });
+        }
+        // 報名表被管理員退回、待會員修改重送
+        if (o.status !== 'cancelled' && o.formReturned) {
+          alerts.push({
+            type: 'competition_form_returned', kind: 'action',
+            label: '比賽報名', link: '/member/competitions?tab=my',
+            name: o.competitionName || '比賽',
+            reason: `報名表被退回：${o.formReturnReason || '請修改後重送'}`,
+            memberName: kidName,
+          });
+        }
       });
     }
     res.json({ alerts });

@@ -33,8 +33,13 @@ const getBlockReasons = async (memberId, memberData) => {
     reasons.push('email_unverified');
   }
 
+  // 2/3 waiver 與墜測查詢並行（原本序列兩次 round-trip）
+  const [waiverDoc, fallTests] = await Promise.all([
+    db.collection(COLLECTIONS.WAIVERS).doc(memberId).get(),
+    db.collection(COLLECTIONS.FALL_TESTS).where('memberId', '==', memberId).where('result', '==', 'passed').get(),
+  ]);
+
   // 2. Waiver 未簽
-  const waiverDoc = await db.collection(COLLECTIONS.WAIVERS).doc(memberId).get();
   if (!waiverDoc.exists || !waiverDoc.data().isComplete) {
     if (!waiverDoc.exists) {
       reasons.push('waiver_unsigned');
@@ -46,11 +51,6 @@ const getBlockReasons = async (memberId, memberData) => {
   }
 
   // 3. 墜落測驗：從未通過 → fall_test_required；曾通過但所有 passed 紀錄皆已過期 → fall_test_expired
-  const fallTests = await db.collection(COLLECTIONS.FALL_TESTS)
-    .where('memberId', '==', memberId)
-    .where('result', '==', 'passed')
-    .get();
-
   if (fallTests.empty) {
     reasons.push('fall_test_required');
   } else {

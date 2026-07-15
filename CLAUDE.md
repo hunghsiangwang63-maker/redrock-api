@@ -1401,6 +1401,21 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - 📋 **釐清**：莊振翔那筆取消**本質是「取消報名」不是「退費申請」**——`paymentStatus=pending`（從未繳費），是舊版 bug（未繳費也無條件標 refundRequested+讓填退費帳號）誤導；`2.97.0` 已修，資料已清。
 - 📌 **決策記錄**：使用者確認**「退回修改」與「退回繳費資訊」維持兩個分開、不整合**（一個修報名資料/`formReturned`、一個修匯款證明/`transfer_rejected`，修正對象不同）。**退費申請審核**（退回退費資訊/駁回退費申請）功能**暫不做**（莊振翔案例其實是取消報名、非退費，無此需求；日後有真正已繳費退費申請再議）。
 
+## 目前進度（2026-07-16 續3）— 比賽報名付款狀態機：繳款期限＋逾期剔除＋依狀態顯示功能鍵
+> 承上，把「會員報名→繳款→確認/退回/駁回」整條收斂成明確狀態機。使用者逐項確認流程。後端 `/health` `3.01.0`；完整狀態機 E2E（打正式 API）**13/13**；員工端實機四狀態逐一截圖驗證。
+- ✅ **未繳費「退費」按鈕語意修正**（純前端 commit `9845f7e`）：名單上 `paymentStatus==='pending'` 的「退費」按鈕語意錯誤（未收款無款可退）→ 轉帳未繳費改「**要求重填轉帳**」走 `reject-payment`（`transfer_rejected`）；實際退費仍走待辦（`competition_refund`/`CompetitionActionModal`）。
+- ✅ **繳款期限＋逾期自動剔除**（`3.01.0-competition-payment-deadline-sweep`，commit 後端 `aa8c9ad`、前端 `13ca0bd`）：
+  - 賽事加 **`paymentDeadlineDays`（預設 3、員工建賽表單可設）**；報名**正取＋有費用**→ `paymentDeadline = 報名日 + N 天`（候補遞補為正取時才起算）。
+  - **`sweepExpiredCompetitionPayments`**（每日排程＋`POST /competitions/sweep-expired-payments` super_admin 手動）：只剔除「**正取＋未繳費＋未填匯款資料（pending 無末五碼）＋有費用＋逾期**」→ 取消/釋名額/遞補候補/Email；**已填待確認（有末五碼/pending_confirm）、已收款、免費者不剔除**（球在櫃檯不冤枉會員）。
+  - 會員報名付款步驟＋「我的比賽報名」卡顯示**繳款期限（含臨櫃繳款、逾期自動取消）**。
+- ✅ **員工名單依狀態顯示功能鍵 + 狀態下拉篩選**（前端 `CompetitionsPage`）：`regState(r)` 六態——
+  - **未填匯款(awaitPayment)**：只有「駁回報名」＋期限提示｜**待確認(awaitConfirm)**：確認收款／要求重填匯款(轉帳)／退回修改／駁回報名｜**已要求重填(rejected)**：只有駁回報名＋「已要求會員重填」｜**已收款(paid)**：退回修改／駁回報名｜**候補(waitlist)**：退回修改／駁回報名｜**已取消**：無按鈕。
+  - 名單右上加**狀態下拉**（未填匯款/待確認/已收款/已要求重填/候補/已取消）。「確認收款」複用既有 `CompetitionActionModal` action=pay；原因 modal 改設定物件支援 return/reject/rejectPayment 三型。
+- **E2E（13/13）**：一筆轉帳報名走 A(未填匯款,有期限)→會員填→B(待確認)→員工要求重填→rejected＋會員通知→會員重填→B→確認收款→paid→退回修改→formReturned＋會員通知→會員修改重送→駁回報名→cancelled；另驗**未填匯款逾期 sweep→剔除**、**已填待確認逾期→不剔除**、**已收款取消→退費申請**。腳本 `scratchpad/comp-states-e2e.cjs`。
+- 🖥️ **員工端實機四狀態逐一確認**（202608 真實名單）：未填匯款(【練習】測試)只駁回報名｜待確認(洪紹祖/葉博榮)四鍵齊｜已要求重填(莊振翔/朱智萩)只駁回報名＋提示｜已收款(多筆)退回修改/駁回報名；狀態下拉＋臨櫃繳款藍標都正確。
+- 🧹 **清除測試報名資訊**：刪 `【練習】比賽報名測試` 在 202608 的 1 筆報名（名單 18→17）＋12 筆 E2E 殘留的 `【練習】` 退費通知（通知數 6→5）；**真實會員報名全未動**；測試帳號 `0900123123` 保留（名下比賽報名歸 0）。
+- 📌 **狀態機關鍵定義**：`hasInfo = bankLastFive || pending_confirm || 現金` 判「已填匯款」；sweep 只掃「未填」者（`pending` 無末五碼）→ 已提交待確認的不冤枉剔除；繳款期限走 `paymentDeadline`（報名日+N，遞補時起算），會員補填/退回不重設。
+
 ## 待辦
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。

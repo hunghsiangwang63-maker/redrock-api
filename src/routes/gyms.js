@@ -17,7 +17,7 @@
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
-const { authenticate, checkPermission, auditLog } = require('../middleware/auth');
+const { authenticate, checkPermission, requireManagerOrStation, auditLog } = require('../middleware/auth');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
@@ -29,6 +29,17 @@ const validate = (req, res, next) => {
 };
 
 const ANNOUNCE_COLLECTION = 'gymAnnouncements';
+
+// 公告館別隔離：非 super_admin（含值班 operator / gym_manager）只能對「自己館」發布，
+// 不可對 'all'（全館）或他館。super_admin 不限（可發全館與任一館）。
+const announceGymGuard = (req, res, next) => {
+  if (req.staff?.role === 'super_admin') return next();
+  const targetGym = req.params.id;
+  if (targetGym === 'all' || targetGym !== req.staff?.gymId) {
+    return res.status(403).json({ error: 'CROSS_GYM_FORBIDDEN', message: '只能發布自己館別的公告' });
+  }
+  next();
+};
 
 // 會員可見的「發布時段」判定：publishAt <= now <= publishUntil（兩者皆選填）。
 // ⚠ 僅供「顯示給會員」的過濾。getGymStatusForDate（休館判定／定期票臨停補償來源）
@@ -334,7 +345,7 @@ router.put('/:id/hours',
 // POST /gyms/:id/announcements - 新增公告
 router.post('/:id/announcements',
   authenticate,
-  checkPermission('notifications.send_gym'),
+  requireManagerOrStation, announceGymGuard,
   auditLog('announcement.create'),
   [
     body('title').notEmpty().withMessage('請輸入公告標題'),
@@ -384,7 +395,7 @@ router.post('/:id/announcements',
 // PUT /gyms/:id/announcements/:aid - 編輯公告
 router.put('/:id/announcements/:aid',
   authenticate,
-  checkPermission('notifications.send_gym'),
+  requireManagerOrStation, announceGymGuard,
   auditLog('announcement.update'),
   async (req, res) => {
     try {
@@ -410,7 +421,7 @@ router.put('/:id/announcements/:aid',
 // DELETE /gyms/:id/announcements/:aid - 刪除公告
 router.delete('/:id/announcements/:aid',
   authenticate,
-  checkPermission('notifications.send_gym'),
+  requireManagerOrStation, announceGymGuard,
   auditLog('announcement.delete'),
   async (req, res) => {
     try {

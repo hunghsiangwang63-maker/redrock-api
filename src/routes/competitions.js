@@ -518,6 +518,7 @@ router.post('/registrations/:regId/return-form',
       if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
       const reg = doc.data();
       if (reg.status === 'cancelled') return res.status(400).json({ error: 'ALREADY_CANCELLED', message: '此報名已取消' });
+      if (reg.formReturned) return res.status(400).json({ error: 'ALREADY_RETURNED', message: '此報名已退回，正在等待會員修改' });
       const staffNote = String(req.body.staffNote || '').trim();
       await ref.update({
         formReturned: true,

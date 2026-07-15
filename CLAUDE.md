@@ -1381,6 +1381,17 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（打正式 API，臨時會員注入 bcrypt 密碼登入，9/9）**：課程並發 6 請求 → **僅 1 成功、5 個 409 ALREADY_ENROLLED、DB 只建一組報名(=場次數)、場次計數=1**；`leave` 中再報名擋 409；比賽並發 6 請求 → 僅 1 成功(201)、5 個 ALREADY_REGISTERED、DB 只一筆有效報名。腳本 `scratchpad/dedup-tx-e2e.cjs`，測後 0 殘留。
 - 💡 **教訓**：讀後寫的去重/名額判定在並發下不可靠；Firestore `tx.get(query)` 會把查詢結果納入交易讀取集，任何並發寫入落在查詢範圍 → abort+retry，天然序列化（同時解決去重 + 位次/計數正確）；跨文件計數優先 `FieldValue.increment`。E2E 繳費日期要用**台灣今天**（UTC 日期會早一天觸發 `INVALID_PAYMENT_DATE`）。
 
+## 目前進度（2026-07-16 續）— 比賽退費/取消語意修正 + 轉帳補填 + 管理員退回/駁回報名表
+> 由「莊振翔比賽退費申請看不到」一路查出並修的三件事。後端 `/health` `2.97.0`→`2.98.0`。
+- ✅ **比賽未繳費取消＝純取消報名（不建退費申請）**（`2.97.0-competition-unpaid-cancel-no-refund`，commit 後端 `bf8f87c`）：**根因**——`POST /registrations/:id/cancel` 原本**無條件** `refundRequested:true`＋存退費帳號，但通知/待辦只在 `paymentStatus==='confirmed'` 觸發 → 未繳費（pending）取消的會員填了退費帳號、以為在等退費，櫃檯卻永遠看不到（無款可退不建待辦）。**修**：只有已繳費才標 `refundRequested`＋存退費帳號、回應「退費將於…處理」；未繳費不標記、回應「尚未繳費，無需退費」。前端 `MemberCompetitionsPage` 取消 modal 依 `paymentStatus` 分流——未繳費隱藏退費試算/退費帳號、標題「取消報名」、不要求填帳號、payload 不帶退費欄；已繳費維持「取消報名・申請退費」。清掉莊振翔那筆未繳費卻標 refundRequested 的舊資料。
+- ✅ **比賽轉帳可先報名、之後補填轉帳資訊（方案 B）**（純前端 commit `20f8506`）：**根因**——報名選轉帳但末五碼/日期留空時，前端仍呼叫 `submitTransferRecord`→`/transfers/upload` 因「截圖或末五碼擇一」缺一 **NO_PROOF 失敗被 try/catch 吞** → 沒建待收款；而**待辦「比賽報名待收款」直接讀 `competitionRegistrations`（`paymentStatus='pending'`）**、報名文件本身末五碼空白 → 櫃檯看到空白無從核對。**修**：報名時空白就不 call submitTransferRecord；「待確認付款(pending+transfer)」加「填寫轉帳資訊」按鈕（複用 repay modal→既有 `POST /payment-info`，該端點已接受 pending、更新報名文件末五碼/日期），已填則顯示末五碼＋「修改」。→ 補填後櫃檯待辦即看到。
+- ✅ **管理員退回/駁回報名表 + 會員修改重送**（`2.98.0-competition-admin-return-reject-form`，commit 後端 `1c74066`、前端 `1898563`；E2E 打正式 API **16/16**）：使用者要求「管理員要有退回報名表的功能」，確認**兩者皆要**——
+  - **退回修改** `POST /registrations/:id/return-form`（manage，reason 必填）：標 `formReturned/formReturnReason`、**保留名額**、Email＋`/members/my/alerts` 首頁通知（新增 `competition_form_returned`）。會員端顯示退回原因＋「修改報名資料」→ 編輯 modal（組別/性別/生日/手機/Email/身分證/緊急聯絡/身高臂展/榮譽，**不重簽**）→ `POST /registrations/:id/update-form`（會員，限 `formReturned`；**後端權威重算費用**（生日→兒童、早鳥）與**改組別容量檢查**（滿轉候補）、清 formReturned）。
+  - **駁回取消** `POST /registrations/:id/reject-form`（manage，reason 必填）：`status:cancelled`＋`formRejected`、**釋出名額＋遞補候補＋移除計分系統**、已收款標 `refundRequested`（走退費待辦）、Email 通知。
+  - 前端 `CompetitionsPage` 每筆報名加「退回修改」「駁回取消」按鈕＋原因 modal、標籤「已退回待修改／已駁回」；`MemberCompetitionsPage` 加編輯 modal＋通知框。
+  - **E2E（16/16）**：退回缺原因 400→退回 200＋formReturned＋名額保留＋首頁通知→會員改 B組＋改兒童生日→費用重算 990→**840**＋清 formReturned→未退回再改 400→駁回 200＋cancelled＋formRejected→已取消再駁回 400。腳本 `scratchpad/comp-returnreject-e2e.cjs`，0 殘留。
+- 💡 **教訓**：`/transfers/upload` 要末五碼或截圖擇一，空白會 NO_PROOF；比賽待收款待辦讀 registration 文件（非 transferRecords），故補填只需更新 registration；「無條件設 refundRequested」是這次的根因型 bug（狀態旗標要跟實際金流狀態一致）。
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

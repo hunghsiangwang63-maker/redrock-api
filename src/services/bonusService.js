@@ -194,24 +194,29 @@ const sweepExpiredBonuses = async () => {
 };
 
 // ── 查詢會員有效紅利 ──────────────────────────────────────────────
-const getMemberBonuses = async (memberId) => {
+const getMemberBonuses = async (memberId, { includeInactive = false } = {}) => {
   const db = getDb();
+  // 單 where(ownerMemberId) + 記憶體過濾；includeInactive → 含已使用/已過期/停用（完整歷史）
   const snap = await db.collection(COLLECTION)
     .where('ownerMemberId', '==', memberId)
-    .where('isActive', '==', true)
-    .where('isUsed', '==', false)
     .get();
 
   const today = dayjs();
-  return snap.docs
-    .map(d => ({ id: d.id, ...d.data() }))
-    .filter(b => today.isBefore(dayjs(b.expiresAt.toDate())))
-    .map(b => ({
+  const expOf = (b) => b.expiresAt?.toDate ? b.expiresAt.toDate() : (b.expiresAt ? new Date(b.expiresAt) : null);
+  let rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  if (!includeInactive) {
+    rows = rows.filter(b => b.isActive !== false && b.isUsed !== true).filter(b => { const e = expOf(b); return e && today.isBefore(dayjs(e)); });
+  }
+  return rows.map(b => {
+    const e = expOf(b);
+    return {
       ...b,
-      expiresAtFormatted: dayjs(b.expiresAt.toDate()).format('YYYY-MM-DD'),
-      daysLeft: dayjs(b.expiresAt.toDate()).diff(today, 'day'),
-      isExpiringSoon: dayjs(b.expiresAt.toDate()).diff(today, 'day') <= EXPIRY_WARNING_DAYS,
-    }));
+      expiresAtFormatted: e ? dayjs(e).format('YYYY-MM-DD') : null,
+      daysLeft: e ? dayjs(e).diff(today, 'day') : null,
+      isExpiringSoon: e ? dayjs(e).diff(today, 'day') <= EXPIRY_WARNING_DAYS : false,
+      isExpired: e ? today.isAfter(dayjs(e)) : false,
+    };
+  });
 };
 
 module.exports = {

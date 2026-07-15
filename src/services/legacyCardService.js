@@ -221,19 +221,21 @@ const refundBlackCard = async (cardId) => {
 };
 
 // ── 查詢會員有效黑卡 ─────────────────────────────────────────────
-const getMemberBlackCards = async (memberId) => {
+const getMemberBlackCards = async (memberId, { includeInactive = false } = {}) => {
   const db = getDb();
   const snap = await db.collection(COLLECTION)
     .where('memberId', '==', memberId)
-    .where('isActive', '==', true)
     .get();
 
   const today = dayjs();
-  return snap.docs
-    .map(d => ({ id: d.id, ...d.data() }))
-    .filter(c => !c.expiresAt || today.isBefore(dayjs(c.expiresAt.toDate())))
+  let rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  if (!includeInactive) {
+    rows = rows.filter(c => c.isActive !== false).filter(c => !c.expiresAt || today.isBefore(dayjs(c.expiresAt.toDate())));
+  }
+  return rows
     .map(c => ({
       ...c,
+      isExpired: c.expiresAt ? today.isAfter(dayjs(c.expiresAt.toDate())) : false,
       expiresAtFormatted: c.expiresAt ? dayjs(c.expiresAt.toDate()).format('YYYY-MM-DD') : null,
       daysLeft: c.expiresAt ? dayjs(c.expiresAt.toDate()).diff(today, 'day') : null,
       isExpiringSoon: c.expiresAt ? dayjs(c.expiresAt.toDate()).diff(today, 'day') <= EXPIRY_WARNING_DAYS : false,

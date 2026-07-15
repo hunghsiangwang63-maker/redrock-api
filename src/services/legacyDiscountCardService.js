@@ -218,19 +218,21 @@ const transferLegacyDiscountCard = async ({ fromCardId, toMemberId, credits, sta
 };
 
 // ── 查詢會員有效舊優惠卡 ─────────────────────────────────────────
-const getMemberLegacyDiscountCards = async (memberId) => {
+const getMemberLegacyDiscountCards = async (memberId, { includeInactive = false } = {}) => {
   const db = getDb();
   const snap = await db.collection(COLLECTION)
     .where('ownerMemberId', '==', memberId)
-    .where('isActive', '==', true)
     .get();
 
   const today = dayjs();
-  return snap.docs
-    .map(d => ({ id: d.id, ...d.data() }))
-    .filter(c => !c.expiresAt || today.isBefore(dayjs(c.expiresAt.toDate())))
+  let rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  if (!includeInactive) {
+    rows = rows.filter(c => c.isActive !== false).filter(c => !c.expiresAt || today.isBefore(dayjs(c.expiresAt.toDate())));
+  }
+  return rows
     .map(c => ({
       ...c,
+      isExpired: c.expiresAt ? today.isAfter(dayjs(c.expiresAt.toDate())) : false,
       expiresAtFormatted: c.expiresAt ? dayjs(c.expiresAt.toDate()).format('YYYY-MM-DD') : null,
       daysLeft: c.expiresAt ? dayjs(c.expiresAt.toDate()).diff(today, 'day') : null,
       isExpiringSoon: c.expiresAt

@@ -265,19 +265,20 @@ const transferDiscountCard = async ({ fromCardId, toMemberId, credits, staffId }
 };
 
 // ── 查詢會員優惠卡 ────────────────────────────────────────────────
-const getMemberDiscountCards = async (memberId) => {
+const getMemberDiscountCards = async (memberId, { includeInactive = false } = {}) => {
   const db = getDb();
-  // 不用 Firestore orderBy('expiresAt')：無期限卡（expiresAt=null）會被 orderBy 排除、查不到 → 記憶體排序
+  // 單 where(ownerMemberId) + 記憶體過濾（避 orderBy 排除無期限卡；includeInactive 時保留全部＝完整歷史）
   const snap = await db.collection(COLLECTION)
     .where('ownerMemberId', '==', memberId)
-    .where('isActive', '==', true)
     .get();
 
   const today = dayjs();
   const asDate = (ts) => ts ? (typeof ts.toDate === 'function' ? ts.toDate() : new Date(ts)) : null;
-  const cards = snap.docs
-    .map(d => ({ id: d.id, ...d.data() }))
-    .filter(c => { const e = asDate(c.expiresAt); return !e || today.isBefore(dayjs(e)); }) // 無期限或未過期
+  let rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  if (!includeInactive) {
+    rows = rows.filter(c => c.isActive !== false).filter(c => { const e = asDate(c.expiresAt); return !e || today.isBefore(dayjs(e)); });
+  }
+  const cards = rows
     .map(c => {
       const e = asDate(c.expiresAt);
       return {
@@ -285,6 +286,7 @@ const getMemberDiscountCards = async (memberId) => {
         expiresAtFormatted: e ? dayjs(e).format('YYYY-MM-DD') : null,
         daysLeft: e ? dayjs(e).diff(today, 'day') : null,
         isExpiringSoon: e ? dayjs(e).diff(today, 'day') <= EXPIRY_WARNING_DAYS : false,
+        isExpired: e ? today.isAfter(dayjs(e)) : false,
       };
     })
     // 有期限的到期日近→遠優先使用，無期限的排最後

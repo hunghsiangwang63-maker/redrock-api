@@ -28,7 +28,7 @@ const childBlock = async (memberId, message) => {
 // 新優惠卡
 // ══════════════════════════════════════════════════════
 router.get('/discount/member/:memberId', authenticateAny, async (req, res) => {
-  try { res.json({ cards: await discountCardService.getMemberDiscountCards(req.params.memberId) }); }
+  try { res.json({ cards: await discountCardService.getMemberDiscountCards(req.params.memberId, { includeInactive: req.query.all === '1' }) }); }
   catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -112,7 +112,7 @@ router.post('/discount/:id/transfer',
 // 舊優惠卡（拍照歸檔）
 // ══════════════════════════════════════════════════════
 router.get('/legacy-discount/member/:memberId', authenticateAny, async (req, res) => {
-  try { res.json({ cards: await legacyDiscountCardService.getMemberLegacyDiscountCards(req.params.memberId) }); }
+  try { res.json({ cards: await legacyDiscountCardService.getMemberLegacyDiscountCards(req.params.memberId, { includeInactive: req.query.all === '1' }) }); }
   catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -178,7 +178,7 @@ router.post('/legacy-discount/:id/transfer',
 // 黑卡
 // ══════════════════════════════════════════════════════
 router.get('/black/member/:memberId', authenticateAny, async (req, res) => {
-  try { res.json({ cards: await legacyCardService.getMemberBlackCards(req.params.memberId) }); }
+  try { res.json({ cards: await legacyCardService.getMemberBlackCards(req.params.memberId, { includeInactive: req.query.all === '1' }) }); }
   catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -317,7 +317,7 @@ router.get('/transfers/outgoing/:memberId', authenticateAny, async (req, res) =>
 // 紅利
 // ══════════════════════════════════════════════════════
 router.get('/bonus/member/:memberId', authenticateAny, async (req, res) => {
-  try { res.json({ bonuses: await bonusService.getMemberBonuses(req.params.memberId) }); }
+  try { res.json({ bonuses: await bonusService.getMemberBonuses(req.params.memberId, { includeInactive: req.query.all === '1' }) }); }
   catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

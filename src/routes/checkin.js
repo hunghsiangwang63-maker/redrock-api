@@ -477,6 +477,8 @@ router.get('/monthly-daily-counts', authenticate, checkPermission('checkin.read'
         previous: day <= dPrev ? (countMap[`${prevMonth}-${pad(day)}`] || 0) : null,
         hsinchu: day <= dCur ? (gymCountMap['gym-hsinchu'][`${month}-${pad(day)}`] || 0) : null,
         shilin: day <= dCur ? (gymCountMap['gym-shilin'][`${month}-${pad(day)}`] || 0) : null,
+        hsinchuPrev: day <= dPrev ? (gymCountMap['gym-hsinchu'][`${prevMonth}-${pad(day)}`] || 0) : null,
+        shilinPrev: day <= dPrev ? (gymCountMap['gym-shilin'][`${prevMonth}-${pad(day)}`] || 0) : null,
       });
     }
     res.json({ month, prevMonth, curLabel: dayjs(curStart).format('M月'), prevLabel: dayjs(prevStart).format('M月'), data });

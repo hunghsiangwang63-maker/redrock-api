@@ -337,6 +337,14 @@ router.post('/registrations/:regId/cancel',
       // 已繳費(confirmed)的取消才算「申請退費」→ 標記 refundRequested + 存退費帳號、建待辦通知管理員；
       // 未繳費(pending)是純「取消報名」→ 無款可退，不標記退費、不通知（避免會員以為在等退費、櫃檯卻看不到）
       const isPaidReg = reg.paymentStatus === 'confirmed';
+      // 權威把關：已繳費取消（＝退費申請）必須帶退費銀行代碼＋帳號，否則櫃檯無從匯款
+      if (isPaidReg) {
+        const bankCode = String(req.body.refundBankCode || '').trim();
+        const account = String(req.body.refundAccount || '').trim();
+        if (!bankCode || !account) {
+          return res.status(400).json({ error: 'MISSING_REFUND_ACCOUNT', message: '申請退費需填寫退費銀行代碼與帳號' });
+        }
+      }
       await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(req.params.regId).update({
         status: 'cancelled',
         cancelledAt: new Date(),

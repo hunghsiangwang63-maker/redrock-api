@@ -1312,6 +1312,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E**：`2.79.0` 值班發自己館輪播 201/他館 403/全館 403/自己館休館(當時)201/super 全館 201（7/7）；`2.80.0` 值班發一般·路線 OK/休館·特殊時間 403 `MANAGER_ONLY_TYPE`/值班下架管理員休館 403/值班下架自己一般 200/管理員發+下架休館 200（10/10）。臨時員工/值班/公告/shiftLog 全清。
 - 📌 **使用**：館別電腦打卡值班 → 設定 → 📢 場館公告 → ＋新增 → 勾「輪播」→ 送出（該館會員首頁輪播出現）；休館公告仍須管理員發。
 
+## 目前進度（2026-07-15 續）— 修：比賽退回通知導向錯 tab
+> 回報：會員首頁「比賽轉帳被退回」通知點「前往處理」導向 `/member/competitions`，但比賽頁預設開「開放中報名」tab，被退回的報名在「我的比賽報名」tab → 會員看不到要補的那筆。後端 `/health` `2.81.0`。
+- ✅ **修**：後端 `/members/my/alerts` 比賽退回通知＋未成年家長簽署通知的 `link` 改 `/member/competitions?tab=my`；前端 `MemberCompetitionsPage` tab 初始值讀 `?tab=my`（用 `window.location.search`，因 `useLocation()` 在 useState 之後才宣告，避免 TDZ）。→ 點通知直接開「我的比賽報名」看到退回原因＋「重新填寫繳費資訊」鈕。
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

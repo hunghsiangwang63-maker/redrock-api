@@ -1367,6 +1367,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **入場類型顯示中文**（前端 commit `51ba80f`）：`MembersPage` 的 `MemberRecords` 入場列原顯示原始 `c.entryType`（discount_card…）→ 套共用 `entryLabelOf`（discount_card→優惠折扣券/single_ticket→單次購票/實體優惠卡…）。實機：黃耀弘「新竹館 · 優惠折扣券」。
 - 💡 教訓：後端「清單」與「詳情」共用 sanitize 時，大欄位（qrCode/簽名圖）應只在詳情/專屬端點回傳；序列 await 的多查詢 handler 優先 `Promise.all`；dead function（grep 只有定義）常是「該呼叫沒呼叫」的 bug 訊號。
 
+## 目前進度（2026-07-15 續）— 會員詳情列全部有效票券 + 班別改名連帶重組梯次名
+> 兩件連續小任務。後端 `/health` `2.94.0`→`2.95.0`。
+- ✅ **會員詳情列各類有效票券**（`2.94.0-member-detail-all-tickets`，後端 commit「GET /members/:id 加各類有效票券摘要」、前端 `29b8b29`）：原 `GET /members/:id` 只回 `activePasses`（定期票）→ 有卡/券/紅利但無定期票者顯示「無有效票券」。加 `activeCards`（優惠卡 kind=discount／舊折扣卡 legacy／黑卡 black，含 remainingCredits/source/expiresAt）、`activeSingleTickets`、`activeBonuses`，**沿用既有權威 getter**（`getMemberDiscountCards`/`getMemberLegacyDiscountCards`/`getMemberBlackCards`/`getValidSingleEntryTickets`/`getMemberBonuses`，各 `.catch(()=>[])` 併入 Promise.all），`activePasses` 不變。前端 `MembersPage` 有效票券區塊列 定期票/優惠卡/黑卡/舊折扣卡/單次券/紅利（null 到期顯「無期限」、全空才「無有效票券」）。實機驗證：蘇玲巧（0988779228）顯示「🎟️ 優惠卡 · 剩 6 格 · 到期 無期限」。**不動發卡/使用/移轉邏輯**。
+- ✅ **班別改名連帶重組梯次顯示名**（`2.95.0-category-rename-recompose-cohorts`，commit `bf5e45c`）：回報新竹館「小蜘蛛人入門班」要改「小蜘蛛人初級班」。查明班別（courseCategory `ebf83b51`）名稱**其實早已是初級班**，但梯次顯示名 `name` 是**建立時存死的**（`courseService` create 存 `班別名+梯次名`、getCourses 讀取不重組）、改名不回寫 → 新竹館 8 梯停在舊「小蜘蛛人入門班 週X班」（士林那筆後建、已正確）。根因＝`PUT /course-categories/:id` 只更 category 文件、不回寫子梯次。**修**：PUT 班別改名（`updates.name!==undefined`）時 batch 重組旗下所有有 `cohortName` 的梯次 `name`＝新班別名+梯次名；一次性校正現有 8 個 stale 梯次。
+- 📋 **產出各館課程正確名稱清單（匯入課程學員用）**：`~/Downloads/課程名稱清單_<日期>.csv`（21 active 梯次，欄位 館別/大類/班別/梯次名/**課程完整名稱(匯入用)**/星期時間/開課迄日/教練/courseId）。匯入注意：①「小蜘蛛人初級班」新竹＋士林都有梯次 → 對應務必帶館別或用 courseId ②矯正班兩梯僅差括號教練名（晉瑋教練/閎聿教練）為不同梯次。腳本走 firebase-admin。
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

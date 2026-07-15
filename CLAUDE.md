@@ -1304,6 +1304,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **三層 gate**：`checkPermission`（矩陣，super 一律過、operator 值班享 COUNTER_PERMS）/ `requireManagerOrStation`（管理員或值班）/ `requireManager`（僅管理員，值班也擋）/ `requireStationAuth`（operator 或 super——**每日結帳連館別管理員也需值班**）。
 - **產出兩份 Artifact**（依 `src/middleware/auth.js` 矩陣+各路由 gate）：①依功能分類 ②依頁面（每頁×5角色）。狀態 ●完整/◐需值班/◔檢視部分/—無。
 
+## 目前進度（2026-07-15 續）— 開放場館電腦發佈該館公告（休館類留管理員）
+> 需求：開放場館電腦（值班）發佈該館輪播公告。AskUserQuestion 先定「全部類型可發」→ 使用者後改「休館留給管理員」。後端 `/health` `2.79.0`→`2.80.0`；E2E（打 Railway）7/7＋10/10。
+- ✅ **公告發布開放值班＋館別隔離（`2.79.0`）**：`POST/PUT/DELETE /gyms/:id/announcements` 由 `checkPermission('notifications.send_gym')`（僅管理員、operator 也擋）→ **`requireManagerOrStation`**（管理員或值班 operator）＋新增 `announceGymGuard`：**非 super_admin 只能對自己館發布，擋 `all`（全館）與他館 → 403 `CROSS_GYM_FORBIDDEN`**。super_admin 不限。（`notifications.send_gym` 權限 key 只被這 3 個公告端點用，改後已無引用。）
+- ✅ **休館/特殊營業時間限管理員（`2.80.0`）**：**休館(closure)/特殊營業時間(special_hours) 有票期補償財務副作用**（休館日自動延長全館定期票效期）→ 新增 `announceTypeGuard`：非管理員（值班 operator 的 full/part 角色）發/改這兩類 → 403 `MANAGER_ONLY_TYPE`；**DELETE 也擋**（值班下架管理員發的休館會反向縮短已補償票期，handler 先讀 type 檢查）。值班僅可發 一般/輪播、路線更換。gym_manager 值班（role 仍 gym_manager）不受限。
+- ✅ **前端**：設定頁 `TAB_GROUPS` 場館與帳號組加「📢 場館公告」分頁（`ownGymAnnounce`，可見條件＝非 super 的 `gym_manager` 或值班 operator；super 走既有「場館設置」）；`GymsPage` 非 super（`annOnly`）→ 只列自己館（`activeGymId`）、只顯示公告區塊（營業時間/銀行 super-only 藏起）、類型下拉移除休館/特殊時間＋提示「請由管理員發布」。角色改由 `operator?.role || staff?.role` 判定。
+- **E2E**：`2.79.0` 值班發自己館輪播 201/他館 403/全館 403/自己館休館(當時)201/super 全館 201（7/7）；`2.80.0` 值班發一般·路線 OK/休館·特殊時間 403 `MANAGER_ONLY_TYPE`/值班下架管理員休館 403/值班下架自己一般 200/管理員發+下架休館 200（10/10）。臨時員工/值班/公告/shiftLog 全清。
+- 📌 **使用**：館別電腦打卡值班 → 設定 → 📢 場館公告 → ＋新增 → 勾「輪播」→ 送出（該館會員首頁輪播出現）；休館公告仍須管理員發。
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

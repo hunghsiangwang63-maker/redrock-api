@@ -84,7 +84,9 @@ router.post('/staff/login',
         if (!trusted) {
           const { verificationId } = await deviceAuthService.createDeviceVerification({
             accountType: 'staff', accountId: staffDoc.id,
-            accountName: staff.name, accountEmail: staff.notificationEmail || staff.email,
+            accountName: staff.name,
+            // notificationEmail 需為合法 email 才用（曾有員工被填 "see" 之類垃圾值 → 驗證碼寄丟）；否則退回主 email
+            accountEmail: /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(staff.notificationEmail || '') ? staff.notificationEmail : staff.email,
             deviceToken: req.body.deviceToken,
             deviceLabel: req.headers['user-agent'] || '',
           });

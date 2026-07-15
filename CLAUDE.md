@@ -1338,6 +1338,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 > 回報：今日統計的「學生免費」是什麼狀況？查證——`student_free`/`child_free` 是 entryType 的**歷史 id**（早年可能免費），實際學生單次入場收 250、兒童 150（近3天 8 筆 student_free 全有收費、無 0 元）。純標籤誤導、計費正常。後端 `/health` `2.83.0`→`2.84.0`。
 - ✅ **四處標籤 學生免費/兒童免費 → 學生入場/兒童入場**（純文字、不動計費）：①前端 `CheckinPage` 今日統計 typeLabel ②後端 `/checkin/today` 統計標籤（`2.83.0`）③前端 `RevenuePage` 入場分類 ④後端 `/revenue` byType 標籤（`2.84.0`）。全域掃描確認顯示層 0 殘留（僅 `checkin/pricing.js` 一行內部註解保留、不顯示）。系統其他處（掃碼預覽/今日紀錄/歷史/結帳/會員紀錄）本就用「學生入場/兒童入場」，現全一致。
 
+## 目前進度（2026-07-15 續）— 每日入場數圖表：上月也拆兩館
+> 承 `2.68.0`（本月拆兩館 新竹紅/士林藍）→ 要求上月資料也拆兩館、用淡紅/淡藍細虛線。後端 `/health` `2.85.0`；實機驗證圖例四項。
+- ✅ **後端**：`/checkin/monthly-daily-counts` data 補 `hsinchuPrev`/`shilinPrev`（上月各館每日；`gymCountMap` 查詢範圍本就含上月，只是原本沒組進 data）。
+- ✅ **前端**（`CheckinPage`，僅 super_admin 視角）：上月由單一灰線 → **上月新竹淡紅 `#E0A6A6`、上月士林淡藍 `#A6C3E5`，細虛線**（strokeWidth 1、`strokeDasharray 3 3`，畫在本月兩館實線後方當背景參考）；圖例四項（新竹/士林實線＋上月新竹/上月士林淡色虛線）。**單館帳號（站台/館長）維持本月實線＋上月灰線不變**。
+- 📌 目前上月（6月）資料量少、虛線貼底不明顯；8 月看 7 月資料時會清楚。
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

@@ -11,7 +11,17 @@ const dayjs = require('dayjs');
 
 const COLLECTION = 'discountCards';
 const CARD_CREDITS = 10;
-const CARD_VALIDITY_MONTHS = 12;
+const CARD_VALIDITY_MONTHS = 12; // 舊寫死值（已改為可設定，見 getDiscountCardValidityMonths；保留供參照）
+
+// 新購優惠折扣卡使用期限（月）：讀 systemSettings/discountCard.validityMonths。
+// 未設定 / 0 / 讀取失敗 → 回 null（＝無限期，目前暫定）。設定僅影響「之後售出」的卡、不追溯。
+const getDiscountCardValidityMonths = async () => {
+  try {
+    const doc = await getDb().collection('systemSettings').doc('discountCard').get();
+    const n = doc.exists ? Number(doc.data().validityMonths) : NaN;
+    return Number.isFinite(n) && n >= 1 ? n : null; // null = 無限期
+  } catch { return null; }
+};
 const EXPIRY_WARNING_DAYS = 30;
 
 // ── 轉入舊優惠卡（設定剩餘次數）──────────────────────────────────
@@ -60,7 +70,8 @@ const purchaseDiscountCard = async ({ memberId, gymId, staffId, price, paymentId
   const db = getDb();
   const cardId = uuidv4();
   const now = new Date();
-  const expiresAt = dayjs().add(CARD_VALIDITY_MONTHS, 'month').toDate();
+  const validityMonths = await getDiscountCardValidityMonths();
+  const expiresAt = validityMonths ? dayjs().add(validityMonths, 'month').toDate() : null; // null = 無限期（依系統設定）
 
   const card = {
     id: cardId,
@@ -305,4 +316,5 @@ module.exports = {
   getValidDiscountCards,
   incrementUsedCredits,
   EXPIRY_WARNING_DAYS,
+  getDiscountCardValidityMonths,
 };

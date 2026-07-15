@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '2.81.0-comp-alert-link-my-tab',
+    version: '2.82.0-discount-card-validity-configurable',
   });
 });
 

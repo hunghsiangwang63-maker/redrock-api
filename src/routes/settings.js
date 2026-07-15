@@ -151,6 +151,36 @@ router.put('/bonus', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /settings/discount-card-validity - 新購優惠折扣卡使用期限（月；null=無限期）──
+router.get('/discount-card-validity', async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('systemSettings').doc('discountCard').get();
+    const n = doc.exists ? Number(doc.data().validityMonths) : NaN;
+    res.json({ validityMonths: Number.isFinite(n) && n >= 1 ? n : null }); // null = 無限期
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── PUT /settings/discount-card-validity（僅 super_admin）；空/0 = 無限期、1~60 = 月數 ──
+// 僅影響設定後「之後售出」的卡，不追溯已售出。
+router.put('/discount-card-validity', authenticate, async (req, res) => {
+  if (!['super_admin', 'admin'].includes(req.staff?.role))
+    return res.status(403).json({ error: '權限不足' });
+  try {
+    const db = getDb();
+    const raw = req.body.validityMonths;
+    let validityMonths = null; // 預設無限期
+    if (raw !== null && raw !== '' && raw !== undefined) {
+      const n = Math.round(Number(raw));
+      if (!Number.isFinite(n) || n < 0 || n > 60)
+        return res.status(400).json({ error: 'INVALID_MONTHS', message: '請填 0（無限期）或 1~60 個月' });
+      validityMonths = n >= 1 ? n : null; // 0 → 無限期
+    }
+    await db.collection('systemSettings').doc('discountCard').set({ validityMonths, updatedAt: new Date() }, { merge: true });
+    res.json({ success: true, validityMonths });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /settings/payment-methods - 付款方式開關（公開；各付款頁讀取）──────
 // 現金/轉帳預設開放；LinePay/街口/台灣Pay 待金流 API 對接後由管理員開啟。
 const PAYMENT_DEFAULTS = { cash: true, transfer: true, linepay: false, jkopay: false, taiwanpay: false };

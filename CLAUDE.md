@@ -1325,6 +1325,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（7/7）**：GET 預設 null、PUT 12→存值、PUT 0/空→null、PUT 61→400、還原無限期。
 - 📌 **現行卡效期規則更新**：新購優惠卡＝**依系統設定（目前無限期）**｜轉入/綁定優惠卡＝無限期｜綁定黑卡＝無限期｜點數移轉＝跟隨原卡。（原「新購＝一年」已作廢。）
 
+## 目前進度（2026-07-15 續）— 墜測影片觀看進度定格排查（純前端 `redrock-web`）
+> 回報：會員看安全墜落影片時影片有播、但完成度定格不動。墜測影片用 YouTube IFrame API 每秒讀 `getCurrentTime()` 累積「看過的整數秒集合 ÷ getDuration()」算 `watchPercent`（`MemberFallTestPage`）。分兩種定格：
+- ✅ **卡 0%（讀不到進度）→ 偵測 in-app 瀏覽器提示改用 Safari/Chrome**：新增 `utils/inAppBrowser.js`（偵測 LINE/FB/Messenger/IG/微信/Threads/TikTok 內建 WebView 的 UA）；墜測影片區 in-app 時顯示琥珀提示橫幅＋「複製本頁網址」鈕（`navigator.clipboard`）。in-app WebView 常無法回報 YT 進度→進度卡 0 無法簽署。UA 偵測 8/8（in-app 提示、一般 Safari/Chrome 桌機手機不誤報）。commit（redrock-web）。
+- ✅ **卡固定非零值（如 31%）→ 加 `playsinline: 1`**：`initPlayer` 的 `playerVars` 原 `{rel:0,modestbranding:1}` **缺 `playsinline:1`** → iOS Safari 點播放**強制跳原生全螢幕**、iframe 內 `getCurrentTime()` 停住 → 進度定格在跳全螢幕前的值。加 `playsinline:1` 讓 iOS 頁面內播放、進度持續前進。（桌機/Android 本就 inline、不受影響；需清快取/無痕重載。）commit（redrock-web）。
+- 📌 **未做（使用者選只加 playsinline）**：進度算法仍是「累積實際經過的整數秒」→ 切背景/鎖屏（setInterval 被節流暫停）與快轉跳看仍會表現為卡住。若再有回報，方向＝改「已達最大播放時間÷總長」或「累計觀看秒數」寬容化。
+
 ## 待辦
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。
 

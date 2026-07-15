@@ -407,7 +407,7 @@ router.get('/export-checkin-csv',
         pass: '定期票', vip: 'VIP', course_access: '課程學員',
         discount_card: '優惠折扣券', black_card: '黑卡',
         single_entry_ticket: '單次入場券', single_ticket: '單次購票',
-        child_free: '兒童免費', student_free: '學生免費',
+        child_free: '兒童入場', student_free: '學生入場',
       };
 
       const rows = [

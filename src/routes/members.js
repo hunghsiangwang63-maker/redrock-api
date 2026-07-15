@@ -354,67 +354,47 @@ router.get('/:id',
   checkPermission('members.read'),
   async (req, res) => {
     try {
-      const member = await memberService.getMember(req.params.id);
-
-      // 非 super_admin 只能查看本館資料（簡單的關聯性檢查）
-      // 實際上會員跨館共用，這裡只擋明顯錯誤的場景
-
-      // 取得 waiver 狀態
+      const member = await memberService.getMember(req.params.id); // 不存在即 throw MEMBER_NOT_FOUND → 404
       const db = getDb();
-      const waiverDoc = await db.collection(COLLECTIONS.WAIVERS).doc(req.params.id).get();
-
-      // 取得最近墜落測驗
-      // 取得最近墜落測驗（查詢失敗不影響其他資料）
-      let fallTests = { empty: true, docs: [] };
-      try {
-        const ftSnap = await db.collection(COLLECTIONS.FALL_TESTS)
-          .where('memberId', '==', req.params.id)
-          .get();
-        if (!ftSnap.empty) {
-          // 客戶端排序
-          const sorted = ftSnap.docs.map(d => d.data()).sort((a, b) => {
-            const ta = a.testedAt?.seconds || a.testedAt?._seconds || 0;
-            const tb = b.testedAt?.seconds || b.testedAt?._seconds || 0;
-            return tb - ta;
-          });
-          fallTests = { empty: false, docs: [{ data: () => sorted[0] }] };
-        }
-      } catch (e) {}
-
-      // 取得有效定期票
       const today = dayjs().format('YYYY-MM-DD');
-      const passes = await db.collection(COLLECTIONS.MEMBER_PASSES)
-        .where('memberId', '==', req.params.id)
-        .where('endDate', '>=', today)
-        .where('status', '==', 'active')
-        .get();
 
-      // 取得子會員
-      const children = await db.collection(COLLECTIONS.MEMBERS)
-        .where('parentMemberId', '==', req.params.id)
-        .get();
+      // 獨立查詢一次並行（原本逐項序列 await ~2s）；查詢失敗個別退回空、不阻斷整體
+      const [waiverDoc, ftSnap, passesSnap, childrenSnap, fallTestSigSnap, blockReasons] = await Promise.all([
+        db.collection(COLLECTIONS.WAIVERS).doc(req.params.id).get(),
+        db.collection(COLLECTIONS.FALL_TESTS).where('memberId', '==', req.params.id).get().catch(() => ({ empty: true, docs: [] })),
+        // 定期票：改單 where(memberId) + 記憶體過濾 endDate/status（避免 memberId+endDate+status 複合索引造成偶發 FAILED_PRECONDITION）
+        db.collection(COLLECTIONS.MEMBER_PASSES).where('memberId', '==', req.params.id).get().catch(() => ({ docs: [] })),
+        db.collection(COLLECTIONS.MEMBERS).where('parentMemberId', '==', req.params.id).get().catch(() => ({ docs: [] })),
+        db.collection('fallTestSignatures').where('memberId', '==', req.params.id).get().catch(() => ({ empty: true })),
+        memberService.refreshBlockStatus(req.params.id).catch(() => []),
+      ]);
 
-      // 取得最新墜落測驗同意書簽署狀態（只取是否存在，不含圖片資料以節省頻寬）
-      const fallTestSigSnap = await db.collection('fallTestSignatures')
-        .where('memberId', '==', req.params.id)
-        .get();
+      // 最近墜落測驗（記憶體排序取最新）
+      let latestFallTest = null;
+      if (!ftSnap.empty) {
+        latestFallTest = ftSnap.docs.map(d => d.data()).sort((a, b) => {
+          const ta = a.testedAt?.seconds || a.testedAt?._seconds || 0;
+          const tb = b.testedAt?.seconds || b.testedAt?._seconds || 0;
+          return tb - ta;
+        })[0];
+      }
+
+      // 有效定期票（記憶體過濾）
+      const activePasses = passesSnap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(p => p.status === 'active' && (p.endDate || '') >= today);
+
       const hasFallTestSignature = !fallTestSigSnap.empty;
 
       // waiver 簽署狀態（供顯示）
       const waiverData = waiverDoc.exists ? waiverDoc.data() : null;
       const liveWaiverSigned = !!(waiverData && waiverData.isComplete);
       member.waiverSigned = liveWaiverSigned;
-
-      // 用權威函式重算「完整」封鎖狀態（含 waiver / 墜落測驗 / Email 未驗證），
-      // 避免只用 waiver 原因覆寫而把因墜測/Email 被封鎖的會員誤解鎖
-      const blockReasons = await memberService.refreshBlockStatus(req.params.id);
       member.blockReasons = blockReasons;
       member.isBlocked = blockReasons.length > 0;
 
-      // 同步 waiverSigned（refreshBlockStatus 不含此欄位）
-      db.collection(COLLECTIONS.MEMBERS).doc(req.params.id).update({
-        waiverSigned: liveWaiverSigned,
-      }).catch(() => {});
+      // 同步 waiverSigned（背景寫、不阻斷回應）
+      db.collection(COLLECTIONS.MEMBERS).doc(req.params.id).update({ waiverSigned: liveWaiverSigned }).catch(() => {});
 
       const waiverOut = waiverDoc.exists
         ? await require('../utils/storageUrl').signFields(waiverDoc.data(), ['memberSignatureUrl', 'parentSignatureUrl'])
@@ -422,9 +402,9 @@ router.get('/:id',
       res.json({
         member,
         waiver: waiverOut,
-        latestFallTest: fallTests.empty ? null : fallTests.docs[0].data(),
-        activePasses: passes.docs.map(d => ({ id: d.id, ...d.data() })),
-        children: children.docs.map(d => ({ id: d.id, name: d.data().name, birthday: d.data().birthday, memberType: d.data().memberType, isChildAccount: d.data().isChildAccount !== false })),
+        latestFallTest,
+        activePasses,
+        children: childrenSnap.docs.map(d => ({ id: d.id, name: d.data().name, birthday: d.data().birthday, memberType: d.data().memberType, isChildAccount: d.data().isChildAccount !== false })),
         hasFallTestSignature,
       });
     } catch (err) {

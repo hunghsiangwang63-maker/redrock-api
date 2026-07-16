@@ -681,6 +681,69 @@ router.post('/registrations/:regId/update-form', authenticateAny, async (req, re
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── POST /competitions/registrations/:regId/reregister - 逾期取消後用原資料重新報名（免重填、免重簽）──
+router.post('/registrations/:regId/reregister', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations').doc(req.params.regId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+    const reg = doc.data();
+    const deny = await checkMemberOwnership(req.member, reg.memberId, { onMissing: 403, message: '只能操作自己或子會員的報名' });
+    if (deny) return res.status(deny.status).json(deny.body);
+    if (!(reg.status === 'cancelled' && reg.cancelReason === 'payment_expired')) {
+      return res.status(400).json({ error: 'NOT_EXPIRED', message: '此報名非逾期取消，無法重新報名' });
+    }
+    const comp = (await db.collection(COLLECTIONS.COMPETITIONS).doc(reg.competitionId).get()).data();
+    if (!comp) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到賽事' });
+    if (comp.status !== 'open') return res.status(400).json({ error: 'REGISTRATION_CLOSED', message: '此賽事目前未開放報名' });
+    const { taiwanToday } = require('../utils/taiwanDate');
+    const today = taiwanToday();
+    if (comp.registrationEnd && today > comp.registrationEnd) return res.status(400).json({ error: 'REGISTRATION_ENDED', message: '報名期限已截止' });
+    const division = (comp.divisions || []).find(d => d.id === reg.divisionId);
+    if (!division) return res.status(400).json({ error: 'INVALID_DIVISION', message: '原組別已不存在，請重新報名' });
+    // 費用重算（早鳥/兒童），沿用原生日
+    const fees = comp.fees || {};
+    const isEarly = comp.earlyBirdDeadline && today <= comp.earlyBirdDeadline;
+    const dayjs = require('dayjs');
+    const age = reg.birthday ? dayjs().diff(dayjs(reg.birthday), 'year') : null;
+    const isChild = age !== null && age < (fees.childAgeLimit || 15);
+    const registrationFee = isChild ? (isEarly ? fees.childEarlyBird : fees.childRegular) || 950 : (isEarly ? fees.adultEarlyBird : fees.adultRegular) || 1100;
+    const N = comp.paymentDeadlineDays || 3;
+    const now = new Date();
+    let finalStatus, waitlistPosition = null;
+    await db.runTransaction(async (tx) => {
+      // 去重：不可已有其他有效報名
+      const dupTx = await tx.get(db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).where('competitionId', '==', reg.competitionId).where('memberId', '==', reg.memberId));
+      if (dupTx.docs.some(d => d.id !== req.params.regId && d.data().status !== 'cancelled')) throw { code: 'ALREADY_REGISTERED', message: '您已有此賽事的有效報名' };
+      // 容量
+      const snap = await tx.get(db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).where('competitionId', '==', reg.competitionId).where('divisionId', '==', reg.divisionId).where('status', 'in', ['confirmed', 'waitlist']));
+      const cCount = snap.docs.filter(d => d.data().status === 'confirmed').length;
+      const wCount = snap.docs.filter(d => d.data().status === 'waitlist').length;
+      const maxP = division.maxParticipants || 40, wMax = division.waitlistMax || 5;
+      if (cCount >= maxP && wCount >= wMax) throw { code: 'DIVISION_FULL', message: '組別已滿（含候補），無法重新報名' };
+      const willWaitlist = cCount >= maxP;
+      finalStatus = willWaitlist ? 'waitlist' : 'confirmed';
+      waitlistPosition = willWaitlist ? wCount + 1 : null;
+      const update = {
+        status: finalStatus, waitlistPosition,
+        paymentStatus: 'pending', registrationFee, isEarlyBird: !!isEarly,
+        cancelReason: null, paymentExpiredAt: null, cancelledAt: null,
+        bankLastFive: null, bankName: null, paymentDate: null,   // 需重新繳費
+        reregisteredAt: now, updatedAt: now,
+        paymentDeadline: (!willWaitlist && registrationFee > 0) ? dayjs(now).add(N, 'day').toDate() : null,
+      };
+      tx.update(ref, update);
+    });
+    // 正取且已完成簽署 → 重新推送計分系統
+    if (finalStatus === 'confirmed' && reg.isComplete) { try { await competitionService.sendWebhook(req.params.regId); } catch (e) {} }
+    res.json({ success: true, status: finalStatus, waitlistPosition, message: finalStatus === 'waitlist' ? '已重新報名（候補）' : '已重新報名，請於繳款期限內完成繳費' });
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 // ── POST /competitions/registrations/:regId/refund - 退費 ──
 router.post('/registrations/:regId/refund',
   authenticate, checkPermission('competitions.manage'),

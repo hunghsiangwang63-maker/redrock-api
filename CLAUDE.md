@@ -1498,6 +1498,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **驗證（打正式 API）**：`/pending-tasks` 待辦 6 筆、轉帳待收款 0 筆、朱智萩 ✅ 已消失；端點正常。
 - 📌 同類提醒：轉帳單（transferRecords）與訂單狀態需連動——訂單取消時務必作廢其 pending 轉帳單，否則待收款/報表殘留。
 
+## 目前進度（2026-07-16 續14）— 修單日券誤判過期 + 保險名冊壞檔 + 首頁體驗提醒導向
+> 三筆修復。後端 `/health` `3.12.0`→`3.13.0`；前端純導向。
+- ✅ **修：單日入場券使用時誤判過期**（`3.12.0-single-ticket-expiry-dateonly`，commit 後端 `60a614b`）：回報王登翰體驗單日券有效日到 7/16、當天使用卻說「票券已過期」。**根因**：`checkin/flow.js` 兩處（`createPendingCheckIn`:73、`confirmCheckIn`:408）過期判斷用 `dayjs().isAfter(dayjs(ticket.expiresAt))`——`expiresAt` 是純日期字串（`2026-07-16`）被解析成當天 00:00，午夜後任何時刻的 `dayjs()` 都晚於它 → **有效日當天午夜過後整天都被誤判過期**（只有恰好 00:00 可用）。顯示用的 `getValidSingleEntryTickets`（eligibility.js）是字串比對（正確）→ 券「看得到、可選、一按下去就過期」。**修**：兩處改 `taiwanToday() > String(ticket.expiresAt)` 日期字串比對（當天 false 不擋、隔天 true 才擋）。黑卡（flow.js:58）與 QR pending（248/340）用 Firestore Timestamp `.toDate()`（完整 datetime）比對正確、不受影響。**體驗單日券本就全體受影響**（有效日僅當天、當天午夜後就不能用），非個案。
+- ✅ **修：保險名冊下載/預覽壞檔**（`3.13.0-insurance-roster-sanitize-import`，commit 後端 `3da9cf9`）：回報保險名冊下載資料錯誤、預覽也錯誤。**根因**：7/13 後端拆檔把 `buildInsuranceXlsBuffer` 從 `experienceBookings.js` 搬進 `experienceService.js`，但 helper `sanitizeSheet` 只在原檔 import、沒跟著搬 → 產名冊時 `ReferenceError: sanitizeSheet is not defined` → 下載 route throw → 回 500 JSON，前端把錯誤 JSON 當 .xls 存下（開檔預覽看到的就是那段錯誤文字）→ 下載與預覽都錯。**修**：`experienceService.js` 補 `const { sanitizeSheet } = require('../utils/xlsxSafe')`。驗證：成人（15+）/未成年（<15）分頁依活動日算年齡、民國生日轉 7 位（`toRoc7`）皆正確。**教訓**：拆檔搬函式時，函式用到的 helper import 要一起搬（同型於 emailService 漏定義那類 bug，build 不會抓、要執行才炸）。
+- ✅ **修：首頁課程活動提醒體驗預約卡導向錯誤**（純前端 commit `97c377c`）：會員首頁「課程活動提醒」的體驗預約卡點擊原跳 `/member/experience`（填寫預約頁）→ 改跳 `/member/experience?tab=my`（我的預約分頁）；`MemberExperiencePage` 初始 tab 讀 `?tab=my`（`URLSearchParams`）。build 兩 target + deploy。
+- 📌 **本次修復 CLAUDE.md 磁碟檔退回事故**：發現 `redrock-api/CLAUDE.md` 磁碟工作檔停在 2026-07-04 版（35KB、mtime 7/4 16:34、git 最後 commit `dd285a4`），07-05→07-16 兩週進度只存在 Claude Code file-history 快照（`~/.claude/file-history/…/922af0b500db3347@v226`，366KB／1517 行）而**未落地磁碟、未進 git**。以 v226 快照重建完整長版並 commit 落地（git 一旦 commit 即永久保存，不受工作檔再被還原影響）。**教訓**：`~/Downloads` 若走 iCloud 同步，工作檔可能被背景還原成舊快照而 Edit 看似成功（file-history 有、磁碟沒）→ 定期 `git add CLAUDE.md && git commit` 才是唯一可靠落地；日後動 CLAUDE.md 後先 `git status` 確認真的有變更再 commit。
+
 ## 待辦
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。

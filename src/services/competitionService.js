@@ -232,6 +232,18 @@ const registerForCompetition = async ({
     ? (isEarlyBird ? fees.childEarlyBird : fees.childRegular) || 950
     : (isEarlyBird ? fees.adultEarlyBird : fees.adultRegular) || 1100;
 
+  // 攀岩隊員報名費 9 折（依報名對象隊籍；共用 applyTeamDiscount，含最低金額門檻）
+  let teamDiscountApplied = false;
+  try {
+    const { isActiveTeamMember, applyTeamDiscount } = require('./teamMemberService');
+    const mDoc = await getDb().collection(COLLECTIONS.MEMBERS).doc(memberId).get();
+    if (mDoc.exists && isActiveTeamMember(mDoc.data())) {
+      const r = applyTeamDiscount(registrationFee, true);
+      registrationFee = r.discounted;
+      teamDiscountApplied = r.applied;
+    }
+  } catch (e) { /* 查無會員不影響報名 */ }
+
   // 必填：性別/生日/手機/Email（自動帶會員資料、會員資料缺漏由報名表補填；帶進計分系統與保險名冊）
   if (gender !== 'male' && gender !== 'female') {
     throw { code: 'MISSING_GENDER', message: '請選擇性別' };
@@ -299,6 +311,8 @@ const registerForCompetition = async ({
     // 費用
     registrationFee,
     isEarlyBird: !!isEarlyBird,
+    isTeamDiscount: teamDiscountApplied,   // 攀岩隊員 9 折
+
     // 付款
     paymentMethod: paymentMethod || 'transfer',
     paymentDate: paymentDate || null,

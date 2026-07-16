@@ -661,9 +661,16 @@ router.post('/registrations/:regId/update-form', authenticateAny, async (req, re
     const isEarly = comp.earlyBirdDeadline && today <= comp.earlyBirdDeadline;
     const age = b.birthday ? require('dayjs')().diff(require('dayjs')(b.birthday), 'year') : null;
     const isChild = age !== null && age < (fees.childAgeLimit || 15);
-    const registrationFee = isChild
+    let registrationFee = isChild
       ? (isEarly ? fees.childEarlyBird : fees.childRegular) || 950
       : (isEarly ? fees.adultEarlyBird : fees.adultRegular) || 1100;
+    // 攀岩隊員報名費 9 折
+    let feTeamDiscount = false;
+    try {
+      const { isActiveTeamMember, applyTeamDiscount } = require('../services/teamMemberService');
+      const mDoc = await db.collection('members').doc(reg.memberId).get();
+      if (mDoc.exists && isActiveTeamMember(mDoc.data())) { const rr = applyTeamDiscount(registrationFee, true); registrationFee = rr.discounted; feTeamDiscount = rr.applied; }
+    } catch (e) {}
 
     await ref.update({
       divisionId: newDivisionId, divisionName: division.name,
@@ -676,7 +683,7 @@ router.post('/registrations/:regId/update-form', authenticateAny, async (req, re
       emergencyPhone: b.emergencyPhone || null,
       height: b.height || null, armSpan: b.armSpan || null,
       isHonorary: !!b.isHonorary,
-      registrationFee, isEarlyBird: !!isEarly,
+      registrationFee, isEarlyBird: !!isEarly, isTeamDiscount: feTeamDiscount,
       // 清除退回旗標
       formReturned: false, formReturnReason: null, formReturnedAt: null,
       updatedAt: new Date(),
@@ -712,7 +719,14 @@ router.post('/registrations/:regId/reregister', authenticateAny, async (req, res
     const dayjs = require('dayjs');
     const age = reg.birthday ? dayjs().diff(dayjs(reg.birthday), 'year') : null;
     const isChild = age !== null && age < (fees.childAgeLimit || 15);
-    const registrationFee = isChild ? (isEarly ? fees.childEarlyBird : fees.childRegular) || 950 : (isEarly ? fees.adultEarlyBird : fees.adultRegular) || 1100;
+    let registrationFee = isChild ? (isEarly ? fees.childEarlyBird : fees.childRegular) || 950 : (isEarly ? fees.adultEarlyBird : fees.adultRegular) || 1100;
+    // 攀岩隊員報名費 9 折
+    let rrTeamDiscount = false;
+    try {
+      const { isActiveTeamMember, applyTeamDiscount } = require('../services/teamMemberService');
+      const mDoc = await db.collection('members').doc(reg.memberId).get();
+      if (mDoc.exists && isActiveTeamMember(mDoc.data())) { const rd = applyTeamDiscount(registrationFee, true); registrationFee = rd.discounted; rrTeamDiscount = rd.applied; }
+    } catch (e) {}
     const N = comp.paymentDeadlineDays || 3;
     const now = new Date();
     let finalStatus, waitlistPosition = null;
@@ -731,7 +745,7 @@ router.post('/registrations/:regId/reregister', authenticateAny, async (req, res
       waitlistPosition = willWaitlist ? wCount + 1 : null;
       const update = {
         status: finalStatus, waitlistPosition,
-        paymentStatus: 'pending', registrationFee, isEarlyBird: !!isEarly,
+        paymentStatus: 'pending', registrationFee, isEarlyBird: !!isEarly, isTeamDiscount: rrTeamDiscount,
         cancelReason: null, paymentExpiredAt: null, cancelledAt: null,
         bankLastFive: null, bankName: null, paymentDate: null,   // 需重新繳費
         reregisteredAt: now, updatedAt: now,

@@ -1485,6 +1485,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **我的比賽不再顯示「轉帳確認中」**：**根因**——`payStatusBadge` 只看 `paymentStatus`（pending_confirm→轉帳確認中），沒看 `status==='cancelled'`；reject-form 設 cancelled 但未清 paymentStatus。**修**：badge 先判 `status==='cancelled'`→顯示 已駁回／逾期取消／已取消；取消卡對 `formRejected` 顯示「⛔ 報名已被駁回＋原因」（原落入通用「已取消」）。
 - **E2E（2/2）**：注入 cancelled+formRejected+pending_confirm → `/my/alerts` 回 `competition_rejected`（kind=reject＋原因）；cancelledAt 改 20 天前 → 通知消失。
 
+## 目前進度（2026-07-16 續14）— 會員各頁右上角加登出圖示（純前端 `redrock-web`）
+> 需求：會員頁面右上角都加簡單登出圖示。commit `9b2e1d5`，member 已 deploy。
+- ✅ **新共用元件 `components/MemberLogoutButton.jsx`**：右上角登出鈕（**SVG 繪製登出圖示**避免缺字 tofu、見 [[ui-icon-css-not-glyph]]；點擊跳「確認登出？」modal → `useMember().logout()` + 導回 `/member/login`）。兩模式：**fixed 浮動**（預設，右上角固定）／**inline**（嵌入既有 header 列）。
+- ✅ **加到 12 個會員 app 頁**：浮動於 11 頁（Courses/Competitions/Experience/QR/Passes/Records/Rental/Team/Gyms/FallTest/Profile，多數插在 `<NavBar/>`/`<BottomNav/>` 前）；**首頁**用 `inline` 嵌在 header 頭像旁（避免與 🌐EN 切換／頭像浮動重疊）。login/register/forgot/reset/verify/parent-waiver 等未登入頁不加。
+- 📌 各頁無共用 MemberLayout（各自 standalone + 自帶 NavBar），故用「浮動 fixed 元件插各頁」達成統一右上角；未實機（會員登入需密碼），靠 12 頁 import/使用確認 + 兩端 build 通過。
+
 ## 待辦
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。

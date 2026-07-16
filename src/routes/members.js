@@ -102,6 +102,7 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
         const seen = new Set();
         snap.docs.forEach(d => {
           const o = d.data();
+          if (o.status === 'cancelled') return;   // 已取消/處理完成 → 通知自動消失
           const key = src.type === 'course' ? `${src.type}|${o.courseId}|${id}` : `${src.type}|${d.id}`;
           if (seen.has(key)) return;
           seen.add(key);
@@ -109,6 +110,7 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
             type: src.type, label: src.label, link: src.link,
             name: src.name(o) || src.label,
             reason: o.paymentRejectReason || '',
+            method: o.paymentMethod || null,   // 供前端文案：現金→繳費被退回、轉帳→轉帳被退回
             memberName: id === req.member.id ? null : (kids.docs.find(k => k.id === id)?.data()?.name || null),
           });
         });

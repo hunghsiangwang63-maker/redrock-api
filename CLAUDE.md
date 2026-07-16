@@ -1491,6 +1491,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **加到 12 個會員 app 頁**：浮動於 11 頁（Courses/Competitions/Experience/QR/Passes/Records/Rental/Team/Gyms/FallTest/Profile，多數插在 `<NavBar/>`/`<BottomNav/>` 前）；**首頁**用 `inline` 嵌在 header 頭像旁（避免與 🌐EN 切換／頭像浮動重疊）。login/register/forgot/reset/verify/parent-waiver 等未登入頁不加。
 - 📌 各頁無共用 MemberLayout（各自 standalone + 自帶 NavBar），故用「浮動 fixed 元件插各頁」達成統一右上角；未實機（會員登入需密碼），靠 12 頁 import/使用確認 + 兩端 build 通過。
 
+## 目前進度（2026-07-16 續15）— 修：比賽駁回/取消後轉帳單殘留在待收款
+> 回報朱智萩比賽報名已駁回卻仍在待收款。後端 `/health` `3.11.0-void-transfer-on-cancel`。
+- ✅ **根因**：駁回報名（reject-form）/會員取消把報名標 cancelled，但**沒作廢連動的 `transferRecord`（status 仍 pending）** → 待辦 9b「轉帳待確認收款」直接讀 pending 轉帳單、不看報名是否取消 → 殘留在待收款（朱智萩 c8096f7f 駁回、轉帳單 8284b6b9 仍 pending）。
+- ✅ **修（commit `942106c`）**：① **待辦 9b** 對每筆 pending 轉帳單查連動訂單（`ORDER_COLL` 5 型）——`status==='cancelled' || paymentStatus==='refunded'` → **跳過不列**（涵蓋所有取消路徑的安全網；forEach 改 for-of async）。② **reject-form + member cancel** 作廢該報名的 pending transferRecords（`where refId== + 記憶體濾 status`，資料清潔）。③ 回填作廢殘留的 1 筆（朱智萩）。
+- **驗證（打正式 API）**：`/pending-tasks` 待辦 6 筆、轉帳待收款 0 筆、朱智萩 ✅ 已消失；端點正常。
+- 📌 同類提醒：轉帳單（transferRecords）與訂單狀態需連動——訂單取消時務必作廢其 pending 轉帳單，否則待收款/報表殘留。
+
 ## 待辦
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。

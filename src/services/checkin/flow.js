@@ -70,7 +70,9 @@ const createPendingCheckIn = async ({
     if (ticketDoc.data().memberId && ticketDoc.data().memberId !== memberId) {
       throw { code: 'TICKET_NOT_OWNED', message: '此單次入場券不屬於此會員' };
     }
-    if (dayjs().isAfter(dayjs(ticketDoc.data().expiresAt))) {
+    // expiresAt 為日期字串(YYYY-MM-DD)；過期＝台灣今天已超過該日（比日期，非 datetime，
+    // 否則當天午夜後的 dayjs() 會晚於 dayjs(expiresAt=當天00:00) 被誤判過期）
+    if (ticketDoc.data().expiresAt && taiwanToday() > String(ticketDoc.data().expiresAt)) {
       throw { code: 'TICKET_EXPIRED', message: '單次入場券已過期' };
     }
   }
@@ -405,7 +407,7 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     if (!ticketDoc.exists || ticketDoc.data().status !== 'active') {
       throw { code: 'TICKET_INVALID', message: '單次入場券無效或已使用' };
     }
-    if (dayjs().isAfter(dayjs(ticketDoc.data().expiresAt))) {
+    if (ticketDoc.data().expiresAt && taiwanToday() > String(ticketDoc.data().expiresAt)) {
       throw { code: 'TICKET_EXPIRED', message: '單次入場券已過期' };
     }
     await ticketRef.update({ status: 'used', usedAt: now, usedCheckInId: checkInId, updatedAt: now });

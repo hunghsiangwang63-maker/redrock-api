@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.11.0-void-transfer-on-cancel',
+    version: '3.12.0-single-ticket-expiry-dateonly',
   });
 });
 

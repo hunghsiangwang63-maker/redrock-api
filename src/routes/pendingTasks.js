@@ -342,9 +342,17 @@ router.get('/returned', authenticate, async (req, res) => {
     const secOf = ts => ts?._seconds || (ts?.toDate ? Math.floor(ts.toDate().getTime() / 1000) : 0);
     const items = [];
     for (const s of SRC) {
-      let snap;
-      try { snap = await db.collection(s.coll).where('wasReturned', '==', true).get(); } catch (e) { continue; }
-      snap.docs.forEach(d => {
+      // 聯集：目前 transfer_rejected（繳費退回·含改版前無旗標者）＋ wasReturned（補正後仍追蹤）＋ formReturned（報名表退回）
+      const docMap = new Map();
+      const qs = [
+        db.collection(s.coll).where('paymentStatus', '==', 'transfer_rejected'),
+        db.collection(s.coll).where('wasReturned', '==', true),
+      ];
+      if (s.type === 'competition') qs.push(db.collection(s.coll).where('formReturned', '==', true));
+      for (const q of qs) {
+        try { const snap = await q.get(); snap.docs.forEach(d => docMap.set(d.id, d)); } catch (e) {}
+      }
+      docMap.forEach(d => {
         const o = d.data();
         if (gymId && o.gymId && o.gymId !== gymId) return;
         const rt = o.lastReturnType || (o.formReturned ? 'form' : 'payment');

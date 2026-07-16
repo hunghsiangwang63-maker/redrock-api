@@ -143,6 +143,19 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
             memberName: kidName,
           });
         }
+        // 報名被管理員駁回取消（近 14 天，資訊性通知；無需動作）
+        if (o.status === 'cancelled' && o.formRejected) {
+          const sec = o.cancelledAt?._seconds || o.cancelledAt?.seconds || 0;
+          if (!sec || (Date.now() / 1000 - sec) < 14 * 86400) {
+            alerts.push({
+              type: 'competition_rejected', kind: 'reject',
+              label: '比賽報名', link: '/member/competitions?tab=my',
+              name: o.competitionName || '比賽',
+              reason: `報名已被駁回：${String(o.cancelReason || '').replace('管理員駁回：', '') || '請洽館方'}`,
+              memberName: kidName,
+            });
+          }
+        }
       });
     }
     res.json({ alerts });

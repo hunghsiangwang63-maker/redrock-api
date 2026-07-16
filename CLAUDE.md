@@ -1479,6 +1479,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **退費/取消分清**：分頁 申請退費＝`refundRequested`、已取消＝`cancelled && !refundRequested` → 朱智萩純取消不再誤歸退費申請（她另有一筆 confirmed 重報，正取顯示）。
 - 🐞 **修自己引入的崩潰（命名衝突）**：新加的報名繳費狀態 `const STATUS_LABEL`（`{t,c}`）與**模組層既有 `STATUS_LABEL`（競賽狀態 draft/open/closed，`{type,label}`）同名** → 元件內 shadow 蓋掉 → 競賽列表 `STATUS_LABEL[c.status].type` 讀到 undefined.type → **CompetitionsPage 整頁白屏**。改名 `PAY_STATUS` 解決。**教訓**：元件內 const 勿與模組層同名（會 shadow）；vite build 不報此類 runtime 崩潰，改前端務必實機開該頁。附帶：期間一度誤判為 entryLabelOf 舊快取 bundle（CUTM_C8_）→ 實為新 bundle 的 `.type` shadow 崩潰，靠開新分頁載入最新 bundle + 讀 console 定位真兇。
 
+## 目前進度（2026-07-16 續13）— 比賽駁回報名：會員首頁通知 + 我的比賽顯示已駁回
+> 回報駁回報名沒在會員首頁通知、且我的比賽仍顯示「轉帳確認中」。後端 `/health` `3.10.0-reject-form-member-notify`；E2E 2/2。commit 後端 `abccf38`、前端 `25447fc`。
+- ✅ **駁回→會員首頁通知**（原本無）：`/members/my/alerts` 加 `competition_rejected`（`status==='cancelled' && formRejected`，近 14 天，`kind:'reject'`）；`MemberHomePage` 支援 `kind:'reject'`（⛔「比賽報名已被駁回：賽名／原因：…／點此查看」）。逾 14 天自動消失（駁回為終態、非待辦、無 acknowledge 機制故以時間窗自然過期）。
+- ✅ **我的比賽不再顯示「轉帳確認中」**：**根因**——`payStatusBadge` 只看 `paymentStatus`（pending_confirm→轉帳確認中），沒看 `status==='cancelled'`；reject-form 設 cancelled 但未清 paymentStatus。**修**：badge 先判 `status==='cancelled'`→顯示 已駁回／逾期取消／已取消；取消卡對 `formRejected` 顯示「⛔ 報名已被駁回＋原因」（原落入通用「已取消」）。
+- **E2E（2/2）**：注入 cancelled+formRejected+pending_confirm → `/my/alerts` 回 `competition_rejected`（kind=reject＋原因）；cancelledAt 改 20 天前 → 通知消失。
+
 ## 待辦
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。

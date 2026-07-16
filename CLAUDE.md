@@ -1437,6 +1437,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **清理**：展示賽事＋7 筆報名全刪、0 殘留、待辦數回落（注入的待確認報名曾進待收款待辦、刪後歸零）。
 - 📌 **比賽付款狀態機（`2.97`~`3.03`）至此完成**：未繳費取消≠退費／轉帳先報名後補填／管理員退回修改+駁回報名+會員重送／擋重複退回+退費帳號必填／繳款期限+逾期剔除（現金不自動剔除、櫃檯人工）/依狀態顯示功能鍵+狀態下拉／逾期免重填重新報名／緊急聯絡人拆欄帶入。API＋實機雙重驗證。
 
+## 目前進度（2026-07-16 續7）— 計分系統對接：性別送中文 + 重新推送批次修 timeout 誤報
+> 對接丟到計分系統的資料性別要中文；連帶查出「重新推送顯示不成功」其實是誤報。後端 `/health` `3.04.0`→`3.05.0`。
+- ✅ **性別送中文男/女**（`3.04.0-scoring-gender-zh`，commit `bf14118`）：`competitionSyncService.mapAthlete` 加 `toGenderZh`（male→男、female→女、已中文/未知原樣），計分系統 athlete payload 不再送英文 male/female。既有已對接賽事需「重新推送」才會更新既有選手。
+- ✅ **修「重新推送顯示不成功」＝前端 timeout 誤報**（`3.05.0-scoring-batch-resync`，commit `2bdc63d`）：**根因**——`startScoringSync` 原**逐一** `syncCompAthlete`（每位跨專案讀整個賽事文件＋寫入），16 位＝~32 次跨專案往返 → 太慢，RedRock 前端 `startScoring` catch timeout 顯示「對接失敗」，但**後端其實全部成功**（查 202608 16 位 `webhookStatus` 全 `sent`、性別已男/女）。**修**：新增 `syncAllAthletes`（讀一次 event doc、一次 `update` 全部 athletes 欄位，保留 bib/order/round）；`startScoringSync` 改批次＋`webhookStatus` 批次回寫。**正式 API 實測**：重推 202608 回 `synced:16/failed:0`、耗時 ~3.7s（原會 timeout）。
+- 📌 **教訓**：跨專案（RedRock↔計分系統 redrock-comp）Firestore 逐一讀寫會累積大量往返→慢/timeout；批次「讀一次+寫一次」是正解。前端顯示「對接失敗」不代表後端沒成功——查 `webhookStatus` 才是真相。
+
 ## 待辦
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。

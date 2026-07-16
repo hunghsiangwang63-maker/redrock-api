@@ -242,7 +242,10 @@ router.get('/eligibility/:memberId', authenticate, requireManagerOrStation, asyn
     // 與入場 confirmCheckIn 權威一致：體驗券限當日 validDate、一般單次券不受限
     // （改用 getValidSingleEntryTickets，避免電話搜尋列出不可用的票券／漏列當日體驗券）
     const validTickets = await checkinService.getValidSingleEntryTickets(req.params.memberId);
-    const memberType = member.memberType || 'general';
+    // 兒童以出生日期 age<13 判定（非 raw memberType）——與 verifyEntry 的 getMemberType 一致，
+    // 否則子帳號 memberType=undefined→'general'，兒童入場(memberTypes:['child']) 被前端過濾掉不顯示
+    const { getMemberType } = require('../services/checkin/pricing');
+    const memberType = getMemberType(member);
 
     res.json({
       memberType,

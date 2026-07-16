@@ -1458,6 +1458,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（6/6）**：繳費退回→出現(待補正+會員末五碼+退回原因)→補正(pending_confirm)→仍追蹤(已補正待確認)→確認收款→結案消失；報名表退回(已付費也追蹤、不因 confirmed 誤判結案)→formReturned 清除→結案消失。腳本 inline。
 - 📌 **設計**：結案＝自動移除（無永久已結案歷史）；「當初填寫資料」取訂單當前欄位（非歷史快照）＋退回 metadata。
 
+## 目前進度（2026-07-16 續10）— 修：退回追蹤抓不到改版前退回件（蔡閔等）
+> 回報退回追蹤沒資料（蔡閔的退回是要她提早繳費、不是不追蹤）。後端 `/health` `3.08.0-returned-tracking-legacy`。
+- ✅ **根因**：`GET /pending-tasks/returned` 原只查 `wasReturned==true`，但該旗標 3.07.0 才加 → **改版前退回的 4 筆（蔡閔/劉昱辰/莊振翔/葉博榮，皆 202608 transfer_rejected 無旗標）查不到** → 追蹤空白。
+- ✅ **修（commit `4953419`）**：查詢改**聯集去重**——`paymentStatus=='transfer_rejected'`（繳費退回，含改版前）＋`wasReturned==true`（補正後仍追蹤）＋`formReturned==true`（報名表退回，比賽）；`docMap` 依 doc id 去重後套原結案判定/子狀態。reason/time 對改版前 fallback `paymentRejectReason`/`paymentRejectedAt`（退回人 name 改版前無、顯示—）。
+- ✅ **回填 4 筆**：現有 transfer_rejected 未結案者補 `wasReturned:true`＋`lastReturnType/Reason/At`（讓其補正後仍持續追蹤到結案）。
+- **驗證（打正式 API）**：`/pending-tasks/returned?gymId=gym-hsinchu` 回 4 筆（含蔡閔 現金·「請於報名三日內完成繳費」），付款方式/末五碼/原因齊全。前端不用改（純後端查詢修正）。
+
 ## 待辦
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。

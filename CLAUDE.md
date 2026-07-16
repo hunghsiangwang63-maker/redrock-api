@@ -1465,6 +1465,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **回填 4 筆**：現有 transfer_rejected 未結案者補 `wasReturned:true`＋`lastReturnType/Reason/At`（讓其補正後仍持續追蹤到結案）。
 - **驗證（打正式 API）**：`/pending-tasks/returned?gymId=gym-hsinchu` 回 4 筆（含蔡閔 現金·「請於報名三日內完成繳費」），付款方式/末五碼/原因齊全。前端不用改（純後端查詢修正）。
 
+## 目前進度（2026-07-16 續11）— 修：比賽報名費未套攀岩隊員 9 折
+> 回報林祺堂是隊員報名卻沒 9 折。後端 `/health` `3.09.0-competition-team-discount`；E2E 2/2。commit `e584224`。
+- ✅ **根因**：`registerForCompetition` 計費**從未讀 `fees.teamMemberDiscount`（0.9）** → 所有隊員收原價。（賽事 fees 有此欄位但只存不用。）
+- ✅ **修（三處計費）**：`registerForCompetition`＋`update-form`（退回修改重送）＋`reregister`（逾期重報）——報名對象效期內隊員（`isActiveTeamMember`）→ `applyTeamDiscount`（共用，0.9＋最低金額門檻）套折、存 `isTeamDiscount`。**E2E**：隊員早鳥 990→891、一般 990 無折。
+- ✅ **林祺堂資料修正**：202608 V4-V5（**pending 未繳費**）990→891＋isTeamDiscount:true；掃 202608 全部報名**僅他 1 人**受影響（已收款者不動、避免更動已收金額）。
+- 📌 隊員折扣適用族群現況：按次入場×0.9、商品 POS、購優惠券/定期票（2.62.0）、**比賽報名費（本次補上）**；兒童入場不套折（比賽童折另計、隊員折疊在計算後）。
+
 ## 待辦
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。

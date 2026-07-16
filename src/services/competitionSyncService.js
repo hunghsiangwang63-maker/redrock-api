@@ -108,6 +108,43 @@ const syncCompAthlete = async (competition, registration) => {
   }
 };
 
+// 批次推送多位選手（重新推送/開始對接用）：讀一次 event doc、一次 update 全部 athletes 欄位。
+// 取代逐一 syncCompAthlete（16 位 → 32 次跨專案往返）造成的慢/timeout；保留既有 bib/order/round。
+const syncAllAthletes = async (competition, registrations) => {
+  if (!isCompScoring(competition)) return { synced: 0, failed: 0, error: '非計分系統賽事' };
+  const cdb = getCompDb();
+  if (!cdb) return { synced: 0, failed: registrations.length, error: '計分系統未設定金鑰（COMP_FIREBASE_SA）' };
+  if (!competition.compDocId) return { synced: 0, failed: registrations.length, error: '計分系統賽事尚未建立' };
+  const ref = cdb.collection('competitions').doc(competition.compDocId);
+  let existing = {};
+  try { existing = (await ref.get()).data()?.athletes || {}; }
+  catch (e) { return { synced: 0, failed: registrations.length, error: e.message }; }
+  const update = {};
+  for (const reg of registrations) {
+    const key = reg.id;
+    const ath = mapAthlete(competition, reg);
+    if (existing[key]) {
+      // 已存在 → 只更新 RedRock 欄位，保留計分系統排的 bib/order/round
+      update[`athletes.${key}.name`] = ath.name;
+      update[`athletes.${key}.catIdx`] = ath.catIdx;
+      update[`athletes.${key}.gender`] = ath.gender;
+      update[`athletes.${key}.birthday`] = ath.birthday;
+      update[`athletes.${key}.phone`] = ath.phone;
+      update[`athletes.${key}.email`] = ath.email;
+      update[`athletes.${key}.team`] = ath.team;
+      update[`athletes.${key}.origId`] = ath.origId;
+    } else {
+      update[`athletes.${key}`] = ath;
+    }
+  }
+  try {
+    if (Object.keys(update).length) await ref.update(update);
+    return { synced: registrations.length, failed: 0 };
+  } catch (e) {
+    return { synced: 0, failed: registrations.length, error: e.message };
+  }
+};
+
 // 取消/退賽 → 從計分系統名單移除該選手
 const removeCompAthlete = async (competition, registrationId) => {
   if (!isCompScoring(competition) || !competition.compDocId) return;
@@ -119,4 +156,4 @@ const removeCompAthlete = async (competition, registrationId) => {
   } catch (e) { console.error('[計分系統] 移除選手失敗', e.message); }
 };
 
-module.exports = { COMP_SCORING, isCompScoring, syncCompEvent, syncCompAthlete, removeCompAthlete };
+module.exports = { COMP_SCORING, isCompScoring, syncCompEvent, syncCompAthlete, syncAllAthletes, removeCompAthlete };

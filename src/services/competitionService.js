@@ -70,7 +70,7 @@ const createCompetition = async ({ name, description, gymId, registrationStart, 
 // 管理員手動「開始與計分系統對接」：建/取得計分系統賽事 + 啟用同步 + 把目前所有正取名單推過去
 const startScoringSync = async (competitionId) => {
   const db = getDb();
-  const { syncCompEvent, syncCompAthlete, isCompScoring } = require('./competitionSyncService');
+  const { syncCompEvent, syncAllAthletes, isCompScoring } = require('./competitionSyncService');
   const ref = db.collection(COLLECTIONS.COMPETITIONS).doc(competitionId);
   const doc = await ref.get();
   if (!doc.exists) throw { code: 'NOT_FOUND', message: '找不到此賽事' };
@@ -81,17 +81,20 @@ const startScoringSync = async (competitionId) => {
   const compDocId = ev.compDocId;
   await ref.update({ compDocId, scoringSyncEnabled: true, scoringSyncStartedAt: new Date() });
   competition = { ...competition, compDocId, scoringSyncEnabled: true };
-  // 推送目前所有正取報名（之後新報名會即時同步）
+  // 推送目前所有正取報名（批次：讀一次 + 寫一次，避免逐一跨專案往返造成慢/timeout）
   const regs = await getCompetitionRegistrations(competitionId);
-  let synced = 0, failed = 0, totalConfirmed = 0;
-  for (const reg of regs) {
-    if (reg.status !== 'confirmed') continue;
-    totalConfirmed++;
-    const r = await syncCompAthlete(competition, reg);
-    await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(reg.id).update({ webhookStatus: r.webhookStatus, webhookSentAt: r.webhookSentAt || null, webhookError: r.webhookError || null });
-    if (r.webhookStatus === 'sent') synced++; else failed++;
-  }
-  return { compDocId, synced, failed, totalConfirmed };
+  const confirmed = regs.filter(r => r.status === 'confirmed');
+  const res = await syncAllAthletes(competition, confirmed);
+  // 回寫各報名的 webhookStatus（批次）
+  const now = new Date();
+  const okAll = !res.failed;
+  const batch = db.batch();
+  confirmed.forEach(reg => batch.update(
+    db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(reg.id),
+    { webhookStatus: okAll ? 'sent' : 'failed', webhookSentAt: okAll ? now : null, webhookError: res.error || null }
+  ));
+  if (confirmed.length) await batch.commit();
+  return { compDocId, synced: res.synced, failed: res.failed, totalConfirmed: confirmed.length };
 };
 
 const updateCompetition = async (competitionId, updates) => {

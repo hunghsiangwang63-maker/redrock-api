@@ -130,9 +130,13 @@ const getCourseAccess = async (memberId) => {
 
     // 無限練習期間：管理員可在課程編輯頁手動設定/覆寫此區間，不一定跟課程開課/結束日綁定
     // 向下相容：舊課程若未設定此欄位，退而求其次用「開課日~最後一堂課+入館緩衝天數」估算
-    const practiceStart = course.unlimitedPracticeStart || course.startDate;
+    let practiceStart = course.unlimitedPracticeStart || course.startDate;
     const practiceEnd = course.unlimitedPracticeEnd ||
       (course.endDate ? dayjs(course.endDate).add(course.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : null);
+    // 個別學員入館起始覆寫（插班：此人 courseAccessStart 晚於課程起始才生效、取較晚者；不影響其他學員、只延後不提前）
+    const overrides = enrollments.filter(en => en.courseId === courseId && en.courseAccessStart).map(en => en.courseAccessStart).sort();
+    const memberStart = overrides.length ? overrides[overrides.length - 1] : null;
+    if (memberStart && practiceStart && memberStart > practiceStart) practiceStart = memberStart;
     if (!practiceStart || !practiceEnd) continue;
 
     // 條件1：今天在無限練習期間內

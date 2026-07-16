@@ -711,13 +711,22 @@ router.get('/:courseId/enrollments',
       const snap = await db.collection('courseEnrollments')
         .where('courseId', '==', courseId)
         .get();
+      // 姓名/電話以 members 集合權威補齊（enrollment 未存 memberPhone；比照 getSessionRoster）
+      const memberIds = [...new Set(snap.docs.map(d => d.data().memberId).filter(Boolean))];
+      const memberInfoMap = {};
+      if (memberIds.length) {
+        const refs = memberIds.map(id => db.collection('members').doc(id));
+        const docs = await db.getAll(...refs);
+        docs.forEach(doc => { if (doc.exists) { const m = doc.data(); memberInfoMap[doc.id] = { name: m.name, phone: m.phone }; } });
+      }
       const enrollments = snap.docs.map(d => {
         const e = d.data();
+        const info = memberInfoMap[e.memberId] || {};
         return {
           id: d.id,
           memberId: e.memberId,
-          memberName: e.memberName || '',
-          memberPhone: e.memberPhone || '',
+          memberName: info.name || e.memberName || '',
+          memberPhone: info.phone || e.memberPhone || '',
           status: e.status || 'confirmed',
           paymentMethod: e.paymentMethod || '',
           paymentConfirmed: e.paymentConfirmed !== false,

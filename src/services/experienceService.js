@@ -7,6 +7,7 @@ const XLSX = require('xlsx');
 const courseService = require('./courseService');
 const scheduleService = require('./scheduleService');
 const { taiwanToday } = require('../utils/taiwanDate');
+const { sanitizeSheet } = require('../utils/xlsxSafe'); // 7/13 拆檔時 buildInsuranceXlsBuffer 用到但漏 import
 
 const COURSE_TYPES = [
   { id:'general',   label:'抱石體驗課程',          priceMap:{ 1:975, 2:875, 3:875, '4-5':825, '6-8':775, '9-12':775 } },

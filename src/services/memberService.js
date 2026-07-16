@@ -186,6 +186,73 @@ const claimLegacyPass = async (db, memberId, member) => {
   }
 };
 
+// 課程名單預留自動認領：店員先把人加進課程名單但當時查無會員，存 pendingCourseClaims；
+// 該人日後註冊時以「姓名」比對（未對到者只有姓名、無電話）自動加入該課程全部場次。
+// ⚠ name-only 比對有同名碰撞風險（低風險名單場景可接受；認領後通知管理員可人工核對）。
+const claimPendingCourseEnrollment = async (db, memberId, member) => {
+  try {
+    if (member.isChildAccount) return null;   // 子帳號名單由家長流程處理，不走此認領
+    if (!member.name) return null;
+    const snap = await db.collection('pendingCourseClaims').where('claimed', '==', false).get();
+    if (snap.empty) return null;
+    const hits = snap.docs.filter(d => legacyNameMatch(d.data().name, member.name));
+    if (!hits.length) return null;
+    const now = new Date();
+    const claimed = [];
+    for (const hit of hits) {
+      const claim = hit.data();
+      const cdoc = await db.collection('courses').doc(claim.courseId).get();
+      if (!cdoc.exists) { await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now, note: '課程已不存在' }); continue; }
+      const c = cdoc.data();
+      const ssnap = await db.collection('courseSessions').where('courseId', '==', claim.courseId).get();
+      const sessions = ssnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => s.status !== 'cancelled').sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      // 去重：已在名單則只標記已認領、不重複建
+      const ex = await db.collection('courseEnrollments').where('courseId', '==', claim.courseId).where('memberId', '==', memberId).get();
+      const already = ex.docs.some(d => ['confirmed', 'leave', 'waitlist'].includes(d.data().status));
+      if (!already && sessions.length) {
+        const gymId = c.gymId || claim.gymId || null;
+        const gymAccessStart = c.unlimitedPracticeStart || c.startDate || sessions[0].date;
+        const gymAccessEnd = c.unlimitedPracticeEnd || (c.endDate ? dayjs(c.endDate).add(c.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : sessions[sessions.length - 1].date);
+        const batch = db.batch(); const cnt = {};
+        for (const s of sessions) {
+          const eid = uuidv4();
+          batch.set(db.collection('courseEnrollments').doc(eid), {
+            id: eid, memberId, memberName: member.name, sessionId: s.id, courseId: claim.courseId, courseName: c.name, gymId,
+            date: s.date, startTime: s.startTime, endTime: s.endTime,
+            status: 'confirmed', waitlistPosition: null, paymentId: null, paymentMethod: 'roster-claim',
+            originalPrice: c.price || 0, enrollmentFee: 0, installment: false, firstPayment: 0, secondPayment: 0,
+            paymentStatus: 'confirmed', paymentConfirmed: true, paymentDeadline: null,
+            gymAccessStart, gymAccessEnd, enrolledBy: 'roster-claim', enrolledAt: now,
+            paymentDate: null, bankLastFive: null, healthNote: null, referralSource: null,
+            confirmedLeavePolicy: false, confirmedRefundPolicy: false, portraitSignature: null, guardianSignature: null,
+            notes: '名單預留自動認領（註冊時姓名比對加入）', createdAt: now, updatedAt: now,
+          });
+          cnt[s.id] = (cnt[s.id] || 0) + 1;
+        }
+        for (const s of sessions) if (cnt[s.id]) batch.update(db.collection('courseSessions').doc(s.id), { enrolledCount: (s.enrolledCount || 0) + cnt[s.id], updatedAt: now });
+        await batch.commit();
+      }
+      await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now });
+      claimed.push(c.name);
+      try {
+        const { notifyRoleInGym } = require('./notificationService');
+        const payload = {
+          gymId: c.gymId || claim.gymId || 'gym-hsinchu', type: 'course_roster_claimed',
+          title: '課程名單自動認領', body: `${member.name} 註冊會員，已自動加入課程名單：${c.name}${already ? '（原已在名單）' : ''}。請核對是否為同一人。`,
+          referenceId: claim.courseId, referenceType: 'course',
+        };
+        await notifyRoleInGym({ ...payload, role: 'gym_manager' });
+        await notifyRoleInGym({ ...payload, role: 'super_admin' });
+      } catch (e) { console.error('課程名單認領通知失敗（已認領）:', e.message); }
+      console.log(`✅ 課程名單認領: ${member.name} → ${c.name}`);
+    }
+    return claimed;
+  } catch (e) {
+    console.error('claimPendingCourseEnrollment 失敗（不阻斷建立會員）:', e.message);
+    return null;
+  }
+};
+
 // ── BeClass 比賽報名自動認領 ─────────────────────────────────────
 // 匯入的比賽報名（memberId:null＋claimPhone/claimName）：會員註冊時電話+姓名比對命中
 // → 報名掛上帳號（App 顯示我的比賽、可用報到 QR）＋通知管理員。
@@ -368,6 +435,8 @@ const createMember = async (memberData, staffId, options = {}) => {
   await claimLegacyPass(db, memberId, member);
   // BeClass 比賽報名自動認領（memberId 空的匯入報名掛上帳號）
   await claimLegacyCompetitionReg(db, memberId, member);
+  // 課程名單預留自動認領（店員先建名單但當時查無會員 → 註冊時姓名比對自動加入該課程）
+  await claimPendingCourseEnrollment(db, memberId, member);
 
   // 計算並更新封鎖狀態
   const blockReasons = await getBlockReasons(memberId, member);

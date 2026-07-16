@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.16.0-eligibility-child-by-age',
+    version: '3.17.0-course-roster-autoclaim',
   });
 });
 

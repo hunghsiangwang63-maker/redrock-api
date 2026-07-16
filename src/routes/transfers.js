@@ -237,6 +237,9 @@ router.put('/:id/reject', authenticate, async (req, res) => {
           paymentRejectReason: reason,
           paymentRejectedAt: now,
           paymentConfirmed: false,
+          // 退回追蹤 metadata（供待辦頁「退回追蹤」列到結案）
+          wasReturned: true, lastReturnType: 'payment', lastReturnReason: reason,
+          lastReturnByName: req.staff?.name || '', lastReturnAt: now,
           // 入隊申請：狀態明確標「已退回」（會員端申請紀錄顯示、名冊顯示已退回）
           ...(t.orderType === 'team_member' ? { status: 'rejected' } : {}),
           updatedAt: now,

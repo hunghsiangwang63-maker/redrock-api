@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.06.0-alerts-exclude-cancelled-method',
+    version: '3.07.0-returned-tracking',
   });
 });
 

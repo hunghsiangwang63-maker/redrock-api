@@ -325,4 +325,59 @@ router.get('/', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /pending-tasks/returned - 退回追蹤：管理者/值班退回的申請或繳費，追蹤到結案 ──
+// 結案＝已確認收款(paymentStatus=confirmed) 或 已取消(status=cancelled) → 不再列出。
+// 子狀態：待會員補正(仍 transfer_rejected 或 formReturned) / 已補正待確認(補正後回 pending/pending_confirm)。
+router.get('/returned', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
+    const SRC = [
+      { coll: 'courseEnrollments',        type: 'course',      label: '課程報名',   name: o => o.courseName },
+      { coll: 'experienceBookings',       type: 'experience',  label: '體驗預約',   name: o => o.courseName || o.courseType },
+      { coll: 'competitionRegistrations', type: 'competition', label: '比賽報名',   name: o => o.competitionName },
+      { coll: 'equipmentRentals',         type: 'rental',      label: '裝備租借',   name: o => o.itemName || o.equipmentName },
+      { coll: 'teamApplications',         type: 'team_member', label: '入隊申請',   name: o => `${o.year || ''} 年度攀岩隊` },
+    ];
+    const secOf = ts => ts?._seconds || (ts?.toDate ? Math.floor(ts.toDate().getTime() / 1000) : 0);
+    const items = [];
+    for (const s of SRC) {
+      let snap;
+      try { snap = await db.collection(s.coll).where('wasReturned', '==', true).get(); } catch (e) { continue; }
+      snap.docs.forEach(d => {
+        const o = d.data();
+        if (gymId && o.gymId && o.gymId !== gymId) return;
+        const rt = o.lastReturnType || (o.formReturned ? 'form' : 'payment');
+        // 結案（不列）：取消一律結案；報名表退回→formReturned 清除即結案；繳費退回→已確認收款即結案
+        const closed = o.status === 'cancelled'
+          || (rt === 'form' ? !o.formReturned : o.paymentStatus === 'confirmed');
+        if (closed) return;
+        // 子狀態：報名表退回只有「待會員補正」；繳費退回 transfer_rejected=待補正、否則已補正待確認
+        const stillReturned = rt === 'form' ? o.formReturned === true : o.paymentStatus === 'transfer_rejected';
+        items.push({
+          orderType: s.type, orderId: d.id, label: s.label,
+          orderName: s.name(o) || s.label,
+          memberId: o.memberId || null,
+          memberName: o.memberName || o.contactName || '',
+          returnType: rt, // payment=繳費退回 / form=報名表退回
+          reason: o.lastReturnReason || o.paymentRejectReason || o.formReturnReason || '',
+          returnByName: o.lastReturnByName || '',
+          returnAtSec: secOf(o.lastReturnAt) || secOf(o.paymentRejectedAt) || secOf(o.formReturnedAt) || 0,
+          subStatus: stillReturned ? 'awaiting_member' : 'resubmitted',   // 待會員補正 / 已補正待確認
+          gymId: o.gymId || null,
+          // 會員填寫資料（供核對）
+          memberData: {
+            bankLastFive: o.bankLastFive || null, bankName: o.bankName || null, paymentDate: o.paymentDate || null,
+            paymentMethod: o.paymentMethod || null, amount: o.registrationFee || o.amount || o.enrollmentFee || null,
+            divisionName: o.divisionName || null, gender: o.gender || null, phone: o.phone || null, email: o.email || null,
+            idNumber: o.idNumber || null, emergencyContact: o.emergencyContact || null, emergencyPhone: o.emergencyPhone || null,
+          },
+        });
+      });
+    }
+    items.sort((a, b) => (b.returnAtSec || 0) - (a.returnAtSec || 0));
+    res.json({ items, total: items.length });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 module.exports = router;

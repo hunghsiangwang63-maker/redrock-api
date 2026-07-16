@@ -1472,6 +1472,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **林祺堂資料修正**：202608 V4-V5（**pending 未繳費**）990→891＋isTeamDiscount:true；掃 202608 全部報名**僅他 1 人**受影響（已收款者不動、避免更動已收金額）。
 - 📌 隊員折扣適用族群現況：按次入場×0.9、商品 POS、購優惠券/定期票（2.62.0）、**比賽報名費（本次補上）**；兒童入場不套折（比賽童折另計、隊員折疊在計算後）。
 
+## 目前進度（2026-07-16 續12）— 比賽報名名單改精簡表格 + 組別分頁 + 詳細資料 modal
+> 回報名單太亂、朱智萩取消被誤歸退費。純前端 `CompetitionsPage`。commit `a512b08`（分頁/退費取消分清）＋`7b55ff2`（精簡表格）＋`4392f4e`（修命名衝突崩潰）。
+- ✅ **精簡表格 + 組別分頁**：分頁列＝**全部(N) + 各組別(N，點看該組名單) + 申請退費(N) + 已取消(N)**；每列僅 **姓名/組別/性別/費用/繳費狀態/報名日期 + 備註徽章**（榮譽/早鳥/隊員9折/臨櫃/候補#/退回修改中/待法代簽/申請退費/已駁回/逾期取消）；**依報名日期排序**；一行總計 有效/申請退費/已取消。
+- ✅ **細項點「詳細資料」看**：點列開 modal——全欄位（付款方式/匯款末五碼/銀行/繳款日期/確認收款/身高臂展/身分證/緊急聯絡/手機Email/簽署狀態/退費帳號/退回原因/員工備註）+ 狀態動作鍵（確認收款/要求重填/退回修改/駁回報名）。
+- ✅ **退費/取消分清**：分頁 申請退費＝`refundRequested`、已取消＝`cancelled && !refundRequested` → 朱智萩純取消不再誤歸退費申請（她另有一筆 confirmed 重報，正取顯示）。
+- 🐞 **修自己引入的崩潰（命名衝突）**：新加的報名繳費狀態 `const STATUS_LABEL`（`{t,c}`）與**模組層既有 `STATUS_LABEL`（競賽狀態 draft/open/closed，`{type,label}`）同名** → 元件內 shadow 蓋掉 → 競賽列表 `STATUS_LABEL[c.status].type` 讀到 undefined.type → **CompetitionsPage 整頁白屏**。改名 `PAY_STATUS` 解決。**教訓**：元件內 const 勿與模組層同名（會 shadow）；vite build 不報此類 runtime 崩潰，改前端務必實機開該頁。附帶：期間一度誤判為 entryLabelOf 舊快取 bundle（CUTM_C8_）→ 實為新 bundle 的 `.type` shadow 崩潰，靠開新分頁載入最新 bundle + 讀 console 定位真兇。
+
 ## 待辦
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。

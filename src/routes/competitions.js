@@ -365,6 +365,13 @@ router.post('/registrations/:regId/cancel',
         refundAccountName: isPaidReg ? (req.body.refundAccountName || null) : null,
         updatedAt: new Date(),
       });
+      // 作廢連動的待確認轉帳單（避免取消後仍殘留在待收款）
+      try {
+        const trs = await db.collection('transferRecords').where('refId', '==', req.params.regId).get();
+        const b = db.batch();
+        trs.docs.forEach(t => { if (t.data().status === 'pending') b.update(t.ref, { status: 'cancelled', updatedAt: new Date() }); });
+        await b.commit();
+      } catch (e) { console.error('取消作廢轉帳單失敗', e.message); }
 
       // 若釋出的是正取名額：① 計分系統移除該選手 ② 遞補下一位候補（遞補者完成簽署會自動推送計分系統）
       if (reg.status === 'confirmed') {
@@ -591,6 +598,13 @@ router.post('/registrations/:regId/reject-form',
         refundRequested: wasPaid,
         updatedAt: new Date(),
       });
+      // 作廢連動的待確認轉帳單（避免駁回後仍殘留在待收款）
+      try {
+        const trs = await db.collection('transferRecords').where('refId', '==', req.params.regId).get();
+        const b = db.batch();
+        trs.docs.forEach(t => { if (t.data().status === 'pending') b.update(t.ref, { status: 'cancelled', updatedAt: new Date() }); });
+        await b.commit();
+      } catch (e) { console.error('駁回作廢轉帳單失敗', e.message); }
       // 釋出名額：正取 → 計分系統移除 + 遞補候補
       if (reg.status === 'confirmed') {
         try {

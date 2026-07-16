@@ -219,12 +219,20 @@ router.get('/', authenticate, async (req, res) => {
     //      舊的 courseEnrollments(transfer_payment) / experienceBookings(experience_transfer) 區塊已移除。
 
     // 9b. 轉帳待確認（transferRecords：截圖或填末五碼皆可，單一來源）
+    //     連動訂單已取消（駁回/取消/退費）者不列入待收款——避免作廢報名的轉帳單殘留在待辦。
     try {
+      const ORDER_COLL = { course:'courseEnrollments', experience:'experienceBookings', competition:'competitionRegistrations', rental:'equipmentRentals', team_member:'teamApplications' };
       let ref = db.collection('transferRecords').where('status', '==', 'pending');
       if (gymId) ref = ref.where('gymId', '==', gymId);
       const snap = await ref.get();
-      snap.docs.forEach(d => {
+      for (const d of snap.docs) {
         const t = d.data();
+        if (t.orderType && t.refId && ORDER_COLL[t.orderType]) {
+          try {
+            const o = (await db.collection(ORDER_COLL[t.orderType]).doc(t.refId).get()).data();
+            if (o && (o.status === 'cancelled' || o.paymentStatus === 'refunded')) continue; // 訂單已取消/退費 → 跳過
+          } catch (e) {}
+        }
         const isCash = t.paymentMethod === 'cash';
         tasks.push({
           id: `transfer_${d.id}`, type: 'transfer_confirm', targetId: d.id,
@@ -237,7 +245,7 @@ router.get('/', authenticate, async (req, res) => {
           link: '/staff/pending-tasks',
           record: { id: d.id, ...t },
         });
-      });
+      }
     } catch(e) { console.error('transfer_confirm tasks error:', e.message); }
 
     // 10. 單次入場券待審核（票券審核）

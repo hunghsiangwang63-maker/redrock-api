@@ -1443,6 +1443,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **修「重新推送顯示不成功」＝前端 timeout 誤報**（`3.05.0-scoring-batch-resync`，commit `2bdc63d`）：**根因**——`startScoringSync` 原**逐一** `syncCompAthlete`（每位跨專案讀整個賽事文件＋寫入），16 位＝~32 次跨專案往返 → 太慢，RedRock 前端 `startScoring` catch timeout 顯示「對接失敗」，但**後端其實全部成功**（查 202608 16 位 `webhookStatus` 全 `sent`、性別已男/女）。**修**：新增 `syncAllAthletes`（讀一次 event doc、一次 `update` 全部 athletes 欄位，保留 bib/order/round）；`startScoringSync` 改批次＋`webhookStatus` 批次回寫。**正式 API 實測**：重推 202608 回 `synced:16/failed:0`、耗時 ~3.7s（原會 timeout）。
 - 📌 **教訓**：跨專案（RedRock↔計分系統 redrock-comp）Firestore 逐一讀寫會累積大量往返→慢/timeout；批次「讀一次+寫一次」是正解。前端顯示「對接失敗」不代表後端沒成功——查 `webhookStatus` 才是真相。
 
+## 目前進度（2026-07-16 續8）— 會員通知：處理完成(已取消)自動消失 + 現金退回文案修正
+> 回報朱智萩比賽報名已取消但通知一直卡待處理、且現金卻顯示「轉帳被退回」。後端 `/health` `3.06.0-alerts-exclude-cancelled-method`；E2E 2/2。commit 後端 `e44c070`、前端 `cd61161`。
+- ✅ **通知處理完成後自動消失**：**根因**——`/members/my/alerts` 的「轉帳/繳費被退回」通知（`paymentStatus==='transfer_rejected'`）**沒排除 `status==='cancelled'`** → 已取消報名（朱智萩 cash+cancelled+transfer_rejected）通知一直在。**修**：alert forEach 加 `if (o.status==='cancelled') return`（已取消/處理完成→通知消失）。通知為即時計算、無殘留，取消/補正/確認後自動消失；涵蓋 course/experience/competition/rental/team 全來源（formReturned/guardian_sign 本就已排除 cancelled）。
+- ✅ **現金退回不再寫「轉帳被退回」**：alert 帶 `method: o.paymentMethod`；首頁通知（`MemberHomePage`）與「我的比賽」badge（`payStatusBadge`）依付款方式——**現金→「繳費資訊被退回」/「繳費被退回」**、轉帳→「轉帳被退回」（pending_confirm 同理：現金→「繳費確認中」）。
+- **E2E（2/2）**：注入 cash+transfer_rejected 兩筆（一 cancelled 一 active）→ `/my/alerts` 只回未取消那筆、且帶 `method=cash`。
+- 📌 朱智萩通知下次開首頁即消失（她不用動作）。
+
 ## 待辦
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。

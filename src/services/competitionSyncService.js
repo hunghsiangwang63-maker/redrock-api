@@ -20,6 +20,14 @@ const mapCategories = (competition) =>
   (competition.divisions || []).map((d, i) => ({ name: d.name, color: CAT_COLORS[i % CAT_COLORS.length], rounds: {} }));
 
 // 把 RedRock 報名轉成計分系統 athlete
+// 計分系統的性別一律送中文「男/女」（不送英文 male/female）
+const toGenderZh = (g) => {
+  const s = String(g || '').toLowerCase().trim();
+  if (['male', 'm', '男', '男性'].includes(s)) return '男';
+  if (['female', 'f', '女', '女性'].includes(s)) return '女';
+  return g || '';   // 未知/空原樣
+};
+
 const mapAthlete = (competition, registration) => {
   const catIdx = Math.max(0, (competition.divisions || []).findIndex(d => d.id === registration.divisionId));
   const cf = registration.customFieldValues || {};
@@ -30,7 +38,7 @@ const mapAthlete = (competition, registration) => {
     round: 'Q',
     bib: '',                 // 號碼布由計分系統排
     order: 0,
-    gender: registration.gender || cf.gender || cf['性別'] || '',
+    gender: toGenderZh(registration.gender || cf.gender || cf['性別'] || ''),
     birthday: registration.birthday || '',
     phone: registration.phone || '',
     email: registration.email || '',

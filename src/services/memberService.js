@@ -246,6 +246,23 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
       } catch (e) { console.error('課程名單認領通知失敗（已認領）:', e.message); }
       console.log(`✅ 課程名單認領: ${member.name} → ${c.name}`);
     }
+    // 政策：認領課程學員一律預設「墜測通過」（免重測；移轉式、不需同意書，比照 claimLegacyFallTest）。
+    // 僅在有認領到課程且該會員尚無 passed 墜測時建立；waiver 仍須另行簽署（不豁免）。
+    if (claimed.length) {
+      const passedSnap = await db.collection('fallTests').where('memberId', '==', memberId).where('result', '==', 'passed').get();
+      if (passedSnap.empty) {
+        const ftId = uuidv4();
+        const exp = dayjs().add(1, 'year').toDate();
+        await db.collection('fallTests').doc(ftId).set({
+          id: ftId, memberId, result: 'passed',
+          testedBy: 'course-claim', testedByName: '課程學員認領預設',
+          testedAt: now, expiresAt: exp, source: 'course-roster-claim',
+          notes: '課程學員認領預設通過墜測（免重測）', createdAt: now, updatedAt: now,
+        });
+        await db.collection(COLLECTIONS.MEMBERS).doc(memberId).update({ fallTestPassed: true, fallTestExpiresAt: exp, updatedAt: now });
+        console.log(`[課程認領] ${member.name} 預設墜測通過（至 ${dayjs(exp).format('YYYY-MM-DD')}）`);
+      }
+    }
     return claimed;
   } catch (e) {
     console.error('claimPendingCourseEnrollment 失敗（不阻斷建立會員）:', e.message);

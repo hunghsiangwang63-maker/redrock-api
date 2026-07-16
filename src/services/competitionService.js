@@ -600,8 +600,8 @@ const recordCompetitionRevenue = async ({ db, regId, sign = 1, refund = false, s
   if (sign > 0) await regRef.update({ revenueRecorded: true });
 };
 
-// 逾期未繳費自動剔除名單：正取 + 未繳費 + 「未填匯款資料」+ 有費用 + 逾繳款期限 → 取消、釋名額、遞補候補、Email 通知。
-// 只剔除「未填匯款資料」者（pending 且無末五碼）；已填待確認(pending_confirm/有末五碼)、已收款、免費者不剔除。
+// 逾期未繳費自動剔除名單：正取 + 「轉帳」+ 未填匯款資料 + 有費用 + 逾繳款期限 → 取消、釋名額、遞補候補、Email 通知。
+// 只剔除「轉帳且未填匯款資料」者（pending 無末五碼）；已填待確認、已收款、免費、**臨櫃現金**皆不自動剔除（現金由櫃檯人工處理）。
 const sweepExpiredCompetitionPayments = async () => {
   const db = getDb();
   const now = new Date();
@@ -613,6 +613,7 @@ const sweepExpiredCompetitionPayments = async () => {
   for (const doc of snap.docs) {
     const r = doc.data();
     if (!(r.registrationFee > 0)) continue;   // 免費（榮譽）不剔除
+    if (r.paymentMethod !== 'transfer') continue; // 只自動剔除轉帳未匯款；臨櫃現金由櫃檯人工處理、永不自動剔除
     if (r.bankLastFive) continue;             // 已填匯款資料（待確認）→ 不剔除（球在櫃檯）
     if (!r.paymentDeadline) continue;
     const dl = r.paymentDeadline.toDate ? r.paymentDeadline.toDate()

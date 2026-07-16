@@ -1422,6 +1422,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **會員端**（`MemberCompetitionsPage`）：`status==='cancelled' && cancelReason==='payment_expired'` → 顯示「⏰ 繳費逾期，報名已自動取消」＋「**重新報名比賽（免重填）**」按鈕（`reregisterCompetition`）；其他取消仍顯示「已取消」。
 - **E2E（7/7）**：報名→backdate 期限+sweep→`payment_expired`→reregister→confirmed/pending＋**原簽名/身分證/緊急聯絡人沿用**＋新繳款期限（N=3）＋費用重算 990＋清逾期旗標；已是有效報名再重報→400。腳本 inline。
 
+## 目前進度（2026-07-16 續5）— 現金逾期改櫃檯人工處理 + 緊急聯絡人帶入修正
+> 兩個由「填匯款＝已繳款？現金逾期怎麼算？」與「緊急聯絡人帶入會不會合併？」引出的釐清＋修正。
+- 📋 **釐清：填寫匯款資訊 ≠ 已繳款**：會員填末五碼只進「待確認收款」（`paymentStatus` 仍 `pending`＋末五碼），**必須員工按「確認收款」（confirm-payment，核對末五碼/金額）才變 `confirmed`＝已繳款**；系統不會因填了末五碼自動當已收款。
+- ✅ **現金逾期改「不自動剔除、櫃檯人工處理」**（`3.03.0-cash-no-autosweep`，commit 後端 `80613a2`、前端 `3b18cdf`；E2E 2/2）：使用者拍板選項 3。`sweepExpiredCompetitionPayments` 加 `paymentMethod!=='transfer' → 跳過` → **只自動剔除「轉帳且未填匯款資料且逾期」**；臨櫃現金永不自動剔除。前端提示區分：會員報名付款步驟「轉帳逾期自動取消／現金請至櫃檯繳費（不自動取消）」；會員卡「逾期自動取消」提示只對轉帳顯示；員工名單現金待確認顯示「臨櫃繳款・櫃檯人工處理」（不顯示期限）。E2E：現金逾期→不剔除、轉帳未填逾期→仍剔除。
+  - **繳款期限總結**：轉帳＝報名日+N 天逾期自動剔除（未填末五碼者；已填待確認不剔除）；現金＝報名日+N 為軟性提示、**不自動剔除**、由櫃檯確認收款或人工取消。
+- ✅ **修：比賽報名緊急聯絡人帶入欄位合併**（純前端 commit `ae87a98`）：**根因**——會員資料的緊急聯絡人存成**單一合併字串** `emergencyContact`＝「姓名 / 關係 / 電話」（`MemberProfilePage` `ecParts.join(' / ')`／`split('/')`，會員**無**獨立 relation/phone 欄），但比賽報名 prefill 直接 `setEmergencyContact(r.emergencyContact)` → **整串塞進「姓名」欄、關係/電話空白**（真實 4 位：吳旻珊/賴易涵/朱智萩/王潔）。**修**：prefill 無獨立欄時 `split('/')` 拆回三欄填正確位置；有獨立 relation/phone 欄則直接用。現有 16 筆有效報名 **0 筆合併殘留**（真實會員當初手填三格、未中 bug），無需清資料。
+
 ## 待辦
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。

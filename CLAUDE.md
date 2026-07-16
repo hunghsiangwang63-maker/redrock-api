@@ -3,6 +3,7 @@
 > 本檔已可安全提交（無機密）。測試帳號 / 金鑰等敏感資料見 `CLAUDE.local.md`（git-ignored）。
 > 接手 / 維護這份 context 的方式見 `docs/maintaining-context.md`。
 > 入場資格與金額的後端權威判斷（前置關卡 / 免費資格 / 付費二段式 / 折扣疊加 / 三條路徑）見 `docs/entry-eligibility-flow.md`。
+> 建立家庭會員（子會員）的注意事項（年齡限制 / 入場前置 / 兒童消費限制 / 櫃檯操作）見 `docs/family-member-guide.md`。
 
 ## 專案概述
 RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsinchu`）和士林館（`gym-shilin`）。

@@ -148,6 +148,60 @@ async function reassignExperienceCoach(db, booking, staff, coachId, coachName) {
   return { scheduleShiftId };
 }
 
+// ── 更新體驗日期/時段：同步 course/session 日期時段 + 重建教練排班 + 更新入場券 validDate ──
+// booking 需帶「新的」bookingDate/bookingTime（呼叫端已更新該欄或傳入新值）。保留 sessionId，只換排班 shift。
+async function updateExperienceSchedule(db, booking, staff) {
+  const label = await courseTypeLabel(db, booking.courseType);
+  const numPeople = booking.numParticipants || (booking.participants || []).length || 1;
+  const { startTime, endTime } = parseBookingTime(booking.bookingTime);
+
+  // 1) 課程日期/時段（單日課，start=end=bookingDate）
+  if (booking.courseId) {
+    await db.collection('courses').doc(booking.courseId).update({
+      startDate: booking.bookingDate, endDate: booking.bookingDate,
+      startTime: startTime || '', endTime: endTime || '', updatedAt: new Date(),
+    });
+  }
+  // 2) 場次日期/時段（保留 sessionId，就地更新）
+  if (booking.sessionId) {
+    await db.collection('courseSessions').doc(booking.sessionId).update({
+      date: booking.bookingDate, startTime: startTime || '', endTime: endTime || '', updatedAt: new Date(),
+    });
+  }
+  // 3) 教練排班：刪舊班→於新日期建新班（只在已指派教練時；任一步失敗只記 log 不阻斷）
+  let scheduleShiftId = booking.scheduleShiftId || null;
+  if (booking.scheduleShiftId) {
+    try { await scheduleService.deleteShift(booking.scheduleShiftId); scheduleShiftId = null; }
+    catch (e) { console.error('[體驗改日期] 刪舊班失敗（續建新班）', e.message || e.code); }
+  }
+  if (booking.coachId || booking.coachName) {
+    try {
+      const staffIdForShift = booking.coachId || `expcoach_${String(booking.coachName || 'coach').replace(/\s+/g, '')}`;
+      const useCustom = !!(startTime && endTime && startTime < endTime);
+      const shift = await scheduleService.createShift({
+        gymId: booking.gymId, staffId: staffIdForShift, staffName: booking.coachName || '教練',
+        date: booking.bookingDate,
+        type: useCustom ? 'custom' : 'full_day',
+        startTime: useCustom ? startTime : null,
+        endTime: useCustom ? endTime : null,
+        note: `體驗課程・${label}・${numPeople} 人`,
+        createdBy: staff?.id || null,
+      });
+      scheduleShiftId = shift.id;
+    } catch (e) { console.error('[體驗改日期] 建新班失敗（不阻斷）', e.message || e.code); }
+  }
+  // 4) 入場券 validDate/expiresAt 改為新日期（僅未使用的 active 券）
+  const tk = await db.collection(EXP_TICKET_COLL)
+    .where('experienceBookingId', '==', booking.id).where('status', '==', 'active').get();
+  if (!tk.empty) {
+    const tb = db.batch();
+    tk.forEach(d => tb.update(d.ref, { validDate: booking.bookingDate, expiresAt: booking.bookingDate, updatedAt: new Date() }));
+    await tb.commit();
+  }
+
+  return { scheduleShiftId, ticketsUpdated: tk.size };
+}
+
 // ── 取消體驗：清理自動建立的課程/場次/教練排班（不阻斷退券主流程）──────
 async function cleanupExperienceCourseAndSchedule(db, booking, staff) {
   const result = { courseCancelled: false, sessionCancelled: false, shiftDeleted: false };
@@ -355,4 +409,4 @@ function defaultSettings() {
 
 // ── POST /experience-bookings/expire-unpaid - 到期未付款自動取消 ──
 // 可設定 cron 每天執行，或加入待辦總覽手動觸發
-module.exports = { COURSE_TYPES, parseBookingTime, courseTypeLabel, addExperienceToCourseAndSchedule, reassignExperienceCoach, cleanupExperienceCourseAndSchedule, EXP_TICKET_COLL, syncExperienceTickets, voidExperienceTickets, buildInsuranceXlsBuffer, defaultSettings };
+module.exports = { COURSE_TYPES, parseBookingTime, courseTypeLabel, addExperienceToCourseAndSchedule, reassignExperienceCoach, updateExperienceSchedule, cleanupExperienceCourseAndSchedule, EXP_TICKET_COLL, syncExperienceTickets, voidExperienceTickets, buildInsuranceXlsBuffer, defaultSettings };

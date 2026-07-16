@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.14.0-course-enrollments-resolve-phone',
+    version: '3.15.0-experience-edit-schedule',
   });
 });
 

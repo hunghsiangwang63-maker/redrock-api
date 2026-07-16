@@ -11,6 +11,7 @@ const courseService = require('../services/courseService');
 const scheduleService = require('../services/scheduleService');
 const memberService = require('../services/memberService');
 const { COURSE_TYPES, parseBookingTime, courseTypeLabel, addExperienceToCourseAndSchedule, reassignExperienceCoach,
+        updateExperienceSchedule,
         cleanupExperienceCourseAndSchedule, syncExperienceTickets, voidExperienceTickets, buildInsuranceXlsBuffer,
         defaultSettings } = require('../services/experienceService');
 const { isUnder5 } = require('../utils/age');
@@ -351,6 +352,26 @@ router.put('/:id/participants', authenticate, async (req, res) => {
     // 已發過券才連動（加人補發/減人作廢未用票）
     const r = await syncExperienceTickets(db, b, req.staff, false);
     res.json({ success: true, numParticipants: participants.length, ...r });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── PUT /experience-bookings/:id/schedule - 編輯課程日期/時段（連動 課程/場次/教練排班/入場券）──
+router.put('/:id/schedule', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection('experienceBookings').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
+    const bookingDate = (req.body.bookingDate || '').trim();
+    const bookingTime = (req.body.bookingTime || '').trim();
+    if (!bookingDate) return res.status(400).json({ error: 'MISSING_DATE', message: '請填寫體驗日期' });
+    await ref.update({ bookingDate, bookingTime, updatedAt: new Date() });
+    const b = { id: doc.id, ...doc.data(), bookingDate, bookingTime };
+    const r = await updateExperienceSchedule(db, b, req.staff);
+    if ((r.scheduleShiftId || null) !== (b.scheduleShiftId || null)) {
+      await ref.update({ scheduleShiftId: r.scheduleShiftId || null });
+    }
+    res.json({ success: true, bookingDate, bookingTime, ...r });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

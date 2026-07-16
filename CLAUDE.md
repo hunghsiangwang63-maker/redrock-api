@@ -1450,6 +1450,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（2/2）**：注入 cash+transfer_rejected 兩筆（一 cancelled 一 active）→ `/my/alerts` 只回未取消那筆、且帶 `method=cash`。
 - 📌 朱智萩通知下次開首頁即消失（她不用動作）。
 
+## 目前進度（2026-07-16 續9）— 待辦頁「退回追蹤」（管理者/值班退回件追蹤至結案）
+> 需求：管理者/值班退回的申請或繳費確認，要能在一處追蹤到結案，並看到會員及管理者當初填寫/退回的資料。後端 `/health` `3.07.0-returned-tracking`；E2E（打正式 API）**6/6**。commit 後端 `1a87603`、前端 `423ff44`。
+- ✅ **退回 metadata（3 端點標記）**：`transfers reject`（course/體驗/比賽/租借/入隊繳費退回）、比賽 `reject-payment`（要求重填匯款）、比賽 `return-form`（退回報名表）→ 於訂單標 `wasReturned:true`＋`lastReturnType`(payment/form)/`lastReturnReason`/`lastReturnByName`(退回人)/`lastReturnAt`。
+- ✅ **`GET /pending-tasks/returned`**：查 5 集合（courseEnrollments/experienceBookings/competitionRegistrations/equipmentRentals/teamApplications）`wasReturned==true`；**結案判定分型**——繳費退回→`paymentStatus==='confirmed'` 結案；報名表退回→`formReturned` 清除結案；取消一律結案（皆濾除）。回子狀態（`awaiting_member` 待會員補正／`resubmitted` 已補正待確認）＋會員填寫資料（繳費：付款方式/金額/末五碼/銀行/日期；報名表：組別/性別/手機/Email/身分證/緊急聯絡）＋退回原因/人/時間。gymId 過濾（super_admin 可指定）。
+- ✅ **前端**（`PendingTasksPage`）：待辦頁切換列加「↩️ 退回追蹤（N）」按鈕（N=件數）＋面板：每筆顯示 會員/類型/訂單名/退回原因/退回人/時間＋雙徽章（繳費退回·報名表退回 / 待會員補正·已補正待確認）；「詳情」modal 分兩區——👔管理者退回資料、🧑會員填寫資料。resolve/取消後自動從追蹤消失（＝結案）。
+- **E2E（6/6）**：繳費退回→出現(待補正+會員末五碼+退回原因)→補正(pending_confirm)→仍追蹤(已補正待確認)→確認收款→結案消失；報名表退回(已付費也追蹤、不因 confirmed 誤判結案)→formReturned 清除→結案消失。腳本 inline。
+- 📌 **設計**：結案＝自動移除（無永久已結案歷史）；「當初填寫資料」取訂單當前欄位（非歷史快照）＋退回 metadata。
+
 ## 待辦
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③✅ 完成（用量警示＋UptimeRobot 雙監測＋api.redrocktaiwan.com 已切前端）；**④ Render 冷備【7/21 左右再處理】**——現況：服務 `redrock-api-backup.onrender.com` 已建、程式部署成功（/health 200、push 自動同步），**卡點＝runtime 讀不到 FIREBASE_* 環境變數**（頁面看得到但空的；最可疑：存成 Environment Group 未 Link 到服務、或貼上格式）。接手步驟：確認變數在服務自身 Environment 清單 → Manual Deploy → 測 `/auth/staff/login`。長期：金流上線前評估遷 Cloud Run。

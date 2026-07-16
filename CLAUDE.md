@@ -35,6 +35,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 開發主機是 **Mac mini**；iPad / iPhone 遠端時走 **SSH 連回同一台 Mac mini**（非雲端環境）。
 - 因此操作的是**同一份實體檔案、同一個 git clone** → 天生無 git 分岔 / merge 衝突；`CLAUDE.local.md`（機密）與前端本機 build / `firebase deploy` 也都在同一台，皆可正常使用。
 - 守則：**一次只讓一個 session 在動**、**切裝置前先存檔**、**別讓兩個 session 同時寫同一檔**（編輯器層級覆蓋，與 git 無關）。
+- ⚠️ **改完 `CLAUDE.md`（或任何被多 session 併行碰的檔）後，一定要 `git status` 確認它真的顯示 modified，再 `git add && git commit`**——別假設「Edit 成功＝已落地」。2026-07-16 踩過雷：api CLAUDE.md 因多 session 併行/內存副本問題，Edit 看似成功但磁碟真檔從 7/4 起就沒被寫過（`git add CLAUDE.md` 每次無 diff＝等於沒 commit），兩週進度只活在 Claude Code file-history 快照（`~/.claude/file-history/<session>/<hash>@vN`）裡差點全失。**唯一可靠落地＝git commit 後 `git show HEAD:CLAUDE.md | wc -l` 核對行數**。若磁碟檔又被還原成舊版，用最新 file-history 快照重建。
 - 背景程序（Railway 部署、firebase、`loop-test.js`、Claude session）是共用的，切裝置後仍在跑。
 - Mac mini 保持開機 + 遠端登入（sshd）；連線建議走 **Tailscale**（免公網 IP / 免開 port，比 port forwarding 安全）。
 

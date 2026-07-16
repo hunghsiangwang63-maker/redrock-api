@@ -33,6 +33,11 @@
 - **新的機密 / 帳號** → 只寫進 `CLAUDE.local.md`（git-ignored）；**永遠不要**把金鑰、密碼、PAT 放進 CLAUDE.md / docs / 程式 / 版控。
 - **金鑰一律走**環境變數（Railway）/ Firestore；GitHub push 走 macOS Keychain。
 
+### ⚠️ CLAUDE.md 落地驗證（2026-07-16 踩雷後新增）
+- 更新 `CLAUDE.md` 後 **務必 `git status` 確認該檔真的 modified，再 `git add && git commit`**；commit 完 `git show HEAD:CLAUDE.md | wc -l` 核對行數是否吻合。**別假設「Edit 成功＝已落地磁碟」**。
+- 曾發生：api CLAUDE.md 磁碟真檔自 2026-07-04 起再沒被寫過（多 session 併行／harness 內存副本未落磁碟），`git add CLAUDE.md` 每次無 diff＝實際沒 commit，兩週進度只存於 Claude Code file-history（`~/.claude/file-history/<session>/<pathhash>@vN`），差點全失。
+- **救援法**：磁碟檔被還原成舊版時，取最新 `file-history` 快照（依 mtime）重建，再 commit 落地。**一次只讓一個 session 編輯 CLAUDE.md**。
+
 ### 一句話原則
 > 「會跟著 repo 的檔案（CLAUDE.md / docs）＝可分享、無機密；機密只放 CLAUDE.local.md（本機）。」
 

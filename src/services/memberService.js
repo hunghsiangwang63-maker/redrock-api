@@ -191,7 +191,8 @@ const claimLegacyPass = async (db, memberId, member) => {
 // ⚠ name-only 比對有同名碰撞風險（低風險名單場景可接受；認領後通知管理員可人工核對）。
 const claimPendingCourseEnrollment = async (db, memberId, member) => {
   try {
-    if (member.isChildAccount) return null;   // 子帳號名單由家長流程處理，不走此認領
+    // 子帳號「不跳過」：兒童課程（小蜘蛛人等）的學員本來就是子會員，名單認領以「上課者姓名」比對
+    // （墜測/隊員/90日票認領才因共用電話跳過子帳號；課程認領為 name-only、無此顧慮）
     if (!member.name) return null;
     const snap = await db.collection('pendingCourseClaims').where('claimed', '==', false).get();
     if (snap.empty) return null;

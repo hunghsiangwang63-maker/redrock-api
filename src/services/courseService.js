@@ -145,7 +145,7 @@ const createSession = async ({ courseId, gymId, staffId, data }) => {
   const session = {
     id,
     courseId,
-    gymId,
+    gymId: gymId || course.gymId || null, // super_admin 的 staff.gymId 為 null → fallback 課程館別（否則場次被館別過濾隱形，同 1.83.0 generate-sessions 修法）
     courseName: course.name,
     tags: course.tags,
     date: data.date,
@@ -445,6 +445,23 @@ const updateSession = async ({ sessionId, staffId, data }) => {
   if (data.notes !== undefined) updates.notes = data.notes;
 
   await ref.update(updates);
+
+  // 日期/時段變更 → 同步該場次報名的快照（enrollment 存 date/startTime/endTime 快照，
+  // 不同步會讓會員端「我的課程/請假判定」停在舊日期）
+  if (updates.date || updates.startTime || updates.endTime) {
+    const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId).get();
+    const batch = db.batch(); let n = 0;
+    enSnap.forEach(d => {
+      if (d.data().status === 'cancelled') return;
+      const u = { updatedAt: new Date() };
+      if (updates.date) u.date = updates.date;
+      if (updates.startTime) u.startTime = updates.startTime;
+      if (updates.endTime) u.endTime = updates.endTime;
+      batch.update(d.ref, u); n++;
+    });
+    if (n) await batch.commit();
+  }
+
   return { id: sessionId, ...doc.data(), ...updates };
 };
 

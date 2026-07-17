@@ -1125,17 +1125,29 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📋 **Railway 用量組成釐清**：大宗＝**服務 24h 常駐（RAM/CPU × 時間）**，與流量/會員數幾乎無關；頻繁部署有小幅貢獻（build 分鐘＋切換期新舊實例並存）、會員註冊/API 流量可忽略。確認：dashboard Usage 頁看 Compute/Egress/Build 拆分。**用量警示設定**：Workspace Settings → Usage → Usage Limits——Soft Limit（email 警示，建議額度 7 成）＋ Hard Limit（到達直接停服務，**建議不設或設很高**，這次下線即此效果）。正式營運建議升級按量計費（小服務約 $5–10/月），避免無預警斷線。
 - ⚠️ **提醒**：Railway 額度用罄會直接下線服務 → 兩館入場/登入/POS 全停。建議 dashboard 設用量警示或升級方案；日後再遇「所有名單同時消失」先打 `/health` 判斷是否服務層問題。
 
-## 系統依賴盤點（2026-07-14）
+## 系統依賴盤點＋路徑總表（2026-07-17 更新）
+### 對外網址（正式）
+| 站點 | 正式網址 | 底層 | 來源 |
+|---|---|---|---|
+| 會員端 | `app.redrocktaiwan.com` | `redrock-member.web.app`（Firebase Hosting） | 本機 `BUILD_TARGET=member` build + firebase deploy |
+| 員工端 | `staff.redrocktaiwan.com` | `redrock-staff.web.app`（Firebase Hosting） | 本機 `BUILD_TARGET=staff` build + firebase deploy |
+| 後端 API | `api.redrocktaiwan.com` | Railway `redrock-api-production.up.railway.app`（Porkbun CNAME → `fox82bz0.up.railway.app`） | GitHub push 自動部署（~1-4 分） |
+| **後端冷備** | `redrock-api-backup.onrender.com` | Render（免費層，閒置休眠、喚醒 ~50s） | 同 GitHub repo push 自動同步、與正式同版本 |
+| 計分系統 | `comp.redrocktaiwan.com` | `redrock-comp.web.app`（獨立 Firebase 專案 `redrock-comp`） | 本機 repo `~/redrock-comp-livescore` firebase deploy |
+
+### 服務與帳務
 | 服務 | 用途 | 備註 |
 |---|---|---|
-| Firebase（`redrock-dev-a35c1`） | Firestore 資料庫／Hosting 前端兩站／Storage 圖檔 | 免費額度內 |
-| Railway | 後端 API（GitHub push 自動部署，24h 常駐） | **主要付費點＋唯一全站單一故障點**（7/14 額度下線事故） |
-| Resend | 所有 Email（Railway 封鎖 SMTP 故走 REST API） | 免費 100 封/天 |
-| Porkbun | 網域 `redrocktaiwan.com`（app./staff. DNS → Firebase Hosting） | 年費 |
-| GitHub | 兩 repo（api push 觸發 Railway 部署） | 免費 |
+| Firebase（`redrock-dev-a35c1`） | Firestore 資料庫／Hosting 前端兩站／Storage 圖檔 | 免費額度內；SA json 本機 `~/Downloads/redrock-dev-a35c1-firebase-adminsdk-*.json` |
+| Railway | 後端 API 主站（24h 常駐） | **主要付費點**；用量警示 Compute hard $150/alert $25；7/14 額度下線事故 |
+| **Render** | 後端冷備（2026-07-17 建置完成） | ✅ Firestore 憑證/JWT_SECRET 同值/custom domain `api.redrocktaiwan.com` 已預登記（Waiting for DNS＝正常待命）；**Railway 環境變數異動須手動同步** |
+| Resend | 所有 Email（Railway 封鎖 SMTP 故走 REST API） | 免費 100 封/天；`RESEND_API_KEY` 在 Railway/Render 環境變數 |
+| Porkbun | 網域 `redrocktaiwan.com` DNS（app./staff.→Firebase、api→Railway、comp→Firebase） | 年費；**故障轉移＝把 `api` CNAME 改指 Render** |
+| UptimeRobot | 監測 `redrock-api-production.up.railway.app/health`（5 分鐘） | 掛站 5 分內 email 通知 |
+| GitHub | 兩 repo（`redrock-api` push 觸發 Railway+Render 雙部署；`redrock-web` 純版控） | 免費；push 走 macOS Keychain |
 
-未啟用：LinePay/街口/台灣Pay（adapter 骨架待金鑰）；BeClass（逐步取代中）；Climbio（資料已移轉完）。金鑰全在 Railway 環境變數。
-**Railway 停機應變手冊：`docs/outage-playbook.md`**（櫃檯紙本 SOP／管理員恢復程序／用量警示與 UptimeRobot 設定／api.redrocktaiwan.com 自訂網域＋Render 冷備的故障轉移步驟／長期 Cloud Run 選項）。
+未啟用：LinePay/街口/台灣Pay（adapter 骨架待金鑰）；BeClass（逐步取代中）；Climbio（資料已移轉完）。金鑰全在 Railway 環境變數（Render 為手動同步副本）。
+**Railway 停機應變手冊：`docs/outage-playbook.md`**（櫃檯紙本 SOP／恢復程序／故障轉移＝純一筆 CNAME／PEM 踩雷備忘／長期 Cloud Run 選項）。
 
 ## 目前進度（2026-07-14）— 員工端課程列表條列式 + 佔用名額透明化
 > 兩項 UI/資料改善。後端 `/health` `2.53.0-reserved-slots-note`；commit 後端 `5fb142f`、前端 `3a9b523`＋`1fe0a5d`；瀏覽器實機驗證通過。
@@ -1533,6 +1545,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - ②**補課/試上不繼承免費入場期**：`getCourseAccess` 對 `isMakeup`/`isTrial` 報名只在**上課當天**給入場資格（`dayOnly:true`、start=end=今天），不再給課程整段 unlimitedPractice。
   - ③**月曆補課標籤**：日格本有 `(補課)` 綠字；選日展開場次列補綠色「補課」標籤。
   - ④**補課選場次分兩區**：「已申請補課的場次」（綠卡+標籤+改期提示）／「可補課的場次」（照常可按）。會員端補課群組標「補課」、隱藏退費/暫停/請假、顯示「取消補課」鈕（確認 modal）。
+- ✅ **Render 冷備建置完成（Railway 應變 ④，2026-07-17 晚）**：`redrock-api-backup.onrender.com` 與正式站同版本、GitHub push 雙部署。**根因排除**：`FIREBASE_PRIVATE_KEY` 當初貼上格式壞（Invalid PEM）→ 每次新部署開機 crash → 部署失敗、Render 留 7/14 舊版跑（症狀＝版本卡舊＋`Unable to detect a Project Id`）；以 SA json 的 private_key **多行原格式**重貼（pbcopy 給使用者、不落檔）→ 存檔自動重部署一次過。**三項驗證**：/health 同版本 ✓、Firestore 憑證（登入端點 401 INVALID_CREDENTIALS）✓、**JWT_SECRET 同值**（Railway 發的 token 在 Render 直接通過認證回真實資料→故障轉移登入不中斷）✓。**custom domain `api.redrocktaiwan.com` 已預登記**（Waiting for DNS＝待命正常）→ 故障轉移＝Porkbun 改一筆 CNAME（~1 分 TLS）。playbook 已更新；⚠️ 維運紀律：Railway 環境變數異動須手動同步 Render。Railway 應變 ①②③④ 全完成。
 - ✅ **今日課程學員名單加 補課/試上/試上費未收 標籤**（`3.32.0-course-students-tags`，commit 後端 `cd0335a`、前端 `8c1ae92`）：查證確認**補課與試上（正取）都會出現在「今日課程學員」快速入場名單**（查詢＝今日場次的 confirmed 報名，無排除；候補/請假不出現）。原名單分不出身分 → `today-course-students` 回傳補 `isMakeup`/`isTrial`/`trialUnpaid`（試上且 `paymentStatus!=='paid'`）三旗標；`CheckinPage` 名單列姓名旁顯示 綠「補課」/紫「試上」/紅「**試上費未收**」（點入場前提醒櫃檯先收試上費）。補課學員點名單快速入場＝當日課程學員免費，與 3.30.0 dayOnly 入場資格一致。
 - ✅ **銷假改方案 B——不自動取消已訂補課、超額擋下由會員自選**（`3.31.0-cancel-leave-planB`，commit 後端 `6345eb0`、前端 `260f863`；E2E **7/7**；使用者拍板）：`cancelLeave` 移除「券血緣連動取消補課」（血緣在 reconcile 模型下不可靠：回填券 originalEnrollmentId null／復活券留舊連結 → 可能誤殺或漏動）。改**額度預檢**：取消後 `used > min(cap, 剩餘請假數)` → 擋 `MAKEUP_OVER_QUOTA`「已預約 X 堂、取消後額度剩 Y，請先取消一堂補課」（**會員自選**要放棄哪堂；補課已上過 used 永久成立、該請假不可取消）；額度足夠 → 放行、**已訂補課全保留**（修原血緣邏輯誤殺：請假2訂1取消1，補課現保留）。E2E：訂2取消擋+補課皆保留／自行取消一堂後放行／訂1取消放行保留／收斂正確。前端銷假 modal 文案對齊。
 - ✅ **補課額度改「不變量重算」——取消請假不再永久吃掉額度**（`3.29.0-makeup-entitlement-invariant`，commit `df7c8f7`；E2E **10/10**；使用者拍板規則 2026-07-17）：

@@ -44,12 +44,14 @@
 4. 通知 Claude 改前端 `src/api/client.js` 的 `BASE` → `https://api.redrocktaiwan.com`（build + deploy）
    - ⚠️ 未完成 1–3 前不可先改前端，會全站斷線
 
-### 步驟 B：Render 冷備（掛點 10 分鐘內復站）
-1. [render.com](https://render.com) 註冊 → New Web Service → 連 GitHub `redrock-api` repo
-2. 環境變數複製 Railway 全部（`JWT_SECRET`、`FIREBASE_*`、`RESEND_API_KEY`、`CLIENT_URL`、`API_URL`…）
-3. 部署成功後打其 `/health` 驗證，之後**留著不用**（免費層閒置會休眠，無妨）
-4. **切換時**：Porkbun 把 `api` CNAME 改指 Render 網址 → 幾分鐘內全站恢復（前提：已完成步驟 A）
-5. 每次 Railway 環境變數有新增，記得同步到 Render
+### 步驟 B：Render 冷備（✅ 已建置完成 2026-07-17）
+- **服務**：`redrock-api-backup.onrender.com`（GitHub push 自動同步、與正式站同版本）
+- **已驗證**：/health 同版本 ✓、Firestore 憑證生效（登入端點 401）✓、**JWT_SECRET 與 Railway 同值**（Railway 發的 token 在 Render 直接通過認證）✓
+- **切換時**：Porkbun 把 `api` CNAME 改指 `redrock-api-backup.onrender.com` → 幾分鐘內全站恢復（前端不用重發）
+  - 切換後第一個請求可能等 ~50 秒（免費層休眠喚醒），之後正常
+  - Render 服務需已加 `api.redrocktaiwan.com` 為 custom domain 才能吃該網域流量（未加則切換時到 Render 後台補加，TLS 憑證約 1 分鐘簽發）
+- ⚠️ **維運紀律**：每次 Railway 環境變數有新增/修改，**必須手動同步到 Render**（否則故障轉移時功能缺失）
+- 📌 **踩雷備忘（2026-07-17 建置時）**：`FIREBASE_PRIVATE_KEY` 貼上格式壞掉（Invalid PEM）會讓**新部署開機即 crash → 部署失敗 → Render 留舊版繼續跑**，症狀是「版本停在舊版＋查 DB 回 Unable to detect a Project Id」。修法＝從 service account JSON 把 private_key 以**多行原格式**重貼（程式相容 \n 與真換行）。存檔即自動重部署。
 
 ## 五、長期選項（金流上線前評估）
 

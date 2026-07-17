@@ -213,13 +213,18 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
         const gymId = c.gymId || claim.gymId || null;
         const gymAccessStart = c.unlimitedPracticeStart || c.startDate || sessions[0].date;
         const gymAccessEnd = c.unlimitedPracticeEnd || (c.endDate ? dayjs(c.endDate).add(c.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : sessions[sessions.length - 1].date);
+        // 認領時自動登錄請假（claim.leaveDates：認領前已請過假的日期）→ 該堂標 leave、不佔名額；
+        // 認領後跑補課額度重算（min(cap, 有效請假數)）自動給補課券
+        const leaveDates = Array.isArray(claim.leaveDates) ? claim.leaveDates : [];
         const batch = db.batch(); const cnt = {};
         for (const s of sessions) {
           const eid = uuidv4();
+          const isLeave = leaveDates.includes(s.date);
           batch.set(db.collection('courseEnrollments').doc(eid), {
             id: eid, memberId, memberName: member.name, sessionId: s.id, courseId: claim.courseId, courseName: c.name, gymId,
             date: s.date, startTime: s.startTime, endTime: s.endTime,
-            status: 'confirmed', waitlistPosition: null, paymentId: null, paymentMethod: 'roster-claim',
+            status: isLeave ? 'leave' : 'confirmed', waitlistPosition: null, paymentId: null, paymentMethod: 'roster-claim',
+            ...(isLeave ? { leaveReason: '補登記（認領時自動登錄請假）', leaveAt: now } : {}),
             originalPrice: c.price || 0, enrollmentFee: 0, installment: false, firstPayment: 0, secondPayment: 0,
             paymentStatus: 'confirmed', paymentConfirmed: true, paymentDeadline: null,
             gymAccessStart, gymAccessEnd, enrolledBy: 'roster-claim', enrolledAt: now,
@@ -227,10 +232,15 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
             confirmedLeavePolicy: false, confirmedRefundPolicy: false, portraitSignature: null, guardianSignature: null,
             notes: '名單預留自動認領（註冊時姓名比對加入）', createdAt: now, updatedAt: now,
           });
-          cnt[s.id] = (cnt[s.id] || 0) + 1;
+          if (!isLeave) cnt[s.id] = (cnt[s.id] || 0) + 1;   // 請假堂不佔名額
         }
         for (const s of sessions) if (cnt[s.id]) batch.update(db.collection('courseSessions').doc(s.id), { enrolledCount: (s.enrolledCount || 0) + cnt[s.id], updatedAt: now });
         await batch.commit();
+        // 有登錄請假 → 重算補課額度（自動給補課券；lazy require 避免循環依賴）
+        if (leaveDates.length) {
+          try { await require('./courseService').reconcileMakeupEntitlement(db, memberId, claim.courseId); }
+          catch (e) { console.error('認領請假補課額度重算失敗（報名已建立）:', e.message); }
+        }
       }
       await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now });
       claimed.push(c.name);

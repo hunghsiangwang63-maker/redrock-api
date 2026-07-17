@@ -16,7 +16,7 @@ const esc = (s) => String(s ?? '')
 /**
  * 核心發信函式
  */
-const sendEmail = async ({ to, subject, html, text, attachments }) => {
+const sendEmail = async ({ to, cc, subject, html, text, attachments }) => {
   if (!RESEND_API_KEY) {
     console.warn('[Email] RESEND_API_KEY 未設定，跳過發信');
     return { skipped: true };
@@ -29,6 +29,9 @@ const sendEmail = async ({ to, subject, html, text, attachments }) => {
       html,
       text: text || subject,
     };
+    // 副本收件人（選填；字串或陣列）
+    const ccList = (Array.isArray(cc) ? cc : (cc ? [cc] : [])).filter(Boolean);
+    if (ccList.length) payload.cc = ccList;
     // 附件：Resend 格式 [{ filename, content(base64 字串) }]
     if (Array.isArray(attachments) && attachments.length) payload.attachments = attachments;
     const res = await fetch('https://api.resend.com/emails', {

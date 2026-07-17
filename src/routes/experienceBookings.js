@@ -473,6 +473,8 @@ router.post('/:id/send-insurance-email', authenticate, async (req, res) => {
     const settings = sdoc.exists ? sdoc.data() : {};
     const to = (settings.insuranceRecipientEmail || '').trim();
     if (!to) return res.status(400).json({ error: 'NO_RECIPIENT', message: '尚未設定保險名冊收件人 email（請至體驗課程設定填寫）' });
+    // 副本收件人（選填；逗號/分號/空白分隔多個）
+    const cc = String(settings.insuranceCcEmails || '').split(/[,;\s]+/).map(s => s.trim()).filter(s => /.+@.+\..+/.test(s));
 
     // 標題：紅石攀岩{館}{年}年{月}月{日}日{首位姓名}等{N}人保險名冊
     const gymName = b.gymId === 'gym-hsinchu' ? '新竹館' : b.gymId === 'gym-shilin' ? '士林館' : '';
@@ -489,7 +491,7 @@ router.post('/:id/send-insurance-email', authenticate, async (req, res) => {
     const fileName = `${title}.xls`;
 
     const result = await emailService.sendEmail({
-      to, subject: title,
+      to, cc, subject: title,
       html: `<div style="font-family:sans-serif;white-space:pre-wrap;font-size:14px">${emailService.esc(body)}</div>`,
       text: body,
       attachments: [{ filename: fileName, content: buf.toString('base64') }],
@@ -508,7 +510,7 @@ router.post('/:id/send-insurance-email', authenticate, async (req, res) => {
 
     await db.collection('insuranceExports').add({
       bookingId: b.id, gymId: b.gymId, courseType: b.courseType,
-      title, recipient: to, bookingDate: b.bookingDate, count, firstName,
+      title, recipient: to, cc, bookingDate: b.bookingDate, count, firstName,
       fileName, filePath, fileUrl,
       emailId: result.id || null, skipped: !!result.skipped,
       sentBy: req.staff.id, sentByName: req.staff.name, createdAt: new Date(),

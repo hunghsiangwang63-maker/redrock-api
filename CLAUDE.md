@@ -1533,6 +1533,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - ②**補課/試上不繼承免費入場期**：`getCourseAccess` 對 `isMakeup`/`isTrial` 報名只在**上課當天**給入場資格（`dayOnly:true`、start=end=今天），不再給課程整段 unlimitedPractice。
   - ③**月曆補課標籤**：日格本有 `(補課)` 綠字；選日展開場次列補綠色「補課」標籤。
   - ④**補課選場次分兩區**：「已申請補課的場次」（綠卡+標籤+改期提示）／「可補課的場次」（照常可按）。會員端補課群組標「補課」、隱藏退費/暫停/請假、顯示「取消補課」鈕（確認 modal）。
+- ✅ **今日課程學員名單加 補課/試上/試上費未收 標籤**（`3.32.0-course-students-tags`，commit 後端 `cd0335a`、前端 `8c1ae92`）：查證確認**補課與試上（正取）都會出現在「今日課程學員」快速入場名單**（查詢＝今日場次的 confirmed 報名，無排除；候補/請假不出現）。原名單分不出身分 → `today-course-students` 回傳補 `isMakeup`/`isTrial`/`trialUnpaid`（試上且 `paymentStatus!=='paid'`）三旗標；`CheckinPage` 名單列姓名旁顯示 綠「補課」/紫「試上」/紅「**試上費未收**」（點入場前提醒櫃檯先收試上費）。補課學員點名單快速入場＝當日課程學員免費，與 3.30.0 dayOnly 入場資格一致。
 - ✅ **銷假改方案 B——不自動取消已訂補課、超額擋下由會員自選**（`3.31.0-cancel-leave-planB`，commit 後端 `6345eb0`、前端 `260f863`；E2E **7/7**；使用者拍板）：`cancelLeave` 移除「券血緣連動取消補課」（血緣在 reconcile 模型下不可靠：回填券 originalEnrollmentId null／復活券留舊連結 → 可能誤殺或漏動）。改**額度預檢**：取消後 `used > min(cap, 剩餘請假數)` → 擋 `MAKEUP_OVER_QUOTA`「已預約 X 堂、取消後額度剩 Y，請先取消一堂補課」（**會員自選**要放棄哪堂；補課已上過 used 永久成立、該請假不可取消）；額度足夠 → 放行、**已訂補課全保留**（修原血緣邏輯誤殺：請假2訂1取消1，補課現保留）。E2E：訂2取消擋+補課皆保留／自行取消一堂後放行／訂1取消放行保留／收斂正確。前端銷假 modal 文案對齊。
 - ✅ **補課額度改「不變量重算」——取消請假不再永久吃掉額度**（`3.29.0-makeup-entitlement-invariant`，commit `df7c8f7`；E2E **10/10**；使用者拍板規則 2026-07-17）：
   - **不變量**：任一時刻 `補課總額(available+used) = min(cap, 目前有效請假數)`；cap＝`enrollment.maxLeavesAllowed ?? rules.maxLeaves`；`allowMakeup=false`→0；**used 絕不撤銷**。

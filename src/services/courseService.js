@@ -763,40 +763,30 @@ const cancelLeave = async ({ enrollmentId, memberId }) => {
 
   const now = new Date();
 
-  // 補課資格連動（先驗證再動手：補課已上過 → 整個銷假擋下）
-  const mkSnap = await db.collection(MAKEUP_COLLECTION)
-    .where('originalEnrollmentId', '==', enrollmentId).get();
-  const makeupEnrollDocs = [];
-  for (const mk of mkSnap.docs) {
-    if (mk.data().status !== 'used') continue;
-    const meSnap = await db.collection(ENROLLMENT_COLLECTION).where('makeupId', '==', mk.id).get();
-    for (const me of meSnap.docs) {
-      const m = me.data();
-      if (m.status !== 'confirmed') continue;
-      const mTime = dayjs(`${m.date}T${m.startTime || '00:00'}:00+08:00`);
-      if (m.date && mTime.isValid() && dayjs().isAfter(mTime)) {
-        throw { code: 'MAKEUP_TAKEN', message: '此請假的補課已上課，無法取消請假' };
-      }
-      makeupEnrollDocs.push(me);
+  // 【方案 B（政策 2026-07-17）】取消請假「一律不自動取消任何已訂補課」（used 不撤銷、不看券血緣）。
+  // 額度預檢：取消後 newEntitlement = min(cap, 有效請假數-1)；若 已訂補課(used) > newEntitlement →
+  // 擋下銷假，請會員先自行「取消補課」選擇要放棄哪堂（系統不猜）。補課已上過者 used 永久成立，
+  // 請假數不足以支撐時該請假即不可取消（消費已發生、不可反悔）。
+  {
+    const courseDocQ = await db.collection(COURSE_COLLECTION).doc(enrollment.courseId).get();
+    const courseQ = courseDocQ.exists ? courseDocQ.data() : {};
+    const rulesQ = resolveRules(courseQ, await getCategoryOf(db, courseQ.categoryId));
+    const enSnapQ = await db.collection(ENROLLMENT_COLLECTION)
+      .where('memberId', '==', memberId).where('courseId', '==', enrollment.courseId).get();
+    const enDocsQ = enSnapQ.docs.map(d => d.data());
+    const activeLeavesQ = enDocsQ.filter(e => e.status === 'leave').length;
+    const capQ = enDocsQ.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rulesQ.maxLeaves;
+    const newEntitlement = rulesQ.allowMakeup === false ? 0 : Math.min(capQ, Math.max(0, activeLeavesQ - 1));
+    const mkSnapQ = await db.collection(MAKEUP_COLLECTION)
+      .where('memberId', '==', memberId).where('courseId', '==', enrollment.courseId).get();
+    const usedQ = mkSnapQ.docs.filter(d => d.data().status === 'used').length;
+    if (usedQ > newEntitlement) {
+      throw {
+        code: 'MAKEUP_OVER_QUOTA',
+        message: `已預約 ${usedQ} 堂補課、取消此請假後補課額度只剩 ${newEntitlement} 堂，請先取消一堂補課再取消請假（補課已上過則無法取消）`,
+      };
     }
   }
-  let makeupEnrollmentCancelled = 0;
-  for (const me of makeupEnrollDocs) {
-    const m = me.data();
-    await me.ref.update({ status: 'cancelled', cancelReason: 'leave_cancelled', cancelledAt: now, updatedAt: now });
-    const msd = await db.collection(SESSION_COLLECTION).doc(m.sessionId).get();
-    if (msd.exists) await msd.ref.update({ enrolledCount: Math.max(0, (msd.data().enrolledCount || 0) - 1), updatedAt: now });
-    makeupEnrollmentCancelled++;
-  }
-  // 補課報名已取消 → 連動的 used 券還原 available（未消費）；後續 reconcile 統一收斂額度
-  if (makeupEnrollDocs.length) {
-    for (const mk of mkSnap.docs) {
-      if (mk.data().status !== 'used') continue;
-      await mk.ref.update({ status: 'available', usedSessionId: null, usedAt: null, updatedAt: now });
-    }
-  }
-  // 【不再無條件作廢補課券】（政策 2026-07-17）：額度交由 reconcile 依「min(cap, 有效請假數)」重算——
-  // 活躍請假減少時只作廢多餘 available、不動 used；之後再請假回來額度會自動補回。
 
   // 還原報名 + 場次人數（保留 leaveReason/leaveAt 供稽核，另記 leaveCancelledAt）
   await enrollDoc.ref.update({ status: 'confirmed', leaveCancelledAt: now, updatedAt: now });
@@ -809,10 +799,8 @@ const cancelLeave = async ({ enrollmentId, memberId }) => {
   const rec = await reconcileMakeupEntitlement(db, memberId, enrollment.courseId, rules2, { ...enrollment, id: enrollmentId });
 
   return {
-    makeupEnrollmentCancelled, entitlement: rec,
-    message: makeupEnrollmentCancelled
-      ? `已取消請假；已報名的補課一併取消（目前可補課 ${rec.available} 次）`
-      : `已取消請假（目前可補課 ${rec.available} 次）`,
+    entitlement: rec,
+    message: `已取消請假（目前可補課 ${rec.available} 次；已預約的補課不受影響）`,
   };
 };
 

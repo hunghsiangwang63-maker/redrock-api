@@ -909,6 +909,18 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
     throw { code: 'SESSION_FULL', message: '此場次已額滿' };
   }
 
+  // 後端權威：不可補回自己請假的課程（同 courseId；整期報名每堂本有名額，前端選單亦排除）
+  if (makeup.courseId && session.courseId === makeup.courseId) {
+    throw { code: 'SAME_COURSE', message: '不可補課至原課程，請選同班別其他梯次或同補課類型的課程' };
+  }
+  // 後端權威：目標場次已有有效報名 → 擋（避免同一人同場次雙重佔位、人數灌水）
+  const dupSnap = await db.collection(ENROLLMENT_COLLECTION)
+    .where('sessionId', '==', targetSessionId)
+    .where('memberId', '==', memberId).get();
+  if (dupSnap.docs.some(d => ['confirmed', 'leave', 'waitlist'].includes(d.data().status))) {
+    throw { code: 'ALREADY_IN_SESSION', message: '你已在此場次名單中，無需補課' };
+  }
+
   // 驗證同「補課群組」同館（班別可設 makeupGroup 讓多班別互補，如小蜘蛛人入門+進階；未設＝各班別自成一組）
   const originalCourseDoc = await db.collection(COURSE_COLLECTION).doc(makeup.courseId).get();
   const targetCourseDoc = await db.collection(COURSE_COLLECTION).doc(session.courseId).get();

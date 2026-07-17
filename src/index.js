@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.21.0-overlap-on-pass-purchase',
+    version: '3.22.0-overlap-revert-on-refund',
   });
 });
 

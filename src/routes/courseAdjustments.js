@@ -219,6 +219,9 @@ router.post('/requests/:id/approve',
           memberId: request.memberId,
           reason: `退費申請核准（退款 NT$${finalRefund}）`,
         });
+        // 課程退費 → 還原定期票「此課程」重疊補償延長（政策 2026-07-17；不阻斷）
+        try { await require('../services/passOverlapService').revertCourseOverlapExtension({ memberId: request.memberId, courseId: request.courseId }); }
+        catch (e) { console.error('重疊補償還原失敗（退費已核准）:', e.message); }
         // 記負向交易（退款），記帳失敗不阻擋核准。認列日＝該課程最後一堂課（與報名費同時結算）
         if (finalRefund > 0) {
           try {

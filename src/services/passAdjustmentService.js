@@ -211,9 +211,16 @@ const approvePassRequest = async ({ requestId, operatorId, operatorName, extensi
 
   } else if (request.type === 'refund') {
     if (!hasInvoice) throw { code: 'INVOICE_REQUIRED', message: '退費需確認會員已提供發票正本' };
+    // 退費前先還原「課程重疊補償」延長（政策 2026-07-17）：補償天數是免費贈延、非付費價值，
+    // 不還原會把延長天數算進 總天數/剩餘天數 → 多退錢。還原失敗不阻斷（走原 endDate 計算）。
+    let effEndDate = pass.endDate;
+    try {
+      const reverted = await require('./passOverlapService').revertAllOverlapForPass(pass.id);
+      if (reverted && reverted.newEndDate) effEndDate = reverted.newEndDate;
+    } catch (e) { console.error('重疊補償還原失敗（退費照原 endDate 計）:', e.message); }
     const today = dayjs();
-    const totalDays = dayjs(pass.endDate).diff(dayjs(pass.startDate), 'day');
-    const remainingDays = Math.max(0, dayjs(pass.endDate).diff(today, 'day'));
+    const totalDays = dayjs(effEndDate).diff(dayjs(pass.startDate), 'day');
+    const remainingDays = Math.max(0, dayjs(effEndDate).diff(today, 'day'));
     const passTypeDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(pass.passTypeId).get();
     const originalPrice = passTypeDoc.exists ? passTypeDoc.data().price : 0;
     const dailyRate = totalDays > 0 ? originalPrice / totalDays : 0;

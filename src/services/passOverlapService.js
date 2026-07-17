@@ -90,4 +90,71 @@ async function applyCourseOverlapForMember(memberId) {
   }
 }
 
-module.exports = { applyCourseOverlapPassExtension, applyCourseOverlapForMember };
+// ── 還原（退費連動）───────────────────────────────────────────────
+// 當時延長量 delta = newEnd − prevEnd = (max(prevEnd, freeEnd) − prevEnd) + days（由已存欄位精確重算）。
+// 還原＝endDate 回推 delta、移除該課程 marker；多課程堆疊為線性加總，逐一回推仍正確。
+const extDelta = (ext) => {
+  const base = ext.prevEndDate > ext.freeEnd ? ext.prevEndDate : ext.freeEnd;
+  return dayjs(base).diff(dayjs(ext.prevEndDate), 'day') + (ext.days || 0);
+};
+
+// 課程退費核准 → 還原該會員全部票上「此課程」的延長
+async function revertCourseOverlapExtension({ memberId, courseId }) {
+  const db = getDb();
+  try {
+    if (!memberId || !courseId) return null;
+    const snap = await db.collection('memberPasses').where('memberId', '==', memberId).get();
+    const results = [];
+    for (const doc of snap.docs) {
+      const p = doc.data();
+      const ext = p.courseOverlapExt && p.courseOverlapExt[courseId];
+      if (!ext) continue;
+      const delta = extDelta(ext);
+      const newEnd = dayjs(p.endDate).subtract(delta, 'day').format('YYYY-MM-DD');
+      const rest = { ...p.courseOverlapExt }; delete rest[courseId];
+      const now = new Date();
+      await doc.ref.update({
+        endDate: newEnd,
+        courseOverlapExt: Object.keys(rest).length ? rest : admin_FieldValue().delete(),
+        notes: `${p.notes ? p.notes + '\n' : ''}課程退費 → 還原重疊補償 −${delta} 天（${ext.courseName || courseId}；${p.endDate} → ${newEnd}）`,
+        updatedAt: now,
+      });
+      results.push({ passId: doc.id, passTypeName: p.passTypeName, revertedDays: delta, newEndDate: newEnd });
+      console.log(`[重疊補償還原] ${memberId} ${p.passTypeName || doc.id} −${delta}天 ${p.endDate}→${newEnd}（課程退費 ${ext.courseName || courseId}）`);
+    }
+    return results;
+  } catch (e) { console.error('revertCourseOverlapExtension 失敗（不阻斷）:', e.message); return null; }
+}
+
+// 定期票退費核准 → 該票「全部」延長先還原（退費天數比例回到原值，避免補償天數被當付費價值多退）
+async function revertAllOverlapForPass(passId) {
+  const db = getDb();
+  try {
+    const ref = db.collection('memberPasses').doc(passId);
+    const doc = await ref.get();
+    if (!doc.exists) return null;
+    const p = doc.data();
+    if (!p.courseOverlapExt || !Object.keys(p.courseOverlapExt).length) return null;
+    let end = p.endDate; let total = 0; const names = [];
+    for (const [cid, ext] of Object.entries(p.courseOverlapExt)) {
+      const d = extDelta(ext); total += d; names.push(ext.courseName || cid);
+      end = dayjs(end).subtract(d, 'day').format('YYYY-MM-DD');
+    }
+    const now = new Date();
+    await ref.update({
+      endDate: end,
+      courseOverlapExt: admin_FieldValue().delete(),
+      notes: `${p.notes ? p.notes + '\n' : ''}定期票退費 → 還原全部重疊補償 −${total} 天（${names.join('、')}；${p.endDate} → ${end}）`,
+      updatedAt: now,
+    });
+    console.log(`[重疊補償還原] 票 ${passId} 退費前還原 −${total}天 ${p.endDate}→${end}`);
+    return { revertedDays: total, newEndDate: end };
+  } catch (e) { console.error('revertAllOverlapForPass 失敗（不阻斷）:', e.message); return null; }
+}
+
+// FieldValue.delete()（lazy 取得，避免頂層依賴 firebase-admin 初始化順序）
+function admin_FieldValue() {
+  return require('firebase-admin').firestore.FieldValue;
+}
+
+module.exports = { applyCourseOverlapPassExtension, applyCourseOverlapForMember, revertCourseOverlapExtension, revertAllOverlapForPass };

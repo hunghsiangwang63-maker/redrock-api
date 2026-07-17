@@ -617,6 +617,60 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, paymentId,
   };
 };
 
+// ── 補課額度重算（不變量，政策 2026-07-17）────────────────────────
+// 任一時刻：補課總額(available+used) = min(cap, 目前有效請假數)；cap = enrollment.maxLeavesAllowed ?? rules.maxLeaves。
+// 取消請假不再永久吃掉額度：只要有效請假數仍足夠，額度自動補回（先復活 cancelled 券、不夠再新建）；
+// 過多只作廢多餘 available（over_limit）、絕不動 used。冪等。
+const reconcileMakeupEntitlement = async (db, memberId, courseId, rules = null, enrollment = null) => {
+  const cDoc = await db.collection(COURSE_COLLECTION).doc(courseId).get();
+  const course = cDoc.exists ? cDoc.data() : {};
+  if (!rules) rules = resolveRules(course, await getCategoryOf(db, course.categoryId));
+
+  const enSnap = await db.collection(ENROLLMENT_COLLECTION)
+    .where('memberId', '==', memberId).where('courseId', '==', courseId).get();
+  const enDocs = enSnap.docs.map(d => d.data());
+  const activeLeaves = enDocs.filter(e => e.status === 'leave').length;
+  const capOverride = enrollment?.maxLeavesAllowed ?? enDocs.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed;
+  const cap = capOverride ?? rules.maxLeaves;
+  const entitlement = rules.allowMakeup === false ? 0 : Math.min(cap, activeLeaves);
+
+  const mkSnap = await db.collection(MAKEUP_COLLECTION)
+    .where('memberId', '==', memberId).where('courseId', '==', courseId).get();
+  const used = mkSnap.docs.filter(d => d.data().status === 'used').length;
+  const availDocs = mkSnap.docs.filter(d => d.data().status === 'available');
+  const targetAvailable = Math.max(0, entitlement - used);
+
+  const now = new Date();
+  const expiresAt = dayjs(course.endDate || taiwanToday()).add(rules.makeupDeadlineDays, 'day').toDate();
+  let delta = targetAvailable - availDocs.length;
+
+  if (delta > 0) {
+    // 先復活 cancelled 券（leave_cancelled / over_limit），不夠再新建
+    for (const r of mkSnap.docs.filter(d => d.data().status === 'cancelled')) {
+      if (delta <= 0) break;
+      await r.ref.update({ status: 'available', cancelReason: null, usedSessionId: null, usedAt: null, expiresAt, updatedAt: now });
+      delta--;
+    }
+    while (delta > 0) {
+      const id = uuidv4();
+      await db.collection(MAKEUP_COLLECTION).doc(id).set({
+        id, memberId, originalEnrollmentId: enrollment?.id || null,
+        courseId, courseName: course.name || '', categoryId: course.categoryId || null,
+        gymId: course.gymId || null, tags: course.tags || [],
+        status: 'available', expiresAt, usedSessionId: null, usedAt: null,
+        source: 'reconcile', createdAt: now, updatedAt: now,
+      });
+      delta--;
+    }
+  } else if (delta < 0) {
+    // 作廢多餘 available（不動 used）
+    for (const r of availDocs.slice(0, -delta)) {
+      await r.ref.update({ status: 'cancelled', cancelReason: 'over_limit', updatedAt: now });
+    }
+  }
+  return { entitlement, used, available: targetAvailable, cap, activeLeaves };
+};
+
 // ── 請假 ──────────────────────────────────────────────────────────
 const requestLeave = async ({ enrollmentId, memberId, reason }) => {
   const db = getDb();
@@ -665,38 +719,16 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
     });
   }
 
-  // 自動產生補課資格（期限＝課程「結束日」+ makeupDeadlineDays 天；無結束日 fallback 請假堂日期起算）
-  // 超過請假上限的請假不產生補課資格（政策 2026-07-17）
-  let makeup = null;
-  if (rules.allowMakeup !== false && !overLimit) {
-    const makeupId = uuidv4();
-    const makeupDays = rules.makeupDeadlineDays;
-    makeup = {
-      id: makeupId,
-      memberId,
-      originalEnrollmentId: enrollmentId,
-      courseId: enrollment.courseId,
-      courseName: enrollment.courseName,
-      categoryId: course.categoryId || null, // 補課篩選同類別用
-      gymId: enrollment.gymId,
-      tags: course.tags || [],
-      status: 'available',
-      expiresAt: dayjs(course.endDate || enrollment.date).add(makeupDays, 'day').toDate(),
-      usedSessionId: null,
-      usedAt: null,
-      createdAt: now,
-      updatedAt: now,
-    };
-    await db.collection(MAKEUP_COLLECTION).doc(makeupId).set(makeup);
-  }
+  // 補課額度重算（不變量：available+used = min(cap, 有效請假數)；取代原事件式發券，政策 2026-07-17）
+  const rec = await reconcileMakeupEntitlement(db, memberId, enrollment.courseId, rules, { ...enrollment, id: enrollmentId });
 
   // 自動遞補候補者（遞補失敗不中斷請假）
   try { await promoteWaitlist(enrollment.sessionId); } catch (err) { console.error('promoteWaitlist 失敗', err.message); }
 
   return {
-    makeup, overLimit,
-    message: overLimit ? '請假成功（已超過補課上限，此次請假不產生補課資格）'
-      : (makeup ? '請假成功，補課資格已產生' : '請假成功'),
+    makeup: null, overLimit, entitlement: rec,
+    message: overLimit ? `請假成功（已達補課上限 ${rec.cap} 次，此次請假不增加補課資格）`
+      : (rec.available > 0 ? `請假成功，目前可補課 ${rec.available} 次` : '請假成功'),
   };
 };
 
@@ -747,7 +779,7 @@ const cancelLeave = async ({ enrollmentId, memberId }) => {
       makeupEnrollDocs.push(me);
     }
   }
-  let makeupEnrollmentCancelled = 0, makeupRightCancelled = 0;
+  let makeupEnrollmentCancelled = 0;
   for (const me of makeupEnrollDocs) {
     const m = me.data();
     await me.ref.update({ status: 'cancelled', cancelReason: 'leave_cancelled', cancelledAt: now, updatedAt: now });
@@ -755,20 +787,31 @@ const cancelLeave = async ({ enrollmentId, memberId }) => {
     if (msd.exists) await msd.ref.update({ enrolledCount: Math.max(0, (msd.data().enrolledCount || 0) - 1), updatedAt: now });
     makeupEnrollmentCancelled++;
   }
-  for (const mk of mkSnap.docs) {
-    if (mk.data().status === 'cancelled') continue;
-    await mk.ref.update({ status: 'cancelled', cancelReason: 'leave_cancelled', updatedAt: now });
-    makeupRightCancelled++;
+  // 補課報名已取消 → 連動的 used 券還原 available（未消費）；後續 reconcile 統一收斂額度
+  if (makeupEnrollDocs.length) {
+    for (const mk of mkSnap.docs) {
+      if (mk.data().status !== 'used') continue;
+      await mk.ref.update({ status: 'available', usedSessionId: null, usedAt: null, updatedAt: now });
+    }
   }
+  // 【不再無條件作廢補課券】（政策 2026-07-17）：額度交由 reconcile 依「min(cap, 有效請假數)」重算——
+  // 活躍請假減少時只作廢多餘 available、不動 used；之後再請假回來額度會自動補回。
 
   // 還原報名 + 場次人數（保留 leaveReason/leaveAt 供稽核，另記 leaveCancelledAt）
   await enrollDoc.ref.update({ status: 'confirmed', leaveCancelledAt: now, updatedAt: now });
   await sessionDoc.ref.update({ enrolledCount: (session.enrolledCount || 0) + 1, updatedAt: now });
 
+  // 補課額度重算（不變量）
+  const courseDoc2 = await db.collection(COURSE_COLLECTION).doc(enrollment.courseId).get();
+  const course2 = courseDoc2.exists ? courseDoc2.data() : {};
+  const rules2 = resolveRules(course2, await getCategoryOf(db, course2.categoryId));
+  const rec = await reconcileMakeupEntitlement(db, memberId, enrollment.courseId, rules2, { ...enrollment, id: enrollmentId });
+
   return {
-    makeupEnrollmentCancelled, makeupRightCancelled,
-    message: makeupEnrollmentCancelled ? '已取消請假；已報名的補課一併取消'
-      : (makeupRightCancelled ? '已取消請假；補課資格已作廢' : '已取消請假'),
+    makeupEnrollmentCancelled, entitlement: rec,
+    message: makeupEnrollmentCancelled
+      ? `已取消請假；已報名的補課一併取消（目前可補課 ${rec.available} 次）`
+      : `已取消請假（目前可補課 ${rec.available} 次）`,
   };
 };
 
@@ -1497,6 +1540,7 @@ module.exports = {
   enrollCourse,
   requestLeave,
   cancelLeave,
+  reconcileMakeupEntitlement,
   promoteWaitlist,
   trialPaymentDeadline,
   sweepExpiredTrialPayments,

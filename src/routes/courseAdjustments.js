@@ -78,26 +78,22 @@ router.post('/enrollments/:enrollmentId/refund-request',
       const perSessionDeduction = _refundRules.perSessionDeduction;
       const handlingFeeRate = _refundRules.handlingFeeRate;
 
-      let suggestedRefund = 0;
-      let refundNote = '';
-
-      if (!courseStartDate || today < courseStartDate) {
-        // 開課前：扣5%手續費
-        const fee = Math.ceil(paidAmount * handlingFeeRate);
-        suggestedRefund = Math.max(0, paidAmount - fee);
-        refundNote = `開課前申請，扣除手續費 NT$${fee}（${Math.round(handlingFeeRate * 100)}%）`;
-      } else {
-        // 開課後：計算已開課堂數（日期已過的場次，不論有無出席/請假）
-        const sessionSnap = await db.collection('courseSessions')
-          .where('courseId', '==', courseId)
-          .get();
-        const heldSessions = sessionSnap.docs
-          .map(d => d.data())
-          .filter(s => s.date && s.date <= today).length;
-        const deduction = heldSessions * perSessionDeduction;
-        suggestedRefund = Math.max(0, paidAmount - deduction);
-        refundNote = `開課後申請，已開課 ${heldSessions} 堂 × NT$${perSessionDeduction} = 扣除 NT$${deduction}`;
-      }
+      // 政府規定週課退費（2026-07-17 改版）：退費＝剩餘堂數價金 − 手續費（剩餘價金 × 費率，法定上限 20%）
+      // 每堂單價＝已繳金額 ÷ 總堂數；剩餘堂數＝總堂數 − 已開課堂數（日期已過，不論出席/請假）。
+      // 開課前＝剩餘全數 → 退 已繳×(1−費率)，同一公式涵蓋。費率走班別/梯次規則（handlingFeeRate）、硬夾 ≤20%。
+      const sessionSnap = await db.collection('courseSessions')
+        .where('courseId', '==', courseId)
+        .get();
+      const _allSess = sessionSnap.docs.map(d => d.data()).filter(s => s.status !== 'cancelled');
+      const totalSessions = _allSess.length || 1;
+      const heldSessions = _allSess.filter(s => s.date && s.date <= today).length;
+      const remainingSessions = Math.max(0, totalSessions - heldSessions);
+      const perSession = paidAmount / totalSessions;
+      const remainingValue = Math.round(perSession * remainingSessions);
+      const feeRate = Math.min(handlingFeeRate ?? 0.2, 0.2);   // 法定上限 20%（管理員可於班別/梯次調低）
+      const fee = Math.round(remainingValue * feeRate);
+      const suggestedRefund = Math.max(0, remainingValue - fee);
+      const refundNote = `剩餘 ${remainingSessions}/${totalSessions} 堂 × 每堂 NT$${Math.round(perSession)} ＝ 剩餘價金 NT$${remainingValue}；手續費 ${Math.round(feeRate * 100)}%＝NT$${fee}（法定上限 20%）`;
 
       const reqId = `crefund_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
       await db.collection('courseAdjustmentRequests').doc(reqId).set({
@@ -112,6 +108,7 @@ router.post('/enrollments/:enrollmentId/refund-request',
         paidAmount,
         suggestedRefund,
         refundNote,
+        totalSessions, heldSessions, remainingSessions, remainingValue, feeRate, fee, // 政府公式明細
         perSessionDeduction,
         handlingFeeRate,
         reason: req.body.reason,

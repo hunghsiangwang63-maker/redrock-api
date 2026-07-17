@@ -358,6 +358,9 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
           courseName: s.courseName || e.courseName || '',
           startTime: s.startTime, endTime: s.endTime,
           alreadyCheckedIn: checkedInMemberIds.has(e.memberId),
+          isMakeup: e.isMakeup === true,                                  // 補課學員標籤
+          isTrial: e.isTrial === true,                                    // 試上學員標籤
+          trialUnpaid: e.isTrial === true && e.paymentStatus !== 'paid',  // 試上費未收提醒
         };
       })
       .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));

@@ -312,6 +312,10 @@ router.post('/',
         });
       }
 
+      // 定期票 × 課程免費期間重疊補償（買票方向；買者已是課程學員 → 新票期間重疊即延長，冪等不阻斷）
+      try { await require('../services/passOverlapService').applyCourseOverlapForMember(req.body.memberId); }
+      catch (e) { console.error('課程重疊補償失敗（票已建立）:', e.message); }
+
       res.status(201).json({ pass, installmentPlan: passPlan, message: '定期票建立成功' });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

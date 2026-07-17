@@ -69,4 +69,25 @@ async function applyCourseOverlapPassExtension({ memberId, courseId }) {
   }
 }
 
-module.exports = { applyCourseOverlapPassExtension };
+// 反向：買定期票當下已是課程學員 → 對該會員全部 confirmed 課程各套一次（冪等）。
+// 呼叫點：櫃檯賣票 POST /passes、入場購票 buy_pass confirmCheckIn（新票建立後）。
+async function applyCourseOverlapForMember(memberId) {
+  const db = getDb();
+  try {
+    if (!memberId) return null;
+    const en = await db.collection('courseEnrollments')
+      .where('memberId', '==', memberId).where('status', '==', 'confirmed').get();
+    const courseIds = [...new Set(en.docs.map(d => d.data().courseId).filter(Boolean))];
+    const all = [];
+    for (const cid of courseIds) {
+      const r = await applyCourseOverlapPassExtension({ memberId, courseId: cid });
+      if (r && r.length) all.push(...r);
+    }
+    return all;
+  } catch (e) {
+    console.error('applyCourseOverlapForMember 失敗（不阻斷）:', e.message);
+    return null;
+  }
+}
+
+module.exports = { applyCourseOverlapPassExtension, applyCourseOverlapForMember };

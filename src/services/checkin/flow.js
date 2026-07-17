@@ -396,6 +396,9 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
       installmentPlanId: passPlan?.id || null,
       soldByStaffId: staffId || null, notes: '入場時購買', createdAt: now, updatedAt: now,
     });
+    // 定期票 × 課程免費期間重疊補償（買票方向；買者已是課程學員 → 新票期間重疊即延長，冪等不阻斷）
+    try { await require('../passOverlapService').applyCourseOverlapForMember(pending.memberId); }
+    catch (e) { console.error('課程重疊補償失敗（票已開立）:', e.message); }
   } else if (pending.entryType === 'discount_card' && pending.discountCardId) {
     await useDiscountCard(pending.discountCardId, pending.gymId);
   } else if (pending.entryType === 'black_card' && pending.blackCardId) {

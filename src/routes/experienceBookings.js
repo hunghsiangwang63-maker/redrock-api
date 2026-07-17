@@ -375,6 +375,26 @@ router.put('/:id/schedule', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── PUT /experience-bookings/:id/finance - 管理員填教練費/發票金額 ──
+router.put('/:id/finance', authenticate, requireManager, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection('experienceBookings').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
+    const coachFee = req.body.coachFee === '' || req.body.coachFee == null ? null : Number(req.body.coachFee);
+    const invoiceAmount = req.body.invoiceAmount === '' || req.body.invoiceAmount == null ? null : Number(req.body.invoiceAmount);
+    if (coachFee != null && (!Number.isFinite(coachFee) || coachFee < 0)) return res.status(400).json({ error: 'INVALID_VALUE', message: '教練費無效' });
+    if (invoiceAmount != null && (!Number.isFinite(invoiceAmount) || invoiceAmount < 0)) return res.status(400).json({ error: 'INVALID_VALUE', message: '發票金額無效' });
+    await ref.update({
+      coachFee, invoiceAmount,
+      financeUpdatedBy: req.staff.id, financeUpdatedByName: req.staff.name || '', financeUpdatedAt: new Date(),
+      updatedAt: new Date(),
+    });
+    res.json({ success: true, coachFee, invoiceAmount });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /experience-bookings/download - 下載 XLS 名單 ─────────────
 router.get('/download', authenticate, async (req, res) => {
   try {

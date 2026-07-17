@@ -1528,6 +1528,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **修：新增場次/編輯日期「沒有用」**（`3.25.0-session-create-gym-edit-cascade`，commit 後端 `a82a853`、前端 `db94fdf`）：回報新增場次與編輯日期無效。**三個問題疊加**：①`POST /:courseId/sessions` 用 `req.staff.gymId`（super_admin＝null）→ 建出 gymId=null 隱形場次（1.83.0 修過 generate-sessions、**單堂 createSession 漏修**）→ fallback `course.gymId`；②員工場次列表查詢 `toDate` 截在課程結束日 → 加開/改期到結束日之後的場次不顯示（「編輯日期沒有用」的觀感）→ 改取 max(課程結束日, 今日+180)；③**編輯場次日期/時段原不同步報名快照**（enrollment 存 date/startTime/endTime 副本）→ 會員端我的課程/請假判定停舊日期 → updateSession 連動 batch 同步非取消報名。資料修復：技巧班5-7月週五班 7/24 幽靈場次 gymId 補 gym-shilin。
 - ✅ **新增場次可勾選帶入本課學員（個別勾選）**（`3.26.0-add-session-with-students`，commit 後端 `d3cdcbc`、前端 `6707f9c`；E2E 5/5）：`createSession` 收 `enrollMemberIds` → 為選定會員建此場次報名（**費用 0＋已確認**——整期已繳、加開不另計費；gymAccess 沿用課程無限練習期；notes「加開場次帶入」）＋場次計數。前端新增場次 Modal 列該課學員勾選區（confirmed/leave 去重、**預設全勾**、可個別勾/全選切換、顯示 N/M）。帶入後員工月曆/名單、會員月曆/我的課程、入場自動出席全連動；未勾選者不會看到該堂。**順修潛在 bug**：課程無 `tags` 欄位建場次 Firestore throw（`tags: course.tags||[]`）。
 - ✅ **保險名冊寄送支援副本收件人（CC）**（`3.27.0-insurance-email-cc`，commit 後端 `33902f9`、前端 `787b74c`）：`emailService.sendEmail` 加 `cc` 參數（Resend `payload.cc`，字串/陣列）；`send-insurance-email` 讀 `settings.insuranceCcEmails`（逗號/分號/空白分隔、驗 email 格式）帶 CC、歷史 `insuranceExports` 補記 cc。前端體驗課程「⚙ 課程設定 → 保險名冊寄送設定」加「副本收件人（CC）」欄（全館共用、settings 整包存免改後端白名單）。
+- ✅ **補課額度改「不變量重算」——取消請假不再永久吃掉額度**（`3.29.0-makeup-entitlement-invariant`，commit `df7c8f7`；E2E **10/10**；使用者拍板規則 2026-07-17）：
+  - **不變量**：任一時刻 `補課總額(available+used) = min(cap, 目前有效請假數)`；cap＝`enrollment.maxLeavesAllowed ?? rules.maxLeaves`；`allowMakeup=false`→0；**used 絕不撤銷**。
+  - **新 `reconcileMakeupEntitlement(db, memberId, courseId, rules?, enrollment?)`**（冪等、課程層級計數）：不足→先**復活** cancelled 券（重設效期＝endDate+makeupDeadlineDays）再新建（`source:'reconcile'`）；過多→只作廢多餘 available（`over_limit`）。
+  - **requestLeave**：移除事件式發券→重算（超限請假仍放行、額度不超 cap）；**cancelLeave**：移除「無條件作廢券」→保留 `MAKEUP_TAKEN` 擋＋未上補課報名連動取消（used 券還原 available）→重算收斂。`originalEnrollmentId` 保留稽核、重算不依賴。
+  - **核心修復**：取消請假→再請假，額度自動補回 min(cap,有效請假數)（原事件式發券被 cancelLeave 廢券後永久卡低）。
+  - **回填**：全庫 3 組有請假 (member,course)，僅**朱智萩**（技巧班，請假4/cap2/**used1**）調整 available 0→1 → 總額 2=min(2,4) ✓（規格原假設 used=0 期望 available=2，實際她已用掉一張、以不變量為準）；吳旻珊/王秀慧本就正確。
+  - **E2E 10/10**：請假1/2/3(超限)、取消收斂、**再請假額度還回**、補課 used、銷假連動（used 還原）、allowMakeup=false。前端免改（補課顯示讀 available 自動跟）。
 - ✅ **補課規則收緊＋放寬（一問一答引出兩改）**（`3.28.0-makeup-backend-guards` commit 後端 `a9e8f51`；前端 `832a0de`）：
   - 📋 **規則確認**：不可補「自己報名的那個梯次」（整期報名每堂本有名額）；可補**同班別其他梯次**或**同補課類型班別**＋同館；期限＝課程結束日+N 天。
   - ✅ **後端權威雙擋**（原只前端排除）：`enrollMakeup` 加 ①補回原課程 → `SAME_COURSE` ②目標場次已有有效報名 → `ALREADY_IN_SESSION`（堵直打 API 同場次雙重佔位灌水）。E2E 3/3（擋原課/擋已在場次/同班別他梯正常）。

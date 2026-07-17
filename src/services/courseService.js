@@ -594,15 +594,14 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
   }
 
   // 請假次數上限：整期＝班別/梯次規則；插班＝管理員個別填寫的 maxLeavesAllowed（覆蓋預設）
+  // 政策（2026-07-17）：超過上限「仍允許請假」，但超限的請假不產生補課資格（補課次數上限不變）
   const maxLeaves = enrollment.maxLeavesAllowed ?? rules.maxLeaves;
   const usedLeaves = await db.collection(ENROLLMENT_COLLECTION)
     .where('memberId', '==', memberId)
     .where('courseId', '==', enrollment.courseId)
     .where('status', '==', 'leave')
     .get().then(s => s.size);
-  if (usedLeaves >= maxLeaves) {
-    throw { code: 'MAX_LEAVES_EXCEEDED', message: `已達請假上限（${maxLeaves} 次）` };
-  }
+  const overLimit = usedLeaves >= maxLeaves;
 
   const now = new Date();
 
@@ -619,8 +618,9 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
   }
 
   // 自動產生補課資格（期限＝課程「結束日」+ makeupDeadlineDays 天；無結束日 fallback 請假堂日期起算）
+  // 超過請假上限的請假不產生補課資格（政策 2026-07-17）
   let makeup = null;
-  if (rules.allowMakeup !== false) {
+  if (rules.allowMakeup !== false && !overLimit) {
     const makeupId = uuidv4();
     const makeupDays = rules.makeupDeadlineDays;
     makeup = {
@@ -645,7 +645,83 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
   // 自動遞補候補者（遞補失敗不中斷請假）
   try { await promoteWaitlist(enrollment.sessionId); } catch (err) { console.error('promoteWaitlist 失敗', err.message); }
 
-  return { makeup, message: makeup ? '請假成功，補課資格已產生' : '請假成功' };
+  return {
+    makeup, overLimit,
+    message: overLimit ? '請假成功（已超過補課上限，此次請假不產生補課資格）'
+      : (makeup ? '請假成功，補課資格已產生' : '請假成功'),
+  };
+};
+
+// ── 取消請假（銷假）────────────────────────────────────────────────
+// 條件：該堂課尚未開始、該場次仍有名額（可能已被候補遞補佔滿）。
+// 連動：補課資格作廢；若補課資格已用（已報補課且補課那堂未上）→ 補課報名一併取消並釋放名額；
+//       補課那堂已上過 → 擋（MAKEUP_TAKEN，不可反悔）。
+const cancelLeave = async ({ enrollmentId, memberId }) => {
+  const db = getDb();
+  const enrollDoc = await db.collection(ENROLLMENT_COLLECTION).doc(enrollmentId).get();
+  if (!enrollDoc.exists) throw { code: 'ENROLLMENT_NOT_FOUND' };
+  const enrollment = enrollDoc.data();
+  if (enrollment.memberId !== memberId) throw { code: 'FORBIDDEN' };
+  if (enrollment.status !== 'leave') throw { code: 'INVALID_STATUS', message: '此報名並非請假狀態' };
+
+  // 課已開始/結束不可銷假（以上課時間為準；無時間則整日視為當日 23:59 前可銷）
+  if (enrollment.date) {
+    const classTime = dayjs(`${enrollment.date}T${enrollment.startTime || '23:59'}:00+08:00`);
+    if (classTime.isValid() && dayjs().isAfter(classTime)) {
+      throw { code: 'CLASS_PASSED', message: '該堂課已開始或結束，無法取消請假' };
+    }
+  }
+
+  // 名額檢查：請假時已自動遞補候補，名額可能被佔滿
+  const sessionDoc = await db.collection(SESSION_COLLECTION).doc(enrollment.sessionId).get();
+  if (!sessionDoc.exists) throw { code: 'SESSION_NOT_FOUND' };
+  const session = sessionDoc.data();
+  if ((session.enrolledCount || 0) >= (session.maxStudents || 0)) {
+    throw { code: 'SESSION_FULL', message: '該堂名額已滿（可能已由候補遞補），無法取消請假' };
+  }
+
+  const now = new Date();
+
+  // 補課資格連動（先驗證再動手：補課已上過 → 整個銷假擋下）
+  const mkSnap = await db.collection(MAKEUP_COLLECTION)
+    .where('originalEnrollmentId', '==', enrollmentId).get();
+  const makeupEnrollDocs = [];
+  for (const mk of mkSnap.docs) {
+    if (mk.data().status !== 'used') continue;
+    const meSnap = await db.collection(ENROLLMENT_COLLECTION).where('makeupId', '==', mk.id).get();
+    for (const me of meSnap.docs) {
+      const m = me.data();
+      if (m.status !== 'confirmed') continue;
+      const mTime = dayjs(`${m.date}T${m.startTime || '00:00'}:00+08:00`);
+      if (m.date && mTime.isValid() && dayjs().isAfter(mTime)) {
+        throw { code: 'MAKEUP_TAKEN', message: '此請假的補課已上課，無法取消請假' };
+      }
+      makeupEnrollDocs.push(me);
+    }
+  }
+  let makeupEnrollmentCancelled = 0, makeupRightCancelled = 0;
+  for (const me of makeupEnrollDocs) {
+    const m = me.data();
+    await me.ref.update({ status: 'cancelled', cancelReason: 'leave_cancelled', cancelledAt: now, updatedAt: now });
+    const msd = await db.collection(SESSION_COLLECTION).doc(m.sessionId).get();
+    if (msd.exists) await msd.ref.update({ enrolledCount: Math.max(0, (msd.data().enrolledCount || 0) - 1), updatedAt: now });
+    makeupEnrollmentCancelled++;
+  }
+  for (const mk of mkSnap.docs) {
+    if (mk.data().status === 'cancelled') continue;
+    await mk.ref.update({ status: 'cancelled', cancelReason: 'leave_cancelled', updatedAt: now });
+    makeupRightCancelled++;
+  }
+
+  // 還原報名 + 場次人數（保留 leaveReason/leaveAt 供稽核，另記 leaveCancelledAt）
+  await enrollDoc.ref.update({ status: 'confirmed', leaveCancelledAt: now, updatedAt: now });
+  await sessionDoc.ref.update({ enrolledCount: (session.enrolledCount || 0) + 1, updatedAt: now });
+
+  return {
+    makeupEnrollmentCancelled, makeupRightCancelled,
+    message: makeupEnrollmentCancelled ? '已取消請假；已報名的補課一併取消'
+      : (makeupRightCancelled ? '已取消請假；補課資格已作廢' : '已取消請假'),
+  };
 };
 
 // ── 自動遞補候補 ──────────────────────────────────────────────────
@@ -1360,6 +1436,7 @@ module.exports = {
   createSession,
   enrollCourse,
   requestLeave,
+  cancelLeave,
   promoteWaitlist,
   trialPaymentDeadline,
   sweepExpiredTrialPayments,

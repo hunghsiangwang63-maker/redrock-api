@@ -293,6 +293,28 @@ router.post('/enrollments/:enrollmentId/leave',
   }
 );
 
+// POST /courses/enrollments/:enrollmentId/cancel-leave - 取消請假（銷假）
+// 條件：課未開始+場次仍有名額；連動作廢補課資格、取消已報名未上的補課（已上過擋 MAKEUP_TAKEN）
+router.post('/enrollments/:enrollmentId/cancel-leave',
+  authenticateAny,
+  auditLog('course.cancel_leave'),
+  async (req, res) => {
+    try {
+      let memberId = req.body.memberId || req.member?.id;
+      const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 'allow' });
+      if (deny) return res.status(deny.status).json(deny.body);
+      const result = await courseService.cancelLeave({
+        enrollmentId: req.params.enrollmentId,
+        memberId,
+      });
+      res.json(result);
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // ══════════════════════════════════════════════════════
 // 補課
 // ══════════════════════════════════════════════════════

@@ -47,9 +47,10 @@
 ### 步驟 B：Render 冷備（✅ 已建置完成 2026-07-17）
 - **服務**：`redrock-api-backup.onrender.com`（GitHub push 自動同步、與正式站同版本）
 - **已驗證**：/health 同版本 ✓、Firestore 憑證生效（登入端點 401）✓、**JWT_SECRET 與 Railway 同值**（Railway 發的 token 在 Render 直接通過認證）✓
-- **切換時**：Porkbun 把 `api` CNAME 改指 `redrock-api-backup.onrender.com` → 幾分鐘內全站恢復（前端不用重發）
+- **切換時（純一筆 CNAME）**：Porkbun 把 `api` CNAME 改指 `redrock-api-backup.onrender.com` → Render 自動驗證＋簽 TLS（約 1 分鐘）→ 全站恢復（前端不用重發）
+  - ✅ `api.redrocktaiwan.com` **已預先登記**為 Render custom domain（2026-07-17；平時顯示 Waiting for DNS 屬正常——DNS 正指著 Railway）
   - 切換後第一個請求可能等 ~50 秒（免費層休眠喚醒），之後正常
-  - Render 服務需已加 `api.redrocktaiwan.com` 為 custom domain 才能吃該網域流量（未加則切換時到 Render 後台補加，TLS 憑證約 1 分鐘簽發）
+  - 復原（Railway 修好後）：CNAME 改回 Railway 目標值即可
 - ⚠️ **維運紀律**：每次 Railway 環境變數有新增/修改，**必須手動同步到 Render**（否則故障轉移時功能缺失）
 - 📌 **踩雷備忘（2026-07-17 建置時）**：`FIREBASE_PRIVATE_KEY` 貼上格式壞掉（Invalid PEM）會讓**新部署開機即 crash → 部署失敗 → Render 留舊版繼續跑**，症狀是「版本停在舊版＋查 DB 回 Unable to detect a Project Id」。修法＝從 service account JSON 把 private_key 以**多行原格式**重貼（程式相容 \n 與真換行）。存檔即自動重部署。
 

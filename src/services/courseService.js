@@ -147,7 +147,7 @@ const createSession = async ({ courseId, gymId, staffId, data }) => {
     courseId,
     gymId: gymId || course.gymId || null, // super_admin 的 staff.gymId 為 null → fallback 課程館別（否則場次被館別過濾隱形，同 1.83.0 generate-sessions 修法）
     courseName: course.name,
-    tags: course.tags,
+    tags: course.tags || [], // 課程無 tags 欄位時 undefined 會讓 Firestore set 直接 throw
     date: data.date,
     startTime: data.startTime,
     endTime: data.endTime,
@@ -162,6 +162,37 @@ const createSession = async ({ courseId, gymId, staffId, data }) => {
   };
 
   await db.collection(SESSION_COLLECTION).doc(id).set(session);
+
+  // 帶入學員（新增場次時可個別勾選）：為選定會員建立此場次報名
+  // 費用 0＋已確認（學員整期費用已繳，加開場次不另計費）；gymAccess 沿用課程無限練習期
+  const ids = Array.isArray(data.enrollMemberIds) ? [...new Set(data.enrollMemberIds.filter(Boolean))] : [];
+  if (ids.length) {
+    const gymAccessStart = course.unlimitedPracticeStart || course.startDate || data.date;
+    const gymAccessEnd = course.unlimitedPracticeEnd ||
+      (course.endDate ? dayjs(course.endDate).add(course.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : data.date);
+    const memberDocs = await db.getAll(...ids.map(mid => db.collection('members').doc(mid)));
+    const batch = db.batch(); let enrolled = 0;
+    for (const mDoc of memberDocs) {
+      if (!mDoc.exists) continue;
+      const eid = uuidv4();
+      batch.set(db.collection(ENROLLMENT_COLLECTION).doc(eid), {
+        id: eid, memberId: mDoc.id, memberName: mDoc.data().name || '', sessionId: id,
+        courseId, courseName: course.name, gymId: session.gymId,
+        date: data.date, startTime: data.startTime, endTime: data.endTime,
+        status: 'confirmed', waitlistPosition: null, paymentId: null, paymentMethod: 'added-session',
+        originalPrice: 0, enrollmentFee: 0, installment: false, firstPayment: 0, secondPayment: 0,
+        paymentStatus: 'confirmed', paymentConfirmed: true, paymentDeadline: null,
+        gymAccessStart, gymAccessEnd, enrolledBy: staffId || null, enrolledAt: now,
+        notes: '加開場次帶入', createdAt: now, updatedAt: now,
+      });
+      enrolled++;
+    }
+    if (enrolled) {
+      batch.update(db.collection(SESSION_COLLECTION).doc(id), { enrolledCount: enrolled, updatedAt: now });
+      await batch.commit();
+      session.enrolledCount = enrolled;
+    }
+  }
   return session;
 };
 

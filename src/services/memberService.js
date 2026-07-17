@@ -234,6 +234,9 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
       }
       await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now });
       claimed.push(c.name);
+      // 定期票 × 課程免費期間重疊補償（政策 2026-07-17；冪等、不阻斷）
+      try { await require('./passOverlapService').applyCourseOverlapPassExtension({ memberId, courseId: claim.courseId }); }
+      catch (e) { console.error('課程重疊補償失敗（認領已完成）:', e.message); }
       try {
         const { notifyRoleInGym } = require('./notificationService');
         const payload = {

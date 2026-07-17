@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.19.0-course-claim-autopass-falltest',
+    version: '3.20.0-pass-course-overlap-extension',
   });
 });
 

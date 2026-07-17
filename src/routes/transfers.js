@@ -174,6 +174,14 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
       } else if (t.orderType === 'course' && t.refId) {
         // 課程營收已於報名時(courses.js enroll, deferPayment=false)記入(認列＝最後一堂課)，此處僅標記付款確認
         await db.collection('courseEnrollments').doc(t.refId).update({ paymentStatus: 'confirmed', ...clearReject, updatedAt: now });
+        // 定期票 × 課程免費期間重疊補償（政策 2026-07-17；收款確認後才套、冪等、不阻斷）
+        try {
+          const enDoc = await db.collection('courseEnrollments').doc(t.refId).get();
+          if (enDoc.exists) {
+            const en = enDoc.data();
+            await require('../services/passOverlapService').applyCourseOverlapPassExtension({ memberId: en.memberId, courseId: en.courseId });
+          }
+        } catch (e) { console.error('課程重疊補償失敗（收款已確認）:', e.message); }
       } else if (t.orderType === 'competition' && t.refId) {
         await db.collection('competitionRegistrations').doc(t.refId).update({
           paymentStatus: 'confirmed', ...clearReject, paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,

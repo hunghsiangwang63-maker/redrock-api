@@ -680,6 +680,7 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
   const enrollment = enrollDoc.data();
   if (enrollment.memberId !== memberId) throw { code: 'FORBIDDEN' };
   if (enrollment.status !== 'confirmed') throw { code: 'INVALID_STATUS', message: '此報名狀態無法請假' };
+  if (enrollment.isMakeup) throw { code: 'MAKEUP_NO_LEAVE', message: '補課場次不可請假；如無法出席請於上課一天前取消補課' };
   if (enrollment.refundPending) throw { code: 'REFUND_PENDING', message: '此課程退費申請審核中，暫不可請假' };
 
   const courseDoc = await db.collection(COURSE_COLLECTION).doc(enrollment.courseId).get();
@@ -813,6 +814,34 @@ const cancelLeave = async ({ enrollmentId, memberId }) => {
       ? `已取消請假；已報名的補課一併取消（目前可補課 ${rec.available} 次）`
       : `已取消請假（目前可補課 ${rec.available} 次）`,
   };
+};
+
+// ── 取消補課（會員；上課一天前）────────────────────────────────────
+// 補課場次不可退費/暫停/請假，只能取消補課：報名取消＋釋放名額＋補課券還原 available（額度不變）。
+const cancelMakeup = async ({ enrollmentId, memberId }) => {
+  const db = getDb();
+  const enrollDoc = await db.collection(ENROLLMENT_COLLECTION).doc(enrollmentId).get();
+  if (!enrollDoc.exists) throw { code: 'ENROLLMENT_NOT_FOUND' };
+  const enrollment = enrollDoc.data();
+  if (enrollment.memberId !== memberId) throw { code: 'FORBIDDEN' };
+  if (enrollment.isMakeup !== true) throw { code: 'NOT_MAKEUP', message: '此報名不是補課場次' };
+  if (enrollment.status !== 'confirmed') throw { code: 'INVALID_STATUS', message: '此補課報名狀態無法取消' };
+  // 一天前：上課日前一天（含）可取消 → 今天需早於上課日
+  if (!enrollment.date || taiwanToday() >= enrollment.date) {
+    throw { code: 'CANCEL_DEADLINE', message: '需於上課一天前取消補課' };
+  }
+  const now = new Date();
+  await enrollDoc.ref.update({ status: 'cancelled', cancelReason: 'makeup_cancelled', cancelledAt: now, updatedAt: now });
+  const sd = await db.collection(SESSION_COLLECTION).doc(enrollment.sessionId).get();
+  if (sd.exists) await sd.ref.update({ enrolledCount: Math.max(0, (sd.data().enrolledCount || 0) - 1), updatedAt: now });
+  // 補課券還原 available（請假數未變 → 額度不變，不需 reconcile）
+  if (enrollment.makeupId) {
+    const mk = await db.collection(MAKEUP_COLLECTION).doc(enrollment.makeupId).get();
+    if (mk.exists && mk.data().status === 'used') {
+      await mk.ref.update({ status: 'available', usedSessionId: null, usedAt: null, updatedAt: now });
+    }
+  }
+  return { message: '已取消補課，補課資格已退回，可重新選擇場次' };
 };
 
 // ── 自動遞補候補 ──────────────────────────────────────────────────
@@ -1540,6 +1569,7 @@ module.exports = {
   enrollCourse,
   requestLeave,
   cancelLeave,
+  cancelMakeup,
   reconcileMakeupEntitlement,
   promoteWaitlist,
   trialPaymentDeadline,

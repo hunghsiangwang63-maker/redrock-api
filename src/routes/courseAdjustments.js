@@ -52,6 +52,10 @@ router.post('/enrollments/:enrollmentId/refund-request',
         .get();
       if (allSnap.empty) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到有效的報名記錄' });
       const all = allSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // 補課/試上場次＝當天行為，不可申請退費（政策 2026-07-17；如無法出席請取消補課）
+      if (all.every(e => e.isMakeup || e.isTrial)) {
+        return res.status(400).json({ error: 'MAKEUP_NO_ADJUST', message: '補課／試上場次不可申請退費；如無法出席請於上課一天前取消補課' });
+      }
       const rep = all[0];
       if (rep.pauseStatus === 'paused') return res.status(400).json({ error: 'IS_PAUSED', message: '暫停中的課程請先恢復再申請退費' });
 
@@ -155,6 +159,15 @@ router.post('/enrollments/:enrollmentId/pause-request',
       const enrollment = { id: enrollDoc.id, ...enrollDoc.data() };
 
       if (enrollment.status === 'cancelled') return res.status(400).json({ error: 'ALREADY_CANCELLED', message: '此報名已取消' });
+      // 補課/試上場次＝當天行為，不可申請暫停（政策 2026-07-17）
+      {
+        const _adjAll = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+          .where('courseId', '==', enrollment.courseId).where('memberId', '==', enrollment.memberId)
+          .where('status', 'in', ['confirmed', 'leave', 'waitlist']).get();
+        if (_adjAll.docs.length && _adjAll.docs.every(d => d.data().isMakeup || d.data().isTrial)) {
+          return res.status(400).json({ error: 'MAKEUP_NO_ADJUST', message: '補課／試上場次不可申請暫停；如無法出席請於上課一天前取消補課' });
+        }
+      }
       if (enrollment.pauseStatus === 'paused') return res.status(400).json({ error: 'ALREADY_PAUSED', message: '此課程報名已在暫停中' });
       if (enrollment.refundPending) return res.status(400).json({ error: 'REFUND_PENDING', message: '此課程退費申請審核中，暫不可申請暫停' });
 

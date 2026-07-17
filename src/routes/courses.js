@@ -315,6 +315,24 @@ router.post('/enrollments/:enrollmentId/cancel-leave',
   }
 );
 
+// POST /courses/enrollments/:enrollmentId/cancel-makeup - 取消補課（會員；上課一天前）
+router.post('/enrollments/:enrollmentId/cancel-makeup',
+  authenticateAny,
+  auditLog('course.cancel_makeup'),
+  async (req, res) => {
+    try {
+      let memberId = req.body.memberId || req.member?.id;
+      const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 'allow' });
+      if (deny) return res.status(deny.status).json(deny.body);
+      const result = await courseService.cancelMakeup({ enrollmentId: req.params.enrollmentId, memberId });
+      res.json(result);
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // ══════════════════════════════════════════════════════
 // 補課
 // ══════════════════════════════════════════════════════

@@ -114,11 +114,14 @@ const getCourseAccess = async (memberId) => {
     .where('memberId', '==', memberId)
     .where('status', '==', 'confirmed')
     .get();
-  const enrollments = enrollSnap.docs
+  const allEnrollments = enrollSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
     .filter(e => e.pauseStatus !== 'paused')   // 暫停中不計入課程學員資格
     .filter(e => e.refundPending !== true);    // 退費審核中：即時取消課程學員入場資格（退回時恢復）
-  if (enrollments.length === 0) return [];
+  // 補課/試上＝「當天行為」：不繼承該課程的免費入場期間，只在上課當天給入場資格（政策 2026-07-17）
+  const enrollments = allEnrollments.filter(e => !e.isMakeup && !e.isTrial);
+  const dayOnly = allEnrollments.filter(e => (e.isMakeup || e.isTrial) && e.date === today);
+  if (enrollments.length === 0 && dayOnly.length === 0) return [];
 
   const courseIds = [...new Set(enrollments.map(e => e.courseId).filter(Boolean))];
   const results = [];
@@ -164,6 +167,15 @@ const getCourseAccess = async (memberId) => {
         gymAccessStart: practiceStart, gymAccessEnd: practiceEnd,
       });
     }
+  }
+
+  // 補課/試上：上課當天限定的入場資格（不含課程免費期間）
+  for (const e of dayOnly) {
+    if (results.some(r => r.courseId === e.courseId)) continue; // 同課已有正式資格則不重複
+    results.push({
+      id: e.id, courseId: e.courseId, courseName: e.courseName || '',
+      gymAccessStart: today, gymAccessEnd: today, dayOnly: true,
+    });
   }
   return results;
 };

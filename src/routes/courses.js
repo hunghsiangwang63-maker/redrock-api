@@ -714,6 +714,15 @@ router.put('/:courseId',
       }
 
       await db.collection('courses').doc(req.params.courseId).update(updates);
+      // maxStudents 變更 → 同步旗下未取消場次（場次名額是建立時快照；不同步會讓 報名/候補遞補/銷假 的
+      // 名額判定停留在舊值——實例：課程 6→7 後場次仍 6，銷假被誤擋 SESSION_FULL）
+      if (updates.maxStudents !== undefined) {
+        const ssnap = await db.collection('courseSessions').where('courseId', '==', req.params.courseId).get();
+        const batch = db.batch();
+        let synced = 0;
+        ssnap.forEach(d => { if (d.data().status !== 'cancelled') { batch.update(d.ref, { maxStudents: Number(updates.maxStudents), updatedAt: new Date() }); synced++; } });
+        if (synced) await batch.commit();
+      }
       res.json({ message: '課程已更新', updates });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

@@ -697,7 +697,7 @@ router.put('/:courseId',
       const allowedFields = [
         'name', 'cohortName', 'categoryId', 'description', 'imageUrl', 'price', 'maxStudents', 'maxWaitlist', 'reservedSlots', 'reservedSlotsNote', 'instructor',
         'startDate', 'endDate', 'startTime', 'endTime', 'weekdays',
-        'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays',
+        'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays', 'handlingFeeRate', 'preStartFeeRate',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',
         'unlimitedPracticeStart', 'unlimitedPracticeEnd',
         'allowTrial', 'trialPrice', 'isActive', // isActive：停用/啟用（會員課程總覽隱藏，不通知、不動報名）

@@ -35,7 +35,8 @@ const RULE_DEFAULTS = {
   allowTrial: false,           // 開放試上
   trialPrice: 0,               // 試上費
   perSessionDeduction: 850,    // 退費：開課後每堂扣除
-  handlingFeeRate: 0.2,        // 退費：手續費率（預設 20%，班別/梯次可調）
+  handlingFeeRate: 0.2,        // 退費：開課後手續費率（預設 20%，班別/梯次可調）
+  preStartFeeRate: 0.05,       // 退費：開課前手續費率（預設 5%，班別/梯次可調）
 };
 const resolveRules = (course, category) => {
   const pick = (k) => {
@@ -102,6 +103,7 @@ const createCourse = async ({ gymId, staffId, data }) => {
     // 退費設定（null＝繼承班別）
     perSessionDeduction: data.perSessionDeduction ?? null,
     handlingFeeRate: data.handlingFeeRate ?? null,
+    preStartFeeRate: data.preStartFeeRate ?? null,
     // 暫停規則
     pauseAllowed: data.pauseAllowed !== false,
     // 請假規則（null＝繼承班別）
@@ -1199,7 +1201,8 @@ const getCourses = async (gymId) => {
       categoryGroup: cat?.group || null,               // adult | youth | special（大類）
       categoryDescription: cat?.description || null,   // 班別共用課程介紹
       categoryImageUrl: cat?.imageUrl || null,         // 班別共用廣告照片
-      refundFeeRate: resolveRules(c, cat).handlingFeeRate ?? 0.2, // 開課後退費手續費率（預設 20%，班別/梯次可調；開課前固定 5%）
+      refundFeeRate: resolveRules(c, cat).handlingFeeRate ?? 0.2, // 開課後退費手續費率（預設 20%，班別/梯次可調）
+      refundPreStartFeeRate: resolveRules(c, cat).preStartFeeRate ?? 0.05, // 開課前退費手續費率（預設 5%，班別/梯次可調）
       statusLabel: computeStatusLabel(c, enrolledCount),
     };
   });

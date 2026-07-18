@@ -26,7 +26,7 @@ const EDITABLE = [
   'allowTrial', 'trialPrice',
   'leaveDeadlineHours', 'maxLeaves',
   'allowMakeup', 'makeupDeadlineDays',   // 補課期限＝課程「結束日」+ N 天
-  'perSessionDeduction', 'handlingFeeRate',
+  'perSessionDeduction', 'handlingFeeRate', 'preStartFeeRate',
   'sortOrder',
 ];
 
@@ -122,6 +122,7 @@ router.post('/',
         makeupDeadlineDays: req.body.makeupDeadlineDays ?? null,
         perSessionDeduction: req.body.perSessionDeduction ?? null,
         handlingFeeRate: req.body.handlingFeeRate ?? null,
+        preStartFeeRate: req.body.preStartFeeRate ?? null,
         sortOrder: req.body.sortOrder ?? null,
         isActive: true,
         createdBy: req.staff.id,

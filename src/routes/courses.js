@@ -293,6 +293,27 @@ router.post('/enrollments/:enrollmentId/leave',
   }
 );
 
+// GET /courses/enrollments/:enrollmentId/cancel-leave-precheck - 銷假預檢（唯讀）
+// 供會員按取消請假前先看：原堂剩餘名額／取消後補課額度，不動任何資料
+router.get('/enrollments/:enrollmentId/cancel-leave-precheck',
+  authenticateAny,
+  async (req, res) => {
+    try {
+      let memberId = req.query.memberId || req.member?.id;
+      const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 'allow' });
+      if (deny) return res.status(deny.status).json(deny.body);
+      const result = await courseService.precheckCancelLeave({
+        enrollmentId: req.params.enrollmentId,
+        memberId,
+      });
+      res.json(result);
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // POST /courses/enrollments/:enrollmentId/cancel-leave - 取消請假（銷假）
 // 條件：課未開始+場次仍有名額；連動作廢補課資格、取消已報名未上的補課（已上過擋 MAKEUP_TAKEN）
 router.post('/enrollments/:enrollmentId/cancel-leave',

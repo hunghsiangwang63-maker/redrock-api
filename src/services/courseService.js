@@ -806,6 +806,58 @@ const cancelLeave = async ({ enrollmentId, memberId }) => {
   };
 };
 
+// ── 取消請假預檢（唯讀，供銷假確認 modal 先顯示名額/額度；與 cancelLeave 三關檢查同步維護）──
+const precheckCancelLeave = async ({ enrollmentId, memberId }) => {
+  const db = getDb();
+  const enrollDoc = await db.collection(ENROLLMENT_COLLECTION).doc(enrollmentId).get();
+  if (!enrollDoc.exists) throw { code: 'ENROLLMENT_NOT_FOUND' };
+  const enrollment = enrollDoc.data();
+  if (enrollment.memberId !== memberId) throw { code: 'FORBIDDEN' };
+
+  const result = { ok: true, blockCode: null, blockMessage: null, session: null, quota: null };
+  const block = (code, message) => { if (result.ok) { result.ok = false; result.blockCode = code; result.blockMessage = message; } };
+
+  if (enrollment.status !== 'leave') block('INVALID_STATUS', '此報名並非請假狀態');
+
+  // 關1：課已開始/結束
+  if (enrollment.date) {
+    const classTime = dayjs(`${enrollment.date}T${enrollment.startTime || '23:59'}:00+08:00`);
+    if (classTime.isValid() && dayjs().isAfter(classTime)) block('CLASS_PASSED', '該堂課已開始或結束，無法取消請假');
+  }
+
+  // 關2：原堂名額
+  const sessionDoc = await db.collection(SESSION_COLLECTION).doc(enrollment.sessionId).get();
+  if (sessionDoc.exists) {
+    const session = sessionDoc.data();
+    const enrolled = session.enrolledCount || 0;
+    const max = session.maxStudents || 0;
+    result.session = { date: session.date, startTime: session.startTime || null, enrolledCount: enrolled, maxStudents: max, remaining: Math.max(0, max - enrolled) };
+    if (enrolled >= max) block('SESSION_FULL', '該堂名額已滿（可能已由候補遞補），無法取消請假');
+  } else {
+    block('SESSION_NOT_FOUND', '找不到該場次');
+  }
+
+  // 關3：補課額度（同 cancelLeave 方案 B 預檢）
+  const courseDocQ = await db.collection(COURSE_COLLECTION).doc(enrollment.courseId).get();
+  const courseQ = courseDocQ.exists ? courseDocQ.data() : {};
+  const rulesQ = resolveRules(courseQ, await getCategoryOf(db, courseQ.categoryId));
+  const enSnapQ = await db.collection(ENROLLMENT_COLLECTION)
+    .where('memberId', '==', memberId).where('courseId', '==', enrollment.courseId).get();
+  const enDocsQ = enSnapQ.docs.map(d => d.data());
+  const activeLeavesQ = enDocsQ.filter(e => e.status === 'leave').length;
+  const capQ = enDocsQ.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rulesQ.maxLeaves;
+  const newEntitlement = rulesQ.allowMakeup === false ? 0 : Math.min(capQ, Math.max(0, activeLeavesQ - 1));
+  const mkSnapQ = await db.collection(MAKEUP_COLLECTION)
+    .where('memberId', '==', memberId).where('courseId', '==', enrollment.courseId).get();
+  const usedQ = mkSnapQ.docs.filter(d => d.data().status === 'used').length;
+  result.quota = { usedMakeups: usedQ, newEntitlement };
+  if (usedQ > newEntitlement) {
+    block('MAKEUP_OVER_QUOTA', `已預約 ${usedQ} 堂補課、取消此請假後補課額度只剩 ${newEntitlement} 堂，請先取消一堂補課再取消請假`);
+  }
+
+  return result;
+};
+
 // ── 取消補課（會員；上課一天前）────────────────────────────────────
 // 補課場次不可退費/暫停/請假，只能取消補課：報名取消＋釋放名額＋補課券還原 available（額度不變）。
 const cancelMakeup = async ({ enrollmentId, memberId }) => {
@@ -1561,6 +1613,7 @@ module.exports = {
   enrollCourse,
   requestLeave,
   cancelLeave,
+  precheckCancelLeave,
   cancelMakeup,
   reconcileMakeupEntitlement,
   promoteWaitlist,

@@ -17,7 +17,7 @@ const COURSE_TYPES = [
 ];
 
 // ── POST /experience-bookings - 送出預約 ──────────────────────────
-function parseBookingTime(bookingTime) {
+function parseBookingTime(bookingTime, defaultMinutes = 120) {
   const matches = String(bookingTime || '').match(/(\d{1,2}):(\d{2})/g) || [];
   const norm = (t) => { const [h, m] = t.split(':'); return `${String(parseInt(h, 10)).padStart(2, '0')}:${m}`; };
   if (matches.length >= 2) {
@@ -26,9 +26,20 @@ function parseBookingTime(bookingTime) {
   }
   if (matches.length === 1) {
     const start = norm(matches[0]);
-    return { startTime: start, endTime: dayjs(`2000-01-01T${start}`).add(2, 'hour').format('HH:mm') };
+    return { startTime: start, endTime: dayjs(`2000-01-01T${start}`).add(defaultMinutes, 'minute').format('HH:mm') };
   }
   return { startTime: null, endTime: null };
+}
+
+// 課程類型時長（分鐘）：讀價格表設定 courseTypes[].durationMinutes；未設回 120（沿用舊行為）
+async function courseTypeDuration(db, courseType) {
+  try {
+    const doc = await db.collection('systemSettings').doc('experienceCourses').get();
+    const cts = (doc.exists ? doc.data() : defaultSettings()).courseTypes || [];
+    const ct = cts.find(c => c.id === (courseType || 'general'));
+    const n = Number(ct?.durationMinutes);
+    return Number.isFinite(n) && n > 0 ? n : 120;
+  } catch (e) { return 120; }
 }
 
 async function courseTypeLabel(db, courseType) {
@@ -44,7 +55,7 @@ async function addExperienceToCourseAndSchedule(db, booking, staff, coachId, coa
   const gymId = booking.gymId;
   const label = await courseTypeLabel(db, booking.courseType);
   const numPeople = booking.numParticipants || (booking.participants || []).length || 1;
-  const { startTime, endTime } = parseBookingTime(booking.bookingTime);
+  const { startTime, endTime } = parseBookingTime(booking.bookingTime, await courseTypeDuration(db, booking.courseType));
   const name = `體驗課程・${label}・${booking.contactName || ''}`.trim();
 
   // 1) 建立課程（工作坊）
@@ -105,7 +116,7 @@ async function addExperienceToCourseAndSchedule(db, booking, staff, coachId, coa
 async function reassignExperienceCoach(db, booking, staff, coachId, coachName) {
   const label = await courseTypeLabel(db, booking.courseType);
   const numPeople = booking.numParticipants || (booking.participants || []).length || 1;
-  const { startTime, endTime } = parseBookingTime(booking.bookingTime);
+  const { startTime, endTime } = parseBookingTime(booking.bookingTime, await courseTypeDuration(db, booking.courseType));
 
   // 1) 更新課程教練
   if (booking.courseId) {
@@ -153,7 +164,7 @@ async function reassignExperienceCoach(db, booking, staff, coachId, coachName) {
 async function updateExperienceSchedule(db, booking, staff) {
   const label = await courseTypeLabel(db, booking.courseType);
   const numPeople = booking.numParticipants || (booking.participants || []).length || 1;
-  const { startTime, endTime } = parseBookingTime(booking.bookingTime);
+  const { startTime, endTime } = parseBookingTime(booking.bookingTime, await courseTypeDuration(db, booking.courseType));
 
   // 1) 課程日期/時段（單日課，start=end=bookingDate）
   if (booking.courseId) {
@@ -395,6 +406,7 @@ function defaultSettings() {
     },
     courseTypes: [
       { id:'general',    label:'抱石體驗課程',           active:true, needsInsurance:true,
+        durationMinutes: 60,
         pricingType:'tiered',
         tiers:[{min:1,max:1,price:975},{min:2,max:3,price:875},{min:4,max:5,price:825},{min:6,max:12,price:775}],
         durationNote:'1~2小時' },

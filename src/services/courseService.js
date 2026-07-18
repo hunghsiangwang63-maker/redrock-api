@@ -1199,7 +1199,7 @@ const getCourses = async (gymId) => {
       categoryGroup: cat?.group || null,               // adult | youth | special（大類）
       categoryDescription: cat?.description || null,   // 班別共用課程介紹
       categoryImageUrl: cat?.imageUrl || null,         // 班別共用廣告照片
-      refundFeeRate: Math.min(resolveRules(c, cat).handlingFeeRate ?? 0.2, 0.2), // 退費手續費率（班別/梯次可調、法定上限 20%）
+      refundFeeRate: 0.2, // 退費手續費率固定 20%（2026-07-18 起不再依班別/梯次調整）
       statusLabel: computeStatusLabel(c, enrolledCount),
     };
   });

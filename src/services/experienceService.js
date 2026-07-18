@@ -427,6 +427,7 @@ async function recordExperienceRevenue(db, ref, booking, staff) {
     relatedId: booking.id,
     notes: booking.kind === 'trial' ? `課程試上：${booking.contactName || ''}` : `體驗課程（發票金額）：${booking.contactName || ''}`,
     staffId: staff?.id || null, staffName: staff?.name || '',
+    recognitionDate: booking.bookingDate || null, // 認列在活動日（非確認收款日）——結在上課那天的帳
   });
   await ref.update({ revenueRecorded: true, revenueAmount: amount });
   return amount;
@@ -440,6 +441,7 @@ async function reverseExperienceRevenue(db, ref, booking) {
     paymentMethod: booking.paymentMethod || 'transfer',
     memberId: booking.memberId || null, memberName: booking.contactName || '',
     relatedId: booking.id, notes: `體驗取消沖銷：${booking.contactName || ''}`,
+    recognitionDate: booking.bookingDate || null, // 沖銷同認列在活動日，與原交易同日對沖
   });
   await ref.update({ revenueReversed: true });
   return -booking.revenueAmount;

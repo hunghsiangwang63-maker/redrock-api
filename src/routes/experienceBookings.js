@@ -15,6 +15,8 @@ const { COURSE_TYPES, parseBookingTime, courseTypeLabel, addExperienceToCourseAn
         cleanupExperienceCourseAndSchedule, syncExperienceTickets, voidExperienceTickets, buildInsuranceXlsBuffer,
         defaultSettings } = require('../services/experienceService');
 const { isUnder5 } = require('../utils/age');
+const { checkMemberOwnership } = require('../utils/memberOwnership');
+const { notifyRoleInGym } = require('../services/notificationService');
 
 router.post('/', authenticateAny, async (req, res) => {
   try {
@@ -200,8 +202,10 @@ router.get('/my', authenticateAny, async (req, res) => {
     const memberId = req.member?.id;
     if (!memberId) return res.status(401).json({ error:'UNAUTHORIZED' });
     const snap = await db.collection('experienceBookings').where('memberId','==',memberId).get();
-    const bookings = snap.docs.map(d=>({ id:d.id,...d.data() }))
-      .sort((a,b)=>(b.createdAt?._seconds||0)-(a.createdAt?._seconds||0));
+    const bookings = snap.docs.map(d=>{
+      const { staffNote, staffNoteBy, staffNoteAt, ...rest } = d.data(); // 員工備註不回傳會員端
+      return { id:d.id, ...rest };
+    }).sort((a,b)=>(b.createdAt?._seconds||0)-(a.createdAt?._seconds||0));
     res.json({ bookings });
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
 });
@@ -323,6 +327,159 @@ router.post('/:id/cancel', authenticate, async (req, res) => {
     // 清理自動建立的課程/場次/教練排班（若當初有指定教練排課）
     const cleanup = await cleanupExperienceCourseAndSchedule(db, booking, req.staff);
     res.json({ success:true, voidedTickets: voided, cleanup });
+  } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
+});
+
+// ── 會員端操作共用：擁有權 + 活動一天前鎖定 ─────────────────────
+async function memberBookingGuard(req, res) {
+  const db = getDb();
+  const ref = db.collection('experienceBookings').doc(req.params.id);
+  const snap = await ref.get();
+  if (!snap.exists) { res.status(404).json({ error:'NOT_FOUND', message:'查無此預約' }); return null; }
+  const booking = { id: snap.id, ...snap.data() };
+  // 擁有權：本人／家長代訂（bookedByMemberId）／子女（checkMemberOwnership）
+  const me = req.member?.id;
+  if (booking.memberId !== me && booking.bookedByMemberId !== me) {
+    const deny = await checkMemberOwnership(req.member, booking.memberId, { onMissing: 403 });
+    if (deny) { res.status(deny.status).json(deny.body); return null; }
+  }
+  if (!['pending','confirmed'].includes(booking.status)) {
+    res.status(400).json({ error:'INVALID_STATUS', message:'此預約已取消或已結束' }); return null;
+  }
+  // 活動一天前鎖定：今天需早於活動日
+  if (!booking.bookingDate || taiwanToday() >= booking.bookingDate) {
+    res.status(400).json({ error:'DEADLINE_PASSED', message:'活動一天前已鎖定，如需異動請洽櫃檯' }); return null;
+  }
+  return { ref, booking };
+}
+
+// ── POST /experience-bookings/:id/member-cancel - 會員取消（已繳費須留退款帳號，扣手續費退回） ──
+router.post('/:id/member-cancel', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const g = await memberBookingGuard(req, res);
+    if (!g) return;
+    const { ref, booking } = g;
+    const paid = ['confirmed','paid'].includes(booking.paymentStatus);
+    const upd = { status:'cancelled', cancelReason:'會員自行取消', cancelledAt:new Date(), cancelledBy:'member', updatedAt:new Date() };
+    let refundAmount = 0, fee = 0;
+    if (paid && (booking.totalFee || 0) > 0) {
+      const { refundBankCode, refundAccount, refundAccountName, refundBankName } = req.body;
+      if (!refundBankCode || !refundAccount) {
+        return res.status(400).json({ error:'MISSING_REFUND_ACCOUNT', message:'已繳費之預約取消需填寫退款帳號（銀行代碼＋帳號）' });
+      }
+      const _sd = await db.collection('systemSettings').doc('experienceCourses').get();
+      fee = Number((_sd.exists ? _sd.data() : {}).refundHandlingFee ?? 100);
+      refundAmount = Math.max(0, (booking.totalFee || 0) - fee);
+      Object.assign(upd, {
+        refundRequested: true, refundBankCode, refundAccount,
+        refundAccountName: refundAccountName || '', refundBankName: refundBankName || '',
+        refundHandlingFee: fee, refundAmount, refundStatus: 'pending',
+      });
+    }
+    await ref.update(upd);
+    // 與員工取消同一套清理：作廢未用票券、釋放試上名額、清課程/場次/排班
+    const voided = await voidExperienceTickets(db, booking.id, '會員取消預約');
+    if (booking.kind === 'trial' && booking.trialEnrollmentId) {
+      await courseService.removeTrialEnrollment(booking.trialEnrollmentId).catch(e => console.error('[會員取消試上] 移除名單失敗', e.message || e.code));
+    }
+    await cleanupExperienceCourseAndSchedule(db, booking, null).catch(e => console.error('[會員取消] 清理失敗', e.message));
+    // 作廢 pending 轉帳單（避免殘留待收款）
+    try {
+      const ts = await db.collection('transferRecords').where('refId','==',booking.id).get();
+      const batch = db.batch();
+      ts.docs.filter(d=>d.data().status==='pending')
+        .forEach(d=>batch.update(d.ref,{ status:'void', voidReason:'booking_cancelled', updatedAt:new Date() }));
+      await batch.commit();
+    } catch(e) {}
+    // 已繳費退款 → 通知同館管理員處理
+    if (upd.refundRequested) {
+      try {
+        await notifyRoleInGym({ gymId: booking.gymId, role:'gym_manager', type:'experience_refund',
+          title:'體驗/試上取消退款', body:`${booking.memberName || booking.contactName} 取消 ${booking.bookingDate} 預約，應退 NT$${refundAmount}（已扣手續費 NT$${fee}），退款帳號 ${upd.refundBankCode}-${upd.refundAccount}`,
+          referenceId: booking.id, referenceType:'experienceBooking' });
+      } catch(e) {}
+    }
+    res.json({ success:true, voidedTickets: voided, refundRequested: !!upd.refundRequested, refundAmount, fee,
+      message: upd.refundRequested ? `已取消，退款 NT$${refundAmount}（已扣手續費 NT$${fee}）將由館方匯至您提供的帳號` : '預約已取消' });
+  } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
+});
+
+// ── PUT /experience-bookings/:id/member-edit - 會員修改（體驗改日期/時段；試上換場次同價） ──
+router.put('/:id/member-edit', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const g = await memberBookingGuard(req, res);
+    if (!g) return;
+    const { ref, booking } = g;
+    if (booking.kind === 'trial') {
+      // 試上：換場次（新場次須同試上費；名額/候補由 enrollTrial 權威判定）
+      const newSessionId = req.body.sessionId;
+      if (!newSessionId) return res.status(400).json({ error:'MISSING_SESSION', message:'請選擇新場次' });
+      if (newSessionId === booking.sessionId) return res.status(400).json({ error:'SAME_SESSION', message:'已是此場次' });
+      const sDoc = await db.collection('courseSessions').doc(newSessionId).get();
+      if (!sDoc.exists) return res.status(400).json({ error:'SESSION_NOT_FOUND', message:'找不到新場次' });
+      const sess = sDoc.data();
+      if (!sess.date || taiwanToday() >= sess.date) return res.status(400).json({ error:'INVALID_DATE', message:'新場次需晚於今天' });
+      // 同館 + 同試上費才可直接改期（費用不同請取消後重新報名）
+      if (sess.gymId && booking.gymId && sess.gymId !== booking.gymId) {
+        return res.status(400).json({ error:'GYM_MISMATCH', message:'僅能改期至同館場次' });
+      }
+      const targetCourse = sess.courseId ? (await db.collection('courses').doc(sess.courseId).get()).data() : null;
+      const targetRules = courseService.resolveRules(targetCourse || {}, await courseService.getCategoryOf(db, targetCourse?.categoryId));
+      const targetPrice = targetRules.trialPrice || 0;
+      if ((booking.totalFee || 0) !== targetPrice) {
+        return res.status(400).json({ error:'PRICE_MISMATCH', message:'新場次試上費不同，請取消後重新報名' });
+      }
+      const enDoc = booking.trialEnrollmentId ? await db.collection('courseEnrollments').doc(booking.trialEnrollmentId).get() : null;
+      const curPayStatus = enDoc?.exists ? (enDoc.data().paymentStatus || 'pending') : 'pending';
+      const curDeadline = enDoc?.exists ? (enDoc.data().paymentDeadline || null) : null;
+      const trial = await courseService.enrollTrial({
+        memberId: booking.memberId, memberName: booking.memberName || booking.contactName || '',
+        sessionId: newSessionId, gymId: booking.gymId, trialFee: booking.totalFee || 0,
+        bookingId: booking.id, paymentStatus: curPayStatus, paymentDeadline: curDeadline,
+      });
+      if (booking.trialEnrollmentId) {
+        await courseService.removeTrialEnrollment(booking.trialEnrollmentId).catch(e => console.error('[試上改期] 移除原名單失敗', e.message || e.code));
+      }
+      const isWaitlist = trial.status === 'waitlist';
+      await ref.update({
+        sessionId: newSessionId, courseId: sess.courseId || booking.courseId,
+        bookingDate: sess.date || booking.bookingDate,
+        bookingTime: `${sess.startTime||''}~${sess.endTime||''}`,
+        trialEnrollmentId: trial.enrollmentId, isWaitlist,
+        editedAt: new Date(), editedBy: 'member', updatedAt: new Date(),
+      });
+      return res.json({ success:true, isWaitlist,
+        message: isWaitlist ? '已改期（該場次額滿，已列入候補）' : '已改期至新場次' });
+    }
+    // 一般體驗：改日期/時段（連動課程/場次/教練排班/票券效期）
+    const bookingDate = (req.body.bookingDate || '').trim();
+    const bookingTime = (req.body.bookingTime || '').trim();
+    if (!bookingDate) return res.status(400).json({ error:'MISSING_DATE', message:'請填寫體驗日期' });
+    if (taiwanToday() >= bookingDate) return res.status(400).json({ error:'INVALID_DATE', message:'新日期需晚於今天' });
+    await ref.update({ bookingDate, bookingTime, editedAt:new Date(), editedBy:'member', updatedAt:new Date() });
+    const b = { id: booking.id, ...booking, bookingDate, bookingTime };
+    const r = await updateExperienceSchedule(db, b, null);
+    if ((r.scheduleShiftId || null) !== (booking.scheduleShiftId || null)) {
+      await ref.update({ scheduleShiftId: r.scheduleShiftId || null });
+    }
+    res.json({ success:true, bookingDate, bookingTime, message:'已更新預約日期/時段' });
+  } catch(err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error:'SERVER_ERROR', message:err.message });
+  }
+});
+
+// ── PUT /experience-bookings/:id/staff-note - 員工備註（會員看不到；/my 已剔除） ──
+router.put('/:id/staff-note', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    await db.collection('experienceBookings').doc(req.params.id).update({
+      staffNote: String(req.body.staffNote || ''),
+      staffNoteBy: req.staff.name || req.staff.id, staffNoteAt: new Date(), updatedAt: new Date(),
+    });
+    res.json({ success:true, message:'備註已儲存' });
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
 });
 

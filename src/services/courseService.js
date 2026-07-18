@@ -1247,14 +1247,18 @@ const getCourses = async (gymId) => {
     // reservedSlots：從 BeClass 等外部帶入的「已佔用正取名額」，計入佔用數（剩餘=max−實報名−reserved）
     const enrolledCount = realEnrolled + (c.reservedSlots || 0);
     const cat = catMap[c.categoryId] || null;
+    const _rules = resolveRules(c, cat); // 班別繼承+梯次覆寫解析後的規則（供會員端顯示，勿直接讀 course 欄位）
     return {
       ...c, enrolledCount, realEnrolled,
       categoryName: cat?.name || null,
       categoryGroup: cat?.group || null,               // adult | youth | special（大類）
       categoryDescription: cat?.description || null,   // 班別共用課程介紹
       categoryImageUrl: cat?.imageUrl || null,         // 班別共用廣告照片
-      refundFeeRate: resolveRules(c, cat).handlingFeeRate ?? 0.2, // 開課後退費手續費率（預設 20%，班別/梯次可調）
-      refundPreStartFeeRate: resolveRules(c, cat).preStartFeeRate ?? 0.05, // 開課前退費手續費率（預設 5%，班別/梯次可調）
+      refundFeeRate: _rules.handlingFeeRate ?? 0.2, // 開課後退費手續費率（預設 20%，班別/梯次可調）
+      refundPreStartFeeRate: _rules.preStartFeeRate ?? 0.05, // 開課前退費手續費率（預設 5%，班別/梯次可調）
+      ruleMaxLeaves: _rules.maxLeaves,                       // 整期可請假次數（報名規則方框顯示）
+      ruleLeaveDeadlineHours: _rules.leaveDeadlineHours,     // 請假截止（課前 N 小時）
+      ruleMakeupDeadlineDays: _rules.makeupDeadlineDays,     // 補課期限（結束後 N 天）
       statusLabel: computeStatusLabel(c, enrolledCount),
     };
   });

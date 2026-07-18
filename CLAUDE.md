@@ -238,7 +238,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - 預覽：`GOOGLE_APPLICATION_CREDENTIALS=/path/sa.json node scripts/cleanupOrphans.js`
   - 刪除：`… node scripts/cleanupOrphans.js --commit`
   - 選項：`--no-shifts`（只清孤兒、不動 shiftLog）、`--station-prefix=test-`（自訂測試站前綴）
-  - dev service account json 在本機 `~/Downloads/redrock-dev-a35c1-firebase-adminsdk-*.json`（機密、不在版控）
+  - dev service account json 在本機 `~/Documents/RedRock/憑證/redrock-dev-a35c1-firebase-adminsdk-*.json`（機密、不在版控；2026-07-18 自 Downloads 搬離）
 - **`seedTestMembers.js`** — 建/清「【練習】」測試會員（`--commit` 寫入、`--clean` 只清）；**`loop-test.js`** — 卡片/紅利/入場/課程/分期狀態機回歸（90 斷言）。
 
 ## 目前進度（2026-07-07）— 定期票會員端續約（產生入場 QR 時勾選）
@@ -1138,7 +1138,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 ### 服務與帳務
 | 服務 | 用途 | 備註 |
 |---|---|---|
-| Firebase（`redrock-dev-a35c1`） | Firestore 資料庫／Hosting 前端兩站／Storage 圖檔 | 免費額度內；SA json 本機 `~/Downloads/redrock-dev-a35c1-firebase-adminsdk-*.json` |
+| Firebase（`redrock-dev-a35c1`） | Firestore 資料庫／Hosting 前端兩站／Storage 圖檔 | 免費額度內；SA json 本機 `~/Documents/RedRock/憑證/redrock-dev-a35c1-firebase-adminsdk-*.json` |
 | Railway | 後端 API 主站（24h 常駐） | **主要付費點**；用量警示 Compute hard $150/alert $25；7/14 額度下線事故 |
 | **Render** | 後端冷備（2026-07-17 建置完成） | ✅ Firestore 憑證/JWT_SECRET 同值/custom domain `api.redrocktaiwan.com` 已預登記（Waiting for DNS＝正常待命）；**Railway 環境變數異動須手動同步** |
 | Resend | 所有 Email（Railway 封鎖 SMTP 故走 REST API） | 免費 100 封/天；`RESEND_API_KEY` 在 Railway/Render 環境變數 |

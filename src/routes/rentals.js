@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate, authenticateAny, requireManagerOrStation } = require('../middleware/auth');
+const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { getDb } = require('../config/firebase');
 const dayjs = require('dayjs');
 
@@ -45,17 +46,8 @@ router.post('/apply', authenticateAny, async (req, res) => {
     const settingsDoc = await db.collection('systemSettings').doc('rentalItems').get();
     const settings = settingsDoc.exists ? settingsDoc.data() : defaultSettings();
 
-    // 計算費用
-    let totalRentalFee = 0, totalDeposit = 0;
-    const itemsWithFee = items.map(item => {
-      const cfg = settings[item.type];
-      if (!cfg) throw { code: 'INVALID_ITEM', message: `無效的器材類型: ${item.type}` };
-      const rentalFee = (rentalType === 'weekend' ? cfg.weekendFee : cfg.sevenDayFee) * item.quantity;
-      const deposit = cfg.deposit * item.quantity;
-      totalRentalFee += rentalFee;
-      totalDeposit += deposit;
-      return { type: item.type, name: cfg.name, quantity: item.quantity, rentalFee, deposit, unitFee: rentalType === 'weekend' ? cfg.weekendFee : cfg.sevenDayFee, unitDeposit: cfg.deposit };
-    });
+    // 計算費用（共用 helper，與修改端點同一份）
+    const { itemsWithFee, totalRentalFee, totalDeposit } = computeRentalItems(settings, items, rentalType);
 
     const id = `rental_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
     await db.collection('equipmentRentals').doc(id).set({
@@ -110,8 +102,10 @@ router.get('/my', authenticateAny, async (req, res) => {
     const memberId = req.member?.id;
     if (!memberId) return res.status(401).json({ error: 'UNAUTHORIZED' });
     const snap = await db.collection('equipmentRentals').where('memberId', '==', memberId).get();
-    const rentals = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      .sort((a, b) => b.createdAt?._seconds - a.createdAt?._seconds);
+    const rentals = snap.docs.map(d => {
+      const { staffNote, ...rest } = d.data(); // 員工備註不回傳會員端
+      return { id: d.id, ...rest };
+    }).sort((a, b) => b.createdAt?._seconds - a.createdAt?._seconds);
     res.json({ rentals });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
@@ -176,6 +170,104 @@ router.post('/:id/return', authenticate, async (req, res) => {
       returnedBy: req.staff.id, returnedByName: req.staff.name, returnedAt: new Date(), updatedAt: new Date(),
     });
     res.json({ success: true, message: '歸還已確認' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── 共用：依設定重算品項費用（金額後端權威，供 apply/修改共用） ──
+function computeRentalItems(settings, items, rentalType) {
+  let totalRentalFee = 0, totalDeposit = 0;
+  const itemsWithFee = items.map(item => {
+    const cfg = settings[item.type];
+    if (!cfg) throw { code: 'INVALID_ITEM', message: `無效的器材類型: ${item.type}` };
+    const rentalFee = (rentalType === 'weekend' ? cfg.weekendFee : cfg.sevenDayFee) * item.quantity;
+    const deposit = cfg.deposit * item.quantity;
+    totalRentalFee += rentalFee;
+    totalDeposit += deposit;
+    return { type: item.type, name: cfg.name, quantity: item.quantity, rentalFee, deposit, unitFee: rentalType === 'weekend' ? cfg.weekendFee : cfg.sevenDayFee, unitDeposit: cfg.deposit };
+  });
+  return { itemsWithFee, totalRentalFee, totalDeposit };
+}
+
+// ── POST /rentals/:id/cancel - 取消申請（會員本人限 pending/confirmed；員工亦可） ──
+router.post('/:id/cancel', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('equipmentRentals').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
+    const r = doc.data();
+    const isStaff = !!req.staff;
+    if (!isStaff) {
+      const deny = await checkMemberOwnership(req.member, r.memberId, { onMissing: 403 });
+      if (deny) return res.status(deny.status).json(deny.body);
+    }
+    if (!['pending', 'confirmed'].includes(r.status)) {
+      return res.status(400).json({ error: 'INVALID_STATUS', message: '器材已取件或已結案，無法取消（請洽櫃檯辦理歸還）' });
+    }
+    await doc.ref.update({
+      status: 'cancelled', cancelledAt: new Date(),
+      cancelledBy: isStaff ? (req.staff.name || req.staff.id) : 'member',
+      updatedAt: new Date(),
+    });
+    // 作廢連動的 pending 轉帳單（避免殘留在待收款）
+    try {
+      const ts = await db.collection('transferRecords').where('refId', '==', req.params.id).get();
+      const batch = db.batch();
+      ts.docs.filter(d => d.data().status === 'pending')
+        .forEach(d => batch.update(d.ref, { status: 'void', voidReason: 'rental_cancelled', updatedAt: new Date() }));
+      await batch.commit();
+    } catch (e) {}
+    res.json({ success: true, message: '租借申請已取消' });
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+// ── PUT /rentals/:id - 修改申請（會員限 pending；員工限 pending/confirmed）費用後端重算 ──
+router.put('/:id', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('equipmentRentals').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
+    const r = doc.data();
+    const isStaff = !!req.staff;
+    if (!isStaff) {
+      const deny = await checkMemberOwnership(req.member, r.memberId, { onMissing: 403 });
+      if (deny) return res.status(deny.status).json(deny.body);
+      if (r.status !== 'pending') return res.status(400).json({ error: 'INVALID_STATUS', message: '館方已確認收款，如需修改請洽櫃檯' });
+    } else if (!['pending', 'confirmed'].includes(r.status)) {
+      return res.status(400).json({ error: 'INVALID_STATUS', message: '器材已取件或已結案，無法修改' });
+    }
+    const pickupDate = req.body.pickupDate || r.pickupDate;
+    const returnDate = req.body.returnDate || r.returnDate;
+    const rentalType = req.body.rentalType || r.rentalType;
+    const items = Array.isArray(req.body.items) && req.body.items.length ? req.body.items : r.items.map(i => ({ type: i.type, quantity: i.quantity }));
+    if (!pickupDate || !returnDate) return res.status(400).json({ code: 'MISSING_DATE', message: '請選擇借出/歸還日期' });
+    const settingsDoc = await db.collection('systemSettings').doc('rentalItems').get();
+    const settings = settingsDoc.exists ? settingsDoc.data() : defaultSettings();
+    const { itemsWithFee, totalRentalFee, totalDeposit } = computeRentalItems(settings, items, rentalType);
+    await doc.ref.update({
+      pickupDate, returnDate, rentalType,
+      items: itemsWithFee, totalRentalFee, totalDeposit,
+      editedAt: new Date(), editedBy: isStaff ? (req.staff.name || req.staff.id) : 'member',
+      updatedAt: new Date(),
+    });
+    res.json({ success: true, totalRentalFee, totalDeposit, message: `已更新申請（租金 NT$${totalRentalFee} + 押金 NT$${totalDeposit}）` });
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+// ── PUT /rentals/:id/staff-note - 員工備註（會員看不到；/my 已剔除） ──
+router.put('/:id/staff-note', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    await db.collection('equipmentRentals').doc(req.params.id).update({
+      staffNote: String(req.body.staffNote || ''),
+      staffNoteBy: req.staff.name || req.staff.id, staffNoteAt: new Date(), updatedAt: new Date(),
+    });
+    res.json({ success: true, message: '備註已儲存' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

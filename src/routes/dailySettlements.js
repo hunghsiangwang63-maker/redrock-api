@@ -44,9 +44,8 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       .where('date', '==', today)
       .limit(1).get();
     const existDoc = existSnap.empty ? null : existSnap.docs[0];
-    // 已正式結帳 → 直接回摘要（含 revisions/resettleCount）
-    if (existDoc && existDoc.data().status === 'settled')
-      return res.json({ settlement: { id: existDoc.id, ...existDoc.data() }, alreadySettled: true });
+    // 已正式結帳 → 不再 early return：往下照算「即時收入」，最後連同快照一起回傳
+    // （否則「當日再次結帳」預填的是結帳當下舊快照，之後新入帳的交易永遠帶不進來）
 
     // 取前日餘額
     const prevSnap = await db.collection('dailySettlements')
@@ -191,6 +190,10 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       status: 'draft',
     };
 
+    // 已正式結帳 → 回快照（顯示用）＋ live（即時重算收入，供「當日再次結帳」預填最新金額）
+    if (existDoc && existDoc.data().status === 'settled') {
+      return res.json({ settlement: { id: existDoc.id, ...existDoc.data() }, live: settlement, alreadySettled: true });
+    }
     // 有暫存檔（status:'draft'）→ 一併回傳供前端載回續填（收入等仍用即時重算的 settlement）
     if (existDoc && existDoc.data().status === 'draft') {
       return res.json({ settlement, draft: { id: existDoc.id, ...existDoc.data() }, alreadySettled: false });

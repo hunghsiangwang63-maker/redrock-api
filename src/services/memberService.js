@@ -284,6 +284,64 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
   }
 };
 
+// ── VIP 自動認領（Climbio VIP 名單，無期限）─────────────────────
+// legacyVips：{ name, phone(可空), family(全家), claimed }。
+// 比對：有電話→電話+姓名；無電話→姓名（legacyNameMatch，含子帳號——名單含小孩本名，
+// 認領即通知管理員核對）。命中→ vipMembers + memberType:'vip'（無期限）；
+// family:true → 會員標 vipFamily，名下既有子帳號一併 VIP、之後新建子帳號也自動 VIP。
+const applyVipToMember = async (db, memberId, memberName, note) => {
+  const dup = await db.collection('vipMembers').where('memberId', '==', memberId).limit(1).get();
+  if (dup.empty) {
+    const vid = uuidv4();
+    await db.collection('vipMembers').doc(vid).set({
+      id: vid, memberId, memberName: memberName || '',
+      note: note || 'climbio-migration', createdBy: 'system-claim',
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+  }
+  await db.collection(COLLECTIONS.MEMBERS).doc(memberId).update({ memberType: 'vip', updatedAt: new Date() });
+};
+const claimLegacyVip = async (db, memberId, member) => {
+  try {
+    // 子帳號：先看家長是否「全家 VIP」→ 直接繼承；再走名單姓名比對（名單含小孩本名）
+    if (member.isChildAccount && member.parentMemberId) {
+      const pDoc = await db.collection(COLLECTIONS.MEMBERS).doc(member.parentMemberId).get();
+      if (pDoc.exists && pDoc.data().vipFamily === true) {
+        await applyVipToMember(db, memberId, member.name, 'climbio-vip-family（家長全家 VIP）');
+        console.log(`[VIP認領] 子帳號 ${member.name} 繼承家長全家 VIP`);
+        return { claimed: true, viaFamily: true };
+      }
+    }
+    const snap = await db.collection('legacyVips').get();
+    const hit = snap.docs.find(d => {
+      const x = d.data();
+      if (x.claimed === true) return false;
+      if (!legacyNameMatch(x.name, member.name)) return false;
+      if (x.phone && member.phone && !member.isChildAccount) return x.phone === member.phone; // 有電話→須同號（子帳號共用家長電話、放寬）
+      return true; // 無電話→姓名比對
+    });
+    if (!hit) return null;
+    const claim = hit.data();
+    await applyVipToMember(db, memberId, member.name, `climbio-vip${claim.family ? '（全家）' : ''}`);
+    if (claim.family) {
+      await db.collection(COLLECTIONS.MEMBERS).doc(memberId).update({ vipFamily: true, updatedAt: new Date() });
+      const kids = await db.collection(COLLECTIONS.MEMBERS).where('parentMemberId', '==', memberId).get();
+      for (const k of kids.docs) await applyVipToMember(db, k.id, k.data().name, 'climbio-vip-family');
+    }
+    await hit.ref.update({ claimed: true, claimedBy: memberId, claimedByName: member.name, claimedAt: new Date() });
+    try {
+      const { notifyRoleInGym } = require('./notificationService');
+      for (const g of ['gym-hsinchu', 'gym-shilin']) {
+        await notifyRoleInGym({ gymId: g, role: 'gym_manager', type: 'legacy_vip_claimed',
+          title: 'VIP 自動認領', body: `${member.name}（${member.phone || '子帳號'}）註冊並認領 Climbio VIP「${claim.name}」${claim.family ? '（全家）' : ''}，請核對身分`,
+          referenceId: memberId, referenceType: 'member' });
+      }
+    } catch (e) {}
+    console.log(`[VIP認領] ${member.name} 認領 VIP「${claim.name}」${claim.family ? '（全家）' : ''}`);
+    return { claimed: true };
+  } catch (e) { console.error('claimLegacyVip 失敗（不阻斷建立會員）:', e.message); return null; }
+};
+
 // ── BeClass 比賽報名自動認領 ─────────────────────────────────────
 // 匯入的比賽報名（memberId:null＋claimPhone/claimName）：會員註冊時電話+姓名比對命中
 // → 報名掛上帳號（App 顯示我的比賽、可用報到 QR）＋通知管理員。
@@ -468,6 +526,8 @@ const createMember = async (memberData, staffId, options = {}) => {
   await claimLegacyCompetitionReg(db, memberId, member);
   // 課程名單預留自動認領（店員先建名單但當時查無會員 → 註冊時姓名比對自動加入該課程）
   await claimPendingCourseEnrollment(db, memberId, member);
+  // Climbio VIP 名單自動認領（無期限；全家 VIP 含子帳號繼承）
+  await claimLegacyVip(db, memberId, member);
 
   // 計算並更新封鎖狀態
   const blockReasons = await getBlockReasons(memberId, member);

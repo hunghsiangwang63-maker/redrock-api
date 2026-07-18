@@ -35,7 +35,7 @@ const RULE_DEFAULTS = {
   allowTrial: false,           // 開放試上
   trialPrice: 0,               // 試上費
   perSessionDeduction: 850,    // 退費：開課後每堂扣除
-  handlingFeeRate: 0.05,       // 退費：開課前手續費率
+  handlingFeeRate: 0.2,        // 退費：手續費率（預設 20%，班別/梯次可調）
 };
 const resolveRules = (course, category) => {
   const pick = (k) => {
@@ -1199,7 +1199,7 @@ const getCourses = async (gymId) => {
       categoryGroup: cat?.group || null,               // adult | youth | special（大類）
       categoryDescription: cat?.description || null,   // 班別共用課程介紹
       categoryImageUrl: cat?.imageUrl || null,         // 班別共用廣告照片
-      refundFeeRate: 0.2, // 退費手續費率固定 20%（2026-07-18 起不再依班別/梯次調整）
+      refundFeeRate: resolveRules(c, cat).handlingFeeRate ?? 0.2, // 退費手續費率（預設 20%，班別/梯次可調）
       statusLabel: computeStatusLabel(c, enrolledCount),
     };
   });

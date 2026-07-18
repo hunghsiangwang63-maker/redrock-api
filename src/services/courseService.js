@@ -760,7 +760,7 @@ const cancelLeave = async ({ enrollmentId, memberId }) => {
   if (!sessionDoc.exists) throw { code: 'SESSION_NOT_FOUND' };
   const session = sessionDoc.data();
   if ((session.enrolledCount || 0) >= (session.maxStudents || 0)) {
-    throw { code: 'SESSION_FULL', message: '該堂名額已滿（可能已由候補遞補），無法取消請假' };
+    throw { code: 'SESSION_FULL', message: '該堂名額已滿（可能已由候補遞補、他人補課或試上），無法取消請假' };
   }
 
   const now = new Date();
@@ -832,7 +832,7 @@ const precheckCancelLeave = async ({ enrollmentId, memberId }) => {
     const enrolled = session.enrolledCount || 0;
     const max = session.maxStudents || 0;
     result.session = { date: session.date, startTime: session.startTime || null, enrolledCount: enrolled, maxStudents: max, remaining: Math.max(0, max - enrolled) };
-    if (enrolled >= max) block('SESSION_FULL', '該堂名額已滿（可能已由候補遞補），無法取消請假');
+    if (enrolled >= max) block('SESSION_FULL', '該堂名額已滿（可能已由候補遞補、他人補課或試上），無法取消請假');
   } else {
     block('SESSION_NOT_FOUND', '找不到該場次');
   }
@@ -849,10 +849,31 @@ const precheckCancelLeave = async ({ enrollmentId, memberId }) => {
   const newEntitlement = rulesQ.allowMakeup === false ? 0 : Math.min(capQ, Math.max(0, activeLeavesQ - 1));
   const mkSnapQ = await db.collection(MAKEUP_COLLECTION)
     .where('memberId', '==', memberId).where('courseId', '==', enrollment.courseId).get();
-  const usedQ = mkSnapQ.docs.filter(d => d.data().status === 'used').length;
+  const usedRights = mkSnapQ.docs.filter(d => d.data().status === 'used');
+  const usedQ = usedRights.length;
   result.quota = { usedMakeups: usedQ, newEntitlement };
   if (usedQ > newEntitlement) {
     block('MAKEUP_OVER_QUOTA', `已預約 ${usedQ} 堂補課、取消此請假後補課額度只剩 ${newEntitlement} 堂，請先取消一堂補課再取消請假`);
+  }
+
+  // 引導版：列出「此課程補課券」對應的已預約補課報名（未上完才可就地取消；已上過 used 永久成立）
+  result.bookedMakeups = [];
+  if (usedQ > 0) {
+    const rightIds = new Set(usedRights.map(d => d.id));
+    const mkEnSnap = await db.collection(ENROLLMENT_COLLECTION)
+      .where('memberId', '==', memberId).where('isMakeup', '==', true).get();
+    const today = taiwanToday();
+    result.bookedMakeups = mkEnSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(e => e.status === 'confirmed' && e.makeupId && rightIds.has(e.makeupId))
+      .map(e => ({
+        enrollmentId: e.id,
+        courseName: e.courseName || '',
+        date: e.date || null,
+        startTime: e.startTime || null,
+        canCancel: !!e.date && today < e.date, // 取消補課限上課一天前（與 cancelMakeup 同規則）
+      }))
+      .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   }
 
   return result;

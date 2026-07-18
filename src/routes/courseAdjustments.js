@@ -78,9 +78,9 @@ router.post('/enrollments/:enrollmentId/refund-request',
       const perSessionDeduction = _refundRules.perSessionDeduction;
       const handlingFeeRate = _refundRules.handlingFeeRate;
 
-      // 週課退費（2026-07-18 改版）：退費＝剩餘堂數價金 − 手續費（剩餘價金 × 費率，預設 20%）
+      // 週課退費（2026-07-18 改版）：退費＝剩餘堂數價金 − 手續費（剩餘價金 × 費率）
       // 每堂單價＝已繳金額 ÷ 總堂數；剩餘堂數＝總堂數 − 已開課堂數（日期已過，不論出席/請假）。
-      // 開課前＝剩餘全數，同一公式涵蓋。費率走班別/梯次規則（handlingFeeRate，預設 20%、員工可彈性調整）。
+      // 費率雙軌：開課前固定 5%；開課後走班別/梯次規則（handlingFeeRate，預設 20%、員工可彈性調整）。
       const sessionSnap = await db.collection('courseSessions')
         .where('courseId', '==', courseId)
         .get();
@@ -90,10 +90,11 @@ router.post('/enrollments/:enrollmentId/refund-request',
       const remainingSessions = Math.max(0, totalSessions - heldSessions);
       const perSession = paidAmount / totalSessions;
       const remainingValue = Math.round(perSession * remainingSessions);
-      const feeRate = handlingFeeRate ?? 0.2;   // 預設 20%（班別/梯次可調）
+      const preStart = courseStartDate ? (today < courseStartDate) : (heldSessions === 0); // 開課前判定（無起始日以已開課堂數推）
+      const feeRate = preStart ? 0.05 : (handlingFeeRate ?? 0.2);   // 開課前固定 5%；開課後預設 20%（班別/梯次可調）
       const fee = Math.round(remainingValue * feeRate);
       const suggestedRefund = Math.max(0, remainingValue - fee);
-      const refundNote = `剩餘 ${remainingSessions}/${totalSessions} 堂 × 每堂 NT$${Math.round(perSession)} ＝ 剩餘價金 NT$${remainingValue}；手續費 ${Math.round(feeRate * 100)}%＝NT$${fee}`;
+      const refundNote = `剩餘 ${remainingSessions}/${totalSessions} 堂 × 每堂 NT$${Math.round(perSession)} ＝ 剩餘價金 NT$${remainingValue}；手續費 ${Math.round(feeRate * 100)}%（${preStart ? '開課前' : '開課後'}）＝NT$${fee}`;
 
       const reqId = `crefund_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
       await db.collection('courseAdjustmentRequests').doc(reqId).set({

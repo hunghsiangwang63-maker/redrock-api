@@ -259,6 +259,23 @@ router.put('/:id', authenticateAny, async (req, res) => {
   }
 });
 
+// ── POST /rentals/:id/return-deposit - 退回押金（歸還後補退；退畢租借結案進歷史） ──
+router.post('/:id/return-deposit', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('equipmentRentals').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
+    const r = doc.data();
+    if (r.status !== 'returned') return res.status(400).json({ error: 'INVALID_STATUS', message: '器材尚未歸還，請先確認歸還' });
+    if (r.depositReturned) return res.status(400).json({ error: 'ALREADY_RETURNED', message: '押金已退回' });
+    await doc.ref.update({
+      depositReturned: true,
+      depositReturnedBy: req.staff.name || req.staff.id, depositReturnedAt: new Date(), updatedAt: new Date(),
+    });
+    res.json({ success: true, message: `押金 NT$${r.totalDeposit} 已退回，租借結案` });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── PUT /rentals/:id/staff-note - 員工備註（會員看不到；/my 已剔除） ──
 router.put('/:id/staff-note', authenticate, async (req, res) => {
   try {

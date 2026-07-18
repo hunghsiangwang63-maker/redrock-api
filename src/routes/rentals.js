@@ -60,6 +60,7 @@ router.post('/apply', authenticateAny, async (req, res) => {
       paymentMethod: paymentMethod || 'transfer',
       paymentDate: paymentDate || null,
       bankLastFive: bankLastFive || null,
+      memberPaidAmount: req.body.paidAmount ? Number(req.body.paidAmount) : null, // 會員自填實際匯款金額
       status: 'pending',        // pending | confirmed | active | returned | cancelled
       paymentStatus: 'pending', // pending | confirmed
       depositReturned: false,

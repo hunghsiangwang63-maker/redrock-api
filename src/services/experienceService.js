@@ -409,4 +409,40 @@ function defaultSettings() {
 
 // ── POST /experience-bookings/expire-unpaid - 到期未付款自動取消 ──
 // 可設定 cron 每天執行，或加入待辦總覽手動觸發
-module.exports = { COURSE_TYPES, parseBookingTime, courseTypeLabel, addExperienceToCourseAndSchedule, reassignExperienceCoach, updateExperienceSchedule, cleanupExperienceCourseAndSchedule, EXP_TICKET_COLL, syncExperienceTickets, voidExperienceTickets, buildInsuranceXlsBuffer, defaultSettings };
+// ── 體驗/試上營收記錄（確認收款時呼叫；冪等 revenueRecorded）──────
+// 金額：試上＝全額試上費；一般體驗＝發票金額（invoiceAmount ?? 總費−人數×175 保險代收不計營收）。
+// 記 type:'course' → 結帳「教學費」與營收報表課程欄自動吃到。兩條確認路徑（體驗確認端點/待辦轉帳確認）共用。
+async function recordExperienceRevenue(db, ref, booking, staff) {
+  if (booking.revenueRecorded) return null;
+  const { recordTransaction } = require('../utils/revenueLedger');
+  const n = booking.numParticipants || (booking.participants || []).length || 1;
+  const amount = booking.kind === 'trial'
+    ? (booking.totalFee || 0)
+    : (booking.invoiceAmount != null ? booking.invoiceAmount : Math.max(0, (booking.totalFee || 0) - n * 175));
+  if (amount <= 0) return null;
+  await recordTransaction(db, {
+    gymId: booking.gymId, type: 'course', totalAmount: amount,
+    paymentMethod: booking.paymentMethod || 'transfer',
+    memberId: booking.memberId || null, memberName: booking.contactName || booking.memberName || '',
+    relatedId: booking.id,
+    notes: booking.kind === 'trial' ? `課程試上：${booking.contactName || ''}` : `體驗課程（發票金額）：${booking.contactName || ''}`,
+    staffId: staff?.id || null, staffName: staff?.name || '',
+  });
+  await ref.update({ revenueRecorded: true, revenueAmount: amount });
+  return amount;
+}
+// ── 取消已確認體驗 → 沖銷營收（負向 type:'course'，結帳/報表對稱歸零；冪等 revenueReversed）──
+async function reverseExperienceRevenue(db, ref, booking) {
+  if (!booking.revenueRecorded || booking.revenueReversed || !(booking.revenueAmount > 0)) return null;
+  const { recordTransaction } = require('../utils/revenueLedger');
+  await recordTransaction(db, {
+    gymId: booking.gymId, type: 'course', totalAmount: -booking.revenueAmount,
+    paymentMethod: booking.paymentMethod || 'transfer',
+    memberId: booking.memberId || null, memberName: booking.contactName || '',
+    relatedId: booking.id, notes: `體驗取消沖銷：${booking.contactName || ''}`,
+  });
+  await ref.update({ revenueReversed: true });
+  return -booking.revenueAmount;
+}
+
+module.exports = { COURSE_TYPES, parseBookingTime, courseTypeLabel, addExperienceToCourseAndSchedule, reassignExperienceCoach, updateExperienceSchedule, cleanupExperienceCourseAndSchedule, EXP_TICKET_COLL, syncExperienceTickets, voidExperienceTickets, buildInsuranceXlsBuffer, defaultSettings, recordExperienceRevenue, reverseExperienceRevenue };

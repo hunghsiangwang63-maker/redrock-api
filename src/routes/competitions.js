@@ -187,6 +187,7 @@ router.post('/:id/register',
         height: req.body.height,
         armSpan: req.body.armSpan,
         isHonorary: req.body.isHonorary,
+        paidAmount: req.body.paidAmount,
         // 付款
         paymentMethod: req.body.paymentMethod,
         paymentDate: req.body.paymentDate,
@@ -521,6 +522,7 @@ router.post('/registrations/:regId/payment-info', authenticateAny, async (req, r
       paymentDate,
       bankName: paymentMethod === 'transfer' ? (String(req.body.bankName || '').trim() || null) : null,
       bankLastFive: paymentMethod === 'transfer' ? (String(req.body.bankLastFive || '').trim() || null) : null,
+      memberPaidAmount: req.body.paidAmount ? Number(req.body.paidAmount) : null, // 會員自填實際匯款金額
       paymentStatus: 'pending',
       paymentRejectReason: null,
       paymentRejectedAt: null,

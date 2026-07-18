@@ -175,7 +175,7 @@ const registerForCompetition = async ({
   // 比賽用欄位
   height, armSpan, isHonorary,
   // 付款
-  paymentDate, bankLastFive, bankName, paymentMethod,
+  paymentDate, bankLastFive, bankName, paymentMethod, paidAmount,
   ip
 }) => {
   const db = getDb();
@@ -317,6 +317,7 @@ const registerForCompetition = async ({
     paymentMethod: paymentMethod || 'transfer',
     paymentDate: paymentDate || null,
     bankLastFive: bankLastFive || null,
+    memberPaidAmount: paidAmount ? Number(paidAmount) : null, // 會員自填實際匯款金額
     bankName: bankName || null,
     paymentStatus: 'pending', // pending | confirmed | refunded
     paidAmount: null,

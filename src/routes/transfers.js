@@ -32,7 +32,7 @@ router.post('/upload', authenticateAny, upload.single('screenshot'), async (req,
     const id = uuidv4();
     const {
       memberName, gymId, enrollmentId, courseId, courseName, amount,
-      orderType, refId, orderName, bankLastFive, bankName, paymentDate,
+      orderType, refId, orderName, bankLastFive, bankName, paymentDate, paidAmount,
     } = req.body;
     // 會員 token 一律用自己的 id，避免偽造他人 memberId
     const memberId = req.member?.id || req.body.memberId;
@@ -87,6 +87,7 @@ router.post('/upload', authenticateAny, upload.single('screenshot'), async (req,
       paymentMethod: 'transfer',
       screenshotUrl: url, screenshotPath: fileName,   // 無截圖則為 null
       bankLastFive: last5 || null,
+      paidAmount: paidAmount ? Number(paidAmount) : null, // 會員自填實際匯款金額
       bankName: (bankName || '').trim() || null,
       paymentDate: paymentDate || null,
       status: 'pending',
@@ -159,6 +160,7 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
     await ref.update({
       status: 'confirmed', confirmedBy: req.staff.id,
       confirmedAt: now, updatedAt: now, notes: req.body.notes || '',
+      confirmedAmount: req.body.confirmedAmount != null && req.body.confirmedAmount !== '' ? Number(req.body.confirmedAmount) : null, // 員工填實際收款金額
     });
     // 依訂單型別確認底層付款（side-effect 失敗不阻斷收款確認）
     try {
@@ -167,10 +169,19 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
       // 避免曾被退回的訂單確認後仍殘留 transfer_rejected/pending_confirm 狀態。
       const clearReject = { paymentConfirmed: true, paymentRejectReason: null, paymentRejectedAt: null };
       if (t.orderType === 'experience' && t.refId) {
-        await db.collection('experienceBookings').doc(t.refId).update({
+        const bkRef = db.collection('experienceBookings').doc(t.refId);
+        await bkRef.update({
           status: 'confirmed', paymentStatus: 'confirmed', ...clearReject,
           confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
         });
+        // 體驗/試上營收記錄（與 /experience-bookings/:id/confirm 同一 helper、冪等）
+        try {
+          const bkDoc = await bkRef.get();
+          if (bkDoc.exists) {
+            const { recordExperienceRevenue } = require('../services/experienceService');
+            await recordExperienceRevenue(db, bkRef, { id: bkDoc.id, ...bkDoc.data() }, req.staff);
+          }
+        } catch (e) { console.error('[體驗營收/transfers]', e.message); }
       } else if (t.orderType === 'course' && t.refId) {
         // 課程營收已於報名時(courses.js enroll, deferPayment=false)記入(認列＝最後一堂課)，此處僅標記付款確認
         await db.collection('courseEnrollments').doc(t.refId).update({ paymentStatus: 'confirmed', ...clearReject, updatedAt: now });

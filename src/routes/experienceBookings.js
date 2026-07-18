@@ -13,7 +13,7 @@ const memberService = require('../services/memberService');
 const { COURSE_TYPES, parseBookingTime, courseTypeLabel, addExperienceToCourseAndSchedule, reassignExperienceCoach,
         updateExperienceSchedule,
         cleanupExperienceCourseAndSchedule, syncExperienceTickets, voidExperienceTickets, buildInsuranceXlsBuffer,
-        defaultSettings } = require('../services/experienceService');
+        defaultSettings, recordExperienceRevenue, reverseExperienceRevenue } = require('../services/experienceService');
 const { isUnder5 } = require('../utils/age');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { notifyRoleInGym } = require('../services/notificationService');
@@ -95,6 +95,7 @@ router.post('/', authenticateAny, async (req, res) => {
         numParticipants: 1,
         totalFee: trialFee,
         paymentDate: paymentDate||null, bankLastFive: bankLastFive||null, paymentMethod: req.body.paymentMethod || 'transfer',
+        memberPaidAmount: req.body.paidAmount ? Number(req.body.paidAmount) : null, // 會員自填實際匯款金額
         consentSigned: true, needsInsurance: false,
         notes: notes||'',
         trialEnrollmentId: trialEnroll.enrollmentId,
@@ -169,6 +170,7 @@ router.post('/', authenticateAny, async (req, res) => {
       totalFee: computedFee,
       paymentDate: paymentDate||null,
       bankLastFive: bankLastFive||null,
+      memberPaidAmount: req.body.paidAmount ? Number(req.body.paidAmount) : null, // 會員自填實際匯款金額
       notes: notes||'',
       status: 'pending', // pending | confirmed | cancelled
       createdAt: new Date(), updatedAt: new Date(),
@@ -232,6 +234,7 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
         }
         await enDoc.ref.update({ paymentStatus: 'paid', paymentDeadline: null, updatedAt: new Date() });
         await ref.update({ status: 'confirmed', confirmedBy: req.staff.id, confirmedByName: req.staff.name, confirmedAt: new Date(), updatedAt: new Date() });
+        await recordExperienceRevenue(db, ref, booking, req.staff).catch(e => console.error('[體驗營收]', e.message));
         if (booking.contactEmail) {
           emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking).catch(e => console.error('[Email]', e.message));
         }
@@ -251,6 +254,7 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
         status: 'confirmed', confirmedBy: req.staff.id, confirmedByName: req.staff.name,
         confirmedAt: new Date(), updatedAt: new Date(), trialEnrollmentId: trialResult.enrollmentId,
       });
+      await recordExperienceRevenue(db, ref, booking, req.staff).catch(e => console.error('[體驗營收]', e.message));
       if (booking.contactEmail) {
         emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking).catch(e => console.error('[Email]', e.message));
       }
@@ -292,6 +296,7 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
     }
 
     await ref.update(update);
+    await recordExperienceRevenue(db, ref, booking, req.staff).catch(e => console.error('[體驗營收]', e.message));
 
     // 發送確認信
     if (booking.contactEmail) {
@@ -318,6 +323,7 @@ router.post('/:id/cancel', authenticate, async (req, res) => {
     await ref.update({
       status:'cancelled', cancelReason:req.body.reason||'', cancelledAt:new Date(), updatedAt:new Date(),
     });
+    await reverseExperienceRevenue(db, ref, booking).catch(e => console.error('[體驗沖銷]', e.message));
     // 退費/取消 → 該預約所有「未使用」體驗入場券作廢（含已轉出未用）；已使用不動
     const voided = await voidExperienceTickets(db, req.params.id, '體驗退費/取消');
     // 試上預約：移除該場次試上名單並釋放名額
@@ -378,6 +384,7 @@ router.post('/:id/member-cancel', authenticateAny, async (req, res) => {
       });
     }
     await ref.update(upd);
+    await reverseExperienceRevenue(db, ref, booking).catch(e => console.error('[體驗沖銷]', e.message));
     // 與員工取消同一套清理：作廢未用票券、釋放試上名額、清課程/場次/排班
     const voided = await voidExperienceTickets(db, booking.id, '會員取消預約');
     if (booking.kind === 'trial' && booking.trialEnrollmentId) {

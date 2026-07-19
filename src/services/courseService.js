@@ -1087,11 +1087,23 @@ const sweepExpiredCoursePayments = async () => {
 // ── 補課報名 ──────────────────────────────────────────────────────
 const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
   const db = getDb();
-  const makeupDoc = await db.collection(MAKEUP_COLLECTION).doc(makeupId).get();
+  let makeupDoc = await db.collection(MAKEUP_COLLECTION).doc(makeupId).get();
   if (!makeupDoc.exists) throw { code: 'MAKEUP_NOT_FOUND' };
 
-  const makeup = makeupDoc.data();
+  let makeup = makeupDoc.data();
   if (makeup.memberId !== memberId) throw { code: 'FORBIDDEN' };
+
+  // 後端權威：停課補課券（source:'closure'）優先消耗——即使前端傳的是配額券，
+  // 只要同課程還有可用停課券就改用它（配額券受不變量管、留著彈性較大；停課券為場館欠課、先清）。
+  if (makeup.source !== 'closure') {
+    const altSnap = await db.collection(MAKEUP_COLLECTION)
+      .where('memberId', '==', memberId).where('courseId', '==', makeup.courseId).get();
+    const closureAvail = altSnap.docs
+      .filter(d => { const r = d.data(); return r.source === 'closure' && r.status === 'available' && !(r.expiresAt?.toDate && dayjs().isAfter(dayjs(r.expiresAt.toDate()))); })
+      .sort((a, b) => (a.data().expiresAt?.toDate?.()?.getTime() || 0) - (b.data().expiresAt?.toDate?.()?.getTime() || 0))[0];
+    if (closureAvail) { makeupDoc = closureAvail; makeup = closureAvail.data(); makeupId = closureAvail.id; }
+  }
+
   if (makeup.status !== 'available') throw { code: 'MAKEUP_USED', message: '補課資格已使用' };
   if (dayjs().isAfter(dayjs(makeup.expiresAt.toDate()))) {
     throw { code: 'MAKEUP_EXPIRED', message: '補課資格已過期' };

@@ -206,7 +206,11 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
       if (!cdoc.exists) { await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now, note: '課程已不存在' }); continue; }
       const c = cdoc.data();
       const ssnap = await db.collection('courseSessions').where('courseId', '==', claim.courseId).get();
-      const sessions = ssnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(s => s.status !== 'cancelled').sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      const allSessions = ssnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const sessions = allSessions.filter(s => s.status !== 'cancelled').sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      // 休館停課場次：認領者一併補發「停課補課券」（exempt、不佔配額）——與已在名單學員待遇一致。
+      // 認領前已請假的日期（leaveDates）落在停課日 → 課沒上成、不發（比照既有學員請假者不補）。
+      const closureSessions = allSessions.filter(s => s.status === 'cancelled' && /休館|closure/.test(String(s.cancelReason || '')));
       // 去重：已在名單則只標記已認領、不重複建
       const ex = await db.collection('courseEnrollments').where('courseId', '==', claim.courseId).where('memberId', '==', memberId).get();
       const already = ex.docs.some(d => ['confirmed', 'leave', 'waitlist'].includes(d.data().status));
@@ -237,6 +241,26 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
         }
         for (const s of sessions) if (cnt[s.id]) batch.update(db.collection('courseSessions').doc(s.id), { enrolledCount: (s.enrolledCount || 0) + cnt[s.id], updatedAt: now });
         await batch.commit();
+        // 停課補課券（豁免配額；效期＝課程結束+補課天數；leaveDates 停課日不發）
+        try {
+          if (closureSessions.length) {
+            const rulesC = require('./courseService').resolveRules(c, await require('./courseService').getCategoryOf(db, c.categoryId));
+            const expC = dayjs(c.endDate || new Date()).add(rulesC.makeupDeadlineDays ?? 60, 'day').toDate();
+            for (const cs of closureSessions) {
+              if (leaveDates.includes(cs.date)) continue;
+              const rid = uuidv4();
+              await db.collection('courseMakeupRights').doc(rid).set({
+                id: rid, memberId, originalEnrollmentId: null,
+                courseId: claim.courseId, courseName: c.name || '', categoryId: c.categoryId || null,
+                gymId: c.gymId || null, tags: c.tags || [],
+                status: 'available', expiresAt: expC, usedSessionId: null, usedAt: null,
+                source: 'closure', exempt: true, closureDate: cs.date || null,
+                notes: '認領時補發（該堂於認領前已休館停課）', createdAt: now, updatedAt: now,
+              });
+            }
+            console.log(`[課程認領] ${member.name} 補發停課券 ${closureSessions.filter(x=>!leaveDates.includes(x.date)).length} 張`);
+          }
+        } catch (e) { console.error('[課程認領] 停課券補發失敗', e.message); }
         // 有登錄請假 → 重算補課額度（自動給補課券；lazy require 避免循環依賴）
         if (leaveDates.length) {
           try { await require('./courseService').reconcileMakeupEntitlement(db, memberId, claim.courseId); }

@@ -753,7 +753,7 @@ router.put('/:courseId',
         'name', 'cohortName', 'categoryId', 'description', 'imageUrl', 'price', 'maxStudents', 'maxWaitlist', 'reservedSlots', 'reservedSlotsNote', 'instructor',
         'startDate', 'endDate', 'startTime', 'endTime', 'weekdays',
         'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays', 'handlingFeeRate', 'preStartFeeRate',
-        'enrollOpenDate', 'alumniOpenDate',
+        'enrollOpenDate', 'alumniOpenDate', 'currentTermRenewalDiscount', 'prevTermRenewalDiscount',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',
         'unlimitedPracticeStart', 'unlimitedPracticeEnd',
         'allowTrial', 'trialPrice', 'isActive', // isActive：停用/啟用（會員課程總覽隱藏，不通知、不動報名）
@@ -1141,24 +1141,32 @@ router.post('/:courseId/enroll-all',
       const now = new Date();
       const maxStudents = course.maxStudents || Infinity;
 
-      // ── 報名開放日 gate（後端權威；員工代報不受限）──
-      // 公開開放日前：僅「舊生」可報（舊生＝同班別任一梯次曾有效報名 confirmed/leave，涵蓋當期在籍與上一期學員）。
-      // 舊生開放日前：全部擋。兩欄皆空＝隨時開放（原行為）。
-      if (!req.staff && course.enrollOpenDate && today < course.enrollOpenDate) {
-        let alumniOk = false;
-        if (course.alumniOpenDate && today >= course.alumniOpenDate) {
-          const myEn = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
-            .where('memberId', '==', memberId).get();
-          const myCourseIds = [...new Set(myEn.docs.map(d => d.data())
-            .filter(e => ['confirmed', 'leave'].includes(e.status) && !e.isTrial && !e.isMakeup)
-            .map(e => e.courseId).filter(cid2 => cid2 && cid2 !== courseId))];
-          for (let i = 0; i < myCourseIds.length && !alumniOk; i += 20) {
-            const refs = myCourseIds.slice(i, i + 20).map(id => db.collection('courses').doc(id));
-            (await db.getAll(...refs)).forEach(doc => {
-              if (doc.exists && doc.data().categoryId && doc.data().categoryId === course.categoryId) alumniOk = true;
-            });
-          }
+      // ── 舊生狀態（gate 與續報優惠共用）：同班別任一梯次曾有效報名（confirmed/leave、排除試上/補課）──
+      // isCurrent＝該梯次未結束（當期在籍）；isPrev＝已結束（上一期/隔期學員）。
+      const _needAlumni = (!req.staff && course.enrollOpenDate && today < course.enrollOpenDate)
+        || (course.currentTermRenewalDiscount > 0) || (course.prevTermRenewalDiscount > 0);
+      const alumni = { isCurrent: false, isPrev: false };
+      if (_needAlumni) {
+        const myEn = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+          .where('memberId', '==', memberId).get();
+        const myCourseIds = [...new Set(myEn.docs.map(d => d.data())
+          .filter(e => ['confirmed', 'leave'].includes(e.status) && !e.isTrial && !e.isMakeup)
+          .map(e => e.courseId).filter(cid2 => cid2 && cid2 !== courseId))];
+        for (let i = 0; i < myCourseIds.length; i += 20) {
+          const refs = myCourseIds.slice(i, i + 20).map(id => db.collection('courses').doc(id));
+          (await db.getAll(...refs)).forEach(doc => {
+            if (!doc.exists) return;
+            const c2 = doc.data();
+            if (!c2.categoryId || c2.categoryId !== course.categoryId) return;
+            if (c2.endDate && c2.endDate < today) alumni.isPrev = true; else alumni.isCurrent = true;
+          });
         }
+      }
+
+      // ── 報名開放日 gate（後端權威；員工代報不受限）──
+      // 公開開放日前：僅舊生（isCurrent 或 isPrev）可報；舊生開放日前全擋。兩欄皆空＝隨時開放。
+      if (!req.staff && course.enrollOpenDate && today < course.enrollOpenDate) {
+        const alumniOk = course.alumniOpenDate && today >= course.alumniOpenDate && (alumni.isCurrent || alumni.isPrev);
         if (!alumniOk) {
           const msg = course.alumniOpenDate && today < course.alumniOpenDate
             ? `此課程 ${course.alumniOpenDate} 起開放舊生續報、${course.enrollOpenDate} 全面開放報名`
@@ -1184,6 +1192,15 @@ router.post('/:courseId/enroll-all',
         ? Math.round((course.price || 0) * ratio * (isBelowHalf ? surcharge : 1))
         : (course.price || 0);
 
+      // ── 續報優惠（NT$ 折抵，後端權威）：當期在籍優先，其次隔期（上一期）；折後再套隊員9折 ──
+      let renewalDiscount = 0, renewalDiscountType = null;
+      if (alumni.isCurrent && (course.currentTermRenewalDiscount > 0)) {
+        renewalDiscount = Number(course.currentTermRenewalDiscount); renewalDiscountType = 'current_term';
+      } else if (alumni.isPrev && (course.prevTermRenewalDiscount > 0)) {
+        renewalDiscount = Number(course.prevTermRenewalDiscount); renewalDiscountType = 'prev_term';
+      }
+      const feeAfterRenewal = Math.max(0, baseFee - renewalDiscount);
+
       const { isActiveTeamMember, applyTeamDiscount } = require('../services/teamMemberService');
       const { getMember } = require('../services/memberService');
       let isTeam = false;
@@ -1191,7 +1208,7 @@ router.post('/:courseId/enroll-all',
         const member = await getMember(memberId);
         isTeam = isActiveTeamMember(member);
       } catch (e) { /* 查無會員不影響報名，視為非隊員 */ }
-      const discountResult = applyTeamDiscount(baseFee, isTeam);
+      const discountResult = applyTeamDiscount(feeAfterRenewal, isTeam);
       const fee = discountResult.discounted;
       const willInstallment = course.installment?.enabled && req.body.paymentPlan === 'installment' && !req.body.deferPayment;
 
@@ -1261,6 +1278,8 @@ router.post('/:courseId/enroll-all',
             waitlistPosition: isWaitlist ? waitlistPosition : null,
             // 候補不收費（遞補為正取後才收）；正取維持原本第一筆收費、其餘 0
             enrollmentFee: isWaitlist ? 0 : (idx === 0 ? fee : 0),
+            renewalDiscount: idx === 0 && renewalDiscount > 0 ? renewalDiscount : null, // 續報折抵（稽核）
+            renewalDiscountType: idx === 0 && renewalDiscount > 0 ? renewalDiscountType : null, // current_term | prev_term
             paymentMethod: (isWaitlist || idx !== 0) ? null : paymentMethod,
             paymentStatus: isWaitlist ? 'na' : (idx === 0 ? 'pending' : 'na'),
             // 付款期限只掛在主報名（idx===0）；sweep 依此取消整門課、釋放各場次名額

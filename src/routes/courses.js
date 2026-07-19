@@ -839,7 +839,7 @@ router.get('/:courseId/leave-makeup-summary',
           memberPhone: nameMap[mid]?.phone || '',
           leaves, leaveCount: leaves.length, leaveCap: cap,
           makeupAvailable: avail.length, makeupUsed: used.length, makeupTotal: avail.length + used.length,
-          makeupExpiresAt: expiresAt ? expiresAt.toISOString().slice(0, 10) : null,
+          makeupExpiresAt: expiresAt ? new Date(expiresAt.getTime() + 8 * 3600000).toISOString().slice(0, 10) : null, // 台灣日期
           bookedMakeups,
         };
       }).filter(Boolean).sort((a, b) => a.memberName.localeCompare(b.memberName, 'zh-Hant'));

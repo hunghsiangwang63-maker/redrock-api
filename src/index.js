@@ -45,6 +45,28 @@ const forgotLimiter = rateLimit({
   standardHeaders: true, legacyHeaders: false,
   message: { error: 'TOO_MANY_REQUESTS', message: '請求過於頻繁，請稍後再試' },
 });
+// 全域限流（防單一來源濫打/灌 Firestore 讀取費；分散式 DDoS 靠邊緣層另擋）。
+// ⚠ 額度要寬：館內 WiFi 全部會員手機＋站台共用同一對外 IP，會員 QR 頁每 3 秒輪詢一次
+//   （50 人同時產 QR ≈ 1000 req/min）→ 設 1200/min，正常尖峰不會踩到、單機 flood 仍被擋。
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000, max: 1200,
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: 'TOO_MANY_REQUESTS', message: '請求過於頻繁，請稍後再試' },
+});
+// 會寄信/建資料的公開端點另收緊（同館 WiFi 幫多組家庭現場註冊仍夠用）
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, max: 30, // 每 IP 每小時 30 次自助註冊
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: 'TOO_MANY_REQUESTS', message: '註冊過於頻繁，請稍後再試' },
+});
+const resendLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, max: 20, // 每 IP 每小時 20 次重寄驗證信（防濫發 Email）
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: 'TOO_MANY_REQUESTS', message: '請求過於頻繁，請稍後再試' },
+});
+app.use(globalLimiter);
+app.use('/members/self-register', registerLimiter);
+app.use('/auth/member/resend-verification', resendLimiter);
 app.use('/auth/staff/login', authLimiter);
 app.use('/auth/member/login', authLimiter);
 app.use('/auth/device/verify-otp', authLimiter);
@@ -103,7 +125,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.67.0-roster-view-permission',
+    version: '3.68.0-global-rate-limit',
   });
 });
 

@@ -365,6 +365,23 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
       })
       .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
 
+    // 跨期補課（上一梯/密集班學員、非本期名單）：以名單註記顯示，供櫃檯辨識放行
+    try {
+      const xm = await db.collection('crossCohortMakeups')
+        .where('targetDate', '==', today).where('status', '==', 'booked').get();
+      xm.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => sessionMap[x.targetSessionId] || x.gymId === gymId).forEach(x => {
+        const s = sessionMap[x.targetSessionId] || {};
+        students.push({
+          memberId: null, memberName: x.name,
+          courseId: s.courseId || null, courseName: s.courseName || x.courseName || '',
+          startTime: s.startTime || '', endTime: s.endTime || '',
+          alreadyCheckedIn: false, isMakeup: true, isTrial: false, trialUnpaid: false,
+          isCrossMakeup: true, crossNote: x.note || '',   // 跨期補課（非會員名單、櫃檯放行）
+        });
+      });
+      students.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+    } catch (e) {}
+
     res.json({ students });
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

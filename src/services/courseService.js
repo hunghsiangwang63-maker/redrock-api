@@ -1304,12 +1304,25 @@ const getSessionRoster = async (sessionId) => {
     } catch (e) { memberInfoMap[mid] = { name: '（會員資料異常）', phone: '' }; }
   }
 
-  return roster.map(r => ({
+  const result = roster.map(r => ({
     ...r,
     memberName: memberInfoMap[r.memberId]?.name || r.memberName || '',
     memberPhone: memberInfoMap[r.memberId]?.phone || '',
     attendanceStatus: attendanceMap[r.memberId] || 'pending',
   }));
+  // 跨期補課（上一梯/密集班學員補到此場次，非會員名單）→ 名單附註記列
+  try {
+    const xm = await db.collection('crossCohortMakeups')
+      .where('targetSessionId', '==', sessionId).get();
+    xm.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => x.status !== 'cancelled').forEach(x => {
+      result.push({
+        id: 'xm_' + x.id, memberId: null, memberName: x.name, memberPhone: '',
+        status: 'confirmed', isMakeup: true, isCrossMakeup: true,
+        crossNote: x.note || '', attendanceStatus: x.status === 'done' ? 'present' : 'pending',
+      });
+    });
+  } catch (e) {}
+  return result;
 };
 
 // ── 查詢課程列表 ──────────────────────────────────────────────────

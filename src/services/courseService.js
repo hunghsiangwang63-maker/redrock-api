@@ -638,8 +638,10 @@ const reconcileMakeupEntitlement = async (db, memberId, courseId, rules = null, 
 
   const mkSnap = await db.collection(MAKEUP_COLLECTION)
     .where('memberId', '==', memberId).where('courseId', '==', courseId).get();
-  const used = mkSnap.docs.filter(d => d.data().status === 'used').length;
-  const availDocs = mkSnap.docs.filter(d => d.data().status === 'available');
+  // 豁免券（休館停課發放 exempt:true）不參與不變量：不計 used/available、不被作廢、不被復活
+  const mkDocs = mkSnap.docs.filter(d => d.data().exempt !== true);
+  const used = mkDocs.filter(d => d.data().status === 'used').length;
+  const availDocs = mkDocs.filter(d => d.data().status === 'available');
   const targetAvailable = Math.max(0, entitlement - used);
 
   const now = new Date();
@@ -648,7 +650,7 @@ const reconcileMakeupEntitlement = async (db, memberId, courseId, rules = null, 
 
   if (delta > 0) {
     // 先復活 cancelled 券（leave_cancelled / over_limit），不夠再新建
-    for (const r of mkSnap.docs.filter(d => d.data().status === 'cancelled')) {
+    for (const r of mkDocs.filter(d => d.data().status === 'cancelled')) {
       if (delta <= 0) break;
       await r.ref.update({ status: 'available', cancelReason: null, usedSessionId: null, usedAt: null, expiresAt, updatedAt: now });
       delta--;
@@ -781,7 +783,7 @@ const cancelLeave = async ({ enrollmentId, memberId }) => {
     const newEntitlement = rulesQ.allowMakeup === false ? 0 : Math.min(capQ, Math.max(0, activeLeavesQ - 1));
     const mkSnapQ = await db.collection(MAKEUP_COLLECTION)
       .where('memberId', '==', memberId).where('courseId', '==', enrollment.courseId).get();
-    const usedQ = mkSnapQ.docs.filter(d => d.data().status === 'used').length;
+    const usedQ = mkSnapQ.docs.filter(d => d.data().status === 'used' && d.data().exempt !== true).length; // 豁免券不佔配額
     if (usedQ > newEntitlement) {
       throw {
         code: 'MAKEUP_OVER_QUOTA',
@@ -849,7 +851,7 @@ const precheckCancelLeave = async ({ enrollmentId, memberId }) => {
   const newEntitlement = rulesQ.allowMakeup === false ? 0 : Math.min(capQ, Math.max(0, activeLeavesQ - 1));
   const mkSnapQ = await db.collection(MAKEUP_COLLECTION)
     .where('memberId', '==', memberId).where('courseId', '==', enrollment.courseId).get();
-  const usedRights = mkSnapQ.docs.filter(d => d.data().status === 'used');
+  const usedRights = mkSnapQ.docs.filter(d => d.data().status === 'used' && d.data().exempt !== true); // 豁免券不佔配額
   const usedQ = usedRights.length;
   result.quota = { usedMakeups: usedQ, newEntitlement };
   if (usedQ > newEntitlement) {
@@ -877,6 +879,74 @@ const precheckCancelLeave = async ({ enrollmentId, memberId }) => {
   }
 
   return result;
+};
+
+// ── 休館停課（員工）：場次取消＋該堂正取自動發「豁免補課券」（不佔請假配額）──
+// 補課學員→報名取消+原券還原；試上學員→報名取消（費用/退費由櫃檯另處理，回報 trialAffected）。
+// 場次 cancelled → 退費公式自動不計此堂（total/held 皆排除）。
+const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) => {
+  const db = getDb();
+  const sDoc = await db.collection(SESSION_COLLECTION).doc(sessionId).get();
+  if (!sDoc.exists) throw { code: 'SESSION_NOT_FOUND' };
+  const session = sDoc.data();
+  if (session.status === 'cancelled') throw { code: 'ALREADY_CANCELLED', message: '此場次已取消' };
+  const cDoc = await db.collection(COURSE_COLLECTION).doc(session.courseId).get();
+  const course = cDoc.exists ? cDoc.data() : {};
+  const rules = resolveRules(course, await getCategoryOf(db, course.categoryId));
+  const expiresAt = dayjs(course.endDate || session.date || taiwanToday()).add(rules.makeupDeadlineDays, 'day').toDate();
+
+  const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId).get();
+  const now = new Date();
+  let issued = 0, makeupRestored = 0, trialAffected = 0;
+  for (const d of enSnap.docs) {
+    const e = d.data();
+    if (!['confirmed', 'leave', 'waitlist'].includes(e.status)) continue;
+    if (e.isTrial) {
+      await d.ref.update({ status: 'cancelled', cancelReason: 'closure', cancelledAt: now, updatedAt: now });
+      trialAffected++;
+      continue;
+    }
+    if (e.isMakeup) {
+      // 補課學員：取消報名、原補課券還原 available（比照 cancelMakeup）
+      await d.ref.update({ status: 'cancelled', cancelReason: 'closure', cancelledAt: now, updatedAt: now });
+      if (e.makeupId) {
+        const mk = await db.collection(MAKEUP_COLLECTION).doc(e.makeupId).get();
+        if (mk.exists && mk.data().status === 'used') {
+          await mk.ref.update({ status: 'available', usedSessionId: null, usedAt: null, updatedAt: now });
+          makeupRestored++;
+        }
+      }
+      continue;
+    }
+    if (e.status === 'confirmed') {
+      // 正取：報名標休館取消＋發豁免補課券（不佔請假配額、不受上限、reconcile 不收斂）
+      await d.ref.update({ status: 'cancelled', cancelReason: 'closure', cancelledAt: now, updatedAt: now });
+      const rid = uuidv4();
+      await db.collection(MAKEUP_COLLECTION).doc(rid).set({
+        id: rid, memberId: e.memberId, originalEnrollmentId: d.id,
+        courseId: session.courseId, courseName: course.name || session.courseName || '',
+        categoryId: course.categoryId || null, gymId: course.gymId || session.gymId || null, tags: course.tags || [],
+        status: 'available', expiresAt, usedSessionId: null, usedAt: null,
+        source: 'closure', exempt: true, closureDate: session.date || null,
+        createdAt: now, updatedAt: now,
+      });
+      issued++;
+    }
+    // leave/waitlist：一併標休館取消（請假者本就有配額補課券、reconcile 會依剩餘請假數收斂）
+    if (e.status !== 'confirmed') {
+      await d.ref.update({ status: 'cancelled', cancelReason: 'closure', cancelledAt: now, updatedAt: now });
+    }
+  }
+  await sDoc.ref.update({
+    status: 'cancelled', cancelReason: reason || '休館停課', closureCancelledBy: staffName || staffId || null,
+    cancelledAt: now, updatedAt: now,
+  });
+  // 請假者配額重算（該堂請假因場次取消而失效 → 額度收斂）
+  const leaveMembers = [...new Set(enSnap.docs.map(d => d.data()).filter(e => e.status === 'leave').map(e => e.memberId))];
+  for (const mid of leaveMembers) {
+    await reconcileMakeupEntitlement(db, mid, session.courseId).catch(() => {});
+  }
+  return { issued, makeupRestored, trialAffected, sessionDate: session.date, courseName: course.name || '' };
 };
 
 // ── 取消補課（會員；上課一天前）────────────────────────────────────
@@ -1640,6 +1710,7 @@ module.exports = {
   cancelLeave,
   precheckCancelLeave,
   cancelMakeup,
+  closureCancelSession,
   reconcileMakeupEntitlement,
   promoteWaitlist,
   trialPaymentDeadline,

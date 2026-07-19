@@ -158,6 +158,24 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
         }
       });
     }
+    // 休館停課補課券（未使用 → 提醒安排補課；用掉/過期自動消失）
+    for (const id of ids) {
+      const snap = await db.collection('courseMakeupRights')
+        .where('memberId', '==', id).where('source', '==', 'closure').get();
+      snap.docs.forEach(d => {
+        const r = d.data();
+        if (r.status !== 'available') return;
+        if (r.expiresAt?.toDate && r.expiresAt.toDate() < new Date()) return;
+        alerts.push({
+          type: 'course_closure_makeup', kind: 'action',
+          label: '課程停課', link: '/member/courses',
+          name: r.courseName || '課程',
+          reason: `${r.closureDate || ''} 因休館停課，已發放補課名額（不佔請假額度），請至課程頁安排補課`,
+          memberName: id === req.member.id ? null : (kids.docs.find(k => k.id === id)?.data()?.name || null),
+        });
+      });
+    }
+
     res.json({ alerts });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

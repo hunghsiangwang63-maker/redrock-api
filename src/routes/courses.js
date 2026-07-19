@@ -127,6 +127,25 @@ router.post('/:courseId/sessions',
   }
 );
 
+// POST /courses/sessions/:sessionId/closure-cancel - 休館停課（場次取消＋正取自動發豁免補課券）
+router.post('/sessions/:sessionId/closure-cancel',
+  authenticate, checkPermission('courses.manage'), auditLog('session.closure_cancel'),
+  async (req, res) => {
+    try {
+      const result = await courseService.closureCancelSession({
+        sessionId: req.params.sessionId,
+        staffId: req.staff.id, staffName: req.staff.name,
+        reason: req.body.reason || '休館停課',
+      });
+      res.json({ success: true, ...result,
+        message: `已停課：發放 ${result.issued} 張休館補課券${result.makeupRestored ? `、還原 ${result.makeupRestored} 張補課券` : ''}${result.trialAffected ? `、${result.trialAffected} 位試上學員請另行處理` : ''}` });
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // GET /courses/sessions/:sessionId/roster - 學員名單
 router.get('/sessions/:sessionId/roster',
   authenticate, checkPermission('courses.manage'),

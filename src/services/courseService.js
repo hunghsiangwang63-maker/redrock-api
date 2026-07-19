@@ -100,6 +100,9 @@ const createCourse = async ({ gymId, staffId, data }) => {
     unlimitedPracticeStart: data.unlimitedPracticeStart || data.startDate || null,
     unlimitedPracticeEnd: data.unlimitedPracticeEnd ||
       (data.endDate ? dayjs(data.endDate).add(data.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : null),
+    // 報名開放（null＝隨時開放）：公開開放日前僅「舊生」（同班別任一梯次曾有效報名）可報
+    enrollOpenDate: data.enrollOpenDate || null,
+    alumniOpenDate: data.alumniOpenDate || null,
     // 退費設定（null＝繼承班別）
     perSessionDeduction: data.perSessionDeduction ?? null,
     handlingFeeRate: data.handlingFeeRate ?? null,

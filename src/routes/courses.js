@@ -753,6 +753,7 @@ router.put('/:courseId',
         'name', 'cohortName', 'categoryId', 'description', 'imageUrl', 'price', 'maxStudents', 'maxWaitlist', 'reservedSlots', 'reservedSlotsNote', 'instructor',
         'startDate', 'endDate', 'startTime', 'endTime', 'weekdays',
         'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays', 'handlingFeeRate', 'preStartFeeRate',
+        'enrollOpenDate', 'alumniOpenDate',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',
         'unlimitedPracticeStart', 'unlimitedPracticeEnd',
         'allowTrial', 'trialPrice', 'isActive', // isActive：停用/啟用（會員課程總覽隱藏，不通知、不動報名）
@@ -1139,6 +1140,34 @@ router.post('/:courseId/enroll-all',
       const { FieldValue } = require('firebase-admin').firestore;
       const now = new Date();
       const maxStudents = course.maxStudents || Infinity;
+
+      // ── 報名開放日 gate（後端權威；員工代報不受限）──
+      // 公開開放日前：僅「舊生」可報（舊生＝同班別任一梯次曾有效報名 confirmed/leave，涵蓋當期在籍與上一期學員）。
+      // 舊生開放日前：全部擋。兩欄皆空＝隨時開放（原行為）。
+      if (!req.staff && course.enrollOpenDate && today < course.enrollOpenDate) {
+        let alumniOk = false;
+        if (course.alumniOpenDate && today >= course.alumniOpenDate) {
+          const myEn = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+            .where('memberId', '==', memberId).get();
+          const myCourseIds = [...new Set(myEn.docs.map(d => d.data())
+            .filter(e => ['confirmed', 'leave'].includes(e.status) && !e.isTrial && !e.isMakeup)
+            .map(e => e.courseId).filter(cid2 => cid2 && cid2 !== courseId))];
+          for (let i = 0; i < myCourseIds.length && !alumniOk; i += 20) {
+            const refs = myCourseIds.slice(i, i + 20).map(id => db.collection('courses').doc(id));
+            (await db.getAll(...refs)).forEach(doc => {
+              if (doc.exists && doc.data().categoryId && doc.data().categoryId === course.categoryId) alumniOk = true;
+            });
+          }
+        }
+        if (!alumniOk) {
+          const msg = course.alumniOpenDate && today < course.alumniOpenDate
+            ? `此課程 ${course.alumniOpenDate} 起開放舊生續報、${course.enrollOpenDate} 全面開放報名`
+            : course.alumniOpenDate
+              ? `目前為舊生續報期間（${course.enrollOpenDate} 全面開放）；您非本班別舊生，請於開放日後報名`
+              : `此課程 ${course.enrollOpenDate} 開放報名`;
+          return res.status(400).json({ error: 'ENROLL_NOT_OPEN', message: msg });
+        }
+      }
 
       // 後端權威計算費用（不信任前端傳入的金額），邏輯與前端顯示一致：
       // 插班報名按剩餘場次比例計收，低於一半加成；隊員身份再套用九折（滿NT$100適用）

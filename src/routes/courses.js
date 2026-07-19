@@ -753,7 +753,7 @@ router.put('/:courseId',
         'name', 'cohortName', 'categoryId', 'description', 'imageUrl', 'price', 'maxStudents', 'maxWaitlist', 'reservedSlots', 'reservedSlotsNote', 'instructor',
         'startDate', 'endDate', 'startTime', 'endTime', 'weekdays',
         'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays', 'handlingFeeRate', 'preStartFeeRate',
-        'enrollOpenDate', 'alumniOpenDate', 'currentTermRenewalDiscount', 'prevTermRenewalDiscount',
+        'enrollOpenDate', 'alumniOpenDate', 'currentTermRenewalDiscount', 'prevTermRenewalDiscount', 'renewalDeadline',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',
         'unlimitedPracticeStart', 'unlimitedPracticeEnd',
         'allowTrial', 'trialPrice', 'isActive', // isActive：停用/啟用（會員課程總覽隱藏，不通知、不動報名）
@@ -1193,10 +1193,12 @@ router.post('/:courseId/enroll-all',
         : (course.price || 0);
 
       // ── 續報優惠（NT$ 折抵，後端權威）：當期在籍優先，其次隔期（上一期）；折後再套隊員9折 ──
+      // 期限＝續報截止日 renewalDeadline（含當日）；過期不折。空＝不限期限。
       let renewalDiscount = 0, renewalDiscountType = null;
-      if (alumni.isCurrent && (course.currentTermRenewalDiscount > 0)) {
+      const renewalOpen = !course.renewalDeadline || today <= course.renewalDeadline;
+      if (renewalOpen && alumni.isCurrent && (course.currentTermRenewalDiscount > 0)) {
         renewalDiscount = Number(course.currentTermRenewalDiscount); renewalDiscountType = 'current_term';
-      } else if (alumni.isPrev && (course.prevTermRenewalDiscount > 0)) {
+      } else if (renewalOpen && alumni.isPrev && (course.prevTermRenewalDiscount > 0)) {
         renewalDiscount = Number(course.prevTermRenewalDiscount); renewalDiscountType = 'prev_term';
       }
       const feeAfterRenewal = Math.max(0, baseFee - renewalDiscount);

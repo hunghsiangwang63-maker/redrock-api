@@ -106,6 +106,7 @@ const createCourse = async ({ gymId, staffId, data }) => {
     // 續報優惠（NT$ 折抵；0/null＝無）：當期在籍／上一期（隔期）學員報名自動折抵
     currentTermRenewalDiscount: data.currentTermRenewalDiscount != null ? Number(data.currentTermRenewalDiscount) || 0 : null,
     prevTermRenewalDiscount: data.prevTermRenewalDiscount != null ? Number(data.prevTermRenewalDiscount) || 0 : null,
+    renewalDeadline: data.renewalDeadline || null, // 續報截止日：兩種續報優惠皆只到此日（含當日）；空＝不限
     // 退費設定（null＝繼承班別）
     perSessionDeduction: data.perSessionDeduction ?? null,
     handlingFeeRate: data.handlingFeeRate ?? null,

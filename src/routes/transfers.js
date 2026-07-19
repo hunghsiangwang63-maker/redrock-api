@@ -178,8 +178,11 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
         try {
           const bkDoc = await bkRef.get();
           if (bkDoc.exists) {
-            const { recordExperienceRevenue } = require('../services/experienceService');
-            await recordExperienceRevenue(db, bkRef, { id: bkDoc.id, ...bkDoc.data() }, req.staff);
+            const bk = { id: bkDoc.id, ...bkDoc.data() };
+            const { recordExperienceRevenue, syncExperienceTickets } = require('../services/experienceService');
+            await recordExperienceRevenue(db, bkRef, bk, req.staff);
+            // 試上：確認收款自動發 1 張當日體驗券（冪等；當日豁免墜測）。一般體驗維持員工手動發放。
+            if (bk.kind === 'trial') await syncExperienceTickets(db, bk, req.staff, true).catch(e => console.error('[試上發券/transfers]', e.message));
           }
         } catch (e) { console.error('[體驗營收/transfers]', e.message); }
       } else if (t.orderType === 'course' && t.refId) {

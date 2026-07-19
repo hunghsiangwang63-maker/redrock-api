@@ -235,6 +235,8 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
         await enDoc.ref.update({ paymentStatus: 'paid', paymentDeadline: null, updatedAt: new Date() });
         await ref.update({ status: 'confirmed', confirmedBy: req.staff.id, confirmedByName: req.staff.name, confirmedAt: new Date(), updatedAt: new Date() });
         await recordExperienceRevenue(db, ref, booking, req.staff).catch(e => console.error('[體驗營收]', e.message));
+        // 試上確認收款 → 自動發 1 張當日體驗券（冪等：sync 依已發張數補差；入場當日豁免墜測）
+        await syncExperienceTickets(db, booking, req.staff, true).catch(e => console.error('[試上發券]', e.message));
         if (booking.contactEmail) {
           emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking).catch(e => console.error('[Email]', e.message));
         }
@@ -255,6 +257,7 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
         confirmedAt: new Date(), updatedAt: new Date(), trialEnrollmentId: trialResult.enrollmentId,
       });
       await recordExperienceRevenue(db, ref, booking, req.staff).catch(e => console.error('[體驗營收]', e.message));
+      await syncExperienceTickets(db, booking, req.staff, true).catch(e => console.error('[試上發券]', e.message));
       if (booking.contactEmail) {
         emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking).catch(e => console.error('[Email]', e.message));
       }

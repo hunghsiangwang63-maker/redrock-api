@@ -5,7 +5,7 @@ const { getDb, COLLECTIONS } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 
 // ── 建立通知 ────────────────────────────────────────────────────
-const createNotification = async ({ gymId, targetRole, targetStaffId, type, title, body, referenceId, referenceType }) => {
+const createNotification = async ({ gymId, targetRole, targetStaffId, type, title, body, referenceId, referenceType, link }) => {
   const db = getDb();
   const notifId = uuidv4();
   const now = new Date();
@@ -20,6 +20,7 @@ const createNotification = async ({ gymId, targetRole, targetStaffId, type, titl
     body,
     referenceId: referenceId || null,
     referenceType: referenceType || null,
+    link: link || null,   // 通知面板「查看」導向；未帶時前端依 type 補預設連結
     isRead: false,
     createdAt: now,
   };
@@ -29,7 +30,7 @@ const createNotification = async ({ gymId, targetRole, targetStaffId, type, titl
 };
 
 // ── 批次通知某館的特定角色 ───────────────────────────────────────
-const notifyRoleInGym = async ({ gymId, role, type, title, body, referenceId, referenceType }) => {
+const notifyRoleInGym = async ({ gymId, role, type, title, body, referenceId, referenceType , link}) => {
   const db = getDb();
 
   // 找出符合條件的 staff
@@ -47,7 +48,7 @@ const notifyRoleInGym = async ({ gymId, role, type, title, body, referenceId, re
   const promises = staffList.map(staff =>
     createNotification({
       gymId, targetRole: role, targetStaffId: staff.id,
-      type, title, body, referenceId, referenceType,
+      type, title, body, referenceId, referenceType, link,
     })
   );
 

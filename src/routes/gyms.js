@@ -18,7 +18,9 @@ const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const { authenticate, checkPermission, requireManagerOrStation, auditLog } = require('../middleware/auth');
-const { getDb, COLLECTIONS } = require('../config/firebase');
+const { getDb, getStorage, COLLECTIONS } = require('../config/firebase');
+const multer = require('multer');
+const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
@@ -355,6 +357,38 @@ router.put('/:id/hours',
 );
 
 // POST /gyms/:id/announcements - 新增公告
+// POST /gyms/:id/announcements/:aid/image - 上傳公告圖片（存 Storage、簽名 URL 寫入 bannerImage）
+// 權限同編輯公告（管理員或值班＋館別隔離）；休館/特殊時間公告限管理員（讀既有公告 type 判斷）
+router.post('/:id/announcements/:aid/image',
+  authenticate, requireManagerOrStation, announceGymGuard,
+  auditLog('announcement.image.upload'),
+  uploadImage.single('file'),
+  async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'NO_FILE', message: '請選擇圖片' });
+      if (!(req.file.mimetype || '').startsWith('image/')) {
+        return res.status(400).json({ error: 'NOT_IMAGE', message: '只能上傳圖片檔' });
+      }
+      const db = getDb();
+      const doc = await db.collection(ANNOUNCE_COLLECTION).doc(req.params.aid).get();
+      if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到公告' });
+      const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+      if (!isManager && MANAGER_ONLY_TYPES.includes(doc.data().type)) {
+        return res.status(403).json({ error: 'MANAGER_ONLY_TYPE', message: '休館／特殊營業時間公告限管理員編輯' });
+      }
+      const ext = (req.file.originalname.split('.').pop() || 'jpg').toLowerCase();
+      const bucket = getStorage().bucket();
+      const file = bucket.file(`announcements/banner_${req.params.aid}_${uuidv4()}.${ext}`);
+      await file.save(req.file.buffer, { contentType: req.file.mimetype });
+      const [url] = await file.getSignedUrl({ action: 'read', expires: '2035-01-01' });
+      await doc.ref.update({ bannerImage: url, updatedAt: new Date() });
+      res.json({ message: '公告圖片已上傳', bannerImage: url });
+    } catch (err) {
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 router.post('/:id/announcements',
   authenticate,
   requireManagerOrStation, announceGymGuard, announceTypeGuard,

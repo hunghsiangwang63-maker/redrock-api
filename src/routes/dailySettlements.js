@@ -590,13 +590,13 @@ router.get('/invoice-export', authenticate, async (req, res) => {
     aoa.push(['統一編號', '', '', taxId]);
     aoa.push(['營業人名稱', '', '', bizName]);
     aoa.push(['發票字軌', '', '', track]);
-    aoa.push(['開立日期', '星期', '交易客次', '開立發票起號', '開立發票迄號', '發票總金額', '作廢發票號碼', '集點卡最前號', '優惠卡最前號', '全票最前號']);
+    aoa.push(['開立日期', '星期', '交易客次', '開立發票起號', '開立發票迄號', '發票總金額', '作廢發票號碼']);
 
     const segCount = (st, en) => (/^\d+$/.test(String(st)) && /^\d+$/.test(String(en))) ? (parseInt(en, 10) - parseInt(st, 10) + 1) : 0;
     let d = dayjs(start); const last = dayjs(end);
     while (d.isBefore(last.add(1, 'day'))) {
       const dt = d.format('YYYY-MM-DD'); const s = byDate[dt];
-      if (!s) { aoa.push([d.format('YYYY/MM/DD'), WD[d.day()], '', '', '', '', '', '', '', '']); d = d.add(1, 'day'); continue; }
+      if (!s) { aoa.push([d.format('YYYY/MM/DD'), WD[d.day()], '', '', '', '', '']); d = d.add(1, 'day'); continue; }
       // 多段發票逐段列（無 invoiceSegments 則回退舊單段）；日彙總（客次/金額/卡號）放第一段列
       const segs = (Array.isArray(s.invoiceSegments) && s.invoiceSegments.length)
         ? s.invoiceSegments : [{ start: s.invoiceStartNumber || '', last: s.invoiceLastNumber || '' }];
@@ -606,14 +606,13 @@ router.get('/invoice-export', authenticate, async (req, res) => {
           idx === 0 ? d.format('YYYY/MM/DD') : '', idx === 0 ? WD[d.day()] : '', idx === 0 ? totalCnt : '',
           sg.start || '', sg.last || '', idx === 0 ? (s.income?.total ?? '') : '',
           idx === 0 ? (s.invoiceVoidNumbers || '') : '',
-          '', idx === 0 ? (s.cardOrangeFirst || '') : '', idx === 0 ? (s.cardFullFirst || '') : '',
         ]);
       });
       d = d.add(1, 'day');
     }
 
     const ws = require('../utils/xlsxSafe').sanitizeSheet(XLSX.utils.aoa_to_sheet(aoa));
-    ws['!cols'] = [{ wch: 12 }, { wch: 5 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+    ws['!cols'] = [{ wch: 12 }, { wch: 5 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
     const sheetName = `${year}${String(m1).padStart(2, '0')}${String(m2).padStart(2, '0')}`;
     XLSX.utils.book_append_sheet(wb, ws, sheetName);

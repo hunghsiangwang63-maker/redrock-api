@@ -161,9 +161,10 @@ router.post('/cross-makeups/:id/done',
   }
 );
 
-// GET /courses/sessions/:sessionId/roster - 學員名單
+// GET /courses/sessions/:sessionId/roster - 學員名單（唯讀 → courses.view：全角色＋值班皆可看，
+// 原 courses.manage 讓 part_time／值班 403、前端吞錯誤顯示「尚無學員報名」誤導）
 router.get('/sessions/:sessionId/roster',
-  authenticate, checkPermission('courses.manage'),
+  authenticate, checkPermission('courses.view'),
   async (req, res) => {
     try {
       const roster = await courseService.getSessionRoster(req.params.sessionId);

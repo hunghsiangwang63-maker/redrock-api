@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.66.0-falltest-schedule-skip',
+    version: '3.67.0-roster-view-permission',
   });
 });
 

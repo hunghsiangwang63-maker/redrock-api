@@ -102,6 +102,19 @@ router.post('/', authenticateAny, async (req, res) => {
 });
 
 // ── GET /fall-test-bookings/my ───────────────────────────────────
+// ── POST /fall-test-bookings/skip-schedule ─ 會員宣告「不入場攀爬、暫不安排墜測」──
+// 只影響 App onboarding gate 的顯示（不再卡排測畫面）；不建站台待辦、不動入場關卡（入場仍擋到通過為止）。
+// 之後想爬可隨時從「墜落測驗」頁安排（建立 booking 後 gate 本就放行）。
+router.post('/skip-schedule', authenticateMember, async (req, res) => {
+  try {
+    const db = getDb();
+    await db.collection('members').doc(req.member.id).update({
+      fallTestScheduleSkipped: true, updatedAt: new Date(),
+    });
+    res.json({ success: true, message: '已略過安排墜落測驗（入場前仍需通過測驗）' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 router.get('/my', authenticateMember, async (req, res) => {
   try {
     const db = getDb();

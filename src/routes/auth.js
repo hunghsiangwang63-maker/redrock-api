@@ -339,6 +339,7 @@ router.get('/member/me', authenticateMember, async (req, res) => {
         isMinor: member.isMinor || false,
         isTeamMember: isActiveTeamMember(member),
         waiverSigned: waiverData?.isComplete || false,
+        fallTestScheduleSkipped: member.fallTestScheduleSkipped || false,
       },
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }

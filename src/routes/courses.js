@@ -872,20 +872,86 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
 }
 
 // GET /courses/leave-makeup-summary/all - 全部課程假補總表（可帶 gymId；只回有資料的課程）
+// 效能：整批一次撈（courses/enrollments/rights/claims/categories 各一查詢＋members/sessions getAll），
+// 勿逐課呼叫 buildLeaveMakeupSummary（19 門課串行 15 秒 → 前端 timeout）。
 router.get('/leave-makeup-summary/all',
   authenticate, checkPermission('courses.view'),
   async (req, res) => {
     try {
       const db = getDb();
       const gymId = req.query.gymId || null;
-      const cs = await db.collection('courses').get();
-      const courses = cs.docs.map(d => ({ id: d.id, ...d.data() }))
+      const today = taiwanToday();
+      const [csSnap, enSnap, mkSnap, pcSnap, catSnap] = await Promise.all([
+        db.collection('courses').get(),
+        db.collection(COLLECTIONS.COURSE_ENROLLMENTS).get(),
+        db.collection('courseMakeupRights').get(),
+        db.collection('pendingCourseClaims').get(),
+        db.collection('courseCategories').get(),
+      ]);
+      const cats = {}; catSnap.docs.forEach(d => { cats[d.id] = { id: d.id, ...d.data() }; });
+      const courses = csSnap.docs.map(d => ({ id: d.id, ...d.data() }))
         .filter(c => c.status !== 'cancelled' && c.isActive !== false && c.source !== 'experience')
         .filter(c => !gymId || c.gymId === gymId);
+      const courseIds = new Set(courses.map(c => c.id));
+
+      const enByCourse = {}, mkByCourse = {}, pcByCourse = {};
+      enSnap.docs.forEach(d => { const e = d.data(); if (e.isTrial || !courseIds.has(e.courseId)) return; ((enByCourse[e.courseId] = enByCourse[e.courseId] || {})[e.memberId] = (enByCourse[e.courseId][e.memberId] || [])).push(e); });
+      mkSnap.docs.forEach(d => { const r = { id: d.id, ...d.data() }; if (!courseIds.has(r.courseId)) return; ((mkByCourse[r.courseId] = mkByCourse[r.courseId] || {})[r.memberId] = (mkByCourse[r.courseId][r.memberId] || [])).push(r); });
+      pcSnap.docs.forEach(d => { const x = d.data(); if (x.claimed === true || !courseIds.has(x.courseId)) return; (pcByCourse[x.courseId] = pcByCourse[x.courseId] || []).push({ name: x.name, leaveDates: x.leaveDates || [] }); });
+
+      // 姓名/場次批次補齊
+      const allMemberIds = [...new Set(Object.values(enByCourse).flatMap(m => Object.keys(m)))];
+      const nameMap = {};
+      for (let i = 0; i < allMemberIds.length; i += 20) {
+        const refs = allMemberIds.slice(i, i + 20).map(id => db.collection(COLLECTIONS.MEMBERS).doc(id));
+        (await db.getAll(...refs)).forEach(doc => { if (doc.exists) nameMap[doc.id] = { name: doc.data().name, phone: doc.data().phone }; });
+      }
+      const usedSessionIds = [...new Set(mkSnap.docs.map(d => d.data()).filter(r => courseIds.has(r.courseId) && r.status === 'used' && r.usedSessionId).map(r => r.usedSessionId))];
+      const sessMap = {};
+      for (let i = 0; i < usedSessionIds.length; i += 20) {
+        const refs = usedSessionIds.slice(i, i + 20).map(id => db.collection('courseSessions').doc(id));
+        (await db.getAll(...refs)).forEach(doc => { if (doc.exists) sessMap[doc.id] = doc.data(); });
+      }
+
       const groups = [];
       for (const c of courses) {
-        const g = await buildLeaveMakeupSummary(db, c.id, c);
-        if (g && (g.rows.length || g.pendingClaims.length)) groups.push(g);
+        const rules = courseService.resolveRules(c, cats[c.categoryId] || null);
+        const byMember = enByCourse[c.id] || {};
+        const rows = Object.keys(byMember).map(mid => {
+          const ens = byMember[mid];
+          const active = ens.filter(e => ['confirmed', 'leave', 'waitlist'].includes(e.status));
+          if (!active.length) return null;
+          const leaves = ens.filter(e => e.status === 'leave').map(e => e.date).filter(Boolean).sort();
+          const cap = ens.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rules.maxLeaves;
+          const rights = (mkByCourse[c.id] || {})[mid] || [];
+          const avail = rights.filter(r => r.status === 'available');
+          const used = rights.filter(r => r.status === 'used');
+          const expiresAt = avail[0]?.expiresAt?.toDate?.() || null;
+          const bookedMakeups = used.map(r => {
+            const sx = sessMap[r.usedSessionId];
+            return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today } : null;
+          }).filter(Boolean).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+          return {
+            memberId: mid,
+            memberName: nameMap[mid]?.name || ens[0].memberName || '',
+            memberPhone: nameMap[mid]?.phone || '',
+            leaves, leaveCount: leaves.length, leaveCap: cap,
+            makeupAvailable: avail.length, makeupUsed: used.length, makeupTotal: avail.length + used.length,
+            makeupExpiresAt: expiresAt ? new Date(expiresAt.getTime() + 8 * 3600000).toISOString().slice(0, 10) : null,
+            bookedMakeups,
+          };
+        }).filter(Boolean).sort((a, b) => a.memberName.localeCompare(b.memberName, 'zh-Hant'));
+        const pendingClaims = pcByCourse[c.id] || [];
+        if (rows.length || pendingClaims.length) {
+          groups.push({
+            course: {
+              id: c.id, name: c.name, gymId: c.gymId || null,
+              maxLeaves: rules.maxLeaves,
+              makeupDeadline: c.endDate ? require('dayjs')(c.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null,
+            },
+            rows, pendingClaims,
+          });
+        }
       }
       groups.sort((a, b) => (a.course.name || '').localeCompare(b.course.name || '', 'zh-Hant'));
       res.json({ groups });

@@ -146,6 +146,21 @@ router.post('/sessions/:sessionId/closure-cancel',
   }
 );
 
+// POST /courses/cross-makeups/:id/done - 跨期補課結案（上完課標 done；名單顯示為出席）
+router.post('/cross-makeups/:id/done',
+  authenticate, checkPermission('courses.manage'), auditLog('cross_makeup.done'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const ref = db.collection('crossCohortMakeups').doc(req.params.id);
+      const doc = await ref.get();
+      if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
+      await ref.update({ status: 'done', doneAt: new Date(), doneBy: req.staff.name || req.staff.id, updatedAt: new Date() });
+      res.json({ success: true, message: `${doc.data().name} 跨期補課已結案` });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
 // GET /courses/sessions/:sessionId/roster - 學員名單
 router.get('/sessions/:sessionId/roster',
   authenticate, checkPermission('courses.manage'),

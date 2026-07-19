@@ -772,6 +772,95 @@ router.put('/:courseId',
 
 
 // GET /courses/:courseId/enrollments - 取得課程所有報名名單（員工用）
+// GET /courses/:courseId/leave-makeup-summary - 請假補課總表（員工）
+// 每位學員：請假日期/次數/上限、補課額度（剩/共/到期）、已排補課（含是否已上）；
+// 另附此課程「待認領」名單的預標請假（pendingCourseClaims.leaveDates），供核對未註冊者。
+router.get('/:courseId/leave-makeup-summary',
+  authenticate, checkPermission('courses.view'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const courseId = req.params.courseId;
+      const courseDoc = await db.collection('courses').doc(courseId).get();
+      if (!courseDoc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
+      const course = courseDoc.data();
+      const rules = courseService.resolveRules(course, await courseService.getCategoryOf(db, course.categoryId));
+      const today = taiwanToday();
+
+      const enSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).where('courseId', '==', courseId).get();
+      const byMember = {};
+      enSnap.docs.forEach(d => {
+        const e = d.data();
+        if (e.isTrial) return; // 試上不列入請假補課
+        (byMember[e.memberId] = byMember[e.memberId] || []).push(e);
+      });
+
+      const rightsSnap = await db.collection('courseMakeupRights').where('courseId', '==', courseId).get();
+      const rightsByMember = {};
+      rightsSnap.docs.forEach(d => {
+        const r = { id: d.id, ...d.data() };
+        (rightsByMember[r.memberId] = rightsByMember[r.memberId] || []).push(r);
+      });
+
+      // 已排補課：用 used 券的 usedSessionId 反查場次（含補到其他班別的場次）
+      const usedSessionIds = [...new Set(Object.values(rightsByMember).flat()
+        .filter(r => r.status === 'used' && r.usedSessionId).map(r => r.usedSessionId))];
+      const sessMap = {};
+      for (let i = 0; i < usedSessionIds.length; i += 20) {
+        const refs = usedSessionIds.slice(i, i + 20).map(id => db.collection('courseSessions').doc(id));
+        (await db.getAll(...refs)).forEach(doc => { if (doc.exists) sessMap[doc.id] = doc.data(); });
+      }
+
+      // 姓名/電話以 members 集合權威補齊
+      const memberIds = Object.keys(byMember);
+      const nameMap = {};
+      for (let i = 0; i < memberIds.length; i += 20) {
+        const refs = memberIds.slice(i, i + 20).map(id => db.collection(COLLECTIONS.MEMBERS).doc(id));
+        (await db.getAll(...refs)).forEach(doc => { if (doc.exists) nameMap[doc.id] = { name: doc.data().name, phone: doc.data().phone }; });
+      }
+
+      const rows = memberIds.map(mid => {
+        const ens = byMember[mid];
+        const active = ens.filter(e => ['confirmed', 'leave', 'waitlist'].includes(e.status));
+        if (!active.length) return null; // 全取消不列
+        const leaves = ens.filter(e => e.status === 'leave').map(e => e.date).filter(Boolean).sort();
+        const cap = ens.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rules.maxLeaves;
+        const rights = rightsByMember[mid] || [];
+        const avail = rights.filter(r => r.status === 'available');
+        const used = rights.filter(r => r.status === 'used');
+        const expiresAt = avail[0]?.expiresAt?.toDate?.() || null;
+        const bookedMakeups = used.map(r => {
+          const sx = sessMap[r.usedSessionId];
+          return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today } : null;
+        }).filter(Boolean).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+        return {
+          memberId: mid,
+          memberName: nameMap[mid]?.name || ens[0].memberName || '',
+          memberPhone: nameMap[mid]?.phone || '',
+          leaves, leaveCount: leaves.length, leaveCap: cap,
+          makeupAvailable: avail.length, makeupUsed: used.length, makeupTotal: avail.length + used.length,
+          makeupExpiresAt: expiresAt ? expiresAt.toISOString().slice(0, 10) : null,
+          bookedMakeups,
+        };
+      }).filter(Boolean).sort((a, b) => a.memberName.localeCompare(b.memberName, 'zh-Hant'));
+
+      // 未認領（此課程的 pendingCourseClaims）
+      const pcSnap = await db.collection('pendingCourseClaims').where('courseId', '==', courseId).get();
+      const pendingClaims = pcSnap.docs.map(d => d.data()).filter(x => x.claimed !== true)
+        .map(x => ({ name: x.name, leaveDates: x.leaveDates || [] }));
+
+      res.json({
+        course: {
+          id: courseId, name: course.name,
+          maxLeaves: rules.maxLeaves,
+          makeupDeadline: course.endDate ? dayjs(course.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null,
+        },
+        rows, pendingClaims,
+      });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
 router.get('/:courseId/enrollments',
   authenticate, checkPermission('courses.view'),
   async (req, res) => {

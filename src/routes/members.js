@@ -305,6 +305,7 @@ router.get('/reports/active-course-students', authenticate, async (req, res) => 
       enrollSnap.docs.forEach(d => {
         const e = d.data();
         if (e.status !== 'confirmed' || e.pauseStatus === 'paused') return;
+        if (e.isMakeup || e.isTrial) return; // 補課/試上＝單日行為（入場資格僅當天），不列為該班「課程學員」
         if (!seen.has(e.memberId)) seen.set(e.memberId, { memberId: e.memberId, memberName: e.memberName || '' });
       });
       const members = [...seen.values()];

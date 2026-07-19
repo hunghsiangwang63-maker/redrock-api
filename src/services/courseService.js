@@ -737,6 +737,15 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
   // 自動遞補候補者（遞補失敗不中斷請假）
   try { await promoteWaitlist(enrollment.sessionId); } catch (err) { console.error('promoteWaitlist 失敗', err.message); }
 
+  // 通知同館管理員：釋出名額（過渡期補課由櫃檯以舊表單安排，需知道哪堂空出位子）
+  await notifyCourseManagers({
+    gymId: enrollment.gymId, type: 'course_leave',
+    title: '課程請假',
+    body: `${enrollment.memberName || '學員'} 已請假：${enrollment.courseName || ''} ${enrollment.date} ${enrollment.startTime || ''}` +
+      (overLimit ? '（超過上限，不產生補課資格）' : '，釋出 1 個名額（可安排補課）'),
+    referenceId: enrollmentId,
+  });
+
   return {
     makeup: null, overLimit, entitlement: rec,
     message: overLimit ? `請假成功（已達補課上限 ${rec.cap} 次，此次請假不增加補課資格）`
@@ -748,6 +757,15 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
 // 條件：該堂課尚未開始、該場次仍有名額（可能已被候補遞補佔滿）。
 // 連動：補課資格作廢；若補課資格已用（已報補課且補課那堂未上）→ 補課報名一併取消並釋放名額；
 //       補課那堂已上過 → 擋（MAKEUP_TAKEN，不可反悔）。
+// ── 課程異動通知（同館 gym_manager＋super_admin；失敗不阻斷主流程）───────
+const notifyCourseManagers = async ({ gymId, type, title, body, referenceId }) => {
+  for (const role of ['gym_manager', 'super_admin']) {
+    try {
+      await notifyRoleInGym({ gymId, role, type, title, body, referenceId, referenceType: 'courseEnrollment' });
+    } catch (e) { console.error('notifyCourseManagers 失敗', e.message); }
+  }
+};
+
 const cancelLeave = async ({ enrollmentId, memberId }) => {
   const db = getDb();
   const enrollDoc = await db.collection(ENROLLMENT_COLLECTION).doc(enrollmentId).get();
@@ -808,6 +826,13 @@ const cancelLeave = async ({ enrollmentId, memberId }) => {
   const course2 = courseDoc2.exists ? courseDoc2.data() : {};
   const rules2 = resolveRules(course2, await getCategoryOf(db, course2.categoryId));
   const rec = await reconcileMakeupEntitlement(db, memberId, enrollment.courseId, rules2, { ...enrollment, id: enrollmentId });
+
+  await notifyCourseManagers({
+    gymId: enrollment.gymId, type: 'course_leave_cancel',
+    title: '取消請假（銷假）',
+    body: `${enrollment.memberName || '學員'} 已取消請假、恢復上課：${enrollment.courseName || ''} ${enrollment.date} ${enrollment.startTime || ''}（名額收回）`,
+    referenceId: enrollmentId,
+  });
 
   return {
     entitlement: rec,
@@ -981,6 +1006,13 @@ const cancelMakeup = async ({ enrollmentId, memberId }) => {
       await mk.ref.update({ status: 'available', usedSessionId: null, usedAt: null, updatedAt: now });
     }
   }
+  await notifyCourseManagers({
+    gymId: enrollment.gymId, type: 'course_makeup_cancel',
+    title: '取消補課',
+    body: `${enrollment.memberName || '學員'} 已取消補課：${enrollment.courseName || ''} ${enrollment.date} ${enrollment.startTime || ''}（釋出 1 個名額）`,
+    referenceId: enrollmentId,
+  });
+
   return { message: '已取消補課，補課資格已退回，可重新選擇場次' };
 };
 
@@ -1207,6 +1239,13 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
 
   // 標記補課資格已使用
   await makeupDoc.ref.update({ status: 'used', usedSessionId: targetSessionId, usedAt: now, updatedAt: now });
+
+  await notifyCourseManagers({
+    gymId: session.gymId, type: 'course_makeup_booked',
+    title: '補課預約',
+    body: `${_mName || '學員'} 已預約補課：${session.courseName || ''} ${session.date} ${session.startTime || ''}（佔 1 個名額）`,
+    referenceId: enrollmentId,
+  });
 
   return { message: '補課報名成功' };
 };

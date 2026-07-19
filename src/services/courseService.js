@@ -1169,11 +1169,14 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
 
   const now = new Date();
 
-  // 建立補課報名
+  // 建立補課報名（memberName 權威補齊——報表/名單顯示用，缺了會 fallback 成 memberId）
+  const _mDoc = await db.collection('members').doc(memberId).get();
+  const _mName = _mDoc.exists ? (_mDoc.data().name || '') : '';
   const enrollmentId = uuidv4();
   await db.collection(ENROLLMENT_COLLECTION).doc(enrollmentId).set({
     id: enrollmentId,
     memberId,
+    memberName: _mName,
     sessionId: targetSessionId,
     courseId: session.courseId,
     courseName: session.courseName,

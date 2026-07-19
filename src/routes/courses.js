@@ -853,7 +853,7 @@ router.get('/:courseId/leave-makeup-summary',
         course: {
           id: courseId, name: course.name,
           maxLeaves: rules.maxLeaves,
-          makeupDeadline: course.endDate ? dayjs(course.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null,
+          makeupDeadline: course.endDate ? require('dayjs')(course.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null,
         },
         rows, pendingClaims,
       });

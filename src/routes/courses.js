@@ -791,18 +791,11 @@ router.put('/:courseId',
 
 
 // GET /courses/:courseId/enrollments - 取得課程所有報名名單（員工用）
-// GET /courses/:courseId/leave-makeup-summary - 請假補課總表（員工）
-// 每位學員：請假日期/次數/上限、補課額度（剩/共/到期）、已排補課（含是否已上）；
-// 另附此課程「待認領」名單的預標請假（pendingCourseClaims.leaveDates），供核對未註冊者。
-router.get('/:courseId/leave-makeup-summary',
-  authenticate, checkPermission('courses.view'),
-  async (req, res) => {
-    try {
-      const db = getDb();
-      const courseId = req.params.courseId;
-      const courseDoc = await db.collection('courses').doc(courseId).get();
-      if (!courseDoc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
-      const course = courseDoc.data();
+// ── 請假補課總表共用邏輯（單一課程）──────────────────────────────
+async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
+      const courseDoc = courseDataOpt ? null : await db.collection('courses').doc(courseId).get();
+      if (!courseDataOpt && !courseDoc.exists) return null;
+      const course = courseDataOpt || courseDoc.data();
       const rules = courseService.resolveRules(course, await courseService.getCategoryOf(db, course.categoryId));
       const today = taiwanToday();
 
@@ -868,14 +861,47 @@ router.get('/:courseId/leave-makeup-summary',
       const pendingClaims = pcSnap.docs.map(d => d.data()).filter(x => x.claimed !== true)
         .map(x => ({ name: x.name, leaveDates: x.leaveDates || [] }));
 
-      res.json({
+      return {
         course: {
-          id: courseId, name: course.name,
+          id: courseId, name: course.name, gymId: course.gymId || null,
           maxLeaves: rules.maxLeaves,
           makeupDeadline: course.endDate ? require('dayjs')(course.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null,
         },
         rows, pendingClaims,
-      });
+      };
+}
+
+// GET /courses/leave-makeup-summary/all - 全部課程假補總表（可帶 gymId；只回有資料的課程）
+router.get('/leave-makeup-summary/all',
+  authenticate, checkPermission('courses.view'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const gymId = req.query.gymId || null;
+      const cs = await db.collection('courses').get();
+      const courses = cs.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(c => c.status !== 'cancelled' && c.isActive !== false && c.source !== 'experience')
+        .filter(c => !gymId || c.gymId === gymId);
+      const groups = [];
+      for (const c of courses) {
+        const g = await buildLeaveMakeupSummary(db, c.id, c);
+        if (g && (g.rows.length || g.pendingClaims.length)) groups.push(g);
+      }
+      groups.sort((a, b) => (a.course.name || '').localeCompare(b.course.name || '', 'zh-Hant'));
+      res.json({ groups });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
+// GET /courses/:courseId/leave-makeup-summary - 單一課程請假補課總表
+router.get('/:courseId/leave-makeup-summary',
+  authenticate, checkPermission('courses.view'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const result = await buildLeaveMakeupSummary(db, req.params.courseId, null);
+      if (!result) return res.status(404).json({ error: 'NOT_FOUND' });
+      res.json(result);
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );

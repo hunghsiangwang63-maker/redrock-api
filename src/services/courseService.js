@@ -1689,13 +1689,16 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
     const c = d.data();
     const rules = resolveRules(c, cats[c.categoryId]);
     if (rules.allowTrial === true && c.status !== 'cancelled' && c.isActive !== false) {
-      trialCourses[d.id] = { trialPrice: rules.trialPrice || 0, courseName: c.name, instructor: c.instructor || '', maxWaitlist: (c.maxWaitlist ?? null) };
+      trialCourses[d.id] = { trialPrice: rules.trialPrice || 0, courseName: c.name, instructor: c.instructor || '', maxWaitlist: (c.maxWaitlist ?? null), categoryName: cats[c.categoryId]?.name || '其他', cohortName: c.cohortName || '' };
     }
   });
   if (Object.keys(trialCourses).length === 0) return [];
 
   const from = fromDate || taiwanToday();
-  const to = toDate || dayjs(from).add(60, 'day').format('YYYY-MM-DD');
+  // 試上只開放「報名日 2 週內」的場次（政策 2026-07-20）→ to 一律夾為 today+14
+  const cap = dayjs(taiwanToday()).add(14, 'day').format('YYYY-MM-DD');
+  const rawTo = toDate || dayjs(from).add(60, 'day').format('YYYY-MM-DD');
+  const to = rawTo < cap ? rawTo : cap;
   const sessions = await getSessions(gymId, from, to);
   return sessions
     // 額滿仍可候補（waitlist 未滿）→ 保留列出（前端標「額滿・可候補」）；正取+候補皆滿才排除
@@ -1709,6 +1712,8 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
     .map(s => ({
       ...s,
       trialPrice: trialCourses[s.courseId].trialPrice,
+      categoryName: trialCourses[s.courseId].categoryName,
+      cohortName: trialCourses[s.courseId].cohortName,
       remaining: Math.max(0, (s.maxStudents || 0) - (s.enrolledCount || 0)),
       isFull: (s.enrolledCount || 0) >= (s.maxStudents || 0),
     }));

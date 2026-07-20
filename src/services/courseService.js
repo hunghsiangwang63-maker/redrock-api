@@ -1437,6 +1437,8 @@ const getCourses = async (gymId) => {
       categoryGroup: cat?.group || null,               // adult | youth | special（大類）
       categoryDescription: cat?.description || null,   // 班別共用課程介紹
       categoryImageUrl: cat?.imageUrl || null,         // 班別共用廣告照片
+      makeupTypeIds: cat?.makeupTypeIds || [],         // 補課類型（跨班別互補：共用類型可互相補課）
+      makeupGroup: cat?.makeupGroup || null,           // 舊制補課群組（相容）
       refundFeeRate: _rules.handlingFeeRate ?? 0.2, // 開課後退費手續費率（預設 20%，班別/梯次可調）
       refundPreStartFeeRate: _rules.preStartFeeRate ?? 0.05, // 開課前退費手續費率（預設 5%，班別/梯次可調）
       ruleMaxLeaves: _rules.maxLeaves,                       // 整期可請假次數（報名規則方框顯示）

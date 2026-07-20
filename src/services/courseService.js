@@ -1190,15 +1190,13 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
         getCategoryOf(db, origCourse.categoryId), getCategoryOf(db, targetCourse.categoryId),
       ]);
       const sameCategory = targetCourse.categoryId === origCourse.categoryId;
-      // 補課類型（named 實體、班別多選）：兩班別有任一共同類型即可互補
-      const origTypes = origCat?.makeupTypeIds || [];
-      const targetTypes = targetCat?.makeupTypeIds || [];
-      const sharedType = origTypes.some(t => targetTypes.includes(t));
-      // 舊制相容：同 makeupGroup key 亦放行
-      const legacyGroup = origCat?.makeupGroup && origCat.makeupGroup !== origCourse.categoryId
-        && origCat.makeupGroup === targetCat?.makeupGroup;
-      if (!sameCategory && !sharedType && !legacyGroup) {
-        throw { code: 'DIFFERENT_CATEGORY', message: '補課只能選擇相同班別（或同補課類型）的課程' };
+      // 補課類型（單向）：來源班別的「可補課去類型」(makeupTypeIds) 含目標班別的「本班別類型」(makeupSelfType) 才放行。
+      // 例：青少年掛「入門班」類型 → 可補入門班；入門班未掛「青少年班」類型 → 不能補青少年（單向）。
+      const origDestTypes = origCat?.makeupTypeIds || [];        // 來源班可補課去的類型
+      const targetSelfType = targetCat?.makeupSelfType || null;  // 目標班本身的類型
+      const directedOk = !!targetSelfType && origDestTypes.includes(targetSelfType);
+      if (!sameCategory && !directedOk) {
+        throw { code: 'DIFFERENT_CATEGORY', message: '補課只能選擇相同班別、或本班別可補課去的類型的課程' };
       }
     }
     const origGym = makeup.gymId || origCourse.gymId;
@@ -1437,7 +1435,8 @@ const getCourses = async (gymId) => {
       categoryGroup: cat?.group || null,               // adult | youth | special（大類）
       categoryDescription: cat?.description || null,   // 班別共用課程介紹
       categoryImageUrl: cat?.imageUrl || null,         // 班別共用廣告照片
-      makeupTypeIds: cat?.makeupTypeIds || [],         // 補課類型（跨班別互補：共用類型可互相補課）
+      makeupTypeIds: cat?.makeupTypeIds || [],         // 可補課去的類型（本班學員能補去哪些類型的課；單向）
+      makeupSelfType: cat?.makeupSelfType || null,     // 本班別類型（別人補課過來時算哪一類）
       makeupGroup: cat?.makeupGroup || null,           // 舊制補課群組（相容）
       refundFeeRate: _rules.handlingFeeRate ?? 0.2, // 開課後退費手續費率（預設 20%，班別/梯次可調）
       refundPreStartFeeRate: _rules.preStartFeeRate ?? 0.05, // 開課前退費手續費率（預設 5%，班別/梯次可調）

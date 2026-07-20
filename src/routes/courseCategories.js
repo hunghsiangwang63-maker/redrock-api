@@ -22,7 +22,7 @@ const validate = (req, res, next) => {
 
 // 班別可編輯欄位（規則欄位＝該班別所有梯次的預設，梯次可個別覆寫）
 const EDITABLE = [
-  'name', 'group', 'description', 'color', 'isActive', 'makeupGroup', 'makeupTypeIds',
+  'name', 'group', 'description', 'color', 'isActive', 'makeupGroup', 'makeupTypeIds', 'makeupSelfType',
   'allowTrial', 'trialPrice',
   'leaveDeadlineHours', 'maxLeaves',
   'allowMakeup', 'makeupDeadlineDays',   // 補課期限＝課程「結束日」+ N 天
@@ -112,7 +112,8 @@ router.post('/',
         imageUrl: req.body.imageUrl || '',
         color: req.body.color || '#8B1A1A',
         makeupGroup: req.body.makeupGroup || id,   // 舊制相容（現行判定以 makeupTypeIds 為主）
-        makeupTypeIds: Array.isArray(req.body.makeupTypeIds) ? req.body.makeupTypeIds : [],  // 適用補課類型（多選；同類型班別可互補）
+        makeupTypeIds: Array.isArray(req.body.makeupTypeIds) ? req.body.makeupTypeIds : [],  // 可補課去的類型（多選；本班學員能補去哪些類型）
+        makeupSelfType: req.body.makeupSelfType || null,  // 本班別類型（別人補課過來時算哪一類；單向判定用）
         // 規則預設（null＝用系統預設；梯次可再覆寫）
         allowTrial: req.body.allowTrial ?? null,
         trialPrice: req.body.trialPrice ?? null,

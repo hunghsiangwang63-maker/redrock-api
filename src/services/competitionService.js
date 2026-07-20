@@ -173,7 +173,7 @@ const registerForCompetition = async ({
   // 保險用欄位
   idNumber, emergencyContact, emergencyRelation, emergencyPhone,
   // 比賽用欄位
-  height, armSpan, isHonorary, memberNote,
+  height, armSpan, isHonorary, memberNote, partnerGymId,
   // 付款
   paymentDate, bankLastFive, bankName, paymentMethod, paidAmount,
   ip
@@ -232,17 +232,38 @@ const registerForCompetition = async ({
     ? (isEarlyBird ? fees.childEarlyBird : fees.childRegular) || 950
     : (isEarlyBird ? fees.adultEarlyBird : fees.adultRegular) || 1100;
 
-  // 攀岩隊員報名費 9 折（依報名對象隊籍；共用 applyTeamDiscount，含最低金額門檻）
-  let teamDiscountApplied = false;
+  // 折扣（不疊加，擇優取較低價）：攀岩隊員 9 折 vs 友館折扣（心流/爬森等，會員宣告→櫃檯人工核對）
+  const baseFee = registrationFee;
+  let teamDiscountApplied = false, partnerGymApplied = false, partnerGymName = null;
+  // 隊員候選
+  let teamFee = baseFee, teamOk = false;
   try {
     const { isActiveTeamMember, applyTeamDiscount } = require('./teamMemberService');
     const mDoc = await getDb().collection(COLLECTIONS.MEMBERS).doc(memberId).get();
     if (mDoc.exists && isActiveTeamMember(mDoc.data())) {
-      const r = applyTeamDiscount(registrationFee, true);
-      registrationFee = r.discounted;
-      teamDiscountApplied = r.applied;
+      const r = applyTeamDiscount(baseFee, true);
+      teamFee = r.discounted; teamOk = r.applied;
     }
   } catch (e) { /* 查無會員不影響報名 */ }
+  // 友館候選（賽事有設 partnerGymDiscount 且會員選了清單內的友館）
+  let partnerFee = baseFee, partnerOk = false;
+  const partnerRate = Number(fees.partnerGymDiscount);
+  if (partnerGymId && partnerRate > 0 && partnerRate < 1) {
+    try {
+      const pgDoc = await getDb().collection('systemSettings').doc('partnerGyms').get();
+      const list = pgDoc.exists && Array.isArray(pgDoc.data().gyms) ? pgDoc.data().gyms : [];
+      const hit = list.find(g => g.id === partnerGymId);
+      if (hit) { partnerFee = Math.round(baseFee * partnerRate); partnerOk = true; partnerGymName = hit.name; }
+    } catch (e) { /* 讀取失敗不套友館折扣 */ }
+  }
+  // 擇優：取較低價（皆不套→原價）
+  const cands = [{ fee: baseFee, kind: 'none' }];
+  if (teamOk) cands.push({ fee: teamFee, kind: 'team' });
+  if (partnerOk) cands.push({ fee: partnerFee, kind: 'partner' });
+  const win = cands.reduce((a, b) => b.fee < a.fee ? b : a);
+  registrationFee = win.fee;
+  teamDiscountApplied = win.kind === 'team';
+  partnerGymApplied = win.kind === 'partner';
 
   // 必填：性別/生日/手機/Email（自動帶會員資料、會員資料缺漏由報名表補填；帶進計分系統與保險名冊）
   if (gender !== 'male' && gender !== 'female') {
@@ -308,6 +329,11 @@ const registerForCompetition = async ({
     armSpan: armSpan || null,
     isHonorary: !!isHonorary,
     memberNote: memberNote || null,   // 會員報名備註（選填）
+    // 友館折扣（會員宣告→櫃檯人工核對）：applied=已套折後價，pending=待核對
+    partnerGym: partnerGymApplied ? partnerGymName : null,
+    partnerGymId: partnerGymApplied ? (partnerGymId || null) : null,
+    isPartnerGymDiscount: partnerGymApplied,
+    partnerGymPending: partnerGymApplied,   // 核對通過後由員工清除
 
     isMinor: !!isMinor,
     // 費用

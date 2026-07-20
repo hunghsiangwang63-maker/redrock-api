@@ -188,6 +188,7 @@ router.post('/:id/register',
         armSpan: req.body.armSpan,
         isHonorary: req.body.isHonorary,
         memberNote: req.body.memberNote,
+        partnerGymId: req.body.partnerGymId,
         paidAmount: req.body.paidAmount,
         // 付款
         paymentMethod: req.body.paymentMethod,
@@ -284,7 +285,7 @@ router.get('/:id/registrations/download',
       const headers = [
         '序號','姓名','性別','生日','手機','Email',
         '身分證/護照','緊急聯絡人','緊急聯絡人關係','緊急聯絡人手機',
-        '身高','臂展','組別','榮譽參賽','報名費',
+        '身高','臂展','組別','榮譽參賽','友館折扣','報名費',
         '付款狀態','匯款銀行','匯款/繳款日期','匯款末五碼',
         '簽署狀態','是否候補','備註','報名時間'
       ];
@@ -308,6 +309,7 @@ router.get('/:id/registrations/download',
           r.armSpan || '',
           `"${r.divisionName || ''}"`,
           r.isHonorary ? '是' : '否',
+          `"${r.isPartnerGymDiscount ? `${r.partnerGym || '友館'}${r.partnerGymPending ? '(待核對)' : ''}` : ''}"`,
           r.registrationFee || '',
           paid,
           r.paymentMethod === 'cash' ? '臨櫃繳款' : `"${r.bankName || ''}"`,
@@ -452,6 +454,53 @@ router.post('/registrations/:regId/confirm-payment',
       try { await competitionService.recordCompetitionRevenue({ db, regId: req.params.regId, sign: 1, staffId: req.staff.id, staffName: req.staff.name }); }
       catch (e) { console.error('比賽記帳失敗', e.message); }
       res.json({ success: true, message: '已確認收款' });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
+// ── POST /competitions/registrations/:regId/verify-partner-gym - 友館折扣人工核對（值班/管理員）──
+// approved:true → 清 pending（核對通過、維持折後價）；false → 移除友館折扣、重算費用（隊員擇優/否則原價）。
+router.post('/registrations/:regId/verify-partner-gym',
+  authenticate,
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+      const isStationMode = ['operator', 'station'].includes(req.staff?.type);
+      if (!isManager && !isStationMode) return res.status(403).json({ error: 'MANAGER_OR_STATION_REQUIRED', message: '友館折扣核對限值班人員或管理員' });
+      const ref = db.collection('competitionRegistrations').doc(req.params.regId);
+      const doc = await ref.get();
+      if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+      const reg = doc.data();
+      if (!reg.isPartnerGymDiscount) return res.status(400).json({ error: 'NO_PARTNER_DISCOUNT', message: '此報名未使用友館折扣' });
+
+      if (req.body.approved) {
+        await ref.update({ partnerGymPending: false, partnerGymVerifiedBy: req.staff.id, partnerGymVerifiedAt: new Date(), updatedAt: new Date() });
+        return res.json({ success: true, message: '友館折扣已核准' });
+      }
+      // 駁回：移除友館折扣、重算費用（隊員擇優，否則原價）
+      const comp = (await db.collection('competitions').doc(reg.competitionId).get()).data() || {};
+      const fees = comp.fees || {};
+      const { taiwanToday } = require('../utils/taiwanDate');
+      const dayjs = require('dayjs');
+      const today = taiwanToday();
+      const isEarly = comp.earlyBirdDeadline && today <= comp.earlyBirdDeadline;
+      const age = reg.birthday ? dayjs().diff(dayjs(reg.birthday), 'year') : null;
+      const isChild = age !== null && age < (fees.childAgeLimit || 15);
+      let fee = isChild ? (isEarly ? fees.childEarlyBird : fees.childRegular) || 950
+                        : (isEarly ? fees.adultEarlyBird : fees.adultRegular) || 1100;
+      let team = false;
+      try {
+        const { isActiveTeamMember, applyTeamDiscount } = require('../services/teamMemberService');
+        const m = await db.collection('members').doc(reg.memberId).get();
+        if (m.exists && isActiveTeamMember(m.data())) { const rr = applyTeamDiscount(fee, true); fee = rr.discounted; team = rr.applied; }
+      } catch (e) {}
+      await ref.update({
+        isPartnerGymDiscount: false, partnerGym: null, partnerGymPending: false,
+        partnerGymRejectedBy: req.staff.id, partnerGymRejectedAt: new Date(),
+        registrationFee: fee, isTeamDiscount: team, updatedAt: new Date(),
+      });
+      res.json({ success: true, message: '友館折扣已取消，費用改回', registrationFee: fee });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );
@@ -681,13 +730,29 @@ router.post('/registrations/:regId/update-form', authenticateAny, async (req, re
     let registrationFee = isChild
       ? (isEarly ? fees.childEarlyBird : fees.childRegular) || 950
       : (isEarly ? fees.adultEarlyBird : fees.adultRegular) || 1100;
-    // 攀岩隊員報名費 9 折
-    let feTeamDiscount = false;
+    // 折扣擇優（不疊加）：隊員 9 折 vs 友館折扣（沿用原報名選定的友館 reg.partnerGymId；核對狀態不變）
+    const _base = registrationFee;
+    let feTeamDiscount = false, fePartner = false, fePartnerName = reg.partnerGym || null;
+    let _teamFee = _base, _teamOk = false;
     try {
       const { isActiveTeamMember, applyTeamDiscount } = require('../services/teamMemberService');
       const mDoc = await db.collection('members').doc(reg.memberId).get();
-      if (mDoc.exists && isActiveTeamMember(mDoc.data())) { const rr = applyTeamDiscount(registrationFee, true); registrationFee = rr.discounted; feTeamDiscount = rr.applied; }
+      if (mDoc.exists && isActiveTeamMember(mDoc.data())) { const rr = applyTeamDiscount(_base, true); _teamFee = rr.discounted; _teamOk = rr.applied; }
     } catch (e) {}
+    let _pFee = _base, _pOk = false;
+    const _pRate = Number(fees.partnerGymDiscount);
+    if (reg.partnerGymId && _pRate > 0 && _pRate < 1) {
+      try {
+        const pg = await db.collection('systemSettings').doc('partnerGyms').get();
+        const hit = (pg.exists && Array.isArray(pg.data().gyms) ? pg.data().gyms : []).find(g => g.id === reg.partnerGymId);
+        if (hit) { _pFee = Math.round(_base * _pRate); _pOk = true; fePartnerName = hit.name; }
+      } catch (e) {}
+    }
+    const _c = [{ fee: _base, k: 'none' }];
+    if (_teamOk) _c.push({ fee: _teamFee, k: 'team' });
+    if (_pOk) _c.push({ fee: _pFee, k: 'partner' });
+    const _w = _c.reduce((a, b) => b.fee < a.fee ? b : a);
+    registrationFee = _w.fee; feTeamDiscount = _w.k === 'team'; fePartner = _w.k === 'partner';
 
     await ref.update({
       divisionId: newDivisionId, divisionName: division.name,
@@ -702,6 +767,8 @@ router.post('/registrations/:regId/update-form', authenticateAny, async (req, re
       isHonorary: !!b.isHonorary,
       memberNote: b.memberNote || null,
       registrationFee, isEarlyBird: !!isEarly, isTeamDiscount: feTeamDiscount,
+      isPartnerGymDiscount: fePartner, partnerGym: fePartner ? fePartnerName : null,
+      partnerGymPending: fePartner ? (reg.partnerGymPending !== false) : false,
       // 清除退回旗標
       formReturned: false, formReturnReason: null, formReturnedAt: null,
       updatedAt: new Date(),
@@ -738,13 +805,29 @@ router.post('/registrations/:regId/reregister', authenticateAny, async (req, res
     const age = reg.birthday ? dayjs().diff(dayjs(reg.birthday), 'year') : null;
     const isChild = age !== null && age < (fees.childAgeLimit || 15);
     let registrationFee = isChild ? (isEarly ? fees.childEarlyBird : fees.childRegular) || 950 : (isEarly ? fees.adultEarlyBird : fees.adultRegular) || 1100;
-    // 攀岩隊員報名費 9 折
-    let rrTeamDiscount = false;
+    // 折扣擇優（不疊加）：隊員 9 折 vs 友館折扣（沿用原報名友館，重報後仍待核對）
+    const _rb = registrationFee;
+    let rrTeamDiscount = false, rrPartner = false, rrPartnerName = reg.partnerGym || null;
+    let _rtFee = _rb, _rtOk = false;
     try {
       const { isActiveTeamMember, applyTeamDiscount } = require('../services/teamMemberService');
       const mDoc = await db.collection('members').doc(reg.memberId).get();
-      if (mDoc.exists && isActiveTeamMember(mDoc.data())) { const rd = applyTeamDiscount(registrationFee, true); registrationFee = rd.discounted; rrTeamDiscount = rd.applied; }
+      if (mDoc.exists && isActiveTeamMember(mDoc.data())) { const rd = applyTeamDiscount(_rb, true); _rtFee = rd.discounted; _rtOk = rd.applied; }
     } catch (e) {}
+    let _rpFee = _rb, _rpOk = false;
+    const _rpRate = Number(fees.partnerGymDiscount);
+    if (reg.partnerGymId && _rpRate > 0 && _rpRate < 1) {
+      try {
+        const pg = await db.collection('systemSettings').doc('partnerGyms').get();
+        const hit = (pg.exists && Array.isArray(pg.data().gyms) ? pg.data().gyms : []).find(g => g.id === reg.partnerGymId);
+        if (hit) { _rpFee = Math.round(_rb * _rpRate); _rpOk = true; rrPartnerName = hit.name; }
+      } catch (e) {}
+    }
+    const _rc = [{ fee: _rb, k: 'none' }];
+    if (_rtOk) _rc.push({ fee: _rtFee, k: 'team' });
+    if (_rpOk) _rc.push({ fee: _rpFee, k: 'partner' });
+    const _rw = _rc.reduce((a, b) => b.fee < a.fee ? b : a);
+    registrationFee = _rw.fee; rrTeamDiscount = _rw.k === 'team'; rrPartner = _rw.k === 'partner';
     const N = comp.paymentDeadlineDays || 3;
     const now = new Date();
     let finalStatus, waitlistPosition = null;
@@ -764,6 +847,7 @@ router.post('/registrations/:regId/reregister', authenticateAny, async (req, res
       const update = {
         status: finalStatus, waitlistPosition,
         paymentStatus: 'pending', registrationFee, isEarlyBird: !!isEarly, isTeamDiscount: rrTeamDiscount,
+        isPartnerGymDiscount: rrPartner, partnerGym: rrPartner ? rrPartnerName : null, partnerGymPending: rrPartner,
         cancelReason: null, paymentExpiredAt: null, cancelledAt: null,
         bankLastFive: null, bankName: null, paymentDate: null,   // 需重新繳費
         reregisteredAt: now, updatedAt: now,

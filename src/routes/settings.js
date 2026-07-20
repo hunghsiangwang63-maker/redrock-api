@@ -219,6 +219,31 @@ router.get('/partner-vendor', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── 友館清單（比賽/講座友館折扣用；管理員可增刪）────────────────────────
+// GET 公開（會員報名頁讀清單顯示）；PUT 限管理員。結構 { gyms:[{id,name}] }。
+router.get('/partner-gyms', async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('systemSettings').doc('partnerGyms').get();
+    const gyms = doc.exists && Array.isArray(doc.data().gyms) ? doc.data().gyms : [];
+    res.json({ gyms });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+router.put('/partner-gyms', authenticate, async (req, res) => {
+  if (!['super_admin', 'admin', 'gym_manager'].includes(req.staff?.role))
+    return res.status(403).json({ error: '權限不足' });
+  try {
+    const db = getDb();
+    const { v4: uuidv4 } = require('uuid');
+    const raw = Array.isArray(req.body.gyms) ? req.body.gyms : [];
+    // 正規化：每筆需 name；補 id；去空白與空名
+    const gyms = raw.map(g => ({ id: g.id || uuidv4(), name: String(g.name || '').trim() }))
+      .filter(g => g.name);
+    await db.collection('systemSettings').doc('partnerGyms').set({ gyms, updatedAt: new Date() }, { merge: true });
+    res.json({ success: true, gyms });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── PUT /settings/partner-vendor（僅 super_admin/admin）──────────────────
 router.put('/partner-vendor', authenticate, async (req, res) => {
   if (!['super_admin', 'admin'].includes(req.staff?.role))

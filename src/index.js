@@ -33,6 +33,24 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 // Railway 在反向代理後方：信任第一層 proxy 以取得真實 client IP（供限流正確計數）
 app.set('trust proxy', 1);
 
+// ── 邊緣防護：只認 Cloudflare 流量（DDoS 防備第二步；預設「關閉」，對現有營運零影響）──
+// 啟用條件：環境變數 EDGE_ENFORCE='true' 且設定 EDGE_SECRET。
+//   啟用後，未帶正確 X-Edge-Auth header（由 Cloudflare Transform Rule 注入）的請求一律 403，
+//   堵住「繞過 Cloudflare、直打 Railway 原始網址」的漏洞。EDGE_ENFORCE 未設＝中介層 no-op。
+// ⚠ 上線流程：先把 API 放到 Cloudflare 後面 + 設好 Transform Rule 注入 header → 實測 header 有到 →
+//   才在 Railway 設 EDGE_ENFORCE='true'。順序顛倒會擋掉所有正常流量（櫃檯全斷）。
+// /health 永遠放行（UptimeRobot 直打健檢、切換期驗證用）。
+if (process.env.EDGE_ENFORCE === 'true' && process.env.EDGE_SECRET) {
+  const EDGE_SECRET = process.env.EDGE_SECRET;
+  const EDGE_HEADER = (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase();
+  app.use((req, res, next) => {
+    if (req.path === '/health') return next();               // 健檢直打放行
+    if (req.headers[EDGE_HEADER] === EDGE_SECRET) return next();
+    return res.status(403).json({ error: 'DIRECT_ACCESS_FORBIDDEN', message: '請透過正式網域存取' });
+  });
+  console.log('🛡  邊緣防護已啟用（只認 Cloudflare 流量）');
+}
+
 // ── 限流（僅認證敏感端點，避免影響同一 IP 多員工的正常操作）──────────
 const rateLimit = require('express-rate-limit');
 const authLimiter = rateLimit({
@@ -125,7 +143,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.79.0-trial-makeup-target-switches',
+    version: '3.80.0-edge-enforce-flag',
   });
 });
 

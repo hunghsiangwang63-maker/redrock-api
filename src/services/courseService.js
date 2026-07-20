@@ -121,6 +121,8 @@ const createCourse = async ({ gymId, staffId, data }) => {
     makeupDeadlineDays: data.makeupDeadlineDays ?? null,
     // 試上規則（null＝繼承班別；試上比照體驗發單日券、不卡墜測）
     allowTrial: data.allowTrial ?? null,
+    trialTarget: data.trialTarget || 'auto',   // 可作為「試上」場次：auto(達2人自動開)|on|off
+    makeupTarget: data.makeupTarget || 'auto', // 可作為「補課」場次：auto(達2人自動開)|on|off(如密集班)
     trialPrice: data.trialPrice ?? null,
     // 上課星期（週課用）0=日 1=一 ... 6=六
     weekdays: data.weekdays || [],
@@ -1204,6 +1206,13 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
     if (origGym && targetGym && origGym !== targetGym) {
       throw { code: 'DIFFERENT_GYM', message: '補課只能在同一場館進行' };
     }
+    // 目標梯次「可作為補課場次」開關（makeupTarget：off 強制不開放如密集班；auto 需常態報名達 2 人）
+    const tRegSnap = await db.collection(ENROLLMENT_COLLECTION)
+      .where('courseId', '==', session.courseId).where('status', '==', 'confirmed').get();
+    const tReg = new Set(); tRegSnap.docs.forEach(x => { const e = x.data(); if (!e.isMakeup && !e.isTrial) tReg.add(e.memberId); });
+    if (!isTargetOpen(targetCourse.makeupTarget, tReg.size)) {
+      throw { code: 'MAKEUP_TARGET_CLOSED', message: '此梯次目前未開放作為補課場次，請改選其他梯次' };
+    }
   }
 
   const now = new Date();
@@ -1373,6 +1382,14 @@ const getSessionRoster = async (sessionId) => {
 
 // ── 查詢課程列表 ──────────────────────────────────────────────────
 // ── 課程狀態標籤（報名中/即將開始/進行中/已滿/已結束/已取消）──────
+// 可作為試上/補課場次（開關 mode）：'off'=強制不開放｜'on'=強制開放｜'auto'/未設=常態報名達 2 人自動開放。
+// 試上、補課為「兩個獨立開關」（trialTarget / makeupTarget）。regularCount＝常態報名不重複人數（不含試上/補課）。
+const isTargetOpen = (mode, regularCount) => {
+  if (mode === 'off') return false;
+  if (mode === 'on') return true;
+  return (regularCount || 0) >= 2;
+};
+
 const computeStatusLabel = (course, enrolledCount) => {
   if (course.status === 'cancelled') return 'cancelled';
   const today = taiwanToday(); // 台灣日期
@@ -1425,6 +1442,10 @@ const getCourses = async (gymId) => {
       ruleMaxLeaves: _rules.maxLeaves,                       // 整期可請假次數（報名規則方框顯示）
       ruleLeaveDeadlineHours: _rules.leaveDeadlineHours,     // 請假截止（課前 N 小時）
       ruleMakeupDeadlineDays: _rules.makeupDeadlineDays,     // 補課期限（結束後 N 天）
+      trialTarget: c.trialTarget || 'auto',
+      makeupTarget: c.makeupTarget || 'auto',
+      trialTargetOpen: isTargetOpen(c.trialTarget, realEnrolled),   // effective：可否被當試上場次
+      makeupTargetOpen: isTargetOpen(c.makeupTarget, realEnrolled), // effective：可否被當補課場次
       statusLabel: computeStatusLabel(c, enrolledCount),
     };
   });
@@ -1684,13 +1705,19 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
   const courseSnap = await cq.get();
   const catSnap = await db.collection(CATEGORY_COLLECTION).get();
   const cats = {}; catSnap.docs.forEach(d => { cats[d.id] = d.data(); });
+  // 候選：開放試上（allowTrial）且未取消/未停用
+  const candidates = courseSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .filter(c => c.status !== 'cancelled' && c.isActive !== false && resolveRules(c, cats[c.categoryId]).allowTrial === true);
+  if (candidates.length === 0) return [];
+  // 各候選課「常態報名不重複人數」（不含試上/補課）→ 供 trialTarget=auto 的達 2 人判定
+  const regularByCourse = {};
+  const enrSnap = await db.collection(ENROLLMENT_COLLECTION).where('status', '==', 'confirmed').get();
+  enrSnap.docs.forEach(x => { const e = x.data(); if (e.isMakeup || e.isTrial) return; (regularByCourse[e.courseId] = regularByCourse[e.courseId] || new Set()).add(e.memberId); });
   const trialCourses = {};
-  courseSnap.docs.forEach(d => {
-    const c = d.data();
+  candidates.forEach(c => {
+    if (!isTargetOpen(c.trialTarget, regularByCourse[c.id]?.size || 0)) return; // 試上開關（達2人/on）才列出
     const rules = resolveRules(c, cats[c.categoryId]);
-    if (rules.allowTrial === true && c.status !== 'cancelled' && c.isActive !== false) {
-      trialCourses[d.id] = { trialPrice: rules.trialPrice || 0, courseName: c.name, instructor: c.instructor || '', maxWaitlist: (c.maxWaitlist ?? null), categoryName: cats[c.categoryId]?.name || '其他', cohortName: c.cohortName || '' };
-    }
+    trialCourses[c.id] = { trialPrice: rules.trialPrice || 0, courseName: c.name, instructor: c.instructor || '', maxWaitlist: (c.maxWaitlist ?? null), categoryName: cats[c.categoryId]?.name || '其他', cohortName: c.cohortName || '' };
   });
   if (Object.keys(trialCourses).length === 0) return [];
 

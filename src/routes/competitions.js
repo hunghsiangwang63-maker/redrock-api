@@ -187,6 +187,7 @@ router.post('/:id/register',
         height: req.body.height,
         armSpan: req.body.armSpan,
         isHonorary: req.body.isHonorary,
+        memberNote: req.body.memberNote,
         paidAmount: req.body.paidAmount,
         // 付款
         paymentMethod: req.body.paymentMethod,
@@ -314,7 +315,7 @@ router.get('/:id/registrations/download',
           r.paymentMethod === 'cash' ? '' : (r.bankLastFive || ''),
           signed,
           r.status === 'waitlist' ? '是' : '否',
-          `"${(r.customFieldValues?.notes || '').replace(/"/g, '""')}"`,
+          `"${(r.memberNote || r.customFieldValues?.notes || '').replace(/"/g, '""')}"`,
           r.registeredAt?._seconds ? new Date(r.registeredAt._seconds * 1000).toLocaleString('zh-TW') : '',
         ];
         csvRows.push(cols.join(','));
@@ -699,6 +700,7 @@ router.post('/registrations/:regId/update-form', authenticateAny, async (req, re
       emergencyPhone: b.emergencyPhone || null,
       height: b.height || null, armSpan: b.armSpan || null,
       isHonorary: !!b.isHonorary,
+      memberNote: b.memberNote || null,
       registrationFee, isEarlyBird: !!isEarly, isTeamDiscount: feTeamDiscount,
       // 清除退回旗標
       formReturned: false, formReturnReason: null, formReturnedAt: null,

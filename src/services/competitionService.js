@@ -173,7 +173,7 @@ const registerForCompetition = async ({
   // 保險用欄位
   idNumber, emergencyContact, emergencyRelation, emergencyPhone,
   // 比賽用欄位
-  height, armSpan, isHonorary,
+  height, armSpan, isHonorary, memberNote,
   // 付款
   paymentDate, bankLastFive, bankName, paymentMethod, paidAmount,
   ip
@@ -307,6 +307,8 @@ const registerForCompetition = async ({
     height: height || null,
     armSpan: armSpan || null,
     isHonorary: !!isHonorary,
+    memberNote: memberNote || null,   // 會員報名備註（選填）
+
     isMinor: !!isMinor,
     // 費用
     registrationFee,

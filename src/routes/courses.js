@@ -998,15 +998,21 @@ router.get('/:courseId/enrollments',
       const snap = await db.collection('courseEnrollments')
         .where('courseId', '==', courseId)
         .get();
+      // 課程層名單＝「常態學員」：confirmed/leave、排除已取消與補課/試上（單堂行為在場次名單看）
+      // —— 與課程列表人數（3.72.0）同口徑；曾轉班者的 cancelled 紀錄不再出現在原班名單
+      const rosterDocs = snap.docs.filter(d => {
+        const e = d.data();
+        return ['confirmed', 'leave'].includes(e.status) && !e.isMakeup && !e.isTrial;
+      });
       // 姓名/電話以 members 集合權威補齊（enrollment 未存 memberPhone；比照 getSessionRoster）
-      const memberIds = [...new Set(snap.docs.map(d => d.data().memberId).filter(Boolean))];
+      const memberIds = [...new Set(rosterDocs.map(d => d.data().memberId).filter(Boolean))];
       const memberInfoMap = {};
       if (memberIds.length) {
         const refs = memberIds.map(id => db.collection('members').doc(id));
         const docs = await db.getAll(...refs);
         docs.forEach(doc => { if (doc.exists) { const m = doc.data(); memberInfoMap[doc.id] = { name: m.name, phone: m.phone }; } });
       }
-      const enrollments = snap.docs.map(d => {
+      const enrollments = rosterDocs.map(d => {
         const e = d.data();
         const info = memberInfoMap[e.memberId] || {};
         return {

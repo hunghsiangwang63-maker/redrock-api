@@ -1258,6 +1258,7 @@ router.post('/:courseId/enroll-all',
         const confirmedMembers = new Set(), waitlistMembers = new Set();
         courseEnrollSnap.forEach(d => {
           const e = d.data();
+          if (e.isMakeup || e.isTrial) return; // 課程名額以「常態學員」計：補課/試上單堂佔位不佔整期名額
           (e.status === 'waitlist' ? waitlistMembers : confirmedMembers).add(e.memberId);
         });
         const occupied = confirmedMembers.size + (course.reservedSlots || 0); // 含外部帶入的已佔用名額

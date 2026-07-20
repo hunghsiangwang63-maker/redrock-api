@@ -125,7 +125,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.71.0-announcement-image',
+    version: '3.72.0-course-count-regular-only',
   });
 });
 

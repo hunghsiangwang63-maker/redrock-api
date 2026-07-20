@@ -1403,6 +1403,7 @@ const getCourses = async (gymId) => {
   const enrolledByCourse = {};
   enrollSnap.docs.forEach(d => {
     const e = d.data();
+    if (e.isMakeup || e.isTrial) return; // 常態上課人數：補課/試上為單堂行為，不計入課程層人數（場次層另有計）
     if (!enrolledByCourse[e.courseId]) enrolledByCourse[e.courseId] = new Set();
     enrolledByCourse[e.courseId].add(e.memberId);
   });

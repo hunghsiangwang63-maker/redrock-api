@@ -101,6 +101,7 @@ router.post('/upload', authenticateAny, upload.single('screenshot'), async (req,
       try {
         await db.collection(linkedColl).doc(resolvedRefId).update({
           paymentStatus: 'pending_confirm',
+          ...(paidAmount ? { memberPaidAmount: Number(paidAmount) } : {}),  // 會員自填實際匯款金額（名單/確認顯示）
           ...(resolvedOrderType === 'team_member' ? { status: 'pending' } : {}),
           paymentRejectReason: null,
           paymentRejectedAt: null,

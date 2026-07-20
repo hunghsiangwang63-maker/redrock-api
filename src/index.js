@@ -125,7 +125,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.74.0-experience-birthday-gregorian',
+    version: '3.75.0-roster-paid-amount',
   });
 });
 

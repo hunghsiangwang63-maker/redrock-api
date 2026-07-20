@@ -294,9 +294,14 @@ async function voidExperienceTickets(db, bookingId, reason) {
 function buildInsuranceXlsBuffer(bookings) {
     // 工具函式
     const parseRocBirthday = (bStr) => {
-      // 輸入可能是 920110(6位) 或 0920110(7位)，統一轉為 Date
-      const s = String(bStr).replace(/\D/g, '');
+      // 輸入相容：西元 ISO（2003-01-10）／西元 8 位（20030110）／民國 920110(6位)／0920110(7位)
+      const raw = String(bStr || '').trim();
+      if (raw.includes('-')) { const d = new Date(raw); return isNaN(d) ? null : d; }
+      const s = raw.replace(/\D/g, '');
       if (!s) return null;
+      if (s.length === 8 && /^(18|19|20)/.test(s)) {
+        return new Date(parseInt(s.slice(0, 4)), parseInt(s.slice(4, 6)) - 1, parseInt(s.slice(6, 8)));
+      }
       let rocYear, mm, dd;
       if (s.length <= 6) {
         const yy = parseInt(s.slice(0, 2));
@@ -312,9 +317,18 @@ function buildInsuranceXlsBuffer(bookings) {
     };
 
     const toRoc7 = (bStr) => {
-      // 轉成 7 位民國格式 YYYMMDD
-      const s = String(bStr).replace(/\D/g, '');
+      // 轉成 7 位民國格式 YYYMMDD（保險名冊固定民國）；輸入相容西元 ISO/8位 與民國 6/7 位
+      const raw = String(bStr || '').trim();
+      if (raw.includes('-')) {
+        const d = new Date(raw);
+        if (isNaN(d)) return '';
+        return String(d.getFullYear() - 1911).padStart(3, '0') + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+      }
+      const s = raw.replace(/\D/g, '');
       if (!s) return '';
+      if (s.length === 8 && /^(18|19|20)/.test(s)) {
+        return String(parseInt(s.slice(0, 4)) - 1911).padStart(3, '0') + s.slice(4);
+      }
       if (s.length <= 6) {
         const yy = parseInt(s.slice(0, 2));
         const rocYear = yy <= 20 ? 100 + yy : yy;

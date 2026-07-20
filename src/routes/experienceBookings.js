@@ -594,7 +594,7 @@ router.get('/download', authenticate, async (req, res) => {
           '序號': idx+1,
           '參加者姓名': p.name||'',
           '身分證字號': p.idNumber||'',
-          '生日（民國）': p.birthday||'',
+          '生日': p.birthday||'',
           '國籍': p.nationality||'台灣',
           '費用': idx===0 ? b.totalFee : '',
           '匯款末五碼': idx===0 ? (b.bankLastFive||'') : '',
@@ -603,7 +603,7 @@ router.get('/download', authenticate, async (req, res) => {
       });
     });
 
-    if (rows.length===0) rows.push({ '場館':'無資料','預約日期':'','預約時間':'','課程類型':'','總人數':'','狀態':'','聯絡人':'','聯絡電話':'','序號':'','參加者姓名':'','身分證字號':'','生日（民國）':'','國籍':'','費用':'','匯款末五碼':'','備註':'' });
+    if (rows.length===0) rows.push({ '場館':'無資料','預約日期':'','預約時間':'','課程類型':'','總人數':'','狀態':'','聯絡人':'','聯絡電話':'','序號':'','參加者姓名':'','身分證字號':'','生日':'','國籍':'','費用':'','匯款末五碼':'','備註':'' });
 
     const ws = sanitizeSheet(XLSX.utils.json_to_sheet(rows));
     // 欄位寬度

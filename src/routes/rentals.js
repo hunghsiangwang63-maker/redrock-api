@@ -156,6 +156,8 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
       paymentStatus: 'confirmed', status: 'active',
       confirmedBy: req.staff.id, confirmedByName: req.staff.name, confirmedAt: new Date(), updatedAt: new Date(),
     });
+    try { await recordRentalRevenue(db, req.params.id, { staffId: req.staff.id, staffName: req.staff.name }); }
+    catch (e) { console.error('器材租借記帳失敗', e.message); }
     res.json({ success: true, message: '已確認收款，器材已取件' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
@@ -187,6 +189,33 @@ function computeRentalItems(settings, items, rentalType) {
     return { type: item.type, name: cfg.name, quantity: item.quantity, rentalFee, deposit, unitFee: rentalType === 'weekend' ? cfg.weekendFee : cfg.sevenDayFee, unitDeposit: cfg.deposit };
   });
   return { itemsWithFee, totalRentalFee, totalDeposit };
+}
+
+// ── 共用：器材租借確認收款記帳（type:'rental'，租金不含押金；冪等 revenueRecorded）──
+async function recordRentalRevenue(db, id, { staffId, staffName }) {
+  const ref = db.collection('equipmentRentals').doc(id);
+  const doc = await ref.get();
+  if (!doc.exists) return;
+  const r = doc.data();
+  if (r.revenueRecorded) return;              // 冪等：已記過不重複
+  const fee = Number(r.totalRentalFee) || 0;
+  if (fee > 0) {
+    await db.collection('transactions').add({
+      type: 'rental',
+      totalAmount: fee,                        // 租金（押金為保證金、不記收入）
+      gymId: r.gymId,
+      memberId: r.memberId || null,
+      memberName: r.memberName || '',
+      paymentMethod: r.paymentMethod || 'cash',
+      relatedType: 'equipmentRental', relatedId: id,
+      notes: `器材租借：${(r.items || []).map(i => i.name).join('、')}`,
+      paymentStatus: 'completed',
+      recognitionDate: new Date(),             // 認列在確認收款（取件）當日
+      staffId: staffId || null, staffName: staffName || null,
+      createdAt: new Date(),
+    });
+  }
+  await ref.update({ revenueRecorded: true, updatedAt: new Date() });
 }
 
 // ── POST /rentals/:id/cancel - 取消申請（會員本人限 pending/confirmed；員工亦可） ──
@@ -298,3 +327,4 @@ function defaultSettings() {
 }
 
 module.exports = router;
+module.exports.recordRentalRevenue = recordRentalRevenue;

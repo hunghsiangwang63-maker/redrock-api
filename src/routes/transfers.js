@@ -208,6 +208,9 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
         await db.collection('equipmentRentals').doc(t.refId).update({
           paymentStatus: 'confirmed', status: 'active', ...clearReject, confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
         });
+        // 器材租借轉帳確認收款 → 記營收（租金，冪等）
+        try { await require('./rentals').recordRentalRevenue(db, t.refId, { staffId: by, staffName: byName }); }
+        catch (e) { console.error('器材租借轉帳記帳失敗', e.message); }
       } else if (t.orderType === 'team_member' && t.refId) {
         const appRef = db.collection('teamApplications').doc(t.refId);
         await appRef.update({

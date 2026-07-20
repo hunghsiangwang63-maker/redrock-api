@@ -119,12 +119,16 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
 
     let courseIncome = 0;
     let passIncome = 0;
+    let equipmentRentalIncome = 0;   // 器材租借租金（/rentals，type:'rental' 交易；不含押金）
     const passByType = {};   // 定期票收入細項（依票種，從 notes「定期票購買：xxx」取名）
     txnSnap.docs.forEach(d => {
       const data = d.data();
       if (data.paymentStatus !== 'completed' || data.gymId !== gymId) return;
       const amount = data.totalAmount || 0;
-      if (data.type === 'course') {
+      if (data.type === 'rental') {
+        equipmentRentalIncome += amount;
+        addPay(data.paymentMethod, amount);
+      } else if (data.type === 'course') {
         courseIncome += amount;
         addPay(data.paymentMethod, amount);   // 含轉帳/LinePay/街口/台灣Pay（原本只算現金）
       } else if (data.type === 'pass') {
@@ -150,7 +154,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       passByType[nm] = (passByType[nm] || 0) + amt;
     });
 
-    const totalIncome = entryIncome + shoeRentalIncome + productIncome + courseIncome + passIncome;
+    const totalIncome = entryIncome + shoeRentalIncome + productIncome + courseIncome + passIncome + equipmentRentalIncome;
     const totalCash = payByMethod.cash || 0;
     const totalElectronic = (payByMethod.linepay || 0) + (payByMethod.jkopay || 0) + (payByMethod.taiwanpay || 0);
     const totalTransfer = payByMethod.transfer || 0;
@@ -166,6 +170,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
         product: productIncome,
         course: courseIncome,
         pass: passIncome,
+        equipmentRental: equipmentRentalIncome,   // 器材租借（抱石墊/岩盔/吊帶等）
         total: totalIncome,
         // 細項
         entryItems: Object.entries(entryByType).filter(([, v]) => v > 0)
@@ -227,6 +232,7 @@ router.put('/draft', authenticate, requireStationAuth, async (req, res) => {
       invoiceSegments: Array.isArray(b.invoiceSegments) ? b.invoiceSegments : null,
       invoiceStartNumber: b.invoiceStartNumber || '', invoiceLastNumber: b.invoiceLastNumber || '',
       invoiceVoidNumbers: b.invoiceVoidNumbers || '',
+      voidInvoiceAmount: Number(b.voidInvoiceAmount) || 0,   // 作廢票號碼總金額（打錯發票金額，總計扣除）
       cardOrangeFirst: b.cardOrangeFirst || '', cardFullFirst: b.cardFullFirst || '',
       checkinCount: b.checkinCount ?? null, notes: b.notes || '',
       incomeManual: b.incomeManual || null, paymentManual: b.paymentManual || null,
@@ -303,6 +309,7 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
       // 月銷售紀錄用：發票起訖/作廢號、票卡最前號、當日 check-in 人數
       invoiceStartNumber: firstStart || '',
       invoiceVoidNumbers: invoiceVoidNumbers || '',
+      voidInvoiceAmount: Number(req.body.voidInvoiceAmount) || 0,   // 作廢票號碼總金額（打錯發票金額，總計扣除）
       cardOrangeFirst: cardOrangeFirst || '',
       cardFullFirst: cardFullFirst || '',
       checkinCount: checkinCount ?? null,
@@ -472,6 +479,7 @@ router.get('/monthly-export', authenticate, async (req, res) => {
     aoa.push(R('發票', '起始號碼', '', s => s.invoiceStartNumber));
     aoa.push(R('', '結束號碼', '', s => s.invoiceLastNumber));
     aoa.push(R('', '作廢號碼', '', s => s.invoiceVoidNumbers));
+    aoa.push(R('', '作廢票號碼總金額', '', s => s.voidInvoiceAmount || ''));
     aoa.push(R('結帳報表', '實收總額', '', s => s.income?.total));
     aoa.push(R('', '退貨總額', '', s => dedSum(s, '其他退款')));
     aoa.push(R('票卡資訊', '優惠卡最前號', '', s => s.cardOrangeFirst));
@@ -493,6 +501,7 @@ router.get('/monthly-export', authenticate, async (req, res) => {
     aoa.push(['品項銷售明細', '', '']);
     entryKeys.forEach(k => { const g = entryGroups[k]; aoa.push(['入場費', g.label, '', ...dates.map(dt => g.byDate[dt] || '')]); });
     aoa.push(R('租借費', '岩鞋', '', s => s.income?.shoeRental));
+    aoa.push(R('器材租借', '抱石墊/岩盔等', '', s => s.income?.equipmentRental));
     aoa.push(R('商品販售', '商品', '', s => s.income?.product));
     passLabels.forEach(lb => aoa.push(R('定期票', lb, '', s => itemVal(s, 'passItems', lb))));
     aoa.push(R('教學費', '課程', '', s => s.income?.course));
@@ -517,7 +526,7 @@ router.get('/monthly-export', authenticate, async (req, res) => {
       } else {
         entrySum = (im.entry !== '' && im.entry != null) ? (Number(im.entry) || 0) : (income.entry || 0);
       }
-      return entrySum + ['shoeRental', 'product', 'course', 'pass']
+      return entrySum + ['shoeRental', 'equipmentRental', 'product', 'course', 'pass']
         .reduce((sum, k) => sum + ((im[k] !== '' && im[k] != null) ? (Number(im[k]) || 0) : (income[k] || 0)), 0);
     };
     const anyManual = dates.some(dt => byDate[dt]?.incomeManual && typeof byDate[dt].incomeManual === 'object');
@@ -592,7 +601,7 @@ router.get('/invoice-export', authenticate, async (req, res) => {
     aoa.push(['統一編號', '', '', taxId]);
     aoa.push(['營業人名稱', '', '', bizName]);
     aoa.push(['發票字軌', '', '', track]);
-    aoa.push(['開立日期', '星期', '交易客次', '開立發票起號', '開立發票迄號', '發票總金額', '作廢發票號碼']);
+    aoa.push(['開立日期', '星期', '交易客次', '開立發票起號', '開立發票迄號', '發票總金額', '作廢發票號碼', '作廢票號碼總金額']);
 
     const segCount = (st, en) => (/^\d+$/.test(String(st)) && /^\d+$/.test(String(en))) ? (parseInt(en, 10) - parseInt(st, 10) + 1) : 0;
     let d = dayjs(start); const last = dayjs(end);
@@ -608,6 +617,7 @@ router.get('/invoice-export', authenticate, async (req, res) => {
           idx === 0 ? d.format('YYYY/MM/DD') : '', idx === 0 ? WD[d.day()] : '', idx === 0 ? totalCnt : '',
           sg.start || '', sg.last || '', idx === 0 ? (s.income?.total ?? '') : '',
           idx === 0 ? (s.invoiceVoidNumbers || '') : '',
+          idx === 0 ? (s.voidInvoiceAmount || '') : '',
         ]);
       });
       d = d.add(1, 'day');

@@ -453,7 +453,8 @@ router.get('/monthly-export', authenticate, async (req, res) => {
       if (c.entryType === 'buy_pass') return; // 入場購定期票票款歸「定期票」列（結帳存檔 passItems），不列入場費
       const dt = new Date(c.checkedInAt.toDate().getTime() + 8 * 3600000).toISOString().slice(0, 10);
       const cat = entryCategory(c);
-      const fee = (c.entryFee ?? c.amountPaid ?? 0);
+      // entryFee 未存（早期 QR/直接入場的 checkIn 文件）時，用 amountPaid 扣掉租借（岩鞋+粉袋），與即時結帳一致，避免把租借灌進入場費
+      const fee = (c.entryFee ?? Math.max(0, (c.amountPaid || 0) - (c.shoesPrice || 0) - (c.chalkPrice || 0)));
       if (!entryGroups[cat]) entryGroups[cat] = { label: cat, byDate: {} };
       entryGroups[cat].byDate[dt] = (entryGroups[cat].byDate[dt] || 0) + fee;
     });

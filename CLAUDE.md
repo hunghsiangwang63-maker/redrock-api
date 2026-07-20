@@ -1601,7 +1601,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **人工核對**：`POST /registrations/:regId/verify-partner-gym {approved}`（值班/管理員）——核准→清 pending（維持折後價）；駁回→移除友館折＋重算費用（隊員擇優/否則原價）。員工詳情 modal 顯示友館＋待核對狀態＋「核准友館折扣／取消友館折扣」鈕；名單列徽章「友館待核/友館」；CSV 加「友館折扣」欄（待核對標註）。
   - **會員端**：報名表備註欄後（賽事有開放且清單非空時）顯示「友館會員優惠」下拉→選友館先享折扣（付款步驟標「🧗 友館折扣」）＋說明「將由館方依友館名單核對、不在名單改回原價、與隊員折擇優不疊加」。
   - **E2E（7/7）**：清單 CRUD＋補 id／一般會員+友館→950(1000×0.95)待核對／**隊員+友館→擇優 900(9折)非友館**／核准→pending 清除費用維持／駁回→移除友館折費用改回 1000。⚠ E2E 會員 fixture 需帶 `teamMemberSince`+`teamMemberUntil` 才會被 `isActiveTeamMember` 判 true。
-  - 📌 **待辦**：講座（工作坊課程）友館折扣未接——之後用工作坊開講座時，把同套折扣邏輯接到課程 enroll-all（清單已共用、只需課程加 partnerGymDiscount 欄＋報名擇優＋核對）。備註欄提示文字已依要求簡化為「備註（選填）」（commit `50b6639`）。
+  - 📌 **待辦**：講座（工作坊課程）友館折扣未接——之後用工作坊開講座時，把同套折扣邏輯接到課程 enroll-all（清單已共用、只需課程加 partnerGymDiscount 欄＋報名擇優＋核對）。備註欄提示文字已依要求簡化為「備註（選填）」（commit `50b6639`）。 備註欄位置移到基本資料頁最下面（友館優惠之後，commit 前端 `f12ab84`）。
 - ✅ **比賽報名表加會員備註欄**（`3.76.0-competition-member-note`，commit 後端 `32e70df`、前端 `9a6d820`；E2E 打正式 API **5/5**）：報名 doc 加 `memberNote`（選填，特殊需求/飲食/身體狀況）——`registerForCompetition`＋`update-form`（退回修改）收存；會員報名表 step1 臂展欄後加備註 textarea、退回修改表加備註欄、「我的比賽」卡顯示；員工詳情 modal 顯示「💬 會員備註」（員工備註 staffNote 之前）＋名單精簡列加「備註」徽章；名單 CSV「備註」欄改讀 `memberNote`（相容舊 `customFieldValues.notes`）。E2E：報名帶備註→registration 存值→CSV 含內容。⚠ 測試踩雷：比賽 fixture 少 `customFields:[]` 會 500「customFields is not iterable」（非本次改動、建賽必帶）。
 - ✅ **實際匯款金額進課程名單＋密集班 BeClass 名單匯入**（`3.75.0-roster-paid-amount`，commit 後端 `09f4dc3`、前端 `3016468`；匯入驗證通過）：
   - **實際匯款欄**：課程列表「名單」modal 加「實際匯款」欄（讀 `enrollment.memberPaidAmount`，付款方式欄前）。管道三條：①會員 `/transfers/upload` 自填 paidAmount → 同步寫進訂單 `memberPaidAmount`（全訂單型別）②claim 認領時帶入 `claim.paidAmount`/`bankLastFive`/`paymentNote`/`healthNote` → enrollment ③外部匯入直接寫。

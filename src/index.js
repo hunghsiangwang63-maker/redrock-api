@@ -143,7 +143,16 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.80.0-edge-enforce-flag',
+    version: '3.81.0-edge-verify',
+    // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
+    edge: {
+      header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
+      seen: !!req.headers[(process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase()],
+      match: process.env.EDGE_SECRET
+        ? req.headers[(process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase()] === process.env.EDGE_SECRET
+        : null,
+      enforce: process.env.EDGE_ENFORCE === 'true',
+    },
   });
 });
 

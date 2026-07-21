@@ -1768,6 +1768,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 
 - 📋 **全場次 enrolledCount 對齊（2026-07-22，資料操作）**：應要求把假補總表/課程學員/場次名單對齊——三視圖本就即時讀報名、天生一致，真正會漂移的是**場次儲存 `enrolledCount`**（大量手動補課/停課操作後計數沒同步，影響補課名額閘門）。掃全部 234 場次、重算 enrolledCount＝實際 confirmed+waitlist 非取消報名數（＋waitlistCount），修 **8 個漂移**（多為停課取消場次計數沒歸零＋技巧班週五A 7/17/7/24 差1）。腳本 `scratchpad/reconcile-counts.cjs`（dry-run 預設、--commit 寫入）。之後大量手動異動報名後可再跑一次對齊。
 
+## 目前進度（2026-07-22）— 假補總表併入「前期補課」標記（跨期別補課呈現）
+> 三位學員的上期(前一梯)補課需在假補總表呈現。後端 `/health` `3.101.0-lm-prevterm-makeup-note`。
+- ✅ **bookedMakeups 併入「前期補課」**（`courses.js` 兩端點）：isMakeup 報名帶 `crossTermNote` 者 → 併入該生「已排補課」欄、標「上期」（不佔本期補課額度）；前端假補總表紫色註記（表格＋CSV）。
+- ✅ **黃勇淳**（週三A班）：7/18 週六A補課**改記為前期(5/13)補課**（enrollment 加 `crossTermNote:'上期5/13'`、清 makeupId）→ 本期兩次請假(7/08、7/15)券恢復 available（剩2/共2 尚未補課）；假補總表「已排補課」顯示「7/18（上期5/13）（已上）」。
+- ✅ **陳以喬**（小蜘蛛人前一梯）＋**莊孟貞**（青少年前一梯、5/16請假）：上期一次請假**待補課**（未排）→ 建 `crossCohortMakeups` pending_arrange（前期段呈現）；期限 陳以喬7/31（小蜘蛛人前期）、莊孟貞8/31（青少年前期）。⚠ 陳以喬上期請假**日期未提供**、暫標「待確認」（owedDates 空），日後補。
+
 ## 待辦
 - 🚨🛡 **【提醒使用者：重開 EDGE_ENFORCE】DDoS 邊緣強制暫關中，2026-07-22 之後重開**：2026-07-20 開啟致營業中斷已回退（Railway `EDGE_ENFORCE=false`）——根因＝DNS 搬 Cloudflare 當天、櫃檯裝置快取仍直連 Railway 被 403。**主動提醒使用者**每次開場先問是否要重開。**重開檢查清單（缺一不可）**：①距 DNS 搬移（7/20 晚）至少 1-2 天、客戶端快取全過期 ②先驗「直打 `redrock-api-production.up.railway.app/courses` 已無正常流量／所有裝置走 Cloudflare」（可看 Cloudflare Analytics 或請櫃檯確認頁面正常且 `dig api.redrocktaiwan.com` 回 104.x/172.67.x）③挑**離峰時段** ④Railway 設 `EDGE_ENFORCE=true`（`EDGE_SECRET` 已在、Transform Rule `inject-edge-auth` 已在）⑤重新部署完**立刻實測**：經 CF 200/401、直打一般端點 403、**請櫃檯重整確認資料正常** ⑥若櫃檯又空白＝仍有裝置走直連 → 立刻改回 `false`、再等。⚠ **Render 冷備刻意保持 `EDGE_ENFORCE` 關**（故障轉移最穩，勿在 Render 開）。
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。

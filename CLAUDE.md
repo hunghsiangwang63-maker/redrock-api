@@ -1760,6 +1760,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 
 - ✅ **修：假補總表補課學員被誤列為該班學生＋跨期/逾期獨立區塊不顯示**（`3.97.0-lm-exclude-makeup-from-rows`＋前端）：回報「週三A班應只有一位學生」「前期課程學員沒看到獨立區塊」。兩個 bug：①後端 `byMember` 只排除試上、**沒排除補課** → 補課進某班的學員（何宇涵/何宇澄/李星諭補課到週三A班）被算成該班「學生」row（週三A顯示4位應1位）→ 兩端點 `byMember` 加排除 `isMakeup`（只列原班級整期學員；補課者列在其原班級、bookedMakeups 顯示補課去哪）。②前端 `loadLmAll` 抓了 `/leave-makeup-summary/all` 回應但 **`setLmSummary` 只存 `groups`、漏存 `crossMakeups`/`overdueMakeups`** → 跨期補課/逾期未補課獨立區塊**從來沒顯示過**（畫面讀 `lmSummary.crossMakeups` 但 state 沒有）→ 補上。驗證：週三A班 rows 只剩黃勇淳；all 視圖回傳 crossMakeups 10 位。⚠ **跨期/逾期獨立區塊只在「全部課程」視圖（📋 假補總表按鈕）顯示**，點單一課程的「假補」按鈕看不到（單一課程視圖無此兩區）。
 
+- ✅ **假補總表排除工作坊/單堂體驗試上**（`3.98.0-lm-exclude-workshop`，commit 後端＋前端；正式 API 驗證）：工作坊/單堂體驗/試上無請假補課概念 → 排除。①all 端點課程過濾加 `type !== 'workshop'`（體驗 `source:experience` 本就排除、試上 `isTrial` 本就不列為學員）②單一課程 `buildLeaveMakeupSummary` 對 workshop/experience 回 null（route 404）③前端隱藏工作坊課的「假補」鈕。驗證：全部課程假補總表 22 門、運動按摩工作坊已排除。
+
 ## 待辦
 - 🚨🛡 **【提醒使用者：重開 EDGE_ENFORCE】DDoS 邊緣強制暫關中，2026-07-22 之後重開**：2026-07-20 開啟致營業中斷已回退（Railway `EDGE_ENFORCE=false`）——根因＝DNS 搬 Cloudflare 當天、櫃檯裝置快取仍直連 Railway 被 403。**主動提醒使用者**每次開場先問是否要重開。**重開檢查清單（缺一不可）**：①距 DNS 搬移（7/20 晚）至少 1-2 天、客戶端快取全過期 ②先驗「直打 `redrock-api-production.up.railway.app/courses` 已無正常流量／所有裝置走 Cloudflare」（可看 Cloudflare Analytics 或請櫃檯確認頁面正常且 `dig api.redrocktaiwan.com` 回 104.x/172.67.x）③挑**離峰時段** ④Railway 設 `EDGE_ENFORCE=true`（`EDGE_SECRET` 已在、Transform Rule `inject-edge-auth` 已在）⑤重新部署完**立刻實測**：經 CF 200/401、直打一般端點 403、**請櫃檯重整確認資料正常** ⑥若櫃檯又空白＝仍有裝置走直連 → 立刻改回 `false`、再等。⚠ **Render 冷備刻意保持 `EDGE_ENFORCE` 關**（故障轉移最穩，勿在 Render 開）。
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。

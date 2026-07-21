@@ -849,6 +849,15 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
         (await db.getAll(...refs)).forEach(doc => { if (doc.exists) nameMap[doc.id] = { name: doc.data().name, phone: doc.data().phone }; });
       }
 
+      // 前期補課（跨期，isMakeup+crossTermNote）→ 併入 bookedMakeups 標「上期」；不佔當期補課額度
+      const crossTermByMember = {};
+      for (let i = 0; i < memberIds.length; i += 10) {
+        const chunk = memberIds.slice(i, i + 10);
+        if (!chunk.length) break;
+        const q = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).where('memberId', 'in', chunk).get();
+        q.docs.forEach(d => { const e = d.data(); if (e.isMakeup && e.crossTermNote && e.status !== 'cancelled') (crossTermByMember[e.memberId] = crossTermByMember[e.memberId] || []).push({ date: e.date, startTime: e.startTime || '', courseName: e.courseName || '', taken: !!e.date && e.date < today, note: e.crossTermNote }); });
+      }
+
       const rows = memberIds.map(mid => {
         const ens = byMember[mid];
         const active = ens.filter(e => ['confirmed', 'leave', 'waitlist'].includes(e.status));
@@ -861,10 +870,10 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
         const avail = rights.filter(r => r.status === 'available');
         const used = rights.filter(r => r.status === 'used');
         const expiresAt = avail[0]?.expiresAt?.toDate?.() || null;
-        const bookedMakeups = used.map(r => {
+        const bookedMakeups = [...used.map(r => {
           const sx = sessMap[r.usedSessionId];
           return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today } : null;
-        }).filter(Boolean).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+        }).filter(Boolean), ...(crossTermByMember[mid] || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
         return {
           memberId: mid,
           memberName: nameMap[mid]?.name || ens[0].memberName || '',
@@ -946,6 +955,15 @@ router.get('/leave-makeup-summary/all',
         (await db.getAll(...refs)).forEach(doc => { if (doc.exists) xmSessName[doc.id] = doc.data().courseName || ''; });
       }
 
+      // 前期補課（跨期，isMakeup+crossTermNote）→ 併入 bookedMakeups 標「上期」
+      const crossTermByMember = {};
+      for (let i = 0; i < allMemberIds.length; i += 10) {
+        const chunk = allMemberIds.slice(i, i + 10);
+        if (!chunk.length) break;
+        const q = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).where('memberId', 'in', chunk).get();
+        q.docs.forEach(d => { const e = d.data(); if (e.isMakeup && e.crossTermNote && e.status !== 'cancelled') (crossTermByMember[e.memberId] = crossTermByMember[e.memberId] || []).push({ date: e.date, startTime: e.startTime || '', courseName: e.courseName || '', taken: !!e.date && e.date < today, note: e.crossTermNote }); });
+      }
+
       const groups = [];
       for (const c of courses) {
         const rules = courseService.resolveRules(c, cats[c.categoryId] || null);
@@ -962,10 +980,10 @@ router.get('/leave-makeup-summary/all',
           const avail = rights.filter(r => r.status === 'available');
           const used = rights.filter(r => r.status === 'used');
           const expiresAt = avail[0]?.expiresAt?.toDate?.() || null;
-          const bookedMakeups = used.map(r => {
+          const bookedMakeups = [...used.map(r => {
             const sx = sessMap[r.usedSessionId];
             return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today } : null;
-          }).filter(Boolean).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+          }).filter(Boolean), ...(crossTermByMember[mid] || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
           return {
             memberId: mid,
             memberName: nameMap[mid]?.name || ens[0].memberName || '',

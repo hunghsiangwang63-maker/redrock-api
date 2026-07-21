@@ -996,6 +996,7 @@ router.get('/leave-makeup-summary/all',
         leaveDates: (x.owedDates || []).map(d => `${d}（前期）`),
         targetCourse: x.targetSessionId ? (xmSessName[x.targetSessionId] || '') : '',
         targetDate: x.targetDate || null,
+        deadline: x.deadline || null,   // 前期補課期限（一次性設定）
       })).sort((a, b) => (a.sourceCourse || '').localeCompare(b.sourceCourse || '', 'zh-Hant') || (a.name || '').localeCompare(b.name || '', 'zh-Hant'));
       // 近三個月逾期未補課：補課券 available（未用）但已過期、到期日在近 90 天內
       const d90 = require('dayjs')(today).subtract(90, 'day').format('YYYY-MM-DD');

@@ -1762,6 +1762,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 
 - ✅ **假補總表排除工作坊/單堂體驗試上**（`3.98.0-lm-exclude-workshop`，commit 後端＋前端；正式 API 驗證）：工作坊/單堂體驗/試上無請假補課概念 → 排除。①all 端點課程過濾加 `type !== 'workshop'`（體驗 `source:experience` 本就排除、試上 `isTrial` 本就不列為學員）②單一課程 `buildLeaveMakeupSummary` 對 workshop/experience 回 null（route 404）③前端隱藏工作坊課的「假補」鈕。驗證：全部課程假補總表 22 門、運動按摩工作坊已排除。
 
+- ✅ **課程「固定補課到期日」＋小蜘蛛人常態週課統一 9/30**（`3.99.0-course-fixed-makeup-deadline`，commit 後端；正式 API 驗證）：回報小蜘蛛人這期補課到期日應都 9/30，但假補總表散開（各梯結束日不同、+30天→9/19~9/30）。加課程欄位 `makeupDeadlineDate`（固定補課到期日，覆蓋「結束日+天數」）：`makeupExpiryDayjs(course,rules,fallback)` helper 套發券兩處（reconcile/closureCancel）＋假補總表顯示＋getCourses 回傳＋PUT 可編輯＋createCourse 存。**資料**：11 門常態週課小蜘蛛人（排除密集班）設 `makeupDeadlineDate=2026-09-30`＋回填 30 張現有券 expiresAt→9/30。密集班維持結束+30天（使用者選）。⚠ 假補總表「無到期日」列＝該生無補課券（沒請假）＝正常，非 bug。**未做前端表單欄位**（目前靠 API/資料設定；要員工端加開/編輯梯次可設固定到期日再說）。
+
 ## 待辦
 - 🚨🛡 **【提醒使用者：重開 EDGE_ENFORCE】DDoS 邊緣強制暫關中，2026-07-22 之後重開**：2026-07-20 開啟致營業中斷已回退（Railway `EDGE_ENFORCE=false`）——根因＝DNS 搬 Cloudflare 當天、櫃檯裝置快取仍直連 Railway 被 403。**主動提醒使用者**每次開場先問是否要重開。**重開檢查清單（缺一不可）**：①距 DNS 搬移（7/20 晚）至少 1-2 天、客戶端快取全過期 ②先驗「直打 `redrock-api-production.up.railway.app/courses` 已無正常流量／所有裝置走 Cloudflare」（可看 Cloudflare Analytics 或請櫃檯確認頁面正常且 `dig api.redrocktaiwan.com` 回 104.x/172.67.x）③挑**離峰時段** ④Railway 設 `EDGE_ENFORCE=true`（`EDGE_SECRET` 已在、Transform Rule `inject-edge-auth` 已在）⑤重新部署完**立刻實測**：經 CF 200/401、直打一般端點 403、**請櫃檯重整確認資料正常** ⑥若櫃檯又空白＝仍有裝置走直連 → 立刻改回 `false`、再等。⚠ **Render 冷備刻意保持 `EDGE_ENFORCE` 關**（故障轉移最穩，勿在 Render 開）。
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。

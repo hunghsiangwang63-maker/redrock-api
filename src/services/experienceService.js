@@ -461,4 +461,46 @@ async function reverseExperienceRevenue(db, ref, booking) {
   return -booking.revenueAmount;
 }
 
-module.exports = { COURSE_TYPES, parseBookingTime, courseTypeLabel, addExperienceToCourseAndSchedule, reassignExperienceCoach, updateExperienceSchedule, cleanupExperienceCourseAndSchedule, EXP_TICKET_COLL, syncExperienceTickets, voidExperienceTickets, buildInsuranceXlsBuffer, defaultSettings, recordExperienceRevenue, reverseExperienceRevenue };
+// ── 場次取消/停課 → 試上預約完整清理（取消預約＋沖銷營收＋作廢票券＋作廢待收轉帳＋已繳費列退費待辦＋通知）──
+// 由 courseService.updateSession(取消) 與 closureCancelSession 對 isTrial 報名呼叫；不動 enrollment（呼叫端取消）、不刪週課。
+async function handleTrialSessionCancelled(db, bookingId, { reason } = {}) {
+  if (!bookingId) return { handled: false };
+  const ref = db.collection('experienceBookings').doc(bookingId);
+  const snap = await ref.get();
+  if (!snap.exists) return { handled: false };
+  const booking = { id: snap.id, ...snap.data() };
+  if (booking.status === 'cancelled') return { handled: false };
+  const now = new Date();
+  const paid = ['confirmed', 'paid'].includes(booking.paymentStatus) && (booking.totalFee || 0) > 0;
+  const upd = {
+    status: 'cancelled', cancelReason: 'session_cancelled',
+    cancelNote: reason || '場次取消', cancelledAt: now, cancelledBy: 'system', updatedAt: now,
+  };
+  if (paid) {
+    // 館方因素取消 → 全額退費（不扣手續費）；無退費帳號（會員未申請）→ 由櫃檯聯繫會員退費或改期
+    Object.assign(upd, { refundRequested: true, refundAmount: booking.totalFee || 0, refundHandlingFee: 0,
+      refundStatus: 'pending', refundReason: '場次取消（館方）' });
+  }
+  await ref.update(upd);
+  await reverseExperienceRevenue(db, ref, booking).catch(e => console.error('[試上場次取消沖銷]', e.message));
+  const voided = await voidExperienceTickets(db, bookingId, '場次取消').catch(() => 0);
+  // 作廢 pending 轉帳單（避免殘留待收款）
+  try {
+    const ts = await db.collection('transferRecords').where('refId', '==', bookingId).get();
+    const batch = db.batch();
+    ts.docs.filter(d => d.data().status === 'pending').forEach(d => batch.update(d.ref, { status: 'void', voidReason: 'session_cancelled', updatedAt: now }));
+    await batch.commit();
+  } catch (e) {}
+  // 已繳費 → 通知同館管理員處理退費（列入待辦）
+  if (paid) {
+    try {
+      const { notifyRoleInGym } = require('./notificationService');
+      await notifyRoleInGym({ gymId: booking.gymId, role: 'gym_manager', type: 'experience_refund',
+        title: '試上因場次取消需退費', referenceId: bookingId, referenceType: 'experienceBooking',
+        body: `${booking.memberName || booking.contactName || ''} 的試上（${booking.bookingDate || ''}）因場次取消，應退 NT$${booking.totalFee || 0}，請聯繫會員退費或改期（會員未提供退費帳號）` });
+    } catch (e) {}
+  }
+  return { handled: true, refunded: paid, amount: paid ? (booking.totalFee || 0) : 0 };
+}
+
+module.exports = { COURSE_TYPES, parseBookingTime, courseTypeLabel, addExperienceToCourseAndSchedule, reassignExperienceCoach, updateExperienceSchedule, cleanupExperienceCourseAndSchedule, EXP_TICKET_COLL, syncExperienceTickets, voidExperienceTickets, buildInsuranceXlsBuffer, defaultSettings, recordExperienceRevenue, reverseExperienceRevenue, handleTrialSessionCancelled };

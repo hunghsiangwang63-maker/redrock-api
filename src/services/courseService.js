@@ -490,20 +490,34 @@ const updateSession = async ({ sessionId, staffId, data }) => {
 
   // 場次取消 → 補課學員退回補課券（比照 cancelMakeup / closureCancelSession；
   // 一般取消不發正取豁免券，那是「休館停課」的專屬行為）
-  let makeupRestored = 0;
+  let makeupRestored = 0, trialAffected = 0;
   if (data.status === 'cancelled' && doc.data().status !== 'cancelled') {
     const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId).get();
     const now = new Date();
     for (const d of enSnap.docs) {
       const e = d.data();
-      if (e.status !== 'confirmed' || !e.isMakeup) continue;
-      await d.ref.update({ status: 'cancelled', cancelReason: 'session_cancelled', cancelledAt: now, updatedAt: now });
-      if (e.makeupId) {
-        const mk = await db.collection(MAKEUP_COLLECTION).doc(e.makeupId).get();
-        if (mk.exists && mk.data().status === 'used') {
-          await mk.ref.update({ status: 'available', usedSessionId: null, usedAt: null, updatedAt: now });
-          makeupRestored++;
+      if (!['confirmed', 'leave', 'waitlist'].includes(e.status)) continue;
+      // 補課學員：取消報名＋補課券還原 available
+      if (e.isMakeup && e.status === 'confirmed') {
+        await d.ref.update({ status: 'cancelled', cancelReason: 'session_cancelled', cancelledAt: now, updatedAt: now });
+        if (e.makeupId) {
+          const mk = await db.collection(MAKEUP_COLLECTION).doc(e.makeupId).get();
+          if (mk.exists && mk.data().status === 'used') {
+            await mk.ref.update({ status: 'available', usedSessionId: null, usedAt: null, updatedAt: now });
+            makeupRestored++;
+          }
         }
+        continue;
+      }
+      // 試上學員：完整清理（取消預約＋沖銷＋作廢票券＋已繳費列退費待辦＋通知）＋取消報名
+      if (e.isTrial) {
+        try {
+          const experienceService = require('./experienceService');
+          await experienceService.handleTrialSessionCancelled(db, e.experienceBookingId, { reason: '場次取消' });
+        } catch (err) { console.error('[取消場次-試上清理]', err.message); }
+        await d.ref.update({ status: 'cancelled', cancelReason: 'session_cancelled', cancelledAt: now, updatedAt: now });
+        trialAffected++;
+        continue;
       }
     }
   }
@@ -524,7 +538,7 @@ const updateSession = async ({ sessionId, staffId, data }) => {
     if (n) await batch.commit();
   }
 
-  return { id: sessionId, ...doc.data(), ...updates, makeupRestored };
+  return { id: sessionId, ...doc.data(), ...updates, makeupRestored, trialAffected };
 };
 
 // ── 插班費用計算 ──────────────────────────────────────────────────
@@ -956,6 +970,11 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
     const e = d.data();
     if (!['confirmed', 'leave', 'waitlist'].includes(e.status)) continue;
     if (e.isTrial) {
+      // 試上：完整清理（取消預約＋沖銷＋作廢票券＋已繳費列退費待辦＋通知）＋取消報名
+      try {
+        const experienceService = require('./experienceService');
+        await experienceService.handleTrialSessionCancelled(db, e.experienceBookingId, { reason: '休館停課' });
+      } catch (err) { console.error('[休館停課-試上清理]', err.message); }
       await d.ref.update({ status: 'cancelled', cancelReason: 'closure', cancelledAt: now, updatedAt: now });
       trialAffected++;
       continue;

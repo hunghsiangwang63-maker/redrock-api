@@ -158,6 +158,26 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
         }
       });
     }
+    // 試上/體驗因場次取消（近 14 天，資訊性通知：請洽櫃檯改期或退費）
+    for (const id of ids) {
+      const snap = await db.collection('experienceBookings')
+        .where('memberId', '==', id).where('cancelReason', '==', 'session_cancelled').get();
+      snap.docs.forEach(d => {
+        const o = d.data();
+        const sec = o.cancelledAt?._seconds || o.cancelledAt?.seconds || 0;
+        if (sec && (Date.now() / 1000 - sec) >= 14 * 86400) return;
+        const kidName = id === req.member.id ? null : (kids.docs.find(k => k.id === id)?.data()?.name || null);
+        alerts.push({
+          type: 'experience_cancelled', kind: 'reject',
+          label: o.kind === 'trial' ? '課程試上' : '體驗預約', link: '/member/experience?tab=my',
+          name: o.courseName || o.courseType || '預約',
+          reason: o.refundRequested
+            ? `因場次取消，應退 NT$${o.refundAmount || 0}，請洽櫃檯辦理退費或改期`
+            : '因場次取消，請洽櫃檯改期或退費',
+          memberName: kidName,
+        });
+      });
+    }
     // 休館停課補課券（未使用 → 提醒安排補課；用掉/過期自動消失）
     for (const id of ids) {
       const snap = await db.collection('courseMakeupRights')

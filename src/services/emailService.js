@@ -282,7 +282,8 @@ const sendDeviceVerificationCode = async (email, name, code) => {
   });
 };
 
-const sendTrialCancelledNotice = async ({ email, memberName, courseName, bookingDate, bookingTime, paid, refundAmount }) => {
+const sendTrialCancelledNotice = async ({ email, cc, gymLabel, memberName, courseName, bookingDate, bookingTime, paid, refundAmount }) => {
+  const displayName = `${gymLabel ? `【${gymLabel}】` : ''}${courseName || ''}`;
   const paidBlock = paid
     ? `<div><strong>已繳試上費：</strong>NT$${esc(Number(refundAmount || 0).toLocaleString())}</div>`
     : '';
@@ -291,14 +292,15 @@ const sendTrialCancelledNotice = async ({ email, memberName, courseName, booking
     : `您可洽櫃檯改約其他試上場次。`;
   return sendEmail({
     to: email,
-    subject: `【紅石攀岩】課程試上取消通知 － ${courseName || ''}`,
+    cc: cc || undefined,
+    subject: `【紅石攀岩】課程試上取消通知 － ${displayName}`,
     html: `
       <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
         <h2 style="color:#8B1A1A">課程試上取消通知</h2>
         <p>親愛的 ${esc(memberName)}，</p>
         <p>很抱歉，您報名的課程試上因故取消該場次，造成不便敬請見諒：</p>
         <div style="background:#FBF5F5;border-radius:8px;padding:16px;margin:16px 0">
-          <div><strong>課程：</strong>${esc(courseName || '')}</div>
+          <div><strong>課程：</strong>${esc(displayName)}</div>
           <div><strong>原上課日期：</strong>${esc(bookingDate || '')}${bookingTime ? ' ' + esc(bookingTime) : ''}</div>
           ${paidBlock}
         </div>

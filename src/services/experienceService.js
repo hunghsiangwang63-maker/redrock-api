@@ -508,9 +508,20 @@ async function handleTrialSessionCancelled(db, bookingId, { reason } = {}) {
       if (mDoc.exists) to = mDoc.data().email || null;
     }
     if (to) {
+      // 館別前綴 + 館方 email 副本（gyms.email）
+      let gymLabel = null, gymCc = null;
+      try {
+        const gDoc = await db.collection('gyms').doc(booking.gymId).get();
+        if (gDoc.exists) {
+          const g = gDoc.data();
+          gymLabel = booking.gymId === 'gym-hsinchu' ? '新竹館' : booking.gymId === 'gym-shilin' ? '士林館' : (g.name || null);
+          gymCc = g.email || null;
+        }
+      } catch (e) {}
       const emailService = require('./emailService');
       await emailService.sendTrialCancelledNotice({
-        email: to, memberName: booking.memberName || booking.contactName || '',
+        email: to, cc: gymCc, gymLabel,
+        memberName: booking.memberName || booking.contactName || '',
         courseName: booking.courseName || '', bookingDate: booking.bookingDate || '', bookingTime: booking.bookingTime || '',
         paid, refundAmount: booking.totalFee || 0,
       });

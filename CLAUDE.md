@@ -1783,6 +1783,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **莊孟貞**（青少年初級班 週六A班）：5/16 上期請假 → 移除跨期紀錄、發 `prev_leave` 券（期限8/31）→ 列本期（剩2/共2）。
 - 📌 **原則**：現役會員上期補課＝發本期券（closure 用 `closureDate`、請假用 `prev_leave`+`prevLeaveDate`，皆 exempt 不佔額度）列本期欄位；非會員（吳宇菲/吳宇商 5/26+5/29）留跨期補課(前期)段等認領。
 
+## 目前進度（2026-07-22 續2）— 場次計數確認＋工作坊同日時間排序＋會員/員工補課一致
+> 使用者要求再確認所有課程學員場次資訊、工作坊同日場次依時間排、會員端補課資訊與員工端一致。後端 `/health` `3.104.0-session-time-sort-makeup-consistency`。
+- ✅ **全場次計數對齊確認**：以 live 語意（`enrolledCount=status==='confirmed'` 數含補課、請假 -1、候補另計 `waitlistCount`）重算 **222 個未取消場次 0 漂移**、已一致。⚠ 慣例備忘：enrolledCount **不含** leave（請假 -1）、**不含** waitlist（另計）、**含** isMakeup(confirmed)；跨期補課(crossCohortMakeups)不進 enrolledCount、由 `_crossBooked` 另計容量。（先前 drift 腳本誤把 leave 算進去→假象 17 筆漂移。）
+- ✅ **場次同日依時間排序**（工作坊）：`getSessions` 排序加 `startTime`（原只 date）；前端 4 處日期-only 排序補時間（員工場次列表、會員梯次場次列表/補課候選/我的課程 future）。實例：運動按摩 8/23 五場次 12:00~17:00 依序。
+- ✅ **會員↔員工補課資訊一致**：查證兩處潛在不一致——① `getMemberMakeupRights`（會員端）濾過期券，員工假補總表「剩」**不濾**→ 統一員工端 `avail` 也排除過期券（兩端點）；② `getMemberMakeupRights` 對 null 到期日 `.toDate()` 會炸→改 null-safe（null 視為無限期）。目前 30 張 available 券 **0 過期、0 無到期日** 故本就一致；改後未來也保證一致。實測比對陳以喬 會員端 API 3 張＝員工端假補總表 剩3/共3。**補課可補場次**兩端皆走後端 `enrollMakeup` 權威（單向補課類型 3.86.0），前端候選 filter 與後端一致。
+
 ## 待辦
 - 🚨🛡 **【提醒使用者：重開 EDGE_ENFORCE】DDoS 邊緣強制暫關中，2026-07-22 之後重開**：2026-07-20 開啟致營業中斷已回退（Railway `EDGE_ENFORCE=false`）——根因＝DNS 搬 Cloudflare 當天、櫃檯裝置快取仍直連 Railway 被 403。**主動提醒使用者**每次開場先問是否要重開。**重開檢查清單（缺一不可）**：①距 DNS 搬移（7/20 晚）至少 1-2 天、客戶端快取全過期 ②先驗「直打 `redrock-api-production.up.railway.app/courses` 已無正常流量／所有裝置走 Cloudflare」（可看 Cloudflare Analytics 或請櫃檯確認頁面正常且 `dig api.redrocktaiwan.com` 回 104.x/172.67.x）③挑**離峰時段** ④Railway 設 `EDGE_ENFORCE=true`（`EDGE_SECRET` 已在、Transform Rule `inject-edge-auth` 已在）⑤重新部署完**立刻實測**：經 CF 200/401、直打一般端點 403、**請櫃檯重整確認資料正常** ⑥若櫃檯又空白＝仍有裝置走直連 → 立刻改回 `false`、再等。⚠ **Render 冷備刻意保持 `EDGE_ENFORCE` 關**（故障轉移最穩，勿在 Render 開）。
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。

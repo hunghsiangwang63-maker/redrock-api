@@ -488,6 +488,26 @@ const updateSession = async ({ sessionId, staffId, data }) => {
 
   await ref.update(updates);
 
+  // 場次取消 → 補課學員退回補課券（比照 cancelMakeup / closureCancelSession；
+  // 一般取消不發正取豁免券，那是「休館停課」的專屬行為）
+  let makeupRestored = 0;
+  if (data.status === 'cancelled' && doc.data().status !== 'cancelled') {
+    const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId).get();
+    const now = new Date();
+    for (const d of enSnap.docs) {
+      const e = d.data();
+      if (e.status !== 'confirmed' || !e.isMakeup) continue;
+      await d.ref.update({ status: 'cancelled', cancelReason: 'session_cancelled', cancelledAt: now, updatedAt: now });
+      if (e.makeupId) {
+        const mk = await db.collection(MAKEUP_COLLECTION).doc(e.makeupId).get();
+        if (mk.exists && mk.data().status === 'used') {
+          await mk.ref.update({ status: 'available', usedSessionId: null, usedAt: null, updatedAt: now });
+          makeupRestored++;
+        }
+      }
+    }
+  }
+
   // 日期/時段變更 → 同步該場次報名的快照（enrollment 存 date/startTime/endTime 快照，
   // 不同步會讓會員端「我的課程/請假判定」停在舊日期）
   if (updates.date || updates.startTime || updates.endTime) {
@@ -504,7 +524,7 @@ const updateSession = async ({ sessionId, staffId, data }) => {
     if (n) await batch.commit();
   }
 
-  return { id: sessionId, ...doc.data(), ...updates };
+  return { id: sessionId, ...doc.data(), ...updates, makeupRestored };
 };
 
 // ── 插班費用計算 ──────────────────────────────────────────────────

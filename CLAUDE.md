@@ -1764,6 +1764,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 
 - ✅ **課程「固定補課到期日」＋小蜘蛛人常態週課統一 9/30**（`3.99.0-course-fixed-makeup-deadline`，commit 後端；正式 API 驗證）：回報小蜘蛛人這期補課到期日應都 9/30，但假補總表散開（各梯結束日不同、+30天→9/19~9/30）。加課程欄位 `makeupDeadlineDate`（固定補課到期日，覆蓋「結束日+天數」）：`makeupExpiryDayjs(course,rules,fallback)` helper 套發券兩處（reconcile/closureCancel）＋假補總表顯示＋getCourses 回傳＋PUT 可編輯＋createCourse 存。**資料**：11 門常態週課小蜘蛛人（排除密集班）設 `makeupDeadlineDate=2026-09-30`＋回填 30 張現有券 expiresAt→9/30。密集班維持結束+30天（使用者選）。⚠ 假補總表「無到期日」列＝該生無補課券（沒請假）＝正常，非 bug。**未做前端表單欄位**（目前靠 API/資料設定；要員工端加開/編輯梯次可設固定到期日再說）。
 
+- ✅ **假補總表跨期補課加「補課期限」欄＋小蜘蛛人前期一次性設 7/31**（`3.100.0-crossmakeup-deadline`，commit 後端＋前端）：`crossCohortMakeups` 原無到期日欄位 → 加 `deadline` 欄，`crossMakeups` 回傳＋假補總表跨期補課段顯示「補課期限」欄＋CSV。**資料（一次性）**：8 筆小蜘蛛人前期跨期補課（范語晨/黃彥凱/陳若僖/吳宇商/吳宇菲/陳宣妙/陳宥希/賴思綺）設 `deadline='2026-07-31'`；青少年班前一梯 2 位（榮謙如/榮謙宇）未設（使用者只說小蜘蛛人）。⚠ 一次性寫入、非自動機制（未來新跨期補課無 deadline 除非再設）。
+
 ## 待辦
 - 🚨🛡 **【提醒使用者：重開 EDGE_ENFORCE】DDoS 邊緣強制暫關中，2026-07-22 之後重開**：2026-07-20 開啟致營業中斷已回退（Railway `EDGE_ENFORCE=false`）——根因＝DNS 搬 Cloudflare 當天、櫃檯裝置快取仍直連 Railway 被 403。**主動提醒使用者**每次開場先問是否要重開。**重開檢查清單（缺一不可）**：①距 DNS 搬移（7/20 晚）至少 1-2 天、客戶端快取全過期 ②先驗「直打 `redrock-api-production.up.railway.app/courses` 已無正常流量／所有裝置走 Cloudflare」（可看 Cloudflare Analytics 或請櫃檯確認頁面正常且 `dig api.redrocktaiwan.com` 回 104.x/172.67.x）③挑**離峰時段** ④Railway 設 `EDGE_ENFORCE=true`（`EDGE_SECRET` 已在、Transform Rule `inject-edge-auth` 已在）⑤重新部署完**立刻實測**：經 CF 200/401、直打一般端點 403、**請櫃檯重整確認資料正常** ⑥若櫃檯又空白＝仍有裝置走直連 → 立刻改回 `false`、再等。⚠ **Render 冷備刻意保持 `EDGE_ENFORCE` 關**（故障轉移最穩，勿在 Render 開）。
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。

@@ -173,9 +173,11 @@ const verifyEntry = async (memberId, gymId) => {
     entryTypeOptions,
     instruments: {
       // 折扣券 8 折金額依所選身分價格 ×rate，由前端/後端依 baseEntryType 計算（兒童不適用）
+      // 有效隊員：8 折再疊隊員 9 折＝0.72（前端以 原價×rate 顯示，與後端實收/eligibility 一致）
       discountCard: {
         available: canUseDiscountCard,
-        rate: DISCOUNT_CARD_RATE,
+        rate: isTeam ? Math.round(DISCOUNT_CARD_RATE * PRICES.team_discount_rate * 100) / 100 : DISCOUNT_CARD_RATE,
+        teamStacked: isTeam,
         cards: discountCards.map(c => ({ id: c.id, remainingCredits: c.remainingCredits, expiresAt: c.expiresAt })),
       },
       blackCard: {

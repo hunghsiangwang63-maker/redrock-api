@@ -1202,7 +1202,10 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
   if (!sessionDoc.exists) throw { code: 'SESSION_NOT_FOUND' };
   const session = sessionDoc.data();
 
-  if (session.enrolledCount >= session.maxStudents) {
+  // 跨期補課（非會員名單，另存 crossCohortMakeups，不進 enrolledCount）也佔實體名額 → 計入容量判斷
+  const _xmSnap = await db.collection('crossCohortMakeups').where('targetSessionId', '==', targetSessionId).get();
+  const _crossBooked = _xmSnap.docs.filter(d => d.data().status === 'booked').length;
+  if ((session.enrolledCount || 0) + _crossBooked >= session.maxStudents) {
     throw { code: 'SESSION_FULL', message: '此場次已額滿' };
   }
 
@@ -1516,8 +1519,9 @@ const getSessions = async (gymId, fromDate, toDate) => {
   }
 
   const statsBySession = {};
+  const _initStat = () => ({ enrolledCount: 0, leaveCount: 0, makeupCount: 0, trialCount: 0, regularCount: 0, crossMakeupCount: 0 });
   allEnrollments.forEach(e => {
-    if (!statsBySession[e.sessionId]) statsBySession[e.sessionId] = { enrolledCount: 0, leaveCount: 0, makeupCount: 0, trialCount: 0, regularCount: 0 };
+    if (!statsBySession[e.sessionId]) statsBySession[e.sessionId] = _initStat();
     const st = statsBySession[e.sessionId];
     if (e.status === 'leave') {
       st.leaveCount++;                     // 請假（原週課學員）
@@ -1528,6 +1532,16 @@ const getSessions = async (gymId, fromDate, toDate) => {
       else st.regularCount++;              // 週課原報名（非補課非試上）
     }
   });
+  // 跨期補課（crossCohortMakeups，非會員名單）也佔名額 → 批次計入
+  for (const chunk of chunks) {
+    const xs = await db.collection('crossCohortMakeups').where('targetSessionId', 'in', chunk).get();
+    xs.docs.forEach(d => {
+      const x = d.data();
+      if (x.status !== 'booked' || !x.targetSessionId) return;
+      if (!statsBySession[x.targetSessionId]) statsBySession[x.targetSessionId] = _initStat();
+      statsBySession[x.targetSessionId].crossMakeupCount++;
+    });
+  }
 
   // 教練存在「課程」上（場次未存 instructor），批次帶出
   const courseIds = [...new Set(sessions.map(s => s.courseId).filter(Boolean))];
@@ -1536,10 +1550,10 @@ const getSessions = async (gymId, fromDate, toDate) => {
   courseDocs.forEach(d => { if (d.exists) instructorByCourse[d.id] = d.data().instructor || ''; });
 
   return sessions.map(s => {
-    const st = statsBySession[s.id] || { enrolledCount: 0, leaveCount: 0, makeupCount: 0, trialCount: 0, regularCount: 0 };
-    // 報名人數＝週課原報名（含請假者）；預計上課人數＝原報名−請假＋補課＋試上
+    const st = statsBySession[s.id] || { enrolledCount: 0, leaveCount: 0, makeupCount: 0, trialCount: 0, regularCount: 0, crossMakeupCount: 0 };
+    // 報名人數＝週課原報名（含請假者）；預計上課人數＝原報名−請假＋補課＋試上＋跨期補課
     const registeredCount = st.regularCount + st.leaveCount;
-    const expectedCount = st.regularCount + st.makeupCount + st.trialCount;
+    const expectedCount = st.regularCount + st.makeupCount + st.trialCount + (st.crossMakeupCount || 0);
     return {
       ...s,
       instructor: s.instructor || instructorByCourse[s.courseId] || '',
@@ -1547,6 +1561,7 @@ const getSessions = async (gymId, fromDate, toDate) => {
       leaveCount: st.leaveCount,
       makeupCount: st.makeupCount,
       trialCount: st.trialCount,
+      crossMakeupCount: st.crossMakeupCount || 0,   // 跨期補課（非會員名單）也佔名額
       registeredCount,
       expectedCount,
     };

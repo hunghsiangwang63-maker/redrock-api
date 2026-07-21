@@ -820,7 +820,7 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
       const byMember = {};
       enSnap.docs.forEach(d => {
         const e = d.data();
-        if (e.isTrial) return; // 試上不列入請假補課
+        if (e.isTrial || e.isMakeup) return; // 試上/補課(單堂)不算該班學員；只列原班級整期學員（補課者列在其原班級）
         (byMember[e.memberId] = byMember[e.memberId] || []).push(e);
       });
 
@@ -914,7 +914,7 @@ router.get('/leave-makeup-summary/all',
       const courseIds = new Set(courses.map(c => c.id));
 
       const enByCourse = {}, mkByCourse = {}, pcByCourse = {};
-      enSnap.docs.forEach(d => { const e = d.data(); if (e.isTrial || !courseIds.has(e.courseId)) return; ((enByCourse[e.courseId] = enByCourse[e.courseId] || {})[e.memberId] = (enByCourse[e.courseId][e.memberId] || [])).push(e); });
+      enSnap.docs.forEach(d => { const e = d.data(); if (e.isTrial || e.isMakeup || !courseIds.has(e.courseId)) return; ((enByCourse[e.courseId] = enByCourse[e.courseId] || {})[e.memberId] = (enByCourse[e.courseId][e.memberId] || [])).push(e); });
       mkSnap.docs.forEach(d => { const r = { id: d.id, ...d.data() }; if (!courseIds.has(r.courseId)) return; ((mkByCourse[r.courseId] = mkByCourse[r.courseId] || {})[r.memberId] = (mkByCourse[r.courseId][r.memberId] || [])).push(r); });
       pcSnap.docs.forEach(d => { const x = d.data(); if (x.claimed === true || !courseIds.has(x.courseId)) return; (pcByCourse[x.courseId] = pcByCourse[x.courseId] || []).push({ name: x.name, leaveDates: x.leaveDates || [] }); });
 

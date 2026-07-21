@@ -865,14 +865,15 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
         const rights = rightsByMember[mid] || [];
         const realLeaves = ens.filter(e => e.status === 'leave').map(e => e.date).filter(Boolean);
         const closureDays = rights.filter(r => r.source === 'closure' && r.closureDate).map(r => r.closureDate); // 停課日（豁免、不計請假數）
-        const leaves = [...realLeaves, ...closureDays.map(d => `${d}（停課）`)].sort();
+        const prevLeaveDays = rights.filter(r => r.source === 'prev_leave' && r.prevLeaveDate).map(r => `${r.prevLeaveDate}（上期請假）`); // 上一期請假、列本期補課
+        const leaves = [...realLeaves, ...closureDays.map(d => `${d}（停課）`), ...prevLeaveDays].sort();
         const cap = ens.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rules.maxLeaves;
         const avail = rights.filter(r => r.status === 'available');
         const used = rights.filter(r => r.status === 'used');
         const expiresAt = avail[0]?.expiresAt?.toDate?.() || null;
         const bookedMakeups = [...used.map(r => {
           const sx = sessMap[r.usedSessionId];
-          return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today, note: (r.source === 'closure' && r.closureDate) ? '補' + String(r.closureDate).slice(5).replace('-', '/') + '停課' : undefined } : null;
+          return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today, note: (r.source === 'closure' && r.closureDate) ? '補' + String(r.closureDate).slice(5).replace('-', '/') + '停課' : ((r.source === 'prev_leave' && r.prevLeaveDate) ? '補' + String(r.prevLeaveDate).slice(5).replace('-', '/') + '上期請假' : undefined) } : null;
         }).filter(Boolean), ...(crossTermByMember[mid] || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
         return {
           memberId: mid,
@@ -975,14 +976,15 @@ router.get('/leave-makeup-summary/all',
           const rights = (mkByCourse[c.id] || {})[mid] || [];
           const realLeaves = ens.filter(e => e.status === 'leave').map(e => e.date).filter(Boolean);
           const closureDays = rights.filter(r => r.source === 'closure' && r.closureDate).map(r => r.closureDate);
-          const leaves = [...realLeaves, ...closureDays.map(d => `${d}（停課）`)].sort();
+          const prevLeaveDays = rights.filter(r => r.source === 'prev_leave' && r.prevLeaveDate).map(r => `${r.prevLeaveDate}（上期請假）`);
+          const leaves = [...realLeaves, ...closureDays.map(d => `${d}（停課）`), ...prevLeaveDays].sort();
           const cap = ens.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rules.maxLeaves;
           const avail = rights.filter(r => r.status === 'available');
           const used = rights.filter(r => r.status === 'used');
           const expiresAt = avail[0]?.expiresAt?.toDate?.() || null;
           const bookedMakeups = [...used.map(r => {
             const sx = sessMap[r.usedSessionId];
-            return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today, note: (r.source === 'closure' && r.closureDate) ? '補' + String(r.closureDate).slice(5).replace('-', '/') + '停課' : undefined } : null;
+            return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today, note: (r.source === 'closure' && r.closureDate) ? '補' + String(r.closureDate).slice(5).replace('-', '/') + '停課' : ((r.source === 'prev_leave' && r.prevLeaveDate) ? '補' + String(r.prevLeaveDate).slice(5).replace('-', '/') + '上期請假' : undefined) } : null;
           }).filter(Boolean), ...(crossTermByMember[mid] || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
           return {
             memberId: mid,

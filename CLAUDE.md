@@ -1766,6 +1766,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 
 - ✅ **假補總表跨期補課加「補課期限」欄＋小蜘蛛人前期一次性設 7/31**（`3.100.0-crossmakeup-deadline`，commit 後端＋前端）：`crossCohortMakeups` 原無到期日欄位 → 加 `deadline` 欄，`crossMakeups` 回傳＋假補總表跨期補課段顯示「補課期限」欄＋CSV。**資料（一次性）**：8 筆小蜘蛛人前期跨期補課（范語晨/黃彥凱/陳若僖/吳宇商/吳宇菲/陳宣妙/陳宥希/賴思綺）設 `deadline='2026-07-31'`；青少年班前一梯 2 位（榮謙如/榮謙宇）未設（使用者只說小蜘蛛人）。⚠ 一次性寫入、非自動機制（未來新跨期補課無 deadline 除非再設）。
 
+- 📋 **全場次 enrolledCount 對齊（2026-07-22，資料操作）**：應要求把假補總表/課程學員/場次名單對齊——三視圖本就即時讀報名、天生一致，真正會漂移的是**場次儲存 `enrolledCount`**（大量手動補課/停課操作後計數沒同步，影響補課名額閘門）。掃全部 234 場次、重算 enrolledCount＝實際 confirmed+waitlist 非取消報名數（＋waitlistCount），修 **8 個漂移**（多為停課取消場次計數沒歸零＋技巧班週五A 7/17/7/24 差1）。腳本 `scratchpad/reconcile-counts.cjs`（dry-run 預設、--commit 寫入）。之後大量手動異動報名後可再跑一次對齊。
+
 ## 待辦
 - 🚨🛡 **【提醒使用者：重開 EDGE_ENFORCE】DDoS 邊緣強制暫關中，2026-07-22 之後重開**：2026-07-20 開啟致營業中斷已回退（Railway `EDGE_ENFORCE=false`）——根因＝DNS 搬 Cloudflare 當天、櫃檯裝置快取仍直連 Railway 被 403。**主動提醒使用者**每次開場先問是否要重開。**重開檢查清單（缺一不可）**：①距 DNS 搬移（7/20 晚）至少 1-2 天、客戶端快取全過期 ②先驗「直打 `redrock-api-production.up.railway.app/courses` 已無正常流量／所有裝置走 Cloudflare」（可看 Cloudflare Analytics 或請櫃檯確認頁面正常且 `dig api.redrocktaiwan.com` 回 104.x/172.67.x）③挑**離峰時段** ④Railway 設 `EDGE_ENFORCE=true`（`EDGE_SECRET` 已在、Transform Rule `inject-edge-auth` 已在）⑤重新部署完**立刻實測**：經 CF 200/401、直打一般端點 403、**請櫃檯重整確認資料正常** ⑥若櫃檯又空白＝仍有裝置走直連 → 立刻改回 `false`、再等。⚠ **Render 冷備刻意保持 `EDGE_ENFORCE` 關**（故障轉移最穩，勿在 Render 開）。
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。

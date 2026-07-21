@@ -813,6 +813,7 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
       const courseDoc = courseDataOpt ? null : await db.collection('courses').doc(courseId).get();
       if (!courseDataOpt && !courseDoc.exists) return null;
       const course = courseDataOpt || courseDoc.data();
+      if (course.type === 'workshop' || course.source === 'experience') return null; // 工作坊/體驗無請假補課
       const rules = courseService.resolveRules(course, await courseService.getCategoryOf(db, course.categoryId));
       const today = taiwanToday();
 
@@ -910,6 +911,7 @@ router.get('/leave-makeup-summary/all',
       const cats = {}; catSnap.docs.forEach(d => { cats[d.id] = { id: d.id, ...d.data() }; });
       const courses = csSnap.docs.map(d => ({ id: d.id, ...d.data() }))
         .filter(c => c.status !== 'cancelled' && c.isActive !== false && c.source !== 'experience')
+        .filter(c => c.type !== 'workshop')   // 工作坊單堂、無請假補課概念 → 排除（體驗課 source:experience 已排除、試上 isTrial 已排除）
         .filter(c => !gymId || c.gymId === gymId);
       const courseIds = new Set(courses.map(c => c.id));
 

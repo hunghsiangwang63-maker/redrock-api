@@ -303,7 +303,11 @@ const sendTrialCancelledNotice = async ({ email, memberName, courseName, booking
           ${paidBlock}
         </div>
         <p>${actionLine}</p>
-        <p>如有疑問請洽櫃檯，謝謝。</p>
+        <p>如需辦理退費或改約，請聯繫櫃檯：</p>
+        <div style="background:#F7F3F3;border-radius:8px;padding:12px 16px;margin:8px 0 16px">
+          <div><strong>新竹館：</strong>03-6686635</div>
+          <div><strong>士林館：</strong>02-28837591</div>
+        </div>
         <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
       </div>
     `,

@@ -27,6 +27,12 @@ const CATEGORY_COLLECTION   = 'courseCategories';
 // ── 班別規則繼承 ─────────────────────────────────────────────────
 // 規則存在班別（category）層＝同班別所有梯次共用預設；梯次（course）欄位為 null/undefined＝繼承，
 // 有值＝該梯次個別覆寫。所有讀規則的地方一律走 resolveRules，勿直接讀 course 欄位。
+// 補課到期日：課程有「固定補課到期日 makeupDeadlineDate」就用它，否則結束日(或 fallback)+補課期限天數
+const makeupExpiryDayjs = (course, rules, fallbackBase) => {
+  if (course && course.makeupDeadlineDate) return dayjs(course.makeupDeadlineDate);
+  return dayjs((course && course.endDate) || fallbackBase || taiwanToday()).add(rules.makeupDeadlineDays, 'day');
+};
+
 const RULE_DEFAULTS = {
   leaveDeadlineHours: 2,       // 上課前 N 小時前須請假
   maxLeaves: 2,                // 整期可請假次數
@@ -119,6 +125,7 @@ const createCourse = async ({ gymId, staffId, data }) => {
     // 補課規則（null＝繼承班別；期限＝課程結束日+N天）
     allowMakeup: data.allowMakeup ?? null,
     makeupDeadlineDays: data.makeupDeadlineDays ?? null,
+    makeupDeadlineDate: data.makeupDeadlineDate ?? null,   // 固定補課到期日(覆蓋結束日+天數)
     // 試上規則（null＝繼承班別；試上比照體驗發單日券、不卡墜測）
     allowTrial: data.allowTrial ?? null,
     trialTarget: data.trialTarget || 'auto',   // 可作為「試上」場次：auto(達2人自動開)|on|off
@@ -688,7 +695,7 @@ const reconcileMakeupEntitlement = async (db, memberId, courseId, rules = null, 
   const targetAvailable = Math.max(0, entitlement - used);
 
   const now = new Date();
-  const expiresAt = dayjs(course.endDate || taiwanToday()).add(rules.makeupDeadlineDays, 'day').toDate();
+  const expiresAt = makeupExpiryDayjs(course, rules).toDate();
   let delta = targetAvailable - availDocs.length;
 
   if (delta > 0) {
@@ -961,7 +968,7 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
   const cDoc = await db.collection(COURSE_COLLECTION).doc(session.courseId).get();
   const course = cDoc.exists ? cDoc.data() : {};
   const rules = resolveRules(course, await getCategoryOf(db, course.categoryId));
-  const expiresAt = dayjs(course.endDate || session.date || taiwanToday()).add(rules.makeupDeadlineDays, 'day').toDate();
+  const expiresAt = makeupExpiryDayjs(course, rules, session.date).toDate();
 
   const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId).get();
   const now = new Date();
@@ -1485,6 +1492,7 @@ const getCourses = async (gymId) => {
       ruleMaxLeaves: _rules.maxLeaves,                       // 整期可請假次數（報名規則方框顯示）
       ruleLeaveDeadlineHours: _rules.leaveDeadlineHours,     // 請假截止（課前 N 小時）
       ruleMakeupDeadlineDays: _rules.makeupDeadlineDays,     // 補課期限（結束後 N 天）
+      makeupDeadlineDate: c.makeupDeadlineDate || null,     // 固定補課到期日（覆蓋結束+天數）
       trialTarget: c.trialTarget || 'auto',
       makeupTarget: c.makeupTarget || 'auto',
       trialTargetOpen: isTargetOpen(c.trialTarget, realEnrolled),   // effective：可否被當試上場次

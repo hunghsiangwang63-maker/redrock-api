@@ -753,7 +753,7 @@ router.put('/:courseId',
       const allowedFields = [
         'name', 'cohortName', 'categoryId', 'description', 'imageUrl', 'price', 'maxStudents', 'maxWaitlist', 'reservedSlots', 'reservedSlotsNote', 'instructor',
         'startDate', 'endDate', 'startTime', 'endTime', 'weekdays',
-        'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays', 'handlingFeeRate', 'preStartFeeRate',
+        'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays', 'makeupDeadlineDate', 'handlingFeeRate', 'preStartFeeRate',
         'enrollOpenDate', 'alumniOpenDate', 'fullTermRenewalDiscount', 'alumniDiscount', 'renewalDeadline',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',
         'unlimitedPracticeStart', 'unlimitedPracticeEnd',
@@ -885,7 +885,7 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
         course: {
           id: courseId, name: course.name, gymId: course.gymId || null,
           maxLeaves: rules.maxLeaves,
-          makeupDeadline: course.endDate ? require('dayjs')(course.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null,
+          makeupDeadline: course.makeupDeadlineDate || (course.endDate ? require('dayjs')(course.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null),
         },
         rows, pendingClaims,
       };
@@ -982,7 +982,7 @@ router.get('/leave-makeup-summary/all',
             course: {
               id: c.id, name: c.name, gymId: c.gymId || null,
               maxLeaves: rules.maxLeaves,
-              makeupDeadline: c.endDate ? require('dayjs')(c.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null,
+              makeupDeadline: c.makeupDeadlineDate || (c.endDate ? require('dayjs')(c.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null),
             },
             rows, pendingClaims,
           });

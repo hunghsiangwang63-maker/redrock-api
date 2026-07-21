@@ -1512,7 +1512,7 @@ const getSessions = async (gymId, fromDate, toDate) => {
     .where('date', '<=', toDate || dayjs().add(30, 'day').format('YYYY-MM-DD'));
   const snap = await ref.get();
   const sessions = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-    .sort((a, b) => a.date.localeCompare(b.date));
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.startTime || '').localeCompare(b.startTime || ''));
 
   if (sessions.length === 0) return sessions;
 
@@ -1861,7 +1861,7 @@ const getMemberMakeupRights = async (memberId) => {
   const today = dayjs();
   return snap.docs
     .map(d => ({ id: d.id, ...d.data() }))
-    .filter(m => today.isBefore(dayjs(m.expiresAt.toDate())))
+    .filter(m => !m.expiresAt || today.isBefore(dayjs(m.expiresAt.toDate())))
     .map(m => ({
       ...m,
       expiresAtFormatted: dayjs(m.expiresAt.toDate()).format('YYYY-MM-DD'),

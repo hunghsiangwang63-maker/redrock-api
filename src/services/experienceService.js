@@ -500,6 +500,22 @@ async function handleTrialSessionCancelled(db, bookingId, { reason } = {}) {
         body: `${booking.memberName || booking.contactName || ''} 的試上（${booking.bookingDate || ''}）因場次取消，應退 NT$${booking.totalFee || 0}，請聯繫會員退費或改期（會員未提供退費帳號）` });
     } catch (e) {}
   }
+  // 通知會員（email；收件信箱 contactEmail → memberEmail → 會員資料 email；缺信箱只留首頁通知）
+  try {
+    let to = booking.contactEmail || booking.memberEmail || null;
+    if (!to && booking.memberId) {
+      const mDoc = await db.collection('members').doc(booking.memberId).get();
+      if (mDoc.exists) to = mDoc.data().email || null;
+    }
+    if (to) {
+      const emailService = require('./emailService');
+      await emailService.sendTrialCancelledNotice({
+        email: to, memberName: booking.memberName || booking.contactName || '',
+        courseName: booking.courseName || '', bookingDate: booking.bookingDate || '', bookingTime: booking.bookingTime || '',
+        paid, refundAmount: booking.totalFee || 0,
+      });
+    }
+  } catch (e) { console.error('[試上取消通知信]', e.message); }
   return { handled: true, refunded: paid, amount: paid ? (booking.totalFee || 0) : 0 };
 }
 

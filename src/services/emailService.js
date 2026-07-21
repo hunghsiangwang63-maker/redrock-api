@@ -282,6 +282,34 @@ const sendDeviceVerificationCode = async (email, name, code) => {
   });
 };
 
+const sendTrialCancelledNotice = async ({ email, memberName, courseName, bookingDate, bookingTime, paid, refundAmount }) => {
+  const paidBlock = paid
+    ? `<div><strong>已繳試上費：</strong>NT$${esc(Number(refundAmount || 0).toLocaleString())}</div>`
+    : '';
+  const actionLine = paid
+    ? `本場試上費 <strong>NT$${esc(Number(refundAmount || 0).toLocaleString())} 將全額退還</strong>（館方因素取消，不收手續費）。請至櫃檯辦理退費，或改約其他試上場次。`
+    : `您可洽櫃檯改約其他試上場次。`;
+  return sendEmail({
+    to: email,
+    subject: `【紅石攀岩】課程試上取消通知 － ${courseName || ''}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">課程試上取消通知</h2>
+        <p>親愛的 ${esc(memberName)}，</p>
+        <p>很抱歉，您報名的課程試上因故取消該場次，造成不便敬請見諒：</p>
+        <div style="background:#FBF5F5;border-radius:8px;padding:16px;margin:16px 0">
+          <div><strong>課程：</strong>${esc(courseName || '')}</div>
+          <div><strong>原上課日期：</strong>${esc(bookingDate || '')}${bookingTime ? ' ' + esc(bookingTime) : ''}</div>
+          ${paidBlock}
+        </div>
+        <p>${actionLine}</p>
+        <p>如有疑問請洽櫃檯，謝謝。</p>
+        <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+  });
+};
+
 module.exports = {
   esc, // HTML 跳脫（供各路由組信件時共用）
   sendEmail,
@@ -296,4 +324,5 @@ module.exports = {
   sendParentWaiverLink,
   sendParentCompetitionWaiverLink,
   sendDeviceVerificationCode,
+  sendTrialCancelledNotice,
 };

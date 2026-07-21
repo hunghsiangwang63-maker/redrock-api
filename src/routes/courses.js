@@ -1000,7 +1000,27 @@ router.get('/leave-makeup-summary/all',
         }
       }
       groups.sort((a, b) => (a.course.name || '').localeCompare(b.course.name || '', 'zh-Hant'));
-      res.json({ groups });
+      // 待安排跨期補課（pending_arrange，尚未排到場次、無歸屬課程）→ 頂層總覽，含前期請假日
+      const pendingCrossMakeups = xmAllSnap.docs.map(d => d.data())
+        .filter(x => x.status === 'pending_arrange')
+        .filter(x => !gymId || x.gymId === gymId)
+        .map(x => ({ name: x.name, sourceCourse: x.courseName || '', leaveDates: (x.owedDates || []).map(d => `${d}（前期）`) }))
+        .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'zh-Hant'));
+      // 近三個月逾期未補課：補課券 available（未用）但已過期、到期日在近 90 天內
+      const d90 = require('dayjs')(today).subtract(90, 'day').format('YYYY-MM-DD');
+      const overdueRights = mkSnap.docs.map(d => d.data())
+        .filter(r => courseIds.has(r.courseId) && r.status === 'available' && r.expiresAt)
+        .map(r => ({ ...r, expDate: r.expiresAt.toDate ? new Date(r.expiresAt.toDate().getTime() + 8 * 3600000).toISOString().slice(0, 10) : String(r.expiresAt).slice(0, 10) }))
+        .filter(r => r.expDate < today && r.expDate >= d90);
+      const odMissing = [...new Set(overdueRights.map(r => r.memberId))].filter(id => !nameMap[id]);
+      for (let i = 0; i < odMissing.length; i += 20) {
+        const refs = odMissing.slice(i, i + 20).map(id => db.collection(COLLECTIONS.MEMBERS).doc(id));
+        (await db.getAll(...refs)).forEach(doc => { if (doc.exists) nameMap[doc.id] = { name: doc.data().name, phone: doc.data().phone }; });
+      }
+      const overdueMakeups = overdueRights
+        .map(r => ({ memberName: nameMap[r.memberId]?.name || '', courseName: r.courseName || '', expiredDate: r.expDate }))
+        .sort((a, b) => (a.expiredDate || '').localeCompare(b.expiredDate || ''));
+      res.json({ groups, pendingCrossMakeups, overdueMakeups });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );

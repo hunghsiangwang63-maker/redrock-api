@@ -880,21 +880,13 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
       const pendingClaims = pcSnap.docs.map(d => d.data()).filter(x => x.claimed !== true)
         .map(x => ({ name: x.name, leaveDates: x.leaveDates || [] }));
 
-      // 跨期補課（前期、非當期學員）：補課進本課程場次者，請假日期標（前期）
-      const mySessSnap = await db.collection('courseSessions').where('courseId', '==', courseId).get();
-      const mySessIds = new Set(mySessSnap.docs.map(d => d.id));
-      const xmSnap = await db.collection('crossCohortMakeups').get();
-      const crossMakeups = xmSnap.docs.map(d => d.data())
-        .filter(x => x.status === 'booked' && x.targetSessionId && mySessIds.has(x.targetSessionId))
-        .map(x => ({ name: x.name, leaveDates: (x.owedDates || []).map(d => `${d}（前期）`), sourceCourse: x.courseName || '', targetDate: x.targetDate || null }));
-
       return {
         course: {
           id: courseId, name: course.name, gymId: course.gymId || null,
           maxLeaves: rules.maxLeaves,
           makeupDeadline: course.endDate ? require('dayjs')(course.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null,
         },
-        rows, pendingClaims, crossMakeups,
+        rows, pendingClaims,
       };
 }
 
@@ -940,21 +932,17 @@ router.get('/leave-makeup-summary/all',
         (await db.getAll(...refs)).forEach(doc => { if (doc.exists) sessMap[doc.id] = doc.data(); });
       }
 
-      // 跨期補課（前期）：booked 者依 target session 對應到目標課程，標（前期）
-      const xmByCourse = {};
+      // 跨期補課（獨立一區）：載入未結案者，解析 booked 的 target session 課名（供顯示補課班級）
       const xmAllSnap = await db.collection('crossCohortMakeups').get();
-      const xmBooked = xmAllSnap.docs.map(d => d.data()).filter(x => x.status === 'booked' && x.targetSessionId);
-      const xmSessIds = [...new Set(xmBooked.map(x => x.targetSessionId))];
-      const xmSessCourse = {};
-      for (let i = 0; i < xmSessIds.length; i += 20) {
-        const refs = xmSessIds.slice(i, i + 20).map(id => db.collection('courseSessions').doc(id));
-        (await db.getAll(...refs)).forEach(doc => { if (doc.exists) xmSessCourse[doc.id] = doc.data().courseId; });
+      const xmActive = xmAllSnap.docs.map(d => d.data())
+        .filter(x => x.status !== 'done')
+        .filter(x => !gymId || x.gymId === gymId);
+      const xmBookSessIds = [...new Set(xmActive.filter(x => x.targetSessionId).map(x => x.targetSessionId))];
+      const xmSessName = {};
+      for (let i = 0; i < xmBookSessIds.length; i += 20) {
+        const refs = xmBookSessIds.slice(i, i + 20).map(id => db.collection('courseSessions').doc(id));
+        (await db.getAll(...refs)).forEach(doc => { if (doc.exists) xmSessName[doc.id] = doc.data().courseName || ''; });
       }
-      xmBooked.forEach(x => {
-        const cid = xmSessCourse[x.targetSessionId];
-        if (!cid || !courseIds.has(cid)) return;
-        (xmByCourse[cid] = xmByCourse[cid] || []).push({ name: x.name, leaveDates: (x.owedDates || []).map(d => `${d}（前期）`), sourceCourse: x.courseName || '', targetDate: x.targetDate || null });
-      });
 
       const groups = [];
       for (const c of courses) {
@@ -987,25 +975,26 @@ router.get('/leave-makeup-summary/all',
           };
         }).filter(Boolean).sort((a, b) => a.memberName.localeCompare(b.memberName, 'zh-Hant'));
         const pendingClaims = pcByCourse[c.id] || [];
-        const crossMakeups = xmByCourse[c.id] || [];
-        if (rows.length || pendingClaims.length || crossMakeups.length) {
+        if (rows.length || pendingClaims.length) {
           groups.push({
             course: {
               id: c.id, name: c.name, gymId: c.gymId || null,
               maxLeaves: rules.maxLeaves,
               makeupDeadline: c.endDate ? require('dayjs')(c.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null,
             },
-            rows, pendingClaims, crossMakeups,
+            rows, pendingClaims,
           });
         }
       }
       groups.sort((a, b) => (a.course.name || '').localeCompare(b.course.name || '', 'zh-Hant'));
       // 待安排跨期補課（pending_arrange，尚未排到場次、無歸屬課程）→ 頂層總覽，含前期請假日
-      const pendingCrossMakeups = xmAllSnap.docs.map(d => d.data())
-        .filter(x => x.status === 'pending_arrange')
-        .filter(x => !gymId || x.gymId === gymId)
-        .map(x => ({ name: x.name, sourceCourse: x.courseName || '', leaveDates: (x.owedDates || []).map(d => `${d}（前期）`) }))
-        .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'zh-Hant'));
+      // 跨期補課獨立一區：以原班級(前一梯)為主排序，後接補課班級+日期；未排定＝待安排
+      const crossMakeups = xmActive.map(x => ({
+        name: x.name, sourceCourse: x.courseName || '',
+        leaveDates: (x.owedDates || []).map(d => `${d}（前期）`),
+        targetCourse: x.targetSessionId ? (xmSessName[x.targetSessionId] || '') : '',
+        targetDate: x.targetDate || null,
+      })).sort((a, b) => (a.sourceCourse || '').localeCompare(b.sourceCourse || '', 'zh-Hant') || (a.name || '').localeCompare(b.name || '', 'zh-Hant'));
       // 近三個月逾期未補課：補課券 available（未用）但已過期、到期日在近 90 天內
       const d90 = require('dayjs')(today).subtract(90, 'day').format('YYYY-MM-DD');
       const overdueRights = mkSnap.docs.map(d => d.data())
@@ -1020,7 +1009,7 @@ router.get('/leave-makeup-summary/all',
       const overdueMakeups = overdueRights
         .map(r => ({ memberName: nameMap[r.memberId]?.name || '', courseName: r.courseName || '', expiredDate: r.expDate }))
         .sort((a, b) => (a.expiredDate || '').localeCompare(b.expiredDate || ''));
-      res.json({ groups, pendingCrossMakeups, overdueMakeups });
+      res.json({ groups, crossMakeups, overdueMakeups });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );

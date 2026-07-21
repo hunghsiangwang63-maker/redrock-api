@@ -872,7 +872,7 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
         const expiresAt = avail[0]?.expiresAt?.toDate?.() || null;
         const bookedMakeups = [...used.map(r => {
           const sx = sessMap[r.usedSessionId];
-          return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today } : null;
+          return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today, note: (r.source === 'closure' && r.closureDate) ? '補' + String(r.closureDate).slice(5).replace('-', '/') + '停課' : undefined } : null;
         }).filter(Boolean), ...(crossTermByMember[mid] || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
         return {
           memberId: mid,
@@ -982,7 +982,7 @@ router.get('/leave-makeup-summary/all',
           const expiresAt = avail[0]?.expiresAt?.toDate?.() || null;
           const bookedMakeups = [...used.map(r => {
             const sx = sessMap[r.usedSessionId];
-            return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today } : null;
+            return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today, note: (r.source === 'closure' && r.closureDate) ? '補' + String(r.closureDate).slice(5).replace('-', '/') + '停課' : undefined } : null;
           }).filter(Boolean), ...(crossTermByMember[mid] || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
           return {
             memberId: mid,

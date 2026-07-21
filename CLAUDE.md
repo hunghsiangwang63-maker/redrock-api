@@ -1764,7 +1764,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 
 - ✅ **課程「固定補課到期日」＋小蜘蛛人常態週課統一 9/30**（`3.99.0-course-fixed-makeup-deadline`，commit 後端；正式 API 驗證）：回報小蜘蛛人這期補課到期日應都 9/30，但假補總表散開（各梯結束日不同、+30天→9/19~9/30）。加課程欄位 `makeupDeadlineDate`（固定補課到期日，覆蓋「結束日+天數」）：`makeupExpiryDayjs(course,rules,fallback)` helper 套發券兩處（reconcile/closureCancel）＋假補總表顯示＋getCourses 回傳＋PUT 可編輯＋createCourse 存。**資料**：11 門常態週課小蜘蛛人（排除密集班）設 `makeupDeadlineDate=2026-09-30`＋回填 30 張現有券 expiresAt→9/30。密集班維持結束+30天（使用者選）。⚠ 假補總表「無到期日」列＝該生無補課券（沒請假）＝正常，非 bug。**未做前端表單欄位**（目前靠 API/資料設定；要員工端加開/編輯梯次可設固定到期日再說）。
 
-- ✅ **假補總表跨期補課加「補課期限」欄＋小蜘蛛人前期一次性設 7/31**（`3.100.0-crossmakeup-deadline`，commit 後端＋前端）：`crossCohortMakeups` 原無到期日欄位 → 加 `deadline` 欄，`crossMakeups` 回傳＋假補總表跨期補課段顯示「補課期限」欄＋CSV。**資料（一次性）**：8 筆小蜘蛛人前期跨期補課（范語晨/黃彥凱/陳若僖/吳宇商/吳宇菲/陳宣妙/陳宥希/賴思綺）設 `deadline='2026-07-31'`；青少年班前一梯 2 位（榮謙如/榮謙宇）未設（使用者只說小蜘蛛人）。⚠ 一次性寫入、非自動機制（未來新跨期補課無 deadline 除非再設）。
+- ✅ **假補總表跨期補課加「補課期限」欄＋小蜘蛛人前期一次性設 7/31**（`3.100.0-crossmakeup-deadline`，commit 後端＋前端）：`crossCohortMakeups` 原無到期日欄位 → 加 `deadline` 欄，`crossMakeups` 回傳＋假補總表跨期補課段顯示「補課期限」欄＋CSV。**資料（一次性）**：8 筆小蜘蛛人前期跨期補課（范語晨/黃彥凱/陳若僖/吳宇商/吳宇菲/陳宣妙/陳宥希/賴思綺）設 `deadline='2026-07-31'`；青少年班前一梯 2 位（榮謙如/榮謙宇）設 `deadline='2026-08-31'`（2026-07-22 補設，與小蜘蛛人 7/31 不同）。⚠ 一次性寫入、非自動機制（未來新跨期補課無 deadline 除非再設）。
 
 - 📋 **全場次 enrolledCount 對齊（2026-07-22，資料操作）**：應要求把假補總表/課程學員/場次名單對齊——三視圖本就即時讀報名、天生一致，真正會漂移的是**場次儲存 `enrolledCount`**（大量手動補課/停課操作後計數沒同步，影響補課名額閘門）。掃全部 234 場次、重算 enrolledCount＝實際 confirmed+waitlist 非取消報名數（＋waitlistCount），修 **8 個漂移**（多為停課取消場次計數沒歸零＋技巧班週五A 7/17/7/24 差1）。腳本 `scratchpad/reconcile-counts.cjs`（dry-run 預設、--commit 寫入）。之後大量手動異動報名後可再跑一次對齊。
 

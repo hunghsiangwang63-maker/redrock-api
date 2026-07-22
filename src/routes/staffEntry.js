@@ -17,7 +17,9 @@ const { taiwanToday } = require('../utils/taiwanDate');
 const DEFAULT_FULL_DAY_HOURS = 8; // 各館未定義標準工時時的預設
 
 // 上一個曆月（台灣時區）「排班表排定」的時數（小時，含小數）
-// custom＝結束−開始；full_day＝有特殊時段用時段，否則用該班所屬館別的標準工時(standardWorkHours)。
+// custom＝結束−開始；full_day＝有特殊時段用時段，否則用「該館 × 該星期幾」的營業時數（regularHours 開→關），
+// 該日公休/無營業時間時退回該館 standardWorkHours（再無則 DEFAULT_FULL_DAY_HOURS）。
+const WD_KEY = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const getLastMonthHours = async (db, staffId) => {
   const start = dayjs(taiwanToday()).startOf('month').subtract(1, 'month');
   const end = start.endOf('month');
@@ -26,15 +28,25 @@ const getLastMonthHours = async (db, staffId) => {
   const hm = (t) => { const [h, m] = String(t).split(':').map(Number); return (h || 0) * 60 + (m || 0); };
   const snap = await db.collection('scheduleShifts').where('staffId', '==', staffId).get();
   const shifts = snap.docs.map(d => d.data()).filter(s => s.date && s.date >= startStr && s.date <= endStr);
-  // 各館標準工時（整天班每日時數）快取
-  const gymHours = {};
-  const gymHoursOf = async (gymId) => {
-    if (!gymId) return DEFAULT_FULL_DAY_HOURS;
-    if (gymHours[gymId] !== undefined) return gymHours[gymId];
+  // 各館資料快取（regularHours 每星期幾營業時段 + standardWorkHours 後備）
+  const gymCache = {};
+  const gymOf = async (gymId) => {
+    if (!gymId) return {};
+    if (gymCache[gymId] !== undefined) return gymCache[gymId];
     const gd = await db.collection('gyms').doc(gymId).get();
-    const h = Number(gd.data()?.standardWorkHours);
-    gymHours[gymId] = (h > 0 ? h : DEFAULT_FULL_DAY_HOURS);
-    return gymHours[gymId];
+    gymCache[gymId] = gd.data() || {};
+    return gymCache[gymId];
+  };
+  // 整天班時數：該館該星期幾的營業時數；公休/未設則退回 standardWorkHours→預設
+  const fullDayMins = async (gymId, dateStr) => {
+    const g = await gymOf(gymId);
+    const rh = g.regularHours?.[WD_KEY[dayjs(dateStr).day()]];
+    if (rh && !rh.closed && rh.open && rh.close) {
+      const dur = hm(rh.close) - hm(rh.open);
+      if (dur > 0) return dur;
+    }
+    const std = Number(g.standardWorkHours);
+    return (std > 0 ? std : DEFAULT_FULL_DAY_HOURS) * 60;
   };
   let mins = 0;
   for (const s of shifts) {
@@ -42,7 +54,7 @@ const getLastMonthHours = async (db, staffId) => {
       const dur = hm(s.endTime) - hm(s.startTime);
       if (dur > 0) mins += dur;
     } else if (s.type === 'full_day') {
-      mins += (await gymHoursOf(s.gymId)) * 60;
+      mins += await fullDayMins(s.gymId, s.date);
     }
   }
   return Math.round((mins / 60) * 10) / 10; // 小時，1 位小數

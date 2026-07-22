@@ -14,12 +14,12 @@ const { authenticate, requireManagerOrStation } = require('../middleware/auth');
 const { getEntryTypePrice } = require('../services/checkin/pricing');
 const { taiwanToday } = require('../utils/taiwanDate');
 
-const DEFAULT_FULL_DAY_HOURS = 8; // 各館未定義標準工時時的預設
+// 整天班標準工時預設（與排班工時統計 getMonthlyHoursSummary 同一套；各星期幾，0=週日）
+const DEFAULT_STD_HOURS = { 0: 11, 1: 9, 2: 9, 3: 9, 4: 9, 5: 9, 6: 12 };
 
 // 上一個曆月（台灣時區）「排班表排定」的時數（小時，含小數）
-// custom＝結束−開始；full_day＝有特殊時段用時段，否則用「該館 × 該星期幾」的營業時數（regularHours 開→關），
-// 該日公休/無營業時間時退回該館 standardWorkHours（再無則 DEFAULT_FULL_DAY_HOURS）。
-const WD_KEY = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+// custom＝結束−開始；full_day＝用「該館排班標準工時設定」的該星期幾時數
+//（systemSettings/scheduleHours_<gymId>.standardHours，與工時統計同一套；未設則 DEFAULT_STD_HOURS）。
 const getLastMonthHours = async (db, staffId) => {
   const start = dayjs(taiwanToday()).startOf('month').subtract(1, 'month');
   const end = start.endOf('month');
@@ -28,25 +28,13 @@ const getLastMonthHours = async (db, staffId) => {
   const hm = (t) => { const [h, m] = String(t).split(':').map(Number); return (h || 0) * 60 + (m || 0); };
   const snap = await db.collection('scheduleShifts').where('staffId', '==', staffId).get();
   const shifts = snap.docs.map(d => d.data()).filter(s => s.date && s.date >= startStr && s.date <= endStr);
-  // 各館資料快取（regularHours 每星期幾營業時段 + standardWorkHours 後備）
-  const gymCache = {};
-  const gymOf = async (gymId) => {
-    if (!gymId) return {};
-    if (gymCache[gymId] !== undefined) return gymCache[gymId];
-    const gd = await db.collection('gyms').doc(gymId).get();
-    gymCache[gymId] = gd.data() || {};
-    return gymCache[gymId];
-  };
-  // 整天班時數：該館該星期幾的營業時數；公休/未設則退回 standardWorkHours→預設
-  const fullDayMins = async (gymId, dateStr) => {
-    const g = await gymOf(gymId);
-    const rh = g.regularHours?.[WD_KEY[dayjs(dateStr).day()]];
-    if (rh && !rh.closed && rh.open && rh.close) {
-      const dur = hm(rh.close) - hm(rh.open);
-      if (dur > 0) return dur;
-    }
-    const std = Number(g.standardWorkHours);
-    return (std > 0 ? std : DEFAULT_FULL_DAY_HOURS) * 60;
+  // 各館標準工時設定快取（與排班工時統計同一份 systemSettings/scheduleHours_<gymId>）
+  const stdCache = {};
+  const stdHoursOf = async (gymId) => {
+    if (stdCache[gymId] !== undefined) return stdCache[gymId];
+    const doc = await db.collection('systemSettings').doc('scheduleHours_' + gymId).get();
+    stdCache[gymId] = (doc.exists && doc.data().standardHours) ? doc.data().standardHours : DEFAULT_STD_HOURS;
+    return stdCache[gymId];
   };
   let mins = 0;
   for (const s of shifts) {
@@ -54,7 +42,9 @@ const getLastMonthHours = async (db, staffId) => {
       const dur = hm(s.endTime) - hm(s.startTime);
       if (dur > 0) mins += dur;
     } else if (s.type === 'full_day') {
-      mins += await fullDayMins(s.gymId, s.date);
+      const std = await stdHoursOf(s.gymId);
+      const hrs = parseFloat(std[dayjs(s.date).day()]) || 8; // 0=週日
+      mins += hrs * 60;
     }
   }
   return Math.round((mins / 60) * 10) / 10; // 小時，1 位小數

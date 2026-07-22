@@ -68,4 +68,5 @@
 - **遇攻擊時恢復邊緣防護（一次動作）**：Cloudflare → DNS → `api` 點回**橘雲（Proxied）**→ Security → 開 **Under Attack Mode**（訪客先過 JS 挑戰）。攻擊過後再點回灰雲恢復速度。
 - ⚠️ **`EDGE_ENFORCE` 與雲朵狀態綁定**：`EDGE_ENFORCE=true`（Railway 環境變數）只在 **api 橘雲**時能用（靠 Cloudflare Transform Rule `inject-edge-auth` 注入 `X-Edge-Auth` header 才不被擋）。**api 灰雲時務必保持 `EDGE_ENFORCE=false`**（現況），否則直連請求無 header 會被全擋、全站斷線。切橘雲並確認 header 有到後，才可考慮開 `EDGE_ENFORCE`。
   - 密鑰 `EDGE_SECRET` 存於 Railway 環境變數 + Cloudflare Transform Rule（兩邊須一致）+ Render（同步備妥、但 Render 端 EDGE_ENFORCE 保持關）。
+- **Railway 區域＝Singapore（asia-southeast1）**（2026-07-22 自 US West 搬遷、離台近；改單一區域 Hobby 即可、多區域副本才需 Pro）。全端點快約 2 倍。⚠️ Render 冷備仍在 US 區。
 - **其餘網域維持灰雲**：app / staff / comp（Firebase Hosting 自有 CDN/憑證，勿 Proxy）；根網域 A 記錄灰雲。SSL/TLS 模式 Full。

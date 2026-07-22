@@ -1139,7 +1139,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 | 服務 | 用途 | 備註 |
 |---|---|---|
 | Firebase（`redrock-dev-a35c1`） | Firestore 資料庫／Hosting 前端兩站／Storage 圖檔 | 免費額度內；SA json 本機 `~/Documents/RedRock/憑證/redrock-dev-a35c1-firebase-adminsdk-*.json` |
-| Railway | 後端 API 主站（24h 常駐） | **主要付費點**；用量警示 Compute hard $150/alert $25；7/14 額度下線事故 |
+| Railway | 後端 API 主站（24h 常駐、**區域 Singapore asia-southeast1**，2026-07-22 自 US West 搬遷、離台近、快約 2 倍） | **主要付費點**；用量警示 Compute hard $150/alert $25；7/14 額度下線事故 |
 | **Render** | 後端冷備（2026-07-17 建置完成） | ✅ Firestore 憑證/JWT_SECRET 同值/custom domain `api.redrocktaiwan.com` 已預登記（Waiting for DNS＝正常待命）；**Railway 環境變數異動須手動同步** |
 | Resend | 所有 Email（Railway 封鎖 SMTP 故走 REST API） | 免費 100 封/天；`RESEND_API_KEY` 在 Railway/Render 環境變數 |
 | **Cloudflare** | 網域 `redrocktaiwan.com` DNS（2026-07-20 自 Porkbun 搬入；app./staff./comp.→Firebase、api→Railway，**全部灰雲 DNS only**） | 免費；**故障轉移＝Cloudflare 改 `api` CNAME 指 Render**。api 灰雲＝快但無 CF 邊緣防護（app 層限流仍在）；遇攻擊點回橘雲+Under Attack |
@@ -1823,6 +1823,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **實測改善**：今日課程學員 1.7→**0.92s**、今日入場 1.3→**0.70s**、每日入場圖表 1.4→**0.76s**（灰雲+平行化+延後綜合）。
 - 📄 `docs/outage-playbook.md` 加第六節「網路架構與 DDoS/延遲權衡」；故障轉移改 Cloudflare（非 Porkbun）改 CNAME、保持灰雲。依賴表 api/DNS 列同步更新。
 - ⚠️ **本機/櫃檯舊快取**：Cloudflare 記錄 TTL ~5 分，切灰雲後幾分鐘或重開瀏覽器才走直連。
+- ✅ **④ Railway 區域 US West → Singapore（asia-southeast1）**（2026-07-22 當日執行，Claude 用瀏覽器操作）：Hobby 方案即可改單一區域（多區域副本才需 Pro，不需要）。滾動部署（舊 US 撐到新 SG build 好才切、下線極短）。**淨效果全端點快約 2 倍**（怕 Firestore 在美國變慢→實測反而更快）：/health 0.28→**0.12s**、今日課程學員 0.92→**0.41s**、今日入場 0.70→**0.33s**、每日圖表 0.76→**0.35s**。CNAME 目標不變（`fox82bz0.up.railway.app`）、Cloudflare 不用動。⚠️ **Render 冷備仍在 US 區**（要一致可另搬，非必要）。
 
 ## 待辦
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。

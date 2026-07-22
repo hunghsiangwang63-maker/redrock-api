@@ -1487,6 +1487,7 @@ const getCourses = async (gymId) => {
       makeupTypeIds: cat?.makeupTypeIds || [],         // 可補課去的類型（本班學員能補去哪些類型的課；單向）
       makeupSelfType: cat?.makeupSelfType || null,     // 本班別類型（別人補課過來時算哪一類）
       makeupGroup: cat?.makeupGroup || null,           // 舊制補課群組（相容）
+      paymentMethods: c.paymentMethods || null,        // 課程層付款方式覆寫（null＝預設現金/轉帳；如運動按摩=['cash']）
       refundFeeRate: _rules.handlingFeeRate ?? 0.2, // 開課後退費手續費率（預設 20%，班別/梯次可調）
       refundPreStartFeeRate: _rules.preStartFeeRate ?? 0.05, // 開課前退費手續費率（預設 5%，班別/梯次可調）
       ruleMaxLeaves: _rules.maxLeaves,                       // 整期可請假次數（報名規則方框顯示）

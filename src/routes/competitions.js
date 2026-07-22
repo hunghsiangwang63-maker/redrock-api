@@ -759,7 +759,26 @@ router.post('/registrations/:regId/update-form', authenticateAny, async (req, re
     const _w = _c.reduce((a, b) => b.fee < a.fee ? b : a);
     registrationFee = _w.fee; feTeamDiscount = _w.k === 'team'; fePartner = _w.k === 'partner';
 
+    // 繳費資訊（退回修改一併可改；已確認收款者不動；末五碼+日期必填）
+    let paymentUpdate = {};
+    if (reg.paymentStatus !== 'confirmed' && b.paymentMethod) {
+      const pm = b.paymentMethod;
+      if (!['cash', 'transfer'].includes(pm)) return res.status(400).json({ error: 'INVALID_METHOD', message: '付款方式須為現金或轉帳' });
+      const pDate = String(b.paymentDate || '').trim();
+      if (!pDate) return res.status(400).json({ error: 'MISSING_PAYMENT_DATE', message: '請填寫繳費日期' });
+      if (pm === 'transfer' && !String(b.bankLastFive || '').trim()) return res.status(400).json({ error: 'MISSING_BANK_LAST_FIVE', message: '請填寫匯款帳號末五碼' });
+      paymentUpdate = {
+        paymentMethod: pm,
+        paymentDate: pDate,
+        bankName: pm === 'transfer' ? (String(b.bankName || '').trim() || null) : null,
+        bankLastFive: pm === 'transfer' ? String(b.bankLastFive).trim() : null,
+        paymentStatus: 'pending',
+        paymentRejectReason: null, paymentRejectedAt: null,
+      };
+    }
+
     await ref.update({
+      ...paymentUpdate,
       divisionId: newDivisionId, divisionName: division.name,
       status: newStatus, waitlistPosition: newWaitlistPos,
       gender: b.gender, birthday: b.birthday,

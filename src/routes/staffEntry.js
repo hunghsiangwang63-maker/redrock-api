@@ -1,7 +1,7 @@
 /*
  * staffEntry.js — 員工入館 QR
  *  正職員工/管理員：免費入場
- *  兼職人員：依「上一個曆月」排班表排定時數（scheduleShifts）分級——
+ *  兼職人員：依「上一個曆月」排班表排定的【值班】時數（scheduleShifts，排除課程帶入班）分級——
  *    ≥ 40 小時 → 次月免費；≥ 20 小時 → 次月半價（單次入場半價）；< 20 小時 → 一般價
  *  流程：員工個人登入 → 產生 QR（staffentry:<token>）→ 站台掃碼預覽 → 確認（記 checkIns、付費部分現場收現金）
  */
@@ -27,7 +27,9 @@ const getLastMonthHours = async (db, staffId) => {
   const endStr = end.format('YYYY-MM-DD');
   const hm = (t) => { const [h, m] = String(t).split(':').map(Number); return (h || 0) * 60 + (m || 0); };
   const snap = await db.collection('scheduleShifts').where('staffId', '==', staffId).get();
-  const shifts = snap.docs.map(d => d.data()).filter(s => s.date && s.date >= startStr && s.date <= endStr);
+  // 只算「值班工時」；排除課程帶入班（體驗教練授課，source:'course' 或舊資料 note 前綴「體驗課程」）
+  const isCourseShift = (s) => s.source === 'course' || String(s.note || '').startsWith('體驗課程');
+  const shifts = snap.docs.map(d => d.data()).filter(s => s.date && s.date >= startStr && s.date <= endStr && !isCourseShift(s));
   // 各館標準工時設定快取（與排班工時統計同一份 systemSettings/scheduleHours_<gymId>）
   const stdCache = {};
   const stdHoursOf = async (gymId) => {

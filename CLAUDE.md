@@ -1796,6 +1796,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（打正式 API，成人非隊員會員）**：verify `partnerGymMemberRate:0.9`、single/student `pgmEligible:true`；建 QR 成人+友館隊員 pending **amount 270**（原300）、學生 **225**（原250）、不勾 300；`partnerGymMember` 旗標正確、pending 測後清。
 - 📌 **與比賽「友館折扣」不同**：比賽 3.77.0 是友館清單+人工核對+0.95（擇優不疊隊員）；此入場友館隊員是**自行出示證明+0.9**（無清單、比照特約廠商自選），兩者獨立。
 
+## 目前進度（2026-07-22 續4）— 工作坊分階段報名＋隊員分級定價
+> 需求：工作坊某段時間先開放隊員報名（優惠價），之後開放一般會員（另一價）。決策（AskUserQuestion）：隊員任何時候都優惠價／專屬期只有隊員能報名／只套工作坊。後端 `/health` `3.107.0-workshop-team-staged-enroll`；E2E 打正式 API **8/8**。
+- ✅ **課程 3 欄位（僅 workshop 生效、留空＝不限制）**：`teamOpenDate`（隊員報名開放日）／`generalOpenDate`（一般會員報名開放日）／`teamPrice`（隊員優惠價）。createCourse／getCourses／PUT allowedFields。
+- ✅ **`enrollCourse` 權威 gate＋計價**（工作坊走 `POST /sessions/:sid/enroll`）：
+  - **gate**（`!byStaff` 才限；店員代報不受限）：隊員 today<teamOpenDate 擋；一般會員 today<generalOpenDate 擋（專屬期訊息「攀岩隊員專屬報名期間，一般會員 X 起開放」）。
+  - **計價**：工作坊隊員（`isActiveTeamMember`）任何時候報名 → `teamPrice`（存 `teamPriceApplied`）；一般 → 原價。
+- ✅ **前端**：會員 `MemberCoursesPage` 工作坊場次卡顯示自己價格（隊員標🏅隊員價、一般顯示隊員價供參）＋未開放「⏳ X 起開放」＋按鈕禁用（依登入者 `member.isTeamMember`）；帶正確 fee 進報名 modal。員工 `CoursesPage` 編輯工作坊加「🏅 分階段報名/隊員優惠價」區塊（3 欄位）＋create/edit submit。
+- **E2E（真會員 token，8/8）**：隊員專屬期→隊員201/800、一般擋；兩者皆開→一般201/1000、隊員201/800；隊員未開→擋。fixtures 全清。
+- 📌 **範圍**：僅工作坊（type=workshop）；週課的隊員 9 折（enroll-all，既有）與此 teamPrice 獨立。目標即報名對象（家長代非隊員子女→一般價，後端依 memberId 判定；前端顯示以登入者隊員身份為主、後端權威）。
+
 ## 待辦
 - 🚨🛡 **【提醒使用者：重開 EDGE_ENFORCE】DDoS 邊緣強制暫關中，2026-07-22 之後重開**：2026-07-20 開啟致營業中斷已回退（Railway `EDGE_ENFORCE=false`）——根因＝DNS 搬 Cloudflare 當天、櫃檯裝置快取仍直連 Railway 被 403。**主動提醒使用者**每次開場先問是否要重開。**重開檢查清單（缺一不可）**：①距 DNS 搬移（7/20 晚）至少 1-2 天、客戶端快取全過期 ②先驗「直打 `redrock-api-production.up.railway.app/courses` 已無正常流量／所有裝置走 Cloudflare」（可看 Cloudflare Analytics 或請櫃檯確認頁面正常且 `dig api.redrocktaiwan.com` 回 104.x/172.67.x）③挑**離峰時段** ④Railway 設 `EDGE_ENFORCE=true`（`EDGE_SECRET` 已在、Transform Rule `inject-edge-auth` 已在）⑤重新部署完**立刻實測**：經 CF 200/401、直打一般端點 403、**請櫃檯重整確認資料正常** ⑥若櫃檯又空白＝仍有裝置走直連 → 立刻改回 `false`、再等。⚠ **Render 冷備刻意保持 `EDGE_ENFORCE` 關**（故障轉移最穩，勿在 Render 開）。
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。

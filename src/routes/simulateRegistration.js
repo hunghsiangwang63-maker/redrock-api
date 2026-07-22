@@ -149,8 +149,17 @@ router.post('/registration', authenticate, requireManagerOrStation, async (req, 
       if (!ct) return res.status(404).json({ error: 'COURSE_TYPE_NOT_FOUND', message: '找不到體驗課程類型' });
 
       const numPeople = 1;
-      const base = ct.price != null ? ct.price : (ct.priceMap ? (ct.priceMap['1'] ?? ct.priceMap[1] ?? Object.values(ct.priceMap)[0]) : 0);
-      const fee = base * numPeople; // 體驗費已含保險
+      // 體驗費解析：階梯(tiers min~max) / 固定(price) / priceMap；體驗費已含保險
+      const resolveExpPrice = (t, n) => {
+        if (Array.isArray(t.tiers) && t.tiers.length) {
+          const hit = t.tiers.find(x => n >= (x.min ?? 1) && n <= (x.max ?? 999));
+          return (hit ? hit.price : t.tiers[0].price) || 0;
+        }
+        if (t.price != null) return t.price;
+        if (t.priceMap) return t.priceMap[String(n)] ?? t.priceMap[n] ?? Object.values(t.priceMap)[0] ?? 0;
+        return 0;
+      };
+      const fee = resolveExpPrice(ct, numPeople) * numPeople; // 每人單價（含保險）× 人數
       const bookingDate = dayjs(taiwanToday()).add(3, 'day').format('YYYY-MM-DD');
       const bookingTime = '14:00-16:00';
       const fakeBooking = { bookingDate, bookingTime, gymId: 'gym-hsinchu', numParticipants: numPeople };

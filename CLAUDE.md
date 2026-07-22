@@ -1806,6 +1806,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（真會員 token，8/8）**：隊員專屬期→隊員201/800、一般擋；兩者皆開→一般201/1000、隊員201/800；隊員未開→擋。fixtures 全清。
 - 📌 **範圍**：僅工作坊（type=workshop）；週課的隊員 9 折（enroll-all，既有）與此 teamPrice 獨立。目標即報名對象（家長代非隊員子女→一般價，後端依 memberId 判定；前端顯示以登入者隊員身份為主、後端權威）。
 
+## 目前進度（2026-07-22 續5）— 課程/比賽報名連結（深連結分享）
+> 需求：產生可分享的報名連結（比照 BeClass）。純前端 `redrock-web`；課程全梯次＋比賽皆支援。
+- ✅ **登入後跳回原網址**（`App.jsx` MemberRoute 未登入導 `/member/login?redirect=<原路徑>`；`MemberLoginPage` 登入後讀 `?redirect=`（限 `/member/` 前綴）跳回）→ 深連結未登入也能用。
+- ✅ **課程深連結** `?course=<courseId>`（`MemberCoursesPage`）：課程載入後自動切課程總覽＋開該課報名頁（useRef 只開一次）。員工 `CoursesPage` 梯次列加「🔗 連結」複製 `app.redrocktaiwan.com/member/courses?course=<id>`。
+- ✅ **比賽深連結** `?comp=<compId>`（`MemberCompetitionsPage`）：賽事載入後自動開該賽事報名 modal（限 status=open、只開一次）。員工 `CompetitionsPage` 開放中賽事加「🔗 連結」複製 `app.redrocktaiwan.com/member/competitions?comp=<id>`。
+- 📌 連結需先是會員（要登入）；家長點連結先到登入頁可註冊。工作坊連結亦適用（會員點進去依隊員身份看價格/開放狀態）。純前端、已部署。
+
 ## 待辦
 - 🚨🛡 **【提醒使用者：重開 EDGE_ENFORCE】DDoS 邊緣強制暫關中，2026-07-22 之後重開**：2026-07-20 開啟致營業中斷已回退（Railway `EDGE_ENFORCE=false`）——根因＝DNS 搬 Cloudflare 當天、櫃檯裝置快取仍直連 Railway 被 403。**主動提醒使用者**每次開場先問是否要重開。**重開檢查清單（缺一不可）**：①距 DNS 搬移（7/20 晚）至少 1-2 天、客戶端快取全過期 ②先驗「直打 `redrock-api-production.up.railway.app/courses` 已無正常流量／所有裝置走 Cloudflare」（可看 Cloudflare Analytics 或請櫃檯確認頁面正常且 `dig api.redrocktaiwan.com` 回 104.x/172.67.x）③挑**離峰時段** ④Railway 設 `EDGE_ENFORCE=true`（`EDGE_SECRET` 已在、Transform Rule `inject-edge-auth` 已在）⑤重新部署完**立刻實測**：經 CF 200/401、直打一般端點 403、**請櫃檯重整確認資料正常** ⑥若櫃檯又空白＝仍有裝置走直連 → 立刻改回 `false`、再等。⚠ **Render 冷備刻意保持 `EDGE_ENFORCE` 關**（故障轉移最穩，勿在 Render 開）。
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。

@@ -65,6 +65,8 @@ router.post('/apply', authenticateAny, async (req, res) => {
 
     if (!agreedPrivacy) return res.status(400).json({ code: 'PRIVACY_NOT_AGREED', message: '請同意個資使用聲明' });
     if (!idNumber) return res.status(400).json({ code: 'MISSING_ID', message: '請填寫身分證字號' });
+    if (!String(bankLastFive || '').trim()) return res.status(400).json({ code: 'MISSING_BANK_LAST_FIVE', message: '請填寫匯款帳號末五碼' });
+    if (!String(paymentDate || '').trim()) return res.status(400).json({ code: 'MISSING_PAYMENT_DATE', message: '請填寫轉帳日期' });
 
     const id = `team_${memberId}_${year}`;
     await db.collection('teamApplications').doc(id).set({

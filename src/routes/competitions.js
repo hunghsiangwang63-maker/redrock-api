@@ -161,6 +161,10 @@ router.post('/:id/register',
       const regPhone = req.body.phone || registrantData.phone || req.member?.phone || null;
       const regEmail = req.body.email || registrantData.email || req.member?.email || null;
 
+      if (req.body.paymentMethod === 'transfer') {
+        if (!String(req.body.bankLastFive || '').trim()) return res.status(400).json({ error: 'MISSING_BANK_LAST_FIVE', message: '請填寫匯款帳號末五碼' });
+        if (!String(req.body.paymentDate || '').trim()) return res.status(400).json({ error: 'MISSING_PAYMENT_DATE', message: '請填寫轉帳日期' });
+      }
       const registration = await competitionService.registerForCompetition({
         competitionId: req.params.id,
         memberId,
@@ -566,6 +570,7 @@ router.post('/registrations/:regId/payment-info', authenticateAny, async (req, r
     const today = taiwanToday();
     const maxDate = require('dayjs')(today).add(3, 'day').format('YYYY-MM-DD');
     if (!paymentDate) return res.status(400).json({ error: 'MISSING_PAYMENT_DATE', message: '請填寫繳費日期' });
+    if (paymentMethod === 'transfer' && !String(req.body.bankLastFive || '').trim()) return res.status(400).json({ error: 'MISSING_BANK_LAST_FIVE', message: '請填寫匯款帳號末五碼' });
     if (paymentDate < today || paymentDate > maxDate) return res.status(400).json({ error: 'INVALID_PAYMENT_DATE', message: '繳費日期須為 3 日內' });
     await ref.update({
       paymentMethod,

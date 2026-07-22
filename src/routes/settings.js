@@ -259,6 +259,31 @@ router.put('/partner-vendor', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /settings/partner-gym-member - 友館隊員入場優惠（啟用 + 折扣率，預設9折）──────
+router.get('/partner-gym-member', async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('systemSettings').doc('partnerGymMember').get();
+    const d = doc.exists ? doc.data() : {};
+    res.json({ enabled: d.enabled !== false, rate: (Number.isFinite(d.rate) && d.rate > 0 && d.rate < 1) ? d.rate : 0.9 });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── PUT /settings/partner-gym-member（僅 super_admin/admin）──────────────────
+router.put('/partner-gym-member', authenticate, async (req, res) => {
+  if (!['super_admin', 'admin'].includes(req.staff?.role))
+    return res.status(403).json({ error: '權限不足' });
+  try {
+    const db = getDb();
+    const r = Number(req.body.rate);
+    if (!Number.isFinite(r) || r <= 0 || r >= 1)
+      return res.status(400).json({ error: 'INVALID_RATE', message: '友館隊員折扣率請填 0~1 之間（如 0.9＝九折）' });
+    const enabled = !!req.body.enabled;
+    await db.collection('systemSettings').doc('partnerGymMember').set({ enabled, rate: r, updatedAt: new Date() }, { merge: true });
+    res.json({ success: true, enabled, rate: r });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /settings/chalk-rental ────────────────────────────────────
 router.get('/chalk-rental', async (req, res) => {
   try {

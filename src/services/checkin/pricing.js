@@ -30,6 +30,17 @@ const getPartnerVendorConfig = async () => {
   } catch { return { enabled: true, discount: PARTNER_VENDOR_DISCOUNT }; }
 };
 
+// 友館隊員入場優惠：全額入場費 ×rate（預設 9 折），自行出示證明、櫃檯查驗（比照特約廠商）。
+// 可於員工端「系統設定 → 入場規則」設定（systemSettings/partnerGymMember）；讀不到 fallback 啟用+0.9。
+const PARTNER_GYM_MEMBER_RATE = 0.9;
+const getPartnerGymMemberConfig = async () => {
+  try {
+    const doc = await getDb().collection('systemSettings').doc('partnerGymMember').get();
+    const d = doc.exists ? doc.data() : {};
+    return { enabled: d.enabled !== false, rate: (Number.isFinite(d.rate) && d.rate > 0 && d.rate < 1) ? d.rate : PARTNER_GYM_MEMBER_RATE };
+  } catch { return { enabled: true, rate: PARTNER_GYM_MEMBER_RATE }; }
+};
+
 // 取得「原價」（折扣券 8 折的基準）：一般→single_ticket，學生→student_free
 const getOriginalEntryPrice = async (memberType) => {
   const id = memberType === 'student' ? 'student_free' : 'single_ticket';
@@ -79,21 +90,30 @@ const computePaidEntryAmount = async (entryType, member, opts = {}) => {
   const originalAmount = t.price;
   // 兒童：不適用折扣卡、也不會是隊員 → 一律原價，任何折扣都不套（權威擋，涵蓋電話入場與 QR 自助）
   if (entryType === 'child_free') {
-    return { amount: originalAmount, originalAmount, isTeamDiscount: false, legacyDiscount: false, partnerVendor: false };
+    return { amount: originalAmount, originalAmount, isTeamDiscount: false, legacyDiscount: false, partnerVendor: false, partnerGymMember: false };
   }
   const isTeam = isActiveTeamMember(member);
   const teamEligible = isTeam && originalAmount >= TEAM_DISCOUNT_MIN_AMOUNT;
   let amount = originalAmount;
   if (opts.legacyDiscountCard) amount = Math.round(amount * DISCOUNT_CARD_RATE); // 舊折扣卡 8 折
   if (teamEligible) amount = Math.round(amount * PRICES.team_discount_rate);      // 有效隊員再疊 9 折
-  // 特約廠商：僅當【未套舊折扣卡 且 非有效隊員】且全票/學生票 → 定額 −N（權威互斥，隊員/舊卡任一成立即忽略；設定停用/金額 0 則不套）
+  // 友館隊員(×rate,預設9折) 與 特約廠商(定額−N) 皆自行出示證明；僅【未套舊折扣卡 且 非有效隊員】且全票/學生票；兩者互斥、友館隊員優先（9折較優）
   let partnerVendor = false;
-  if (!opts.legacyDiscountCard && !teamEligible && opts.partnerVendor
+  let partnerGymMember = false;
+  if (!opts.legacyDiscountCard && !teamEligible
       && (entryType === 'single_ticket' || entryType === 'student_free')) {
-    const pv = await getPartnerVendorConfig();
-    if (pv.enabled && pv.discount > 0) {
-      amount = Math.max(0, originalAmount - pv.discount);
-      partnerVendor = true;
+    if (opts.partnerGymMember) {
+      const pg = await getPartnerGymMemberConfig();
+      if (pg.enabled && pg.rate > 0 && pg.rate < 1) {
+        amount = Math.round(originalAmount * pg.rate);
+        partnerGymMember = true;
+      }
+    } else if (opts.partnerVendor) {
+      const pv = await getPartnerVendorConfig();
+      if (pv.enabled && pv.discount > 0) {
+        amount = Math.max(0, originalAmount - pv.discount);
+        partnerVendor = true;
+      }
     }
   }
   return {
@@ -101,10 +121,11 @@ const computePaidEntryAmount = async (entryType, member, opts = {}) => {
     isTeamDiscount: teamEligible,
     legacyDiscount: !!opts.legacyDiscountCard,
     partnerVendor,
+    partnerGymMember,
   };
 };
 
 // ── 取得有效定期票 ───────────────────────────────────────────────
 // endDate 改用「補償後到期日」（臨時休館延長票期，公休不補）→ 不在 Firestore 端以 endDate 預篩，
 // 改抓全部 active 後在程式碼用 effectiveEndDate 判斷（會員 active 票很少，成本可忽略）。
-module.exports = { PRICES, DISCOUNT_CARD_RATE, PARTNER_VENDOR_DISCOUNT, getPartnerVendorConfig, getOriginalEntryPrice, getMemberType, isFreeEntry, getEntryTypePrice, computePaidEntryAmount };
+module.exports = { PRICES, DISCOUNT_CARD_RATE, PARTNER_VENDOR_DISCOUNT, PARTNER_GYM_MEMBER_RATE, getPartnerVendorConfig, getPartnerGymMemberConfig, getOriginalEntryPrice, getMemberType, isFreeEntry, getEntryTypePrice, computePaidEntryAmount };

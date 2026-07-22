@@ -20,7 +20,7 @@ const GYM_NAMES = { 'gym-hsinchu': '新竹館', 'gym-shilin': '士林館' };
 const createPendingCheckIn = async ({
   memberId, gymId, entryType, baseEntryType,
   passId, discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
-  paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, partnerVendor, paymentPlan,
+  paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, partnerVendor, partnerGymMember, paymentPlan,
   rentShoes, shoesPrice,
   rentChalk, chalkPrice,
   renewPassId, renewPaymentPlan,
@@ -84,6 +84,7 @@ const createPendingCheckIn = async ({
   let finalTeam = isTeamDiscount || false;
   let finalLegacy = false;
   let finalPartnerVendor = false;
+  let finalPartnerGymMember = false;
   {
     // 舊折扣卡 8 折：權威以後端轉換期開關 checkinLegacyDiscountCard 為準，不單信呼叫端旗標（與 /checkin/phone 同一份邏輯）
     let useLegacyDiscount = false;
@@ -93,13 +94,14 @@ const createPendingCheckIn = async ({
         useLegacyDiscount = !!(ts.exists && ts.data().checkinLegacyDiscountCard);
       } catch {}
     }
-    const computed = await computePaidEntryAmount(entryType, member, { legacyDiscountCard: useLegacyDiscount, partnerVendor: partnerVendor === true });
+    const computed = await computePaidEntryAmount(entryType, member, { legacyDiscountCard: useLegacyDiscount, partnerVendor: partnerVendor === true, partnerGymMember: partnerGymMember === true });
     if (computed) {
       finalOriginal = computed.originalAmount;
       finalAmount = computed.amount;
       finalTeam = computed.isTeamDiscount;
       finalLegacy = !!computed.legacyDiscount;
       finalPartnerVendor = !!computed.partnerVendor;   // 後端權威：隊員/舊卡成立時一律 false
+      finalPartnerGymMember = !!computed.partnerGymMember;   // 後端權威：友館隊員 9 折
     }
   }
 
@@ -211,6 +213,7 @@ const createPendingCheckIn = async ({
     isTeamDiscount: finalTeam,
     legacyDiscount: finalLegacy,
     partnerVendor: finalPartnerVendor,   // 特約廠商優惠（−20，掃碼提示出示證件）
+    partnerGymMember: finalPartnerGymMember,   // 友館隊員優惠（9折，掃碼提示出示證件）
     rentShoes: rentShoes || false,
     shoesPrice: rentShoes ? (shoesPrice || PRICES.shoes_rental) : 0,
     rentChalk: rentChalk || false,
@@ -315,6 +318,7 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     isTeamDiscount: pending.isTeamDiscount,
     legacyDiscount: pending.legacyDiscount || false,
     partnerVendor: pending.partnerVendor === true,   // 特約廠商優惠 → 員工端提示出示證件
+    partnerGymMember: pending.partnerGymMember === true,   // 友館隊員優惠 → 員工端提示出示證件
     rentShoes: pending.rentShoes,
     shoesPrice: pending.shoesPrice,
     rentChalk: pending.rentChalk || false,
@@ -512,6 +516,7 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     isTeamDiscount: pending.isTeamDiscount,
     legacyDiscount: pending.legacyDiscount || false,
     partnerVendor: pending.partnerVendor || false,   // 特約廠商優惠（供報表/掃碼顯示）
+    partnerGymMember: pending.partnerGymMember || false,   // 友館隊員優惠（供報表/掃碼顯示）
     rentShoes: pending.rentShoes,
     shoesPrice: pending.shoesPrice,
     rentChalk: pending.rentChalk || false,

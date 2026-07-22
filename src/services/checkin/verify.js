@@ -7,7 +7,7 @@ const { getValidDiscountCards } = require('../discountCardService');
 const { getMemberBlackCards } = require('../legacyCardService');
 const { isActiveTeamMember, TEAM_DISCOUNT_MIN_AMOUNT } = require('../teamMemberService');
 const dayjs = require('dayjs');
-const { DISCOUNT_CARD_RATE, PRICES, getEntryTypePrice, getOriginalEntryPrice, getPartnerVendorConfig } = require('./pricing');
+const { DISCOUNT_CARD_RATE, PRICES, getEntryTypePrice, getOriginalEntryPrice, getPartnerVendorConfig, getPartnerGymMemberConfig } = require('./pricing');
 const { checkVip, getBuyablePassTypes, getCourseAccess, getRenewalInfo, getValidPasses, getValidSingleEntryTickets } = require('./eligibility');
 const { runEntryGates } = require('./gates');
 
@@ -111,6 +111,8 @@ const verifyEntry = async (memberId, gymId) => {
   // 特約廠商優惠設定（啟用 + 金額）；停用或金額 0 → eligible 一律 false（前端不顯示勾選）
   const pvConfig = await getPartnerVendorConfig();
   const pvOn = pvConfig.enabled && pvConfig.discount > 0;
+  const pgmConfig = await getPartnerGymMemberConfig();
+  const pgmOn = pgmConfig.enabled && pgmConfig.rate > 0 && pgmConfig.rate < 1;
   const etDoc = await db.collection('systemSettings').doc('entryTypes').get();
   const configuredTypes = (etDoc.exists ? (etDoc.data().types || []) : [])
     .filter(t => t && t.id !== 'course_access' && typeof t.price === 'number' && t.active !== false)
@@ -138,6 +140,7 @@ const verifyEntry = async (memberId, gymId) => {
       teamDiscount: isTeam && withTeam(t.price) < t.price,
       // 特約廠商優惠：全票/學生票且非隊員（隊員 9 折較優、不提供特約）；設定停用/金額0 則一律 false
       partnerVendorEligible: pvOn && (t.id === 'single_ticket' || t.id === 'student_free') && !isTeam,
+      partnerGymMemberEligible: pgmOn && (t.id === 'single_ticket' || t.id === 'student_free') && !isTeam,
       available: true,
       requiresPayment: true,
     }));
@@ -160,6 +163,7 @@ const verifyEntry = async (memberId, gymId) => {
       discountedPrice: withTeam(singlePrice),
       teamDiscount: isTeam && withTeam(singlePrice) < singlePrice,
       partnerVendorEligible: pvOn && (singleTypeId === 'single_ticket' || singleTypeId === 'student_free') && !isTeam,
+      partnerGymMemberEligible: pgmOn && (singleTypeId === 'single_ticket' || singleTypeId === 'student_free') && !isTeam,
       available: true, requiresPayment: true,
     }];
   }
@@ -169,6 +173,7 @@ const verifyEntry = async (memberId, gymId) => {
     requiresPayment: true,
     member: memberInfo,
     partnerVendorDiscount: pvConfig.discount,   // 特約廠商定額折扣（可設定，前端顯示）
+    partnerGymMemberRate: pgmConfig.rate,       // 友館隊員折扣率（可設定，前端顯示；預設0.9）
     // 兩段式流程：先選身分(entryTypeOptions)，再選要不要用票券(instruments)
     entryTypeOptions,
     instruments: {

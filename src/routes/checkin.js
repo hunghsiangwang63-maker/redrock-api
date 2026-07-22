@@ -76,7 +76,7 @@ router.post('/qr/create',
       const {
         memberId, gymId, entryType, baseEntryType,
         passId, discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
-        paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, partnerVendor, paymentPlan,
+        paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, partnerVendor, partnerGymMember, paymentPlan,
         rentShoes, shoesPrice, rentChalk, chalkPrice,
         renewPassId, renewPaymentPlan,
       } = req.body;
@@ -101,7 +101,7 @@ router.post('/qr/create',
         memberId: effectiveMemberId,
         gymId: effectiveGymId,
         entryType, baseEntryType, passId, discountCardId, blackCardId, singleEntryTicketId, bonusId, buyPassTypeId,
-        paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, partnerVendor, paymentPlan,
+        paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, partnerVendor, partnerGymMember, paymentPlan,
         rentShoes, shoesPrice, rentChalk, chalkPrice,
         renewPassId, renewPaymentPlan,
       });

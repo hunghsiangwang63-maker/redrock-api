@@ -320,28 +320,23 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
     const sessions = sessionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     if (sessions.length === 0) return res.json({ students: [] });
 
-    // 各場次的報名者（正取，不含候補/請假）
+    // 各場次報名者（正取）+ 今日已入場 + 跨期補課 → 平行查詢（原序列多次往返造成慢）
     const sessionIds = sessions.map(s => s.id);
     const chunks = [];
     for (let i = 0; i < sessionIds.length; i += 30) chunks.push(sessionIds.slice(i, i + 30));
-    const enrollments = [];
-    for (const chunk of chunks) {
-      const snap = await db.collection('courseEnrollments')
-        .where('sessionId', 'in', chunk)
-        .where('status', '==', 'confirmed')
-        .get();
-      snap.docs.forEach(d => enrollments.push({ id: d.id, ...d.data() }));
-    }
-    if (enrollments.length === 0) return res.json({ students: [] });
-
-    // 今日已入場名單（用於標註禁止重複點選）；以台灣時間午夜為界
     const todayStr0 = taiwanToday();
     const todayStart = new Date(todayStr0 + 'T00:00:00+08:00');
-    const checkedInSnap = await db.collection('checkIns')
-      .where('gymId', '==', gymId)
-      .where('isCancelled', '==', false)
-      .where('checkedInAt', '>=', todayStart)
-      .get();
+    const [enrollSnaps, checkedInSnap, xmSnap] = await Promise.all([
+      Promise.all(chunks.map(chunk => db.collection('courseEnrollments')
+        .where('sessionId', 'in', chunk).where('status', '==', 'confirmed').get())),
+      db.collection('checkIns')
+        .where('gymId', '==', gymId).where('isCancelled', '==', false)
+        .where('checkedInAt', '>=', todayStart).get(),
+      db.collection('crossCohortMakeups')
+        .where('targetDate', '==', today).where('status', '==', 'booked').get(),
+    ]);
+    const enrollments = [];
+    enrollSnaps.forEach(snap => snap.docs.forEach(d => enrollments.push({ id: d.id, ...d.data() })));
     const checkedInMemberIds = new Set(checkedInSnap.docs.map(d => d.data().memberId));
 
     const sessionMap = {};
@@ -365,11 +360,9 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
       })
       .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
 
-    // 跨期補課（上一梯/密集班學員、非本期名單）：以名單註記顯示，供櫃檯辨識放行
+    // 跨期補課（上一梯/密集班學員、非本期名單）：以名單註記顯示，供櫃檯辨識放行（已平行取得 xmSnap）
     try {
-      const xm = await db.collection('crossCohortMakeups')
-        .where('targetDate', '==', today).where('status', '==', 'booked').get();
-      xm.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => sessionMap[x.targetSessionId] || x.gymId === gymId).forEach(x => {
+      xmSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => sessionMap[x.targetSessionId] || x.gymId === gymId).forEach(x => {
         const s = sessionMap[x.targetSessionId] || {};
         students.push({
           memberId: null, memberName: x.name,

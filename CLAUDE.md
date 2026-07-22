@@ -1789,6 +1789,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **場次同日依時間排序**（工作坊）：`getSessions` 排序加 `startTime`（原只 date）；前端 4 處日期-only 排序補時間（員工場次列表、會員梯次場次列表/補課候選/我的課程 future）。實例：運動按摩 8/23 五場次 12:00~17:00 依序。
 - ✅ **會員↔員工補課資訊一致**：查證兩處潛在不一致——① `getMemberMakeupRights`（會員端）濾過期券，員工假補總表「剩」**不濾**→ 統一員工端 `avail` 也排除過期券（兩端點）；② `getMemberMakeupRights` 對 null 到期日 `.toDate()` 會炸→改 null-safe（null 視為無限期）。目前 30 張 available 券 **0 過期、0 無到期日** 故本就一致；改後未來也保證一致。實測比對陳以喬 會員端 API 3 張＝員工端假補總表 剩3/共3。**補課可補場次**兩端皆走後端 `enrollMakeup` 權威（單向補課類型 3.86.0），前端候選 filter 與後端一致。
 
+## 目前進度（2026-07-22 續3）— 入場新增「友館隊員優惠」（9折，出示證明）
+> 承特約廠商優惠：入場加一種**友館隊員優惠**＝全額入場費 ×0.9（成人300→270、學生250→225），自行出示證明、櫃檯查驗（比照特約廠商，只是折扣是率非定額）。後端 `/health` `3.106.0-partner-gym-member-entry-discount`；E2E 打正式 API 通過。
+- ✅ **後端**：`pricing.computePaidEntryAmount` 加 `opts.partnerGymMember` 分支（×rate 預設0.9，全票/學生票，兒童不適用）；**互斥優先序 legacy(8折) > 隊員(9折) > 友館隊員(9折) > 特約廠商(−N)**（友館隊員與特約廠商擇一、友館隊員優先）。`getPartnerGymMemberConfig`（systemSettings/partnerGymMember{enabled,rate}，fallback 啟用+0.9）；`verifyEntry` 回 `partnerGymMemberEligible`(每選項)＋`partnerGymMemberRate`；`flow` 串接 createPending/confirm/scan（pending 存 partnerGymMember、掃碼回傳供提示）；`checkin.js` 兩路由參數；`settings.js` GET/PUT `/settings/partner-gym-member`（PUT 限 super_admin/admin，rate 0~1）。
+- ✅ **前端**：`MemberQRPage` 付款步驟加「友館隊員優惠（N折）」勾選（與特約廠商**互斥**、勾一個清另一個）＋QR頁摘要「入場費（友館隊員 X折）」＋出示證明提示；`CheckinPage` 掃碼預覽「⚠ 友館隊員優惠（9折）：請出示友館隊員證明」；`SettingsPage` 入場規則加「🧗 友館隊員優惠」分頁（啟用+折扣率，superAdminOnly）。
+- **E2E（打正式 API，成人非隊員會員）**：verify `partnerGymMemberRate:0.9`、single/student `pgmEligible:true`；建 QR 成人+友館隊員 pending **amount 270**（原300）、學生 **225**（原250）、不勾 300；`partnerGymMember` 旗標正確、pending 測後清。
+- 📌 **與比賽「友館折扣」不同**：比賽 3.77.0 是友館清單+人工核對+0.95（擇優不疊隊員）；此入場友館隊員是**自行出示證明+0.9**（無清單、比照特約廠商自選），兩者獨立。
+
 ## 待辦
 - 🚨🛡 **【提醒使用者：重開 EDGE_ENFORCE】DDoS 邊緣強制暫關中，2026-07-22 之後重開**：2026-07-20 開啟致營業中斷已回退（Railway `EDGE_ENFORCE=false`）——根因＝DNS 搬 Cloudflare 當天、櫃檯裝置快取仍直連 Railway 被 403。**主動提醒使用者**每次開場先問是否要重開。**重開檢查清單（缺一不可）**：①距 DNS 搬移（7/20 晚）至少 1-2 天、客戶端快取全過期 ②先驗「直打 `redrock-api-production.up.railway.app/courses` 已無正常流量／所有裝置走 Cloudflare」（可看 Cloudflare Analytics 或請櫃檯確認頁面正常且 `dig api.redrocktaiwan.com` 回 104.x/172.67.x）③挑**離峰時段** ④Railway 設 `EDGE_ENFORCE=true`（`EDGE_SECRET` 已在、Transform Rule `inject-edge-auth` 已在）⑤重新部署完**立刻實測**：經 CF 200/401、直打一般端點 403、**請櫃檯重整確認資料正常** ⑥若櫃檯又空白＝仍有裝置走直連 → 立刻改回 `false`、再等。⚠ **Render 冷備刻意保持 `EDGE_ENFORCE` 關**（故障轉移最穩，勿在 Render 開）。
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。

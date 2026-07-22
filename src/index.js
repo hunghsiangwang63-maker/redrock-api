@@ -77,6 +77,11 @@ const registerLimiter = rateLimit({
   standardHeaders: true, legacyHeaders: false,
   message: { error: 'TOO_MANY_REQUESTS', message: '註冊過於頻繁，請稍後再試' },
 });
+const publicBookLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, max: 20, // 每 IP 每小時 20 次公開體驗預約（免登入，防濫填/機器人）
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: 'TOO_MANY_REQUESTS', message: '預約次數過多，請稍後再試' },
+});
 const resendLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, max: 20, // 每 IP 每小時 20 次重寄驗證信（防濫發 Email）
   standardHeaders: true, legacyHeaders: false,
@@ -85,6 +90,7 @@ const resendLimiter = rateLimit({
 app.use(globalLimiter);
 app.use('/members/self-register', registerLimiter);
 app.use('/auth/member/resend-verification', resendLimiter);
+app.use('/experience-bookings/public', publicBookLimiter);
 app.use('/auth/staff/login', authLimiter);
 app.use('/auth/member/login', authLimiter);
 app.use('/auth/device/verify-otp', authLimiter);
@@ -143,7 +149,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.108.0-today-course-students-parallel',
+    version: '3.109.0-public-experience-booking',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),

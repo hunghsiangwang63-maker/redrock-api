@@ -367,6 +367,25 @@ const claimLegacyVip = async (db, memberId, member) => {
   } catch (e) { console.error('claimLegacyVip 失敗（不阻斷建立會員）:', e.message); return null; }
 };
 
+// 認領公開訪客體驗預約（免登入預約時 memberId:null）：註冊會員後用電話比對綁定，之後「我的預約」看得到、可自助管理。
+const claimGuestExperienceBookings = async (db, memberId, member) => {
+  try {
+    if (!member?.phone) return;
+    const snap = await db.collection('experienceBookings')
+      .where('contactPhone', '==', member.phone).get();
+    const batch = db.batch();
+    let n = 0;
+    snap.docs.forEach(d => {
+      const b = d.data();
+      if (!b.memberId && b.status !== 'cancelled') {
+        batch.update(d.ref, { memberId, claimedFromGuest: true, updatedAt: new Date() });
+        n++;
+      }
+    });
+    if (n) { await batch.commit(); console.log(`認領訪客體驗預約 ${n} 筆 → ${memberId}`); }
+  } catch (e) { console.error('claimGuestExperienceBookings 失敗（不阻斷建立會員）:', e.message); }
+};
+
 // ── BeClass 比賽報名自動認領 ─────────────────────────────────────
 // 匯入的比賽報名（memberId:null＋claimPhone/claimName）：會員註冊時電話+姓名比對命中
 // → 報名掛上帳號（App 顯示我的比賽、可用報到 QR）＋通知管理員。
@@ -553,6 +572,8 @@ const createMember = async (memberData, staffId, options = {}) => {
   await claimPendingCourseEnrollment(db, memberId, member);
   // Climbio VIP 名單自動認領（無期限；全家 VIP 含子帳號繼承）
   await claimLegacyVip(db, memberId, member);
+
+  await claimGuestExperienceBookings(db, memberId, member);
 
   // 計算並更新封鎖狀態
   const blockReasons = await getBlockReasons(memberId, member);

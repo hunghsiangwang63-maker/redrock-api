@@ -179,6 +179,81 @@ router.post('/', authenticateAny, async (req, res) => {
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
 });
 
+// ── GET /experience-bookings/public-settings - 公開讀取（免登入，供公開預約頁顯示課程類型/價格/場館）──
+router.get('/public-settings', async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('systemSettings').doc('experienceCourses').get();
+    const settings = doc.exists ? doc.data() : defaultSettings();
+    const courseTypes = (settings.courseTypes || defaultSettings().courseTypes)
+      .filter(c => c.active !== false)
+      .map(c => ({ id: c.id, name: c.name, pricingType: c.pricingType || 'fixed', price: c.price || 0, tiers: c.tiers || null }));
+    const gymsSnap = await db.collection('gyms').get();
+    const gyms = gymsSnap.docs.map(d => ({ id: d.id, name: d.data().name })).filter(g => g.name);
+    const bank = settings.bankInfo || settings.bank || null; // 匯款帳號資訊（若有設定）
+    res.json({ courseTypes, gyms, insuranceFee: settings.insuranceFee ?? 175, bankInfo: bank });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── POST /experience-bookings/public - 公開預約（免登入、訪客、先轉帳；IP 限流見 index.js）──
+// 非會員也能預約體驗課；不建帳號（memberId:null、isGuest），之後註冊用電話認領。金額後端權威。
+router.post('/public', async (req, res) => {
+  try {
+    const db = getDb();
+    const {
+      gymId, bookingDate, bookingTime, courseType,
+      contactName, contactEmail, contactPhone, facebookName,
+      participants, paymentDate, bankLastFive, paidAmount, notes, agreedTerms,
+    } = req.body;
+    if (!contactName || !String(contactName).trim()) return res.status(400).json({ code:'MISSING_CONTACT', message:'請填寫聯絡人姓名' });
+    if (!contactPhone || !String(contactPhone).trim()) return res.status(400).json({ code:'MISSING_PHONE', message:'請填寫聯絡電話' });
+    if (!gymId) return res.status(400).json({ code:'MISSING_GYM', message:'請選擇場館' });
+    if (!bookingDate) return res.status(400).json({ code:'MISSING_DATE', message:'請選擇體驗日期' });
+    if (!participants?.length) return res.status(400).json({ code:'MISSING_PARTICIPANTS', message:'請填寫參加人員資料' });
+    if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code:'MISSING_TRANSFER', message:'請填寫匯款帳號末五碼' });
+    if (agreedTerms !== true) return res.status(400).json({ code:'TERMS_REQUIRED', message:'請閱讀並同意注意事項' });
+
+    // 未滿 5 歲擋（參加者生日；公開頁送 ISO 西元 YYYY-MM-DD）
+    const _under5 = (s) => { const d = s ? require('dayjs')(String(s)) : null; return d && d.isValid() && require('dayjs')().diff(d, 'year') < 5; };
+    if ((participants || []).some(p => _under5(p?.birthday))) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名體驗' });
+
+    // 後端權威計費（同會員預約邏輯）
+    const _sDoc = await db.collection('systemSettings').doc('experienceCourses').get();
+    const _settings = _sDoc.exists ? _sDoc.data() : defaultSettings();
+    const _courseTypes = _settings.courseTypes || defaultSettings().courseTypes;
+    const _ct = _courseTypes.find(c => c.id === (courseType || 'general'));
+    if (!_ct || _ct.active === false) return res.status(400).json({ code:'INVALID_COURSE_TYPE', message:'此體驗課程類型未開放' });
+    const _n = participants.length;
+    let _unit = 0;
+    if (_ct.pricingType === 'tiered' && Array.isArray(_ct.tiers)) {
+      const _t = _ct.tiers.find(t => _n >= t.min && _n <= t.max);
+      _unit = _t ? _t.price : (_ct.tiers[_ct.tiers.length - 1]?.price || 0);
+    } else { _unit = _ct.price || 0; }
+    const computedFee = _unit * _n;
+
+    const id = `exp_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+    await db.collection('experienceBookings').doc(id).set({
+      id, memberId: null, isGuest: true, source: 'public',
+      gymId, bookingDate, bookingTime: bookingTime || '', courseType: courseType || 'general',
+      contactName: String(contactName).trim(),
+      contactEmail: (contactEmail || '').trim(),
+      contactPhone: String(contactPhone).trim(),
+      facebookName: facebookName || '',
+      participants, numParticipants: _n,
+      totalFee: computedFee,
+      paymentMethod: 'transfer',
+      paymentDate: paymentDate || null,
+      bankLastFive: String(bankLastFive).trim(),
+      memberPaidAmount: paidAmount ? Number(paidAmount) : null,
+      notes: notes || '',
+      agreedTerms: true,
+      status: 'pending',
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    res.status(201).json({ success: true, id, totalFee: computedFee, message: '預約已送出！請於 3 日內完成匯款，我們確認後會與您聯繫。' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /experience-bookings - 員工查詢 ────────────────────────────
 router.get('/', authenticate, async (req, res) => {
   try {

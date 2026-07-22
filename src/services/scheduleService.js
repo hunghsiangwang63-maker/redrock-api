@@ -163,7 +163,7 @@ const hasExistingFullDayShift = async (gymId, staffId, date, excludeShiftId) => 
 };
 
 // ── 建立排班 ──────────────────────────────────────────────────────
-const createShift = async ({ gymId, staffId, staffName, date, type, startTime, endTime, note, createdBy }) => {
+const createShift = async ({ gymId, staffId, staffName, date, type, startTime, endTime, note, createdBy, source, courseId, courseName }) => {
   if (!['full_day', 'custom'].includes(type)) {
     throw { code: 'INVALID_TYPE', message: 'type 必須為 full_day 或 custom' };
   }
@@ -186,6 +186,9 @@ const createShift = async ({ gymId, staffId, staffName, date, type, startTime, e
     startTime: type === 'custom' ? startTime : null,
     endTime: type === 'custom' ? endTime : null,
     note: note || '',
+    source: source || 'manual',              // 'manual'=值班排班 / 'course'=課程帶入(教練授課班)
+    courseId: courseId || null,
+    courseName: courseName || null,
     createdBy, createdAt: now, updatedAt: now,
   };
   await db.collection(COLLECTIONS.SCHEDULE_SHIFTS).doc(shiftId).set(shift);
@@ -300,27 +303,32 @@ const getMonthlyHoursSummary = async (gymId, yearMonth) => {
   const defaultHours = { 0:11, 1:9, 2:9, 3:9, 4:9, 5:9, 6:12 };
   const standardHours = settingsDoc.exists ? settingsDoc.data().standardHours : defaultHours;
 
+  // 課程帶入班（教練授課）：source==='course' 或舊資料 note 前綴「體驗課程」
+  const isCourseShift = (s) => s.source === 'course' || String(s.note || '').startsWith('體驗課程');
+
   shifts.forEach(s => {
     if (!summary[s.staffId]) {
-      summary[s.staffId] = { staffId: s.staffId, staffName: s.staffName, totalHours: 0, shiftCount: 0, fullDayCount: 0, customCount: 0 };
+      summary[s.staffId] = { staffId: s.staffId, staffName: s.staffName, totalHours: 0, dutyHours: 0, courseHours: 0, shiftCount: 0, dutyShiftCount: 0, courseShiftCount: 0, fullDayCount: 0, customCount: 0 };
     }
-    summary[s.staffId].shiftCount++;
+    let hrs;
     if (s.type === 'full_day') {
       summary[s.staffId].fullDayCount++;
-      // 依星期幾查標準工時
       const dow = dayjs(s.date).day(); // 0=週日
-      const hrs = parseFloat(standardHours[dow]) || 8;
-      summary[s.staffId].totalHours += hrs;
+      hrs = parseFloat(standardHours[dow]) || 8;
     } else {
       summary[s.staffId].customCount++;
       const start = dayjs(`2000-01-01T${s.startTime}`);
       const end = dayjs(`2000-01-01T${s.endTime}`);
-      const hours = end.diff(start, 'minute') / 60;
-      summary[s.staffId].totalHours += hours;
+      hrs = end.diff(start, 'minute') / 60;
     }
+    summary[s.staffId].shiftCount++;
+    summary[s.staffId].totalHours += hrs;
+    if (isCourseShift(s)) { summary[s.staffId].courseHours += hrs; summary[s.staffId].courseShiftCount++; }
+    else { summary[s.staffId].dutyHours += hrs; summary[s.staffId].dutyShiftCount++; }
   });
 
-  return Object.values(summary).map(s => ({ ...s, totalHours: Math.round(s.totalHours * 10) / 10 }));
+  const r1 = (n) => Math.round(n * 10) / 10;
+  return Object.values(summary).map(s => ({ ...s, totalHours: r1(s.totalHours), dutyHours: r1(s.dutyHours), courseHours: r1(s.courseHours) }));
 };
 
 // ── 清空某館某月所有排班 ─────────────────────────────────────────

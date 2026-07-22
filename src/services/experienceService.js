@@ -90,6 +90,7 @@ async function addExperienceToCourseAndSchedule(db, booking, staff, coachId, coa
       startTime: useCustom ? startTime : null,
       endTime: useCustom ? endTime : null,
       note: `體驗課程・${label}・${numPeople} 人`,
+      source: 'course', courseId: course.id, courseName: course.name || label,
       createdBy: staff?.id || null,
     });
     scheduleShiftId = shift.id;
@@ -138,6 +139,7 @@ async function reassignExperienceCoach(db, booking, staff, coachId, coachName) {
       startTime: useCustom ? startTime : null,
       endTime: useCustom ? endTime : null,
       note: `體驗課程・${label}・${numPeople} 人`,
+      source: 'course', courseId: booking.courseId || null, courseName: label,
       createdBy: staff?.id || null,
     });
     scheduleShiftId = shift.id;

@@ -1131,7 +1131,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 |---|---|---|---|
 | 會員端 | `app.redrocktaiwan.com` | `redrock-member.web.app`（Firebase Hosting） | 本機 `BUILD_TARGET=member` build + firebase deploy |
 | 員工端 | `staff.redrocktaiwan.com` | `redrock-staff.web.app`（Firebase Hosting） | 本機 `BUILD_TARGET=staff` build + firebase deploy |
-| 後端 API | `api.redrocktaiwan.com` | Railway `redrock-api-production.up.railway.app`（Porkbun CNAME → `fox82bz0.up.railway.app`） | GitHub push 自動部署（~1-4 分） |
+| 後端 API | `api.redrocktaiwan.com` | Railway `redrock-api-production.up.railway.app`（**Cloudflare** CNAME → `fox82bz0.up.railway.app`，**灰雲 DNS only** 直連、2026-07-22 為降延遲改回） | GitHub push 自動部署（~1-4 分） |
 | **後端冷備** | `redrock-api-backup.onrender.com` | Render（免費層，閒置休眠、喚醒 ~50s） | 同 GitHub repo push 自動同步、與正式同版本 |
 | 計分系統 | `comp.redrocktaiwan.com` | `redrock-comp.web.app`（獨立 Firebase 專案 `redrock-comp`） | 本機 repo `~/redrock-comp-livescore` firebase deploy |
 
@@ -1142,7 +1142,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 | Railway | 後端 API 主站（24h 常駐） | **主要付費點**；用量警示 Compute hard $150/alert $25；7/14 額度下線事故 |
 | **Render** | 後端冷備（2026-07-17 建置完成） | ✅ Firestore 憑證/JWT_SECRET 同值/custom domain `api.redrocktaiwan.com` 已預登記（Waiting for DNS＝正常待命）；**Railway 環境變數異動須手動同步** |
 | Resend | 所有 Email（Railway 封鎖 SMTP 故走 REST API） | 免費 100 封/天；`RESEND_API_KEY` 在 Railway/Render 環境變數 |
-| Porkbun | 網域 `redrocktaiwan.com` DNS（app./staff.→Firebase、api→Railway、comp→Firebase） | 年費；**故障轉移＝把 `api` CNAME 改指 Render** |
+| **Cloudflare** | 網域 `redrocktaiwan.com` DNS（2026-07-20 自 Porkbun 搬入；app./staff./comp.→Firebase、api→Railway，**全部灰雲 DNS only**） | 免費；**故障轉移＝Cloudflare 改 `api` CNAME 指 Render**。api 灰雲＝快但無 CF 邊緣防護（app 層限流仍在）；遇攻擊點回橘雲+Under Attack |
+| Porkbun | 網域註冊商（nameserver 已指 Cloudflare） | 年費（僅續約網域，DNS 不在此管） |
 | UptimeRobot | 監測 `redrock-api-production.up.railway.app/health`（5 分鐘） | 掛站 5 分內 email 通知 |
 | GitHub | 兩 repo（`redrock-api` push 觸發 Railway+Render 雙部署；`redrock-web` 純版控） | 免費；push 走 macOS Keychain |
 
@@ -1813,8 +1814,18 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **比賽深連結** `?comp=<compId>`（`MemberCompetitionsPage`）：賽事載入後自動開該賽事報名 modal（限 status=open、只開一次）。員工 `CompetitionsPage` 開放中賽事加「🔗 連結」複製 `app.redrocktaiwan.com/member/competitions?comp=<id>`。
 - 📌 連結需先是會員（要登入）；家長點連結先到登入頁可註冊。工作坊連結亦適用（會員點進去依隊員身份看價格/開放狀態）。純前端、已部署。
 
+## 目前進度（2026-07-22 續6）— 站台載入加速（api 改灰雲＋端點平行化＋圖表延後）
+> 回報站台電腦「今日課程學員」等資訊 loading 很慢。實測後根因＝**網路路徑**（非程式/Firestore）。
+- 🔍 **根因**：`/health`（不查 DB）經 Cloudflare 也要 0.85s、直連 Railway 僅 0.28s → **Cloudflare 免費版代理每請求 +約 0.5s**（邊緣→Railway 源站無優化路由）。Firestore 查詢只佔 ~0.5s。
+- ✅ **① Cloudflare api 改灰雲（DNS only）**（Claude 用瀏覽器代改、已驗證）：api CNAME Proxy 橘雲→灰雲、直連 Railway。api 解析到 Railway IP（`69.46.46.29`、非 CF 104.x/172.67.x）、TLS 正常、`edge.seen:false`。**每請求 0.85s→0.28s（快 3 倍）**。DDoS 權衡：平時靠 app 層限流（3.68.0）；遇攻擊點回橘雲+Under Attack。⚠️ `EDGE_ENFORCE` 保持關（灰雲時開會全站被擋）。
+- ✅ **② 今日課程學員查詢平行化**（`3.108.0`，checkin.js）：sessions 後 enrollments+checkIns+跨期補課 由序列 4 往返改 `Promise.all` 2 往返。
+- ✅ **③ 入場頁每日入場圖表延後載入**（純前端 `CheckinPage`）：`requestIdleCallback` 閒置才抓 `monthly-daily-counts`，主內容（今日課程學員/統計）先顯示。
+- **實測改善**：今日課程學員 1.7→**0.92s**、今日入場 1.3→**0.70s**、每日入場圖表 1.4→**0.76s**（灰雲+平行化+延後綜合）。
+- 📄 `docs/outage-playbook.md` 加第六節「網路架構與 DDoS/延遲權衡」；故障轉移改 Cloudflare（非 Porkbun）改 CNAME、保持灰雲。依賴表 api/DNS 列同步更新。
+- ⚠️ **本機/櫃檯舊快取**：Cloudflare 記錄 TTL ~5 分，切灰雲後幾分鐘或重開瀏覽器才走直連。
+
 ## 待辦
-- 🚨🛡 **【提醒使用者：重開 EDGE_ENFORCE】DDoS 邊緣強制暫關中，2026-07-22 之後重開**：2026-07-20 開啟致營業中斷已回退（Railway `EDGE_ENFORCE=false`）——根因＝DNS 搬 Cloudflare 當天、櫃檯裝置快取仍直連 Railway 被 403。**主動提醒使用者**每次開場先問是否要重開。**重開檢查清單（缺一不可）**：①距 DNS 搬移（7/20 晚）至少 1-2 天、客戶端快取全過期 ②先驗「直打 `redrock-api-production.up.railway.app/courses` 已無正常流量／所有裝置走 Cloudflare」（可看 Cloudflare Analytics 或請櫃檯確認頁面正常且 `dig api.redrocktaiwan.com` 回 104.x/172.67.x）③挑**離峰時段** ④Railway 設 `EDGE_ENFORCE=true`（`EDGE_SECRET` 已在、Transform Rule `inject-edge-auth` 已在）⑤重新部署完**立刻實測**：經 CF 200/401、直打一般端點 403、**請櫃檯重整確認資料正常** ⑥若櫃檯又空白＝仍有裝置走直連 → 立刻改回 `false`、再等。⚠ **Render 冷備刻意保持 `EDGE_ENFORCE` 關**（故障轉移最穩，勿在 Render 開）。
+- 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

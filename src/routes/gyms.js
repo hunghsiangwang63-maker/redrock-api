@@ -297,9 +297,10 @@ router.put('/:id',
     try {
       const db = getDb();
       const allowed = ['name', 'shortName', 'address', 'phone', 'googleMapsUrl',
-        'parkingInfo', 'transitInfo', 'facilities', 'description', 'status'];
+        'parkingInfo', 'transitInfo', 'facilities', 'description', 'status', 'standardWorkHours'];
       const updates = {};
       allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+      if (updates.standardWorkHours !== undefined) { const n = Number(updates.standardWorkHours); updates.standardWorkHours = (n > 0 ? n : null); }
       updates.updatedAt = new Date();
 
       await db.collection(COLLECTIONS.GYMS).doc(req.params.id).update(updates);

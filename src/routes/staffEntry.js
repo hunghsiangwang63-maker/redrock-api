@@ -14,10 +14,10 @@ const { authenticate, requireManagerOrStation } = require('../middleware/auth');
 const { getEntryTypePrice } = require('../services/checkin/pricing');
 const { taiwanToday } = require('../utils/taiwanDate');
 
-const FULL_DAY_HOURS = 8; // 整天班(full_day)無明確時段時，以 8 小時計
+const DEFAULT_FULL_DAY_HOURS = 8; // 各館未定義標準工時時的預設
 
 // 上一個曆月（台灣時區）「排班表排定」的時數（小時，含小數）
-// custom＝結束−開始；full_day＝有特殊時段用時段，否則以 FULL_DAY_HOURS 計。
+// custom＝結束−開始；full_day＝有特殊時段用時段，否則用該班所屬館別的標準工時(standardWorkHours)。
 const getLastMonthHours = async (db, staffId) => {
   const start = dayjs(taiwanToday()).startOf('month').subtract(1, 'month');
   const end = start.endOf('month');
@@ -25,17 +25,26 @@ const getLastMonthHours = async (db, staffId) => {
   const endStr = end.format('YYYY-MM-DD');
   const hm = (t) => { const [h, m] = String(t).split(':').map(Number); return (h || 0) * 60 + (m || 0); };
   const snap = await db.collection('scheduleShifts').where('staffId', '==', staffId).get();
+  const shifts = snap.docs.map(d => d.data()).filter(s => s.date && s.date >= startStr && s.date <= endStr);
+  // 各館標準工時（整天班每日時數）快取
+  const gymHours = {};
+  const gymHoursOf = async (gymId) => {
+    if (!gymId) return DEFAULT_FULL_DAY_HOURS;
+    if (gymHours[gymId] !== undefined) return gymHours[gymId];
+    const gd = await db.collection('gyms').doc(gymId).get();
+    const h = Number(gd.data()?.standardWorkHours);
+    gymHours[gymId] = (h > 0 ? h : DEFAULT_FULL_DAY_HOURS);
+    return gymHours[gymId];
+  };
   let mins = 0;
-  snap.docs.forEach(d => {
-    const s = d.data();
-    if (!s.date || s.date < startStr || s.date > endStr) return; // 以排班日歸屬月份
+  for (const s of shifts) {
     if (s.startTime && s.endTime) {
       const dur = hm(s.endTime) - hm(s.startTime);
       if (dur > 0) mins += dur;
     } else if (s.type === 'full_day') {
-      mins += FULL_DAY_HOURS * 60;
+      mins += (await gymHoursOf(s.gymId)) * 60;
     }
-  });
+  }
   return Math.round((mins / 60) * 10) / 10; // 小時，1 位小數
 };
 

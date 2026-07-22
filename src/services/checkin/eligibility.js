@@ -130,6 +130,7 @@ const getCourseAccess = async (memberId) => {
     const courseDoc = await db.collection('courses').doc(courseId).get();
     if (!courseDoc.exists) continue;
     const course = courseDoc.data();
+    if (course.type === 'workshop') continue; // 工作坊（如運動按摩）不含當日入館資格
 
     // 無限練習期間：管理員可在課程編輯頁手動設定/覆寫此區間，不一定跟課程開課/結束日綁定
     // 向下相容：舊課程若未設定此欄位，退而求其次用「開課日~最後一堂課+入館緩衝天數」估算

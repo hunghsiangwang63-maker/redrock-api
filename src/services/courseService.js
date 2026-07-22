@@ -109,6 +109,11 @@ const createCourse = async ({ gymId, staffId, data }) => {
     // 報名開放（null＝隨時開放）：公開開放日前僅「舊生」（同班別任一梯次曾有效報名）可報
     enrollOpenDate: data.enrollOpenDate || null,
     alumniOpenDate: data.alumniOpenDate || null,
+    // 工作坊分階段報名＋隊員分級定價（僅 workshop 生效；留空＝不限制）：
+    // 隊員專屬期(teamOpenDate ~ generalOpenDate)只有隊員可報名；一般會員 generalOpenDate 起開放；隊員任何時候都用 teamPrice
+    teamOpenDate: data.teamOpenDate || null,
+    generalOpenDate: data.generalOpenDate || null,
+    teamPrice: (data.teamPrice === '' || data.teamPrice === null || data.teamPrice === undefined) ? null : Number(data.teamPrice),
     // 續報/舊生優惠（NT$ 折抵；0/null＝無）：續報＝前一期整期報名（插班不算）；舊生＝曾報名過或插班生
     fullTermRenewalDiscount: data.fullTermRenewalDiscount != null ? Number(data.fullTermRenewalDiscount) || 0 : null,
     alumniDiscount: data.alumniDiscount != null ? Number(data.alumniDiscount) || 0 : null,
@@ -563,7 +568,7 @@ const calcEnrollmentFee = (course, completedSessions) => {
   return { fee, ratio, remaining, total, installment, firstPayment, secondPayment, multiplier };
 };
 
-const enrollCourse = async ({ memberId, sessionId, gymId, staffId, paymentId,
+const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paymentId,
   paymentDate, bankLastFive, healthNote, referralSource,
   confirmedLeavePolicy, confirmedRefundPolicy, portraitSignature, guardianSignature,
 }) => {
@@ -612,6 +617,28 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, paymentId,
     .get().then(s => s.size);
   const feeInfo = calcEnrollmentFee(course, completedSessions);
 
+  // 工作坊分階段報名＋隊員分級定價（僅 workshop、且設了 team/general 開放日或隊員價時生效；店員代報 byStaff 不受 gate 限）
+  const _isTeam = require('../services/teamMemberService').isActiveTeamMember(member);
+  if (course.type === 'workshop' && !byStaff && (course.teamOpenDate || course.generalOpenDate)) {
+    const _t = taiwanToday();
+    if (_isTeam) {
+      if (course.teamOpenDate && _t < course.teamOpenDate)
+        throw { code: 'ENROLL_NOT_OPEN', message: `隊員報名將於 ${course.teamOpenDate} 開放` };
+    } else {
+      if (course.generalOpenDate && _t < course.generalOpenDate) {
+        const msg = (course.teamOpenDate && _t >= course.teamOpenDate)
+          ? `目前為攀岩隊員專屬報名期間，一般會員將於 ${course.generalOpenDate} 開放報名`
+          : `一般會員報名將於 ${course.generalOpenDate} 開放`;
+        throw { code: 'ENROLL_NOT_OPEN', message: msg };
+      }
+    }
+  }
+  // 隊員優惠價（工作坊；隊員任何時候報名都用 teamPrice）；否則沿用 feeInfo
+  let _fee = feeInfo.fee, _first = feeInfo.firstPayment, _second = feeInfo.secondPayment, _inst = feeInfo.installment, _teamPriceApplied = false;
+  if (course.type === 'workshop' && _isTeam && course.teamPrice != null && course.teamPrice >= 0) {
+    _fee = course.teamPrice; _first = course.teamPrice; _second = 0; _inst = false; _teamPriceApplied = true;
+  }
+
   const enrollment = {
     id: enrollmentId,
     memberId,
@@ -629,10 +656,12 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, paymentId,
     paymentMethod: paymentId ? null : 'pending',
     // 費用資訊
     originalPrice: course.price,
-    enrollmentFee: feeInfo.fee,
-    installment: feeInfo.installment,
-    firstPayment: feeInfo.firstPayment,
-    secondPayment: feeInfo.secondPayment,
+    enrollmentFee: _fee,
+    installment: _inst,
+    firstPayment: _first,
+    secondPayment: _second,
+    teamPriceApplied: _teamPriceApplied,   // 工作坊隊員優惠價
+    isTeamMemberEnroll: _isTeam,
     paymentStatus: 'pending',
     gymAccessStart,
     gymAccessEnd,
@@ -665,7 +694,7 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, paymentId,
     isWaitlist: isFull,
     message: isFull
       ? `已加入候補名單（第 ${session.waitlistCount + 1} 位）`
-      : `報名成功，應繳 NT$${feeInfo.firstPayment}${feeInfo.installment ? `（共兩期，第二期 NT$${feeInfo.secondPayment}）` : ''}`,
+      : `報名成功，應繳 NT$${_first}${_inst ? `（共兩期，第二期 NT$${_second}）` : ''}`,
   };
 };
 
@@ -1488,6 +1517,9 @@ const getCourses = async (gymId) => {
       makeupSelfType: cat?.makeupSelfType || null,     // 本班別類型（別人補課過來時算哪一類）
       makeupGroup: cat?.makeupGroup || null,           // 舊制補課群組（相容）
       paymentMethods: c.paymentMethods || null,        // 課程層付款方式覆寫（null＝預設現金/轉帳；如運動按摩=['cash']）
+      teamOpenDate: c.teamOpenDate || null,            // 工作坊隊員專屬報名開始日
+      generalOpenDate: c.generalOpenDate || null,      // 工作坊一般會員報名開始日
+      teamPrice: c.teamPrice != null ? c.teamPrice : null,  // 工作坊隊員優惠價
       refundFeeRate: _rules.handlingFeeRate ?? 0.2, // 開課後退費手續費率（預設 20%，班別/梯次可調）
       refundPreStartFeeRate: _rules.preStartFeeRate ?? 0.05, // 開課前退費手續費率（預設 5%，班別/梯次可調）
       ruleMaxLeaves: _rules.maxLeaves,                       // 整期可請假次數（報名規則方框顯示）

@@ -1825,8 +1825,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ⚠️ **本機/櫃檯舊快取**：Cloudflare 記錄 TTL ~5 分，切灰雲後幾分鐘或重開瀏覽器才走直連。
 - ✅ **④ Railway 區域 US West → Singapore（asia-southeast1）**（2026-07-22 當日執行，Claude 用瀏覽器操作）：Hobby 方案即可改單一區域（多區域副本才需 Pro，不需要）。滾動部署（舊 US 撐到新 SG build 好才切、下線極短）。**淨效果全端點快約 2 倍**（怕 Firestore 在美國變慢→實測反而更快）：/health 0.28→**0.12s**、今日課程學員 0.92→**0.41s**、今日入場 0.70→**0.33s**、每日圖表 0.76→**0.35s**。CNAME 目標不變（`fox82bz0.up.railway.app`）、Cloudflare 不用動。⚠️ **Render 冷備仍在 US 區**（要一致可另搬，非必要）。
 
+## 目前進度（2026-07-22 續7）— 公開體驗預約頁（免登入，訪客）
+> 承「報名連結」：體驗客群多為非會員新客，登入型連結不適用 → 做免登入公開預約。使用者規格：先轉帳/訪客不建帳號/電話認領/IP限流。後端 `/health` `3.109.0-public-experience-booking`；E2E 打正式 API **10/10**。
+- ✅ **後端**（`experienceBookings.js`）：`GET /public-settings`（**免登入**讀 active 課程類型/價格/場館，供公開頁）；`POST /public`（**免登入**建訪客預約：`memberId:null`/`isGuest`/`source:'public'`、**轉帳**、**後端權威計費**不信前端、擋未滿5歲/缺聯絡人/缺末五碼/未同意條款）。`index.js` `publicBookLimiter` **20/時/IP**（防機器人）。`memberService.createMember` 加 `claimGuestExperienceBookings`（註冊時**用電話比對認領**訪客預約→綁 memberId，之後「我的預約」看得到）。
+- ✅ **前端**：新增公開頁 `src/pages/public/PublicExperienceBookingPage.jsx`（route `/book/experience`，**MemberRoutes 內免登入**，plain axios 不帶 token）——場館/課程/日期/參加者/聯絡人/轉帳末五碼/同意條款/送出→成功頁。員工 `ExperienceBookingsPage` 加「🔗 公開預約連結」複製 `app.redrocktaiwan.com/book/experience`。
+- **E2E（10/10）**：public-settings 回課程/場館；未同意/缺末五碼/缺電話/未滿5歲 全擋 400；建立訪客預約(fee 後端算)、`memberId:null/isGuest/transfer/pending`；同電話 createMember → 預約認領綁定。fixtures 清。
+- 📌 **比賽公開報名仍保留在待辦**（較複雜：組別/簽名/計分推送）。訪客體驗**免責現場簽**（線上僅勾同意）。
+
 ## 待辦
-- 🔧 **【暫緩，2026-07-22 使用者決定先不做】公開預約/報名頁（免登入，體驗＋比賽）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。共用一套公開路由+端點。①**體驗** `/book/experience`（單純：聯絡人/參加者/日期時段/轉帳；免責現場簽、線上只勾同意）②**比賽** `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
+- 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。

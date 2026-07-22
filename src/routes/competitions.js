@@ -161,6 +161,9 @@ router.post('/:id/register',
       const regPhone = req.body.phone || registrantData.phone || req.member?.phone || null;
       const regEmail = req.body.email || registrantData.email || req.member?.email || null;
 
+      // 🧪 模擬報名：短路，不建真實報名（不佔名額）
+      if (registrantData?.isSimulation) return res.json(await require('../services/simulationService').handleSimulatedRegistration(getDb(), { type: 'competition', member: { ...registrantData, id: memberId, email: regEmail }, targetId: req.params.id, payload: req.body }));
+
       if (req.body.paymentMethod === 'transfer') {
         if (!String(req.body.bankLastFive || '').trim()) return res.status(400).json({ error: 'MISSING_BANK_LAST_FIVE', message: '請填寫匯款帳號末五碼' });
         if (!String(req.body.paymentDate || '').trim()) return res.status(400).json({ error: 'MISSING_PAYMENT_DATE', message: '請填寫轉帳日期' });

@@ -201,6 +201,8 @@ router.post('/sessions/:sessionId/enroll',
       // 後端權威：未滿 5 歲無法報名課程（實際上課者＝req.body.memberId，家長代子時已解析為子會員）
       const _attendee = await memberService.getMember(req.body.memberId).catch(() => null);
       if (isUnder5(_attendee)) return res.status(400).json({ code: 'AGE_UNDER_5', message: '未滿 5 歲無法報名課程' });
+      // 🧪 模擬報名：短路，不建真實報名（不佔名額）
+      if (_attendee?.isSimulation) return res.json(await require('../services/simulationService').handleSimulatedRegistration(getDb(), { type: 'course', member: _attendee, targetId: null, payload: { ...req.body, sessionId: req.params.sessionId } }));
       const result = await courseService.enrollCourse({
         memberId: req.body.memberId,
         sessionId: req.params.sessionId,
@@ -1192,6 +1194,8 @@ router.post('/:courseId/enroll-all',
       // 後端權威：未滿 5 歲無法報名課程（實際上課者＝memberId，家長代子時已解析為子會員）
       const _attendee = await memberService.getMember(memberId).catch(() => null);
       if (isUnder5(_attendee)) return res.status(400).json({ code: 'AGE_UNDER_5', message: '未滿 5 歲無法報名課程' });
+      // 🧪 模擬報名：短路，不建真實報名（不佔名額）
+      if (_attendee?.isSimulation) return res.json(await require('../services/simulationService').handleSimulatedRegistration(db, { type: 'course', member: _attendee, targetId: courseId, payload: req.body }));
 
       // 取得課程所有未取消場次
       const sessionsSnap = await db.collection('courseSessions')

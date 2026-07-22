@@ -22,6 +22,11 @@ router.post('/', authenticateAny, async (req, res) => {
   try {
     const db = getDb();
     const memberId = req.member?.id || req.body.memberId;
+    // 🧪 模擬報名：短路，不建真實預約/課程/排班（不佔名額）
+    {
+      const _sm = memberId ? await require('../services/memberService').getMember(memberId).catch(() => null) : null;
+      if (_sm?.isSimulation) return res.json(await require('../services/simulationService').handleSimulatedRegistration(getDb(), { type: 'experience', member: _sm, targetId: req.body.courseType, payload: req.body }));
+    }
     const {
       gymId, bookingDate, bookingTime, courseType,
       contactName, contactEmail, contactPhone, facebookName,

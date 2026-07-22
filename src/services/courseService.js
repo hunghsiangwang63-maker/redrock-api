@@ -114,6 +114,11 @@ const createCourse = async ({ gymId, staffId, data }) => {
     teamOpenDate: data.teamOpenDate || null,
     generalOpenDate: data.generalOpenDate || null,
     teamPrice: (data.teamPrice === '' || data.teamPrice === null || data.teamPrice === undefined) ? null : Number(data.teamPrice),
+    // 報名流程客製（如運動按摩）：略過簽名、收集性別/年齡、自訂必填備註欄
+    skipSignature: data.skipSignature === true,
+    collectGenderAge: data.collectGenderAge === true,
+    enrollNoteLabel: data.enrollNoteLabel || null,
+    enrollNoteRequired: data.enrollNoteRequired === true,
     // 續報/舊生優惠（NT$ 折抵；0/null＝無）：續報＝前一期整期報名（插班不算）；舊生＝曾報名過或插班生
     fullTermRenewalDiscount: data.fullTermRenewalDiscount != null ? Number(data.fullTermRenewalDiscount) || 0 : null,
     alumniDiscount: data.alumniDiscount != null ? Number(data.alumniDiscount) || 0 : null,
@@ -571,6 +576,7 @@ const calcEnrollmentFee = (course, completedSessions) => {
 const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paymentId,
   paymentDate, bankLastFive, healthNote, referralSource,
   confirmedLeavePolicy, confirmedRefundPolicy, portraitSignature, guardianSignature,
+  enrollGender, enrollAge, enrollNote,
 }) => {
   const db = getDb();
 
@@ -676,6 +682,9 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     confirmedRefundPolicy: confirmedRefundPolicy || false,
     portraitSignature: portraitSignature || null,
     guardianSignature: guardianSignature || null,
+    enrollGender: enrollGender || null,   // 報名收集：性別（供講師參考）
+    enrollAge: (enrollAge != null && enrollAge !== '') ? Number(enrollAge) : null, // 年齡
+    enrollNote: enrollNote || null,       // 自訂備註（如想特別處理的部位）
     createdAt: now,
     updatedAt: now,
   };
@@ -1520,6 +1529,10 @@ const getCourses = async (gymId) => {
       teamOpenDate: c.teamOpenDate || null,            // 工作坊隊員專屬報名開始日
       generalOpenDate: c.generalOpenDate || null,      // 工作坊一般會員報名開始日
       teamPrice: c.teamPrice != null ? c.teamPrice : null,  // 工作坊隊員優惠價
+      skipSignature: c.skipSignature === true,         // 報名略過簽名流程（如運動按摩）
+      collectGenderAge: c.collectGenderAge === true,   // 報名收集性別/年齡（供講師參考）
+      enrollNoteLabel: c.enrollNoteLabel || null,      // 自訂備註欄標題（如「想要特別處理的部位」）
+      enrollNoteRequired: c.enrollNoteRequired === true,
       refundFeeRate: _rules.handlingFeeRate ?? 0.2, // 開課後退費手續費率（預設 20%，班別/梯次可調）
       refundPreStartFeeRate: _rules.preStartFeeRate ?? 0.05, // 開課前退費手續費率（預設 5%，班別/梯次可調）
       ruleMaxLeaves: _rules.maxLeaves,                       // 整期可請假次數（報名規則方框顯示）

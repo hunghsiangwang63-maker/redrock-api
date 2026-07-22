@@ -33,8 +33,9 @@ const createSimMember = async (db, { email, gymId }) => {
     defaultGymId: gymId || 'gym-hsinchu', createdAt: now,
   };
   await db.collection('members').doc(id).set(member);
-  // waiver 完成，避免 onboarding gate / isBlocked 擋住報名
+  // waiver 完成 + 墜測已過，避免 onboarding gate / isBlocked 擋住報名
   await db.collection('waivers').doc(id).set({ memberId: id, isComplete: true, isSimulation: true, signedAt: now, createdAt: now });
+  await db.collection('fallTests').doc('simft-' + id).set({ memberId: id, result: 'passed', isSimulation: true, testedAt: now, createdAt: now, expiresAt: new Date(now.getTime() + 400 * 24 * 3600 * 1000) });
   return member;
 };
 
@@ -150,6 +151,7 @@ const sweepExpiredSimulations = async (db) => {
       const exp = ms(d.data().simExpiresAt);
       if (exp && exp < now) {
         await db.collection('waivers').doc(d.id).delete().catch(() => {});
+        await db.collection('fallTests').doc('simft-' + d.id).delete().catch(() => {});
         await d.ref.delete().catch(() => {});
         n++;
       }

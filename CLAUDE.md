@@ -1857,6 +1857,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **驗證「家長不入場不影響幫小孩處理事務」（E2E 5/5）**：封鎖家長（`selfEntrySkipped`+`isBlocked`）幫小孩**報週課 201／報比賽 201／請假 200／登入正常**。根因：全系統**只有 `enrollCourse`（工作坊）檢查 isBlocked，且對象是 `getMember(memberId)`＝報名對象（小孩）非登入家長**；enroll-all／比賽／請假補課皆不檢查 isBlocked；無全域擋封鎖會員的中介層。所以家長 blocked 完全不影響代小孩操作。
 - 🐞 **順修：`?sim=` 自動登入 race（前端，影響本人不入場測試連結＋模擬報名 deepLink）**：`MemberRoute` 在會員資料載入前（member=null）就 `Navigate` 去 `/member/login`，且導向後 `sim` 被包進 `redirect` 參數 → `params.get('sim')` 抓不到 → 卡登入頁。修：`memberStore` 於 **useState 同步初始化**時（首次 render 前）就把 `?sim=` token 寫入 localStorage 並設 `simResolving=true`；`/auth/member/me` 載完才 `setSimResolving(false)`；`MemberRoute`：`if (simResolving) return null`（先等、不導向）。→ deepLink（本人不入場測試、模擬報名）在無會員 session 的瀏覽器也能正常自動登入進頁。
 
+## 目前進度（2026-07-24）— 員工入館QR pending sweep + 歷史/銷售區間查詢 + 下載明細/財務/結帳/設定權限收緊
+> 一輪權限與查詢調整。後端 `/health` `3.125.0`→`3.127.0`；live smoke 驗證通過。
+- ✅ **員工入館QR pending 排程 sweep（`3.125.0`，commit `d328055`）**：`staffEntry.js` 加 `sweepStaleStaffEntries`（每 30 分清 `pendingStaffEntries` 已過期/已使用者，self-contained setInterval＋global 旗標）；順手清當時 10 筆過期殘留。掃碼端本就擋過期，這只清底層垃圾。
+- ✅ **歷史入場改區間查詢＋CSV（`3.126.0`）**：員工入場→歷史入場 由單日改「從～到」兩個 date picker（預設起訖=今天）；後端 `/checkin/history` 本就支援 `dateFrom/dateTo`，區間查詢上限 2000→**10000**；CSV 涵蓋整區間（檔名帶區間）。
+- ✅ **銷售紀錄改區間查詢＋CSV（`3.127.0`）**：`SalesPage` 銷售紀錄由「近30天」改「從～到」（預設近30天）；後端 `/products/sales` 加 `dateFrom/dateTo`（優先於 days，上限 10000）；CSV 匯出**限管理員**（isAdmin，客戶端生成故隱藏按鈕＝enforcement）。
+- ✅ **所有下載明細限管理員/系統管理員（除比賽名單/課程名單/假補名單）**：後端各匯出端點加 `requireManager`（super_admin/gym_manager；operator/full/part 皆擋）——`members/download`、`experience-bookings/download`＋`insurance-download`、`daily-settlements/monthly-export`＋`invoice-export`、`revenue/export-csv`＋`export-adjustments-csv`＋`export-checkin-csv`、`pass-adjustments/analytics/download`（原 requireManagerOrStation）、`team/members/download`（原 requireManagerOrStation）、`products/export`。**三例外不動**：比賽 `competitions/:id/registrations/download`（competitions.manage）、課程 `courses/:id/attendance/download`（courses.manage）、假補 `courses/leave-makeup-summary`（courses.view）。前端隱藏非管理員的下載鈕（歷史入場CSV/體驗名冊/保險/卡券統計/庫存匯出/隊員名單；MembersPage 下載本就已 manager-gated）。
+- ✅ **財務＋結帳歷史限管理員（館別電腦也不行）**：財務（revenue.* 端點）本就 `revenue.report`＝{super_admin,gym_manager}、不在 COUNTER_PERMS→operator 進不了（已符合）；結帳歷史列表 `GET /daily-settlements/` 由 `authenticate`→`requireManager`（前端 `DailySettlementPage` 歷史 tab 本就 isAdmin-gated；順修 operator 進頁時不再誤呼叫 loadHistory）。nav 的 財務/結帳 本就 manager/station gated。
+- ✅ **設定：僅新增/修改公告開放場館電腦＋正職員工，其餘限管理員**：`SettingsPage` 入場類型/Waiver/墜落測驗/岩鞋租借 4 個原本無 flag（人人可見）改 `managerOnly`（isManagerPlus＝super_admin/gym_manager）；預設分頁對非管理員自動切到第一個可見（＝場館公告）；`canOwnGymAnnounce` 加 `full_time`；`StaffLayout` PERSONAL_NAV.full_time 加 `/staff/settings`（否則正職個人帳號 nav 看不到設定）。**後端**：公告新增/修改 gate `requireManagerOrStation`→新 `requireAnnounceEditor`（管理員/場館電腦(operator·station)/正職(full_time) 皆可，part_time 擋；休館/特殊時間仍受 announceTypeGuard 限管理員；DELETE 不變）。
+- **Live smoke**：super_admin 結帳歷史/會員下載/銷售區間/歷史入場區間 皆 200；站台 token 打 結帳歷史/會員下載/卡券統計下載 皆 **401 擋下**。commit 後端 `3.127.0`、前端已 deploy。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

@@ -208,14 +208,18 @@ router.get('/my/children', authenticateAny, async (req, res) => {
     const db = getDb();
     // 子會員判定以 parentMemberId 為準（唯一定義關係）；不再要求 isChildAccount:true，
     // 避免有 parentMemberId 但漏設旗標的子會員在家長「我的票券/課程」看不到、無法代操作。
-    const snap = await db.collection(COLLECTIONS.MEMBERS)
-      .where('parentMemberId', '==', memberId)
-      .get();
-    const children = snap.docs.map(d => {
+    // 子會員＝主家長(parentMemberId) 或 共同家長(coParentIds) 為本人者
+    const [snap, coSnap] = await Promise.all([
+      db.collection(COLLECTIONS.MEMBERS).where('parentMemberId', '==', memberId).get(),
+      db.collection(COLLECTIONS.MEMBERS).where('coParentIds', 'array-contains', memberId).get(),
+    ]);
+    const map = {};
+    [...snap.docs, ...coSnap.docs].forEach(d => {
+      if (map[d.id]) return;
       const { phone, email, ...rest } = d.data();
-      return { id: d.id, ...rest };
+      map[d.id] = { id: d.id, ...rest };
     });
-    res.json({ children });
+    res.json({ children: Object.values(map) });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

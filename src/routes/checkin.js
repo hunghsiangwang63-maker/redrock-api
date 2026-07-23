@@ -530,7 +530,8 @@ router.get('/history',
       } else if (gymId) {
         ref = ref.where('gymId', '==', gymId);
       }
-      const snapshot = await ref.limit(2000).get();
+      const cap = (dateFrom || dateTo) ? 10000 : 2000; // 區間查詢放寬上限
+      const snapshot = await ref.limit(cap).get();
       let checkIns = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       if (gymId) checkIns = checkIns.filter(c => c.gymId === gymId);
       if (scopedMemberId) checkIns = checkIns.filter(c => c.memberId === scopedMemberId);

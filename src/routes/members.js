@@ -220,6 +220,24 @@ router.get('/my/children', authenticateAny, async (req, res) => {
 });
 
 // ── POST /members/my/children - 會員自行新增子會員 ─────────────────
+// ── POST /members/my/skip-self-entry ─ 本人不入場、只幫家庭成員建立資料（略過本人入場文件 gate）──
+router.post('/my/skip-self-entry', authenticateAny, async (req, res) => {
+  try {
+    if (!req.member?.id) return res.status(403).json({ error: 'MEMBER_ONLY', message: '限會員本人操作' });
+    await getDb().collection('members').doc(req.member.id).update({ selfEntrySkipped: true, updatedAt: new Date() });
+    res.json({ success: true, message: '已設定本人不入場（僅建立家庭成員資料）' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── POST /members/my/resume-self-entry ─ 重啟本人入場文件簽署 ──
+router.post('/my/resume-self-entry', authenticateAny, async (req, res) => {
+  try {
+    if (!req.member?.id) return res.status(403).json({ error: 'MEMBER_ONLY', message: '限會員本人操作' });
+    await getDb().collection('members').doc(req.member.id).update({ selfEntrySkipped: false, updatedAt: new Date() });
+    res.json({ success: true, message: '已重啟本人入場文件簽署' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 router.post('/my/children',
   authenticateAny,
   [

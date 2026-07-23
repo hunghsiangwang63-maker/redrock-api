@@ -342,6 +342,7 @@ router.get('/member/me', authenticateMember, async (req, res) => {
         fallTestScheduleSkipped: member.fallTestScheduleSkipped || false,
         isSimulation: member.isSimulation === true,
         isStaff: member.isStaff === true,
+        selfEntrySkipped: member.selfEntrySkipped === true,
       },
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }

@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const { authenticate, checkPermission, auditLog } = require('../middleware/auth');
+const { authenticate, checkPermission, auditLog, requireManager } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
@@ -367,11 +367,18 @@ router.get('/sales', authenticate, async (req, res) => {
   try {
     const db = getDb();
     const gymId = req.query.gymId || (req.staff?.role !== 'super_admin' ? req.staff?.gymId : null);
-    const days = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 366); // clamp 1..366，避免超大範圍查詢
-    const fromDate = dayjs().subtract(days, 'day').toDate();
-    let ref = db.collection('productSales').where('soldAt', '>=', fromDate);
+    // 區間查詢：帶 dateFrom/dateTo（台灣日期字串）優先；否則沿用近 N 天
+    let ref = db.collection('productSales');
+    const { dateFrom, dateTo } = req.query;
+    if (dateFrom || dateTo) {
+      if (dateFrom) ref = ref.where('soldAt', '>=', new Date(`${dateFrom}T00:00:00+08:00`));
+      if (dateTo) ref = ref.where('soldAt', '<=', new Date(`${dateTo}T23:59:59+08:00`));
+    } else {
+      const days = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 366); // clamp 1..366，避免超大範圍查詢
+      ref = ref.where('soldAt', '>=', dayjs().subtract(days, 'day').toDate());
+    }
     if (gymId) ref = ref.where('gymId', '==', gymId);
-    const snap = await ref.orderBy('soldAt', 'desc').get();
+    const snap = await ref.orderBy('soldAt', 'desc').limit(10000).get();
     res.json({ sales: snap.docs.map(d => ({ id: d.id, ...d.data() })) });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
@@ -417,7 +424,7 @@ router.post('/import', authenticate, checkPermission('products.manage'), upload.
 });
 
 // ── GET /products/export ──────────────────────────────────────────
-router.get('/export', authenticate, async (req, res) => {
+router.get('/export', authenticate, requireManager, async (req, res) => {
   try {
     const XLSX = require('xlsx');
     const db = getDb();

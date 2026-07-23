@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authenticate, authenticateAny, checkPermission, requireManagerOrStation } = require('../middleware/auth');
+const { authenticate, authenticateAny, checkPermission, requireManagerOrStation, requireManager } = require('../middleware/auth');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
 const XLSX = require('xlsx');
@@ -247,7 +247,7 @@ router.delete('/applications/:id', authenticate, requireManagerOrStation, async 
 });
 
 // ── GET /team/members/download - 下載名單 Excel(.xlsx) ──
-router.get('/members/download', authenticate, requireManagerOrStation, async (req, res) => {
+router.get('/members/download', authenticate, requireManager, async (req, res) => {
   try {
     const db = getDb();
     const year = parseInt(req.query.year) || dayjs().year();

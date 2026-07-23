@@ -643,7 +643,7 @@ router.put('/:id/finance', authenticate, requireManager, async (req, res) => {
 });
 
 // ── GET /experience-bookings/download - 下載 XLS 名單 ─────────────
-router.get('/download', authenticate, async (req, res) => {
+router.get('/download', authenticate, requireManager, async (req, res) => {
   try {
     const db = getDb();
     const { gymId, from, to } = req.query;
@@ -703,7 +703,7 @@ router.get('/download', authenticate, async (req, res) => {
 module.exports = router;
 
 // ── 保險名冊 XLS 產生（下載與一鍵寄送共用）──────────────────────
-router.get('/insurance-download', authenticate, async (req, res) => {
+router.get('/insurance-download', authenticate, requireManager, async (req, res) => {
   try {
     const db = getDb();
     const { bookingId, gymId, from, to } = req.query;

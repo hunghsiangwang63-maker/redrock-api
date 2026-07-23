@@ -8,7 +8,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../config/firebase');
-const { authenticate, checkPermission, requireStationAuth } = require('../middleware/auth');
+const { authenticate, checkPermission, requireStationAuth, requireManager } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
@@ -384,7 +384,7 @@ router.post('/sweep-stale-drafts', authenticate, checkPermission('super_admin'),
 });
 
 // ── GET /daily-settlements ────────────────────────────────────────
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, requireManager, async (req, res) => {
   try {
     const db = getDb();
     const gymId = req.staff?.role === 'super_admin' ? req.query.gymId : req.staff?.gymId;
@@ -412,7 +412,7 @@ router.put('/:id/unlock', authenticate, checkPermission('super_admin'), async (r
 
 // ── GET /daily-settlements/monthly-export?month=YYYY-MM ──────────────
 // 管理員下載「月銷售紀錄」Excel：整月每日一欄，照原版型自動帶入每日結帳
-router.get('/monthly-export', authenticate, async (req, res) => {
+router.get('/monthly-export', authenticate, requireManager, async (req, res) => {
   try {
     const role = req.staff?.role;
     if (!['super_admin', 'gym_manager'].includes(role)) {
@@ -570,7 +570,7 @@ const GYM_TAX = {
   'gym-hsinchu': { taxId: '87549069', bizName: '紅石攀岩有限公司新竹館' },
   'gym-shilin':  { taxId: '',         bizName: '紅石攀岩有限公司士林館' },
 };
-router.get('/invoice-export', authenticate, async (req, res) => {
+router.get('/invoice-export', authenticate, requireManager, async (req, res) => {
   try {
     const role = req.staff?.role;
     if (!['super_admin', 'gym_manager'].includes(role)) {

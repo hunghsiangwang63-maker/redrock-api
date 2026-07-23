@@ -3,7 +3,7 @@
  */
 const express = require('express');
 const router = express.Router();
-const { authenticate, checkPermission } = require('../middleware/auth');
+const { authenticate, checkPermission, requireManager } = require('../middleware/auth');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
 
@@ -283,6 +283,7 @@ router.get('/adjustments',
 // ── GET /revenue/export-adjustments-csv - 加減項匯出 CSV ─────────
 router.get('/export-adjustments-csv',
   authenticate,
+  requireManager,
   checkPermission('revenue.report'),
   async (req, res) => {
     try {
@@ -336,6 +337,7 @@ router.get('/export-adjustments-csv',
 // ── GET /revenue/export-csv - 匯出 CSV ──────────────────────────
 router.get('/export-csv',
   authenticate,
+  requireManager,
   checkPermission('revenue.report'),
   async (req, res) => {
     try {
@@ -387,6 +389,7 @@ router.get('/export-csv',
 // ── 入場統計（checkIns）的 CSV 匯出 ─────────────────────────────
 router.get('/export-checkin-csv',
   authenticate,
+  requireManager,
   checkPermission('revenue.report'),
   async (req, res) => {
     try {

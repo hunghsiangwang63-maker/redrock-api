@@ -2,7 +2,7 @@ const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const { body, param, query, validationResult } = require('express-validator');
-const { authenticate, authenticateAny, checkPermission, requireSameGym, auditLog, requireManagerOrStation } = require('../middleware/auth');
+const { authenticate, authenticateAny, checkPermission, requireSameGym, auditLog, requireManagerOrStation, requireManager } = require('../middleware/auth');
 const memberService = require('../services/memberService');
 const waiverService = require('../services/waiverService');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
@@ -369,6 +369,7 @@ router.get('/reports/active-course-students', authenticate, async (req, res) => 
 // 注意：此路由必須在 GET /:id 之前，否則會被 /:id 攔截。
 router.get('/download',
   authenticate,
+  requireManager,
   checkPermission('members.read'),
   async (req, res) => {
     try {

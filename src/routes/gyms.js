@@ -34,6 +34,16 @@ const ANNOUNCE_COLLECTION = 'gymAnnouncements';
 
 // 公告館別隔離：非 super_admin（含值班 operator / gym_manager）只能對「自己館」發布，
 // 不可對 'all'（全館）或他館。super_admin 不限（可發全館與任一館）。
+// 公告新增/修改：管理員(super_admin/gym_manager)、場館電腦(operator/station)、正職員工(full_time) 皆可；
+// part_time 個人帳號擋下。（休館／特殊時間仍受 announceTypeGuard 限管理員）
+const requireAnnounceEditor = (req, res, next) => {
+  const role = req.staff?.role;
+  const isManager = ['super_admin', 'gym_manager'].includes(role);
+  const isStation = ['operator', 'station'].includes(req.staff?.type);
+  if (isManager || isStation || role === 'full_time') return next();
+  return res.status(403).json({ error: 'ANNOUNCE_FORBIDDEN', message: '公告編輯僅限管理員、場館電腦或正職員工' });
+};
+
 const announceGymGuard = (req, res, next) => {
   if (req.staff?.role === 'super_admin') return next();
   const targetGym = req.params.id;
@@ -360,7 +370,7 @@ router.put('/:id/hours',
 // POST /gyms/:id/announcements/:aid/image - 上傳公告圖片（存 Storage、簽名 URL 寫入 bannerImage）
 // 權限同編輯公告（管理員或值班＋館別隔離）；休館/特殊時間公告限管理員（讀既有公告 type 判斷）
 router.post('/:id/announcements/:aid/image',
-  authenticate, requireManagerOrStation, announceGymGuard,
+  authenticate, requireAnnounceEditor, announceGymGuard,
   auditLog('announcement.image.upload'),
   uploadImage.single('file'),
   async (req, res) => {
@@ -391,7 +401,7 @@ router.post('/:id/announcements/:aid/image',
 
 router.post('/:id/announcements',
   authenticate,
-  requireManagerOrStation, announceGymGuard, announceTypeGuard,
+  requireAnnounceEditor, announceGymGuard, announceTypeGuard,
   auditLog('announcement.create'),
   [
     body('title').notEmpty().withMessage('請輸入公告標題'),
@@ -441,7 +451,7 @@ router.post('/:id/announcements',
 // PUT /gyms/:id/announcements/:aid - 編輯公告
 router.put('/:id/announcements/:aid',
   authenticate,
-  requireManagerOrStation, announceGymGuard, announceTypeGuard,
+  requireAnnounceEditor, announceGymGuard, announceTypeGuard,
   auditLog('announcement.update'),
   async (req, res) => {
     try {

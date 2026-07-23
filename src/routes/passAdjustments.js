@@ -6,7 +6,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const { body, validationResult } = require('express-validator');
-const { authenticate, authenticateAny, requireManagerOrStation } = require('../middleware/auth');
+const { authenticate, authenticateAny, requireManagerOrStation, requireManager } = require('../middleware/auth');
 const passAdjustmentService = require('../services/passAdjustmentService');
 const { getStorage, getDb, COLLECTIONS } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
@@ -345,7 +345,7 @@ router.get('/analytics', authenticate, requireManagerOrStation, async (req, res)
 
 // ── GET /pass-adjustments/analytics/download - 下載詳細資料 CSV（管理員/值班）──
 // 下載含會員姓名/手機/卡號 → 同上限管理員/值班（防個人 full/part 未值班帳號直打 API 撈全館個資）
-router.get('/analytics/download', authenticate, requireManagerOrStation, async (req, res) => {
+router.get('/analytics/download', authenticate, requireManager, async (req, res) => {
   try {
     const db = getDb();
     const { type } = req.query; // passes | discounts | blacks | tickets | bonuses

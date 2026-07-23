@@ -1847,6 +1847,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **刪前一律確認空**（courseEnrollments/checkIns/courseMakeupRights/memberPasses/discountCards/legacyBlackCards/singleEntryTickets 皆0才刪）。有效會員數因刪 5 筆重複而減 5。
 - 📌 **重複掃描法（日後複用）**：全 members 依「姓名+生日」分組取 count>1；每筆查各集合資料量標「⬜空/✅有料」＋家長/電話/email/建立時間/emailVerified → 空的通常是重複空帳號、有料的保留；子會員雙親情況改 coParent（非刪），成人重複主帳號刪空的。
 
+## 目前進度（2026-07-23 續）— 本人不入場流程（家長只建家庭成員）＋?sim= 自動登入 race 修復
+> 需求：很多家長自己不入場、只幫小孩建資料。onboarding gate 加「本人不入場」選項→略過本人簽署→直接建家庭成員；入場 QR 家長反白；日後可重啟。後端 `/health` `3.123.0-self-entry-skip`。
+- ✅ **`selfEntrySkipped` 旗標＋端點**：`POST /members/my/skip-self-entry`（設 true）／`/my/resume-self-entry`（設 false，重啟）；`/auth/member/me` 回 `selfEntrySkipped`。與 `fallTestScheduleSkipped`（3.66.0，階段二排測跳過）**是兩個不同旗標**。
+- ✅ **onboarding gate（`MemberOnboardingGate`）**：`if (member?.selfEntrySkipped) return children` 直接放行；**階段一（兩大方框）底部**加第三選項「🙋 本人不入場，前往建立家庭成員」→ 確認彈窗 → `skip-self-entry` → `updateMember({selfEntrySkipped:true})` → 導 `/member/profile?family=1`（自動展開家庭成員面板）。⚠ 兩個「不入場」選項**不同階段、不會同畫面**：階段一＝本人不入場（連簽都不用簽）；階段二排測畫面＝「我不入場攀爬，暫不安排」（已簽兩份、只跳過排測）——使用者確認兩個都留。
+- ✅ **`MemberProfilePage`**：`?family=1` 自動開家庭成員面板；`selfEntrySkipped` 時頭像卡下顯示琥珀橫幅「🙋 本人目前設定為不入場」＋「重啟入場文件簽署 →」（**確認彈窗**後 `resume-self-entry`→回首頁 gate 重新要簽）。
+- ✅ **`MemberQRPage`**：入場人員選擇器對 `selfEntrySkipped` 的**家長本人反白不可選**（標「（本人不入場）」）＋入場對象**預設落在第一個家庭成員**。
+- ✅ **兩入口都加確認彈窗（防誤觸）**：「本人不入場」與「重啟」按下都先跳確認、可取消；且**雙向可逆**（不入場↔重啟互切）。
+- ✅ **驗證「家長不入場不影響幫小孩處理事務」（E2E 5/5）**：封鎖家長（`selfEntrySkipped`+`isBlocked`）幫小孩**報週課 201／報比賽 201／請假 200／登入正常**。根因：全系統**只有 `enrollCourse`（工作坊）檢查 isBlocked，且對象是 `getMember(memberId)`＝報名對象（小孩）非登入家長**；enroll-all／比賽／請假補課皆不檢查 isBlocked；無全域擋封鎖會員的中介層。所以家長 blocked 完全不影響代小孩操作。
+- 🐞 **順修：`?sim=` 自動登入 race（前端，影響本人不入場測試連結＋模擬報名 deepLink）**：`MemberRoute` 在會員資料載入前（member=null）就 `Navigate` 去 `/member/login`，且導向後 `sim` 被包進 `redirect` 參數 → `params.get('sim')` 抓不到 → 卡登入頁。修：`memberStore` 於 **useState 同步初始化**時（首次 render 前）就把 `?sim=` token 寫入 localStorage 並設 `simResolving=true`；`/auth/member/me` 載完才 `setSimResolving(false)`；`MemberRoute`：`if (simResolving) return null`（先等、不導向）。→ deepLink（本人不入場測試、模擬報名）在無會員 session 的瀏覽器也能正常自動登入進頁。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

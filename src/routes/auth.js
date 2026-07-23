@@ -341,6 +341,7 @@ router.get('/member/me', authenticateMember, async (req, res) => {
         waiverSigned: waiverData?.isComplete || false,
         fallTestScheduleSkipped: member.fallTestScheduleSkipped || false,
         isSimulation: member.isSimulation === true,
+        isStaff: member.isStaff === true,
       },
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }

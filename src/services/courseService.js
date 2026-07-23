@@ -625,11 +625,12 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
 
   // 工作坊分階段報名＋隊員分級定價（僅 workshop、且設了 team/general 開放日或隊員價時生效；店員代報 byStaff 不受 gate 限）
   const _isTeam = require('../services/teamMemberService').isActiveTeamMember(member);
+  const _isStaff = member.isStaff === true; // 員工會員（比對到員工帳號者）——比照隊員，於 teamOpenDate 起可報
   if (course.type === 'workshop' && !byStaff && (course.teamOpenDate || course.generalOpenDate)) {
     const _t = taiwanToday();
-    if (_isTeam) {
+    if (_isTeam || _isStaff) {
       if (course.teamOpenDate && _t < course.teamOpenDate)
-        throw { code: 'ENROLL_NOT_OPEN', message: `隊員報名將於 ${course.teamOpenDate} 開放` };
+        throw { code: 'ENROLL_NOT_OPEN', message: `${_isStaff ? '員工' : '隊員'}報名將於 ${course.teamOpenDate} 開放` };
     } else {
       if (course.generalOpenDate && _t < course.generalOpenDate) {
         const msg = (course.teamOpenDate && _t >= course.teamOpenDate)

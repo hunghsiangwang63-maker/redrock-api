@@ -1836,6 +1836,17 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📋 **柯昀彤（member `68edffa2`，0921091550）額外發放 2 張補課券**（入門班 7-8月週一A班 `a5216a13`，gym-hsinchu）：firebase-admin 建 `courseMakeupRights` 2 張——`status:'available'`、**`source:'manual'`＋`exempt:true`**（＝豁免券：不佔請假配額、不被 reconcile 不變量作廢，真正「額外」的兩次，與請假配額券獨立）、`courseId=a5216a13`、`expiresAt` **補課期限 2026-10-23**（課程 endDate 8/24 + 解析後 makeupDeadlineDays 60）。
 - ⚠️ **目前無可補場次**：入門班「可補去類型（makeupTypeIds）」只設「入門班」自己、且系統中入門班**僅這一梯**（原課不能補回自己）→ 兩張券暫時無處可補。**使用者拍板：下一期補、沒關係。** 下一期入門班開課有場次（且落在 2026-10-23 前）即可用；若下期晚於 10/23，需將這兩張券 `expiresAt` 往後延（延長前跟使用者確認）。
 
+## 目前進度（2026-07-23 續）— 子會員共同家長機制（coParentIds）＋重複會員清理
+> 起因：家長回報同一個小孩被登在兩個家長帳號下（爸媽各建一次）。做「共同家長」讓一筆資料兩個家長都能管，並全庫掃重複清理。後端 `/health` `3.124.0-co-parent`。
+- ✅ **共同家長機制 `coParentIds`（子會員可掛多個家長）**：一個小孩原本只能有單一 `parentMemberId`；新增 `coParentIds`（陣列）讓另一位家長也能查看/代操作同一子會員。改兩處（單一真相）——① `GET /members/my/children`：`parentMemberId==me` **併** `coParentIds array-contains me`（去重）② `checkMemberOwnership`（`utils/memberOwnership.js`）：`target.parentMemberId===me || coParentIds.includes(me)` 才放行。**兩家長皆可報名/請假/補課/退費/轉移/入場代操作同一小孩，資料統一不重複**。設共同家長＝`members.<childId>.coParentIds arrayUnion(另一家長id)`（firebase-admin）。
+- ✅ **重複會員清理（firebase-admin，掃「同姓名＋同生日」分組）**：
+  - **廖彥澄／許宸碩**（許哲嘉父0918620673 vs 廖家嘉母0937124706）：兩小孩各兩筆，父帳號下有料（各9報名/2補課券/1入場、7/17建）、母帳號下空（7/21建）→ **留父帳號有料那筆＋把母設為 coParent＋刪母帳號空重複**。
+  - **黎芷芸**（VIP family，爸媽各建、皆VIP）：留有料 `52553e4c`（入場1）＋加共同家長 `4b9d1f7d`＋刪空 `8644e8bb`。
+  - **謝明伶**（重複主帳號，電話差1碼/email差大小寫＝同一人打錯註冊兩次）：刪空 `65b3e677`、留有料 `cb669ab1`（入場2/卡1）。
+  - **周鄺宏**（重複主帳號，nagisa信箱未驗證19:29建→3分鐘後elaine信箱驗證19:32建並19:45入場＝廢棄第一次註冊）：刪空未驗證 `c5fc1617`、留有料 `cb68961f`。
+  - **刪前一律確認空**（courseEnrollments/checkIns/courseMakeupRights/memberPasses/discountCards/legacyBlackCards/singleEntryTickets 皆0才刪）。有效會員數因刪 5 筆重複而減 5。
+- 📌 **重複掃描法（日後複用）**：全 members 依「姓名+生日」分組取 count>1；每筆查各集合資料量標「⬜空/✅有料」＋家長/電話/email/建立時間/emailVerified → 空的通常是重複空帳號、有料的保留；子會員雙親情況改 coParent（非刪），成人重複主帳號刪空的。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

@@ -144,4 +144,25 @@ router.post('/confirm', authenticate, requireManagerOrStation, async (req, res) 
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── 清除過期/已使用的入館 QR pending（30 分效期，避免累積）──
+const sweepStaleStaffEntries = async () => {
+  try {
+    const db = getDb();
+    const now = Date.now();
+    const snap = await db.collection('pendingStaffEntries').get();
+    let n = 0;
+    for (const d of snap.docs) {
+      const p = d.data();
+      const exp = p.expiresAt?.toMillis ? p.expiresAt.toMillis() : (p.expiresAt ? new Date(p.expiresAt).getTime() : 0);
+      if (p.status === 'used' || (exp && exp < now)) { await d.ref.delete(); n++; }
+    }
+    if (n) console.log(`[staff-entry] sweep 清除過期/已用入館QR ${n} 筆`);
+  } catch (e) { /* ignore */ }
+};
+if (!global.__staffEntrySweepStarted) {
+  global.__staffEntrySweepStarted = true;
+  setInterval(sweepStaleStaffEntries, 30 * 60 * 1000); // 每 30 分
+}
+
 module.exports = router;
+module.exports.sweepStaleStaffEntries = sweepStaleStaffEntries;

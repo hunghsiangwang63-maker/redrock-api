@@ -48,7 +48,7 @@ const getOriginalEntryPrice = async (memberType) => {
   return getEntryTypePrice(id, fallback);
 };
 
-// ── 墜落測驗：有效期 1 年，期限內每入場2次遞延1年 ────────────────
+// ── 墜落測驗：有效期 1 年；到期前2個月~前1天入場時，回看過去1年若≥2次入場則自動延長1年（見 checkin/gates.js tryExtendFallTest）──
 const getMemberType = (member) => {
   if (member.memberType === 'vip') return 'vip';
   if (member.memberType === 'climbing_team') return 'climbing_team';

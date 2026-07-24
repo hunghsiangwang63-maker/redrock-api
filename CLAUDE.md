@@ -1911,6 +1911,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **後端**（`courses.js` `GET /courses/sessions`）：加 **`courseId` 快速路徑**——只查該課程場次（單一等值查詢、極小 payload、無需複合索引），會員端過濾體驗場次後回傳；`loadSessions` 改帶 `courseId`。實測某週課 8 場次 **0.26s**（原本拉整個日期範圍全部課程場次）。
 - 驗證：courseId 快速路徑回傳正確場次數＋耗時 0.26s；費用鎖到場次載入完成。
 
+## 目前進度（2026-07-24 續6）— 課程報名報價端點（顯示＝實收，消除續報/舊生折扣溢繳）；定期票查證安全
+> 承插班溢繳：使用者問「隊員折扣/續報也會嗎？定期票也是」。查證：**隊員折** 已被續5的 gate 涵蓋（顯示 fee 本就含隊員折）；**續報/舊生折** 有溢繳風險——前端顯示的 fee **根本沒扣續報/舊生折**（那是後端「系統自動折抵」、前端無法判資格），符合資格者轉帳會多繳。**定期票查證後安全**（見下）。後端 `/health` `3.135.0-course-fee-quote`；E2E 報價==實收。
+- ✅ **課程報價端點 `GET /courses/:courseId/quote`**（authenticateAny、可帶 memberId 查子女）：回這位會員這門課的**最終應繳**（後端權威，與 enroll-all 同規則）。抽共用 `courseService.computeCourseFeeForMember`（插班比例×續報/舊生折×隊員9折）＋`computeAlumniStatus`（舊生/續報資格）；⚠ **與 enroll-all 內同段邏輯必須同步**（此為抽出、enroll-all 未重構、屬平行複製）。
+- ✅ **前端**（`MemberCoursesPage` 週課報名）：`selectedCourse`/`enrollForMemberId` 變動時打 quote → **顯示/報名鈕/付款金額一律用 `quote.fee`＝實收**；`feeReady`（quote 到齊）前顯示「費用計算中…」、鈕禁用（承續5 的 gate）；續報/舊生折**現在會顯示已折抵金額**（原本完全沒扣）；切換報名對象重取報價、同步已捕捉的 enrollSession.fee。
+- **E2E（打正式 API，插班課程「小蜘蛛人初級班7-8月週五B」原價4400/共7已開2）**：`quote.fee=3143` == `enroll-all 實收 fee=3143` ✅ PASS（測試會員/報名/場次計數/交易全清）。
+- 📋 **定期票查證＝安全、不需比照修**：買定期票（buy_pass）選項與付款金額都用 `pt.price`＝`/checkin/verify` 後端回傳的**折後價**（2.62.0 起隊員9折由後端 fold、附 originalPrice），前端**不自算折扣**；續約用 `renewal.renewalPrice`（後端 verify 算好）；**無載入空窗**（定期票選項在 verify 回來後才出現）；隊員折由後端用真實會員算、不受 `member.isTeamMember` 前端快取過期影響。故定期票「顯示價＝實收價」本就成立。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

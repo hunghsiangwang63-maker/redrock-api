@@ -10,9 +10,13 @@ const dayjs = require('dayjs');
 const { getMemberType } = require('./pricing');
 const { getValidSingleEntryTickets } = require('./eligibility');
 
-const FALL_TEST_VALID_YEARS = 1;       // 初次效期（與登記時 settings.validYears 預設一致）
-const FALL_TEST_EXTENSION_VISITS = 2;  // 觸發遞延所需入場次數
-const FALL_TEST_EXTENSION_YEARS = 1;   // 每次遞延年數
+const FALL_TEST_VALID_YEARS = 1;                 // 初次效期（與登記時 settings.validYears 預設一致）
+// 自動延長規則（2026-07-24 更正）：僅在「到期前 N 個月 ~ 到期前一天」窗口內入場時判斷；
+// 回看過去 1 年若有 ≥2 次（非取消）入場 → 延長 1 年（每個到期週期至多一次，延長後窗口外移天然只延一次）。
+const FALL_TEST_EXTENSION_WINDOW_MONTHS = 2;     // 到期前幾個月起進入判斷窗口
+const FALL_TEST_EXTENSION_LOOKBACK_YEARS = 1;    // 回看年數
+const FALL_TEST_EXTENSION_MIN_VISITS = 2;        // 回看窗口內所需入場次數
+const FALL_TEST_EXTENSION_YEARS = 1;             // 每次延長年數
 
 // 解析墜測有效期：優先 currentExpiresAt（含遞延），其次登記時的 expiresAt，最後回推 testedAt + 效期年數
 const resolveFallTestExpiry = (test) => {
@@ -69,7 +73,12 @@ const hasFallTestSignature = async (memberId) => {
   return !snap.empty;
 };
 
-// ── 墜落測驗遞延：每入場2次延長1年 ──────────────────────────────
+// ── 墜落測驗自動延長（2026-07-24 更正）──────────────────────────────
+// 規則：僅在「到期前 FALL_TEST_EXTENSION_WINDOW_MONTHS 個月 ~ 到期前一天」窗口內入場時判斷；
+//       回看過去 FALL_TEST_EXTENSION_LOOKBACK_YEARS 年若有 ≥ FALL_TEST_EXTENSION_MIN_VISITS 次
+//       （非取消）入場（含本次）→ 到期日 +FALL_TEST_EXTENSION_YEARS 年。
+//       延長後到期日往後推一年、窗口隨之外移 → 天然每個到期週期至多延一次（無需額外去重）。
+//       非窗口內、已過期、或回看不足 → 不延長（不活躍者放其自然到期、需重測）。
 const tryExtendFallTest = async (memberId, checkInId) => {
   const db = getDb();
   const snap = await db.collection(COLLECTIONS.FALL_TESTS)
@@ -83,42 +92,41 @@ const tryExtendFallTest = async (memberId, checkInId) => {
   const docRef = snap.docs[0].ref;
   const data = snap.docs[0].data();
 
-  // 計算目前有效期
-  const currentExpiry = resolveFallTestExpiry(data);
+  // 目前有效期（含先前延長）與判斷窗口
+  const expiry = resolveFallTestExpiry(data);
+  const today = dayjs(taiwanToday()); // 台灣今日（date-level，避免時分秒邊界）
+  const windowStart = expiry.subtract(FALL_TEST_EXTENSION_WINDOW_MONTHS, 'month');
 
-  // 統計有效期內入場次數（含本次）
+  // 僅在「到期前兩個月 ~ 到期前一天」窗口內、且尚未到期時判斷
+  if (today.isBefore(windowStart)) return; // 尚未進入判斷窗口
+  if (!today.isBefore(expiry)) return;     // 已到期日/過期 → 不自動延長（過期不入場亦到不了此處）
+
+  // 回看過去一年（非取消）入場次數（含本次剛寫入的）
+  const lookbackStart = today.subtract(FALL_TEST_EXTENSION_LOOKBACK_YEARS, 'year').toDate();
   const visitsSnap = await db.collection(COLLECTIONS.CHECK_INS)
     .where('memberId', '==', memberId)
     .where('isCancelled', '==', false)
-    .where('checkedInAt', '>=', data.testedAt.toDate())
+    .where('checkedInAt', '>=', lookbackStart)
     .get();
+  if (visitsSnap.size < FALL_TEST_EXTENSION_MIN_VISITS) return; // 回看不足 → 不延長
 
-  const visitCount = visitsSnap.size; // 包含本次剛寫入的
-
-  // 每累積 FALL_TEST_EXTENSION_VISITS 次觸發一次遞延
-  const extensionCount = data.extensionCount || 0;
-  const expectedExtensions = Math.floor(visitCount / FALL_TEST_EXTENSION_VISITS);
-
-  if (expectedExtensions > extensionCount) {
-    // 補齊所有未套用的遞延（避免一次跨多門檻時只加一年、其餘永久遺失）
-    const missedExtensions = expectedExtensions - extensionCount;
-    const previousExpiry = currentExpiry.format('YYYY-MM-DD');
-    const newExpiry = currentExpiry.add(missedExtensions * FALL_TEST_EXTENSION_YEARS, 'year').format('YYYY-MM-DD');
-    const extensionLog = data.extensionLog || [];
-    extensionLog.push({
-      extendedAt: new Date(),
-      checkInId,
-      previousExpiresAt: previousExpiry,
-      newExpiresAt: newExpiry,
-      extensionsApplied: missedExtensions,
-    });
-    await docRef.update({
-      extensionCount: expectedExtensions,
-      currentExpiresAt: newExpiry,
-      extensionLog,
-      updatedAt: new Date(),
-    });
-  }
+  const previousExpiry = expiry.format('YYYY-MM-DD');
+  const newExpiry = expiry.add(FALL_TEST_EXTENSION_YEARS, 'year').format('YYYY-MM-DD');
+  const extensionLog = data.extensionLog || [];
+  extensionLog.push({
+    extendedAt: new Date(),
+    checkInId,
+    previousExpiresAt: previousExpiry,
+    newExpiresAt: newExpiry,
+    lookbackVisits: visitsSnap.size,
+    reason: `到期前窗口內、過去一年入場 ${visitsSnap.size} 次`,
+  });
+  await docRef.update({
+    extensionCount: (data.extensionCount || 0) + 1,
+    currentExpiresAt: newExpiry,
+    extensionLog,
+    updatedAt: new Date(),
+  });
 };
 
 // ── waiver 檢查 ──────────────────────────────────────────────────
@@ -231,4 +239,4 @@ const runEntryGates = async (memberId, gymId, { skipDuplicate = false, expTicket
 
 // ── 主驗票：verifyEntry ──────────────────────────────────────────
 // 用於「會員端選擇入場方式前」的資格確認
-module.exports = { FALL_TEST_VALID_YEARS, FALL_TEST_EXTENSION_VISITS, FALL_TEST_EXTENSION_YEARS, resolveFallTestExpiry, checkFallTest, hasFallTestSignature, tryExtendFallTest, checkWaiver, runEntryGates };
+module.exports = { FALL_TEST_VALID_YEARS, FALL_TEST_EXTENSION_WINDOW_MONTHS, FALL_TEST_EXTENSION_LOOKBACK_YEARS, FALL_TEST_EXTENSION_MIN_VISITS, FALL_TEST_EXTENSION_YEARS, resolveFallTestExpiry, checkFallTest, hasFallTestSignature, tryExtendFallTest, checkWaiver, runEntryGates };

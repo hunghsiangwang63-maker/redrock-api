@@ -1896,7 +1896,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **六個掛鉤點**：
   - **報名收到**：`courses.js` enroll-all（週課，非候補）＋`/sessions/:id/enroll`（工作坊/單場，非候補）＋`competitions.js` register（比賽，to=報名 email）。
   - **確認收款**：`transfers.js` confirm 的 course 分支（課程/工作坊，含現金與轉帳）＋competition 分支（比賽轉帳）＋`competitions.js` confirm-payment（比賽現金）。（confirm-payment 有冪等 guard→不會與 transfers 重複寄。）
-- ✅ **運動按摩工作坊特例**（`isMassage`＝課名含「運動按摩」）：① cc 額外加 `seven2170923@gmail.com` ② **報名收到信不附匯款帳號**（該工作坊繳費另循「私訊智萩」）③ **確認收款信附 7 點注意事項**（限預約一次/著輕便衣物/肢體碰觸/調時段私訊智萩/按摩床位置/自備毛巾/清潔）。
+- ✅ **運動按摩工作坊特例**（`isMassage`＝課名含「運動按摩」）：① cc 額外加 `seven2170923@gmail.com` ② **報名收到信不附匯款帳號** ③ **確認收款信附 7 點注意事項**（限預約一次/著輕便衣物/肢體碰觸/調時段請自行協調並**於隊員 LINE 群尋求轉讓**/按摩床位置/自備毛巾/清潔）。⚠ 注意事項第 4 點原「私訊智萩」已改「隊員 LINE 群尋求轉讓」。
+
+## 目前進度（2026-07-24 續4）— 工作坊會員端名額改「場次層」判斷（部分場次額滿仍顯尚有名額）
+> 回報：會員看工作坊報名，若還有場次有名額但部分場次額滿，應顯「尚有名額」而非「額滿」。原本會員端梯次卡用 course 層彙總 `maxStudents−enrolledCount` 判額滿，工作坊每場獨立名額故不準。後端 `/health` `3.133.0-workshop-any-session-open`；正式資料驗證。
+- ✅ **後端 `getCourses`**：對 `type==='workshop'` 課程查其場次，加 `anySessionOpen`＝任一「未取消、今日(含)以後」場次 `enrolledCount < maxStudents` → true（分批 `where courseId in`≤30、失敗不阻斷）。非工作坊回 undefined。
+- ✅ **前端**（`MemberCoursesPage` 第二層梯次卡）：工作坊 `isFull = anySessionOpen===false`、有名額時標「**尚有名額**」（非「剩 N 位」，因逐場計不適用單一數字）；非工作坊維持「剩 N 位／額滿」不變。
+- **驗證（正式資料）**：運動按摩 8/23（5 場 3 開 2 滿）→尚有名額；半小時（8 場 7 開 1 滿）→尚有名額；一小時（8 場全滿）→額滿。
 - **render 驗證（4 情境）**：課程轉帳→含匯款帳號+應繳；運動按摩→cc含seven+無匯款帳號+確認信含注意事項；比賽現金→無匯款帳號+「請至櫃檯繳費」。⚠ 未跑真實 API E2E（需建課程/會員/收款鏈）；掛鉤與 render 皆驗，行為比照已上線的體驗寄信（3.128）。
 
 ## 待辦

@@ -85,6 +85,15 @@ router.post('/',
 // GET /courses/sessions - 場次列表（可依日期區間）
 router.get('/sessions', authenticateAny, async (req, res) => {
   try {
+    // 快速路徑：帶 courseId → 只查該課程場次（單一等值查詢、極小 payload），供報名時算插班費用即時取得
+    if (req.query.courseId) {
+      const db = getDb();
+      const snap = await db.collection('courseSessions').where('courseId', '==', req.query.courseId).get();
+      let sessions = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || ''));
+      if (req.member) sessions = sessions.filter(s => s.source !== 'experience');
+      return res.json({ sessions });
+    }
     const gymId = req.query.gymId || req.staff?.gymId;
     let sessions = await courseService.getSessions(gymId, req.query.fromDate || req.query.from, req.query.toDate || req.query.to);
     // 會員端過濾體驗課程場次（不出現在報名/課表；會員自己的體驗另由 /experience-bookings/my 顯示）

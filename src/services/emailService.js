@@ -229,12 +229,11 @@ const sendExperienceBookingConfirmation = async (memberEmail, memberName, bookin
 };
 
 // ── 體驗課程「報名收到 / 繳費通知」（報名當下寄；含應繳金額＋該館匯款帳號；cc 該館）──
-const sendExperienceBookingReceived = async (memberEmail, memberName, booking, { bank, insuranceFee = 175, cc } = {}) => {
+// 應繳＝booking.totalFee（級距價格「已含保險」，不另加收）。
+const sendExperienceBookingReceived = async (memberEmail, memberName, booking, { bank, cc } = {}) => {
   const gymName = booking.gymId === 'gym-hsinchu' ? '新竹館' : '士林館';
-  const courseFee = Number(booking.totalFee) || 0;
+  const total = Number(booking.totalFee) || 0;
   const nP = Number(booking.numParticipants) || 0;
-  const insTotal = nP * insuranceFee;
-  const total = courseFee + insTotal;
   const money = (n) => `NT$${Number(n || 0).toLocaleString()}`;
   const bankBlock = bank ? `
         <div style="background:#FBF5F5;border:1px solid #E8D5D5;border-radius:8px;padding:16px;margin:12px 0">
@@ -259,9 +258,7 @@ const sendExperienceBookingReceived = async (memberEmail, memberName, booking, {
           <div><strong>人數：</strong>${esc(nP)} 人</div>
         </div>
         <div style="background:#FFF6E9;border:1px solid #E0C08A;border-radius:8px;padding:16px;margin:12px 0">
-          <div><strong>課程費：</strong>${money(courseFee)}</div>
-          <div><strong>保險代收：</strong>${money(insTotal)}（${esc(nP)} 人 × ${insuranceFee}）</div>
-          <div style="margin-top:6px;font-size:16px;color:#8B1A1A"><strong>應繳總額：${money(total)}</strong></div>
+          <div style="font-size:16px;color:#8B1A1A"><strong>應繳總額：${money(total)}</strong>　<span style="font-size:12px;color:#666">（費用已含保險）</span></div>
         </div>
         ${bankBlock}
         <p style="font-size:13px;color:#666">匯款後請保留末五碼，或回覆本信告知，以利館方核對收款。</p>

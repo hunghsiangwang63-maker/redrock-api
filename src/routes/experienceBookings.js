@@ -180,6 +180,21 @@ router.post('/', authenticateAny, async (req, res) => {
       status: 'pending', // pending | confirmed | cancelled
       createdAt: new Date(), updatedAt: new Date(),
     });
+    // 報名收到 → 寄「繳費通知」給聯絡人（cc 該館）；含應繳金額＋該館匯款帳號。非同步、失敗不阻斷。
+    const _bookingEmail = contactEmail || req.member?.email;
+    if (_bookingEmail) {
+      try {
+        const _bankKey = gymId === 'gym-hsinchu' ? 'hsinchu' : 'shilin';
+        const _bank = (_settings.bankInfo || _settings.bank || {})[_bankKey] || null;
+        const _gymDoc2 = await db.collection('gyms').doc(gymId).get();
+        const _gymCc2 = _gymDoc2.exists ? _gymDoc2.data().email : undefined;
+        emailService.sendExperienceBookingReceived(
+          _bookingEmail, contactName || req.member?.name || '',
+          { bookingDate, bookingTime, gymId, numParticipants: participants.length, totalFee: computedFee },
+          { bank: _bank, insuranceFee: _settings.insuranceFee ?? 175, cc: _gymCc2 }
+        ).catch(e => console.error('[Email] 體驗報名通知', e.message));
+      } catch (e) { console.error('[Email] 體驗報名通知', e.message); }
+    }
     res.status(201).json({ success:true, id, message:'預約已送出，請於3日內完成匯款' });
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
 });
@@ -302,6 +317,8 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
     const booking = { id: doc.id, ...doc.data() };
+    const _gymCcDoc = await db.collection('gyms').doc(booking.gymId).get();
+    const _gymCc = _gymCcDoc.exists ? _gymCcDoc.data().email : undefined; // 確認信副本給該館
 
     // ── 試上預約：確認收款 ──
     // 新流程：報名當下已佔位（pending）→ 確認收款只標 paymentStatus:'paid'；
@@ -318,7 +335,7 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
         // 試上確認收款 → 自動發 1 張當日體驗券（冪等：sync 依已發張數補差；入場當日豁免墜測）
         await syncExperienceTickets(db, booking, req.staff, true).catch(e => console.error('[試上發券]', e.message));
         if (booking.contactEmail) {
-          emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking).catch(e => console.error('[Email]', e.message));
+          emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking, _gymCc).catch(e => console.error('[Email]', e.message));
         }
         return res.json({ success:true, isTrial:true, enrollmentStatus: enDoc.data().status, message: enDoc.data().status === 'waitlist' ? '已確認收款（目前為候補，名額釋出將自動轉正）' : '已確認收款' });
       }
@@ -339,7 +356,7 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
       await recordExperienceRevenue(db, ref, booking, req.staff).catch(e => console.error('[體驗營收]', e.message));
       await syncExperienceTickets(db, booking, req.staff, true).catch(e => console.error('[試上發券]', e.message));
       if (booking.contactEmail) {
-        emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking).catch(e => console.error('[Email]', e.message));
+        emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking, _gymCc).catch(e => console.error('[Email]', e.message));
       }
       return res.json({
         success: true, isTrial: true, ...trialResult,
@@ -383,7 +400,7 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
 
     // 發送確認信
     if (booking.contactEmail) {
-      emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking).catch(e => console.error('[Email]', e.message));
+      emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking, _gymCc).catch(e => console.error('[Email]', e.message));
     }
     res.json({
       success: true, coachName, ...(created || {}), ...(reassigned || {}),

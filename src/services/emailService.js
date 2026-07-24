@@ -205,9 +205,10 @@ const sendInstallmentOverdueNotice = async ({ email, memberName, itemName, seq, 
 };
 
 // ── 體驗課程確認信 ────────────────────────────────────────────────
-const sendExperienceBookingConfirmation = async (memberEmail, memberName, booking) => {
+const sendExperienceBookingConfirmation = async (memberEmail, memberName, booking, cc) => {
   return sendEmail({
     to: memberEmail,
+    cc: cc || undefined,
     subject: '【紅石攀岩】體驗課程預約確認',
     html: `
       <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
@@ -221,6 +222,49 @@ const sendExperienceBookingConfirmation = async (memberEmail, memberName, bookin
           <div><strong>人數：</strong>${esc(booking.numParticipants)} 人</div>
         </div>
         <p>期待與您見面！如有疑問請聯繫館方。</p>
+        <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+  });
+};
+
+// ── 體驗課程「報名收到 / 繳費通知」（報名當下寄；含應繳金額＋該館匯款帳號；cc 該館）──
+const sendExperienceBookingReceived = async (memberEmail, memberName, booking, { bank, insuranceFee = 175, cc } = {}) => {
+  const gymName = booking.gymId === 'gym-hsinchu' ? '新竹館' : '士林館';
+  const courseFee = Number(booking.totalFee) || 0;
+  const nP = Number(booking.numParticipants) || 0;
+  const insTotal = nP * insuranceFee;
+  const total = courseFee + insTotal;
+  const money = (n) => `NT$${Number(n || 0).toLocaleString()}`;
+  const bankBlock = bank ? `
+        <div style="background:#FBF5F5;border:1px solid #E8D5D5;border-radius:8px;padding:16px;margin:12px 0">
+          <div style="font-weight:600;color:#8B1A1A;margin-bottom:6px">匯款帳號（${gymName}）</div>
+          <div><strong>銀行：</strong>${esc(bank.bankName || '')} ${esc(bank.branch || '')}</div>
+          <div><strong>帳號：</strong>${esc(bank.account || '')}</div>
+          <div><strong>戶名：</strong>${esc(bank.accountName || '')}</div>
+        </div>` : '';
+  return sendEmail({
+    to: memberEmail,
+    cc: cc || undefined,
+    subject: '【紅石攀岩】體驗課程預約成功，請完成匯款',
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">體驗課程預約成功</h2>
+        <p>親愛的 ${esc(memberName)}，</p>
+        <p>已收到您的體驗課程預約，請於 <strong>3 日內完成匯款</strong>；館方確認收款後將再寄出正式確認信。</p>
+        <div style="background:#F7F3F3;border-radius:8px;padding:16px;margin:16px 0">
+          <div><strong>日期：</strong>${esc(booking.bookingDate)}</div>
+          <div><strong>時間：</strong>${esc(booking.bookingTime)}</div>
+          <div><strong>場館：</strong>${gymName}</div>
+          <div><strong>人數：</strong>${esc(nP)} 人</div>
+        </div>
+        <div style="background:#FFF6E9;border:1px solid #E0C08A;border-radius:8px;padding:16px;margin:12px 0">
+          <div><strong>課程費：</strong>${money(courseFee)}</div>
+          <div><strong>保險代收：</strong>${money(insTotal)}（${esc(nP)} 人 × ${insuranceFee}）</div>
+          <div style="margin-top:6px;font-size:16px;color:#8B1A1A"><strong>應繳總額：${money(total)}</strong></div>
+        </div>
+        ${bankBlock}
+        <p style="font-size:13px;color:#666">匯款後請保留末五碼，或回覆本信告知，以利館方核對收款。</p>
         <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
       </div>
     `,
@@ -326,6 +370,7 @@ module.exports = {
   sendInstallmentDueReminder,
   sendInstallmentOverdueNotice,
   sendExperienceBookingConfirmation,
+  sendExperienceBookingReceived,
   sendInstallmentReminders,
   sendParentWaiverLink,
   sendParentCompetitionWaiverLink,

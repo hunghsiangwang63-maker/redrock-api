@@ -1867,6 +1867,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **設定：僅新增/修改公告開放場館電腦＋正職員工，其餘限管理員**：`SettingsPage` 入場類型/Waiver/墜落測驗/岩鞋租借 4 個原本無 flag（人人可見）改 `managerOnly`（isManagerPlus＝super_admin/gym_manager）；預設分頁對非管理員自動切到第一個可見（＝場館公告）；`canOwnGymAnnounce` 加 `full_time`；`StaffLayout` PERSONAL_NAV.full_time 加 `/staff/settings`（否則正職個人帳號 nav 看不到設定）。**後端**：公告新增/修改 gate `requireManagerOrStation`→新 `requireAnnounceEditor`（管理員/場館電腦(operator·station)/正職(full_time) 皆可，part_time 擋；休館/特殊時間仍受 announceTypeGuard 限管理員；DELETE 不變）。
 - **Live smoke**：super_admin 結帳歷史/會員下載/銷售區間/歷史入場區間 皆 200；站台 token 打 結帳歷史/會員下載/卡券統計下載 皆 **401 擋下**。commit 後端 `3.127.0`、前端已 deploy。
 
+## 目前進度（2026-07-24 續）— 結帳摘要加現金清點 + 體驗預約寄信（報名+確認雙信、cc 該館）
+- ✅ **結帳摘要加「現金清點」（點鈔明細）**（純前端 `DailySettlementPage`）：`SettlementSummary` 原只顯示「實際現金」總額 → 改「現金清點」區塊逐面額列出（`NT$1,000 × 3　NT$3,000`…只列 count>0）＋底部實際現金合計；無點鈔資料退回顯示總額。三處摘要都套用（歷史紀錄展開／今日已結帳／完成結帳確認 modal），資料取各筆 settlement 存的 `denominations`（本就存、只是摘要沒顯示明細）。器材租借本就在「總金額分項」cats（3.84.0），未變動。
+- ✅ **體驗課程「報名當下寄繳費通知信」＋「確認信」雙信、皆 cc 該館**（後端 `/health` `3.128.0-exp-booking-received-email`）：
+  - **報名收到信（新）**：`emailService.sendExperienceBookingReceived`——`POST /experience-bookings` 建立成功後寄給聯絡人（`contactEmail`），含 日期/時段/館別/人數 ＋ **應繳拆帳**（課程費 `totalFee` ＋ 保險代收 `numParticipants×insuranceFee(175)` ＝ 總額）＋ **該館匯款帳號**（讀 `systemSettings/experienceCourses.bankInfo[hsinchu|shilin]`）。非同步、失敗不阻斷 201。
+  - **確認信（原有，保留）**：`sendExperienceBookingConfirmation`（`POST /:id/confirm` 三處：試上兩分支＋一般）確認收款後寄。
+  - **兩封都 cc 該館 email**：讀 `gyms.<gymId>.email`（新竹 `redrocktaiwan.hc@gmail.com`／士林 `redrocktaiwan@gmail.com`，3.91.0 建的欄位）；`sendExperienceBookingConfirmation` 加第 4 參數 cc、received 信 opts.cc。
+  - **範圍**：只做一般體驗預約（general）；試上（trial）確認信本就有、不加報名收到信（試上另有發券流程）。commit 後端 `3.128.0`（前端無變動——寄信純後端）。
+- 📋 **實際操作：建立士林館 9 人團體體驗預約（鄒竣有團）**：士林館 2026-07-26 10:00–12:00、9 人（general，6–12 人級距 775/人＝課程費 6,975＋保險 9×175＝1,575＝應繳 8,550）、聯絡人 鄒竣有/0930303729/Vaneas0720@gmail.com、walk-in（memberId:null）、轉帳 pending。功能上線後「刪除+重建」補觸發繳費通知信（寄客人＋副本士林）；現行 id `exp_1784880924199_stpt`。⚠ walk-in 團體體驗＝`memberId:null`（Firestore 不吃 undefined，API 要顯式帶 `memberId:null`）；bookingTime 格式 `HH:MM-HH:MM`。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

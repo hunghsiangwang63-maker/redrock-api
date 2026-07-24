@@ -1511,6 +1511,23 @@ const getCourses = async (gymId) => {
     enrolledByCourse[e.courseId].add(e.memberId);
   });
 
+  // 工作坊：名額以「場次層」判斷——course 層 enrolledCount 是彙總，不反映各場次；
+  // 只要任一「未取消、今日(含)以後」場次未滿 → 視為尚有名額（部分場次額滿不算整體額滿）。
+  const workshopIds = courses.filter(c => c.type === 'workshop').map(c => c.id);
+  const workshopAnyOpen = {};
+  const _todayW = taiwanToday();
+  for (let i = 0; i < workshopIds.length; i += 30) {
+    const chunk = workshopIds.slice(i, i + 30);
+    try {
+      const ss = await db.collection(SESSION_COLLECTION).where('courseId', 'in', chunk).get();
+      ss.docs.forEach(d => {
+        const s = d.data();
+        if (s.status === 'cancelled' || (s.date && s.date < _todayW)) return;
+        if ((s.enrolledCount || 0) < (s.maxStudents || 0)) workshopAnyOpen[s.courseId] = true;
+      });
+    } catch (e) { /* 場次查詢失敗不阻斷課程列表 */ }
+  }
+
   return courses.map(c => {
     const realEnrolled = enrolledByCourse[c.id]?.size || 0;
     // reservedSlots：從 BeClass 等外部帶入的「已佔用正取名額」，計入佔用數（剩餘=max−實報名−reserved）
@@ -1545,6 +1562,8 @@ const getCourses = async (gymId) => {
       trialTargetOpen: isTargetOpen(c.trialTarget, realEnrolled),   // effective：可否被當試上場次
       makeupTargetOpen: isTargetOpen(c.makeupTarget, realEnrolled), // effective：可否被當補課場次
       statusLabel: computeStatusLabel(c, enrolledCount),
+      // 工作坊專用：任一未取消未來場次仍有名額（部分場次額滿不算整體額滿）
+      anySessionOpen: c.type === 'workshop' ? !!workshopAnyOpen[c.id] : undefined,
     };
   });
 };

@@ -1476,6 +1476,96 @@ const isTargetOpen = (mode, regularCount) => {
   return (regularCount || 0) >= 2;
 };
 
+// ── 舊生/續報狀態（後端權威）──────────────────────────────────────
+// isAlumni＝同班別任一梯次曾有效報名（confirmed/leave，排除試上/補課）；
+// isFullTermRenewal＝其中有「前一期(結束<開課前60天內)整期(堂數達 totalSessions)」報名。
+// ⚠ 與 courses.js enroll-all 內同段邏輯必須同步（此為抽出供報價端點共用）。
+const computeAlumniStatus = async (db, course, courseId, memberId) => {
+  const today = taiwanToday();
+  const alumni = { isAlumni: false, isFullTermRenewal: false };
+  const need = (course.fullTermRenewalDiscount > 0) || (course.alumniDiscount > 0) || !!course.enrollOpenDate;
+  if (!need || !memberId) return alumni;
+  const myEn = await db.collection(ENROLLMENT_COLLECTION).where('memberId', '==', memberId).get();
+  const byCourse = {};
+  myEn.docs.forEach(d => {
+    const e = d.data();
+    if (e.isTrial || e.isMakeup) return;
+    if (!e.courseId || e.courseId === courseId) return;
+    const b = byCourse[e.courseId] || (byCourse[e.courseId] = { active: 0, total: 0 });
+    b.total += 1;
+    if (['confirmed', 'leave'].includes(e.status)) b.active += 1;
+  });
+  const otherIds = Object.keys(byCourse).filter(cid2 => byCourse[cid2].active > 0);
+  const prevTermCutoff = dayjs(course.startDate || today).subtract(60, 'day').format('YYYY-MM-DD');
+  for (let i = 0; i < otherIds.length; i += 20) {
+    const refs = otherIds.slice(i, i + 20).map(id => db.collection(COURSE_COLLECTION).doc(id));
+    (await db.getAll(...refs)).forEach(doc => {
+      if (!doc.exists) return;
+      const c2 = doc.data();
+      if (!c2.categoryId || c2.categoryId !== course.categoryId) return;
+      alumni.isAlumni = true;
+      const fullTerm = !c2.totalSessions || byCourse[doc.id].total >= c2.totalSessions;
+      const recent = !c2.endDate || c2.endDate >= prevTermCutoff;
+      if (fullTerm && recent) alumni.isFullTermRenewal = true;
+    });
+  }
+  return alumni;
+};
+
+// ── 課程報名「這位會員的最終應繳」（後端權威報價，供前端顯示＝實收）──────
+// 插班比例(剩餘/總堂，<半加成) × 續報/舊生折(NT$，不疊加) × 隊員9折(滿100)。
+// ⚠ 與 courses.js enroll-all 的費用計算必須同步；weekly 週課專用（工作坊/單場費用另計）。
+const computeCourseFeeForMember = async (db, { courseId, memberId, byStaff = false, course = null, scheduledSessions = null }) => {
+  if (!course) {
+    const cDoc = await db.collection(COURSE_COLLECTION).doc(courseId).get();
+    if (!cDoc.exists) throw { code: 'COURSE_NOT_FOUND' };
+    course = cDoc.data();
+  }
+  const today = taiwanToday();
+  // 場次（scheduled，與 enroll-all 同一口徑）→ 插班比例
+  let sess = scheduledSessions;
+  if (!sess) {
+    const ss = await db.collection(SESSION_COLLECTION).where('courseId', '==', courseId).where('status', '==', 'scheduled').get();
+    sess = ss.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
+  const completedCount = sess.filter(s => s.date < today).length;
+  const totalCount = sess.length;
+  const isLateJoin = completedCount > 0;
+  const remainingCount = totalCount - completedCount;
+  const ratio = totalCount > 0 ? remainingCount / totalCount : 1;
+  const isBelowHalf = ratio < 0.5;
+  const surcharge = course.midpointSurcharge || 1.05;
+  const baseFee = isLateJoin
+    ? Math.round((course.price || 0) * ratio * (isBelowHalf ? surcharge : 1))
+    : (course.price || 0);
+
+  const alumni = await computeAlumniStatus(db, course, courseId, memberId);
+
+  let renewalDiscount = 0, renewalDiscountType = null;
+  const renewalOpen = !course.renewalDeadline || today <= course.renewalDeadline;
+  if (renewalOpen && alumni.isFullTermRenewal && (course.fullTermRenewalDiscount > 0)) {
+    renewalDiscount = Number(course.fullTermRenewalDiscount); renewalDiscountType = 'full_term_renewal';
+  } else if (renewalOpen && alumni.isAlumni && (course.alumniDiscount > 0)) {
+    renewalDiscount = Number(course.alumniDiscount); renewalDiscountType = 'alumni';
+  }
+  const feeAfterRenewal = Math.max(0, baseFee - renewalDiscount);
+
+  const { isActiveTeamMember, applyTeamDiscount } = require('./teamMemberService');
+  let isTeam = false;
+  try { const m = await require('./memberService').getMember(memberId); isTeam = isActiveTeamMember(m); } catch (e) {}
+  const teamRes = applyTeamDiscount(feeAfterRenewal, isTeam);
+  const fee = teamRes.discounted;
+  const teamDiscount = feeAfterRenewal - fee;
+
+  return {
+    fee, baseFee, price: course.price || 0,
+    renewalDiscount, renewalDiscountType,
+    isTeam, teamApplied: teamDiscount > 0, teamDiscount,
+    isLateJoin, completedCount, totalCount, remainingCount, ratio, isBelowHalf,
+    alumni, courseType: course.type,
+  };
+};
+
 const computeStatusLabel = (course, enrolledCount) => {
   if (course.status === 'cancelled') return 'cancelled';
   const today = taiwanToday(); // 台灣日期
@@ -1958,6 +2048,8 @@ module.exports = {
   markTodayCourseAttendanceOnEntry,
   getSessionRoster,
   getCourses,
+  computeCourseFeeForMember,
+  computeAlumniStatus,
   getSessions,
   getTrialSessions,
   enrollTrial,

@@ -83,6 +83,26 @@ router.post('/',
 // ══════════════════════════════════════════════════════
 
 // GET /courses/sessions - 場次列表（可依日期區間）
+// GET /courses/:courseId/quote — 這位會員這門課的「最終應繳」（後端權威，與 enroll-all 同規則）
+// 供報名 modal 顯示＝實收，避免插班/隊員/續報折扣的顯示與實收落差造成溢繳。
+router.get('/:courseId/quote', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const memberId = req.query.memberId || req.member?.id;
+    if (!memberId) return res.status(400).json({ error: 'MISSING_MEMBER' });
+    // 會員只能查自己或子會員的報價
+    if (req.member) {
+      const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
+      if (deny) return res.status(deny.status).json(deny.body);
+    }
+    const quote = await courseService.computeCourseFeeForMember(db, { courseId: req.params.courseId, memberId, byStaff: !!req.staff });
+    res.json(quote);
+  } catch (err) {
+    if (err.code === 'COURSE_NOT_FOUND') return res.status(404).json({ error: 'COURSE_NOT_FOUND' });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 router.get('/sessions', authenticateAny, async (req, res) => {
   try {
     // 快速路徑：帶 courseId → 只查該課程場次（單一等值查詢、極小 payload），供報名時算插班費用即時取得

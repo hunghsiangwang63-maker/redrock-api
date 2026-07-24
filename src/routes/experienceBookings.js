@@ -191,7 +191,7 @@ router.post('/', authenticateAny, async (req, res) => {
         emailService.sendExperienceBookingReceived(
           _bookingEmail, contactName || req.member?.name || '',
           { bookingDate, bookingTime, gymId, numParticipants: participants.length, totalFee: computedFee },
-          { bank: _bank, cc: _gymCc2 }
+          { bank: _bank, cc: _gymCc2, insuranceFee: _settings.insuranceFee ?? 175 }
         ).catch(e => console.error('[Email] 體驗報名通知', e.message));
       } catch (e) { console.error('[Email] 體驗報名通知', e.message); }
     }

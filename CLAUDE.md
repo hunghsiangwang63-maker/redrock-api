@@ -1889,6 +1889,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（3/3，注入 fixture＋打正式 `/checkin/phone`，測後清理）**：A 到期+30天(窗口內)＋90天前1次prior→本次入場後回看 2 次→**延長至+1年**（extensionCount 1）；B 到期+180天(窗口外)→**不延長**；C 到期+30天(窗口內)但只本次 1 次→**不延長**。
 - ⚠️ **與舊行為差異**：舊版任何會員每 2 次入場就 +1 年、且從 testedAt 累積；新版只在「快到期」窗口內、且近一年活躍(≥2次)才續，一次一年。**既有已被舊邏輯延長的墜測（currentExpiresAt/extensionCount）維持現值不回捲**，只是之後改用新規則判斷。
 
+## 目前進度（2026-07-24 續3）— 課程/工作坊/比賽 報名寄信（報名收到＋確認收款兩封，cc 該館）
+> 承體驗寄信：查證原本比賽/課程/工作坊報名**都不寄確認信**（只有取消/退回/家長簽署連結才寄）→ 補齊兩封。後端 `/health` `3.132.0-registration-emails`；本地 render 驗證（攔截 fetch）內容/cc/注意事項/免匯款帳號全對。
+- ✅ **新增 `services/registrationNotify.js`**（共用）：`notifyRegReceived`（報名收到）＋`notifyRegConfirmed`（確認收款）；cc 解析＝該館 `gyms.<gymId>.email`＋（運動按摩另加 `seven2170923@gmail.com`）；匯款帳號讀 `systemSettings/bankAccounts[gymId]`（`{bankName, accountNumber, accountName, notes(分行)}`）；會員 email 由 memberId 反查。全 try/catch 不阻斷主流程。
+- ✅ **emailService 兩函式**：`sendRegistrationReceived`（轉帳且有 bank 才顯示匯款帳號、現金顯示「請至櫃檯繳費」、fee>0 才顯示應繳）＋`sendRegistrationConfirmed`（已收款；`extraNoticeHtml` 供運動按摩 7 點注意事項）。
+- ✅ **六個掛鉤點**：
+  - **報名收到**：`courses.js` enroll-all（週課，非候補）＋`/sessions/:id/enroll`（工作坊/單場，非候補）＋`competitions.js` register（比賽，to=報名 email）。
+  - **確認收款**：`transfers.js` confirm 的 course 分支（課程/工作坊，含現金與轉帳）＋competition 分支（比賽轉帳）＋`competitions.js` confirm-payment（比賽現金）。（confirm-payment 有冪等 guard→不會與 transfers 重複寄。）
+- ✅ **運動按摩工作坊特例**（`isMassage`＝課名含「運動按摩」）：① cc 額外加 `seven2170923@gmail.com` ② **報名收到信不附匯款帳號**（該工作坊繳費另循「私訊智萩」）③ **確認收款信附 7 點注意事項**（限預約一次/著輕便衣物/肢體碰觸/調時段私訊智萩/按摩床位置/自備毛巾/清潔）。
+- **render 驗證（4 情境）**：課程轉帳→含匯款帳號+應繳；運動按摩→cc含seven+無匯款帳號+確認信含注意事項；比賽現金→無匯款帳號+「請至櫃檯繳費」。⚠ 未跑真實 API E2E（需建課程/會員/收款鏈）；掛鉤與 render 皆驗，行為比照已上線的體驗寄信（3.128）。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

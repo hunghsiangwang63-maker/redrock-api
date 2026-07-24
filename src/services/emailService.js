@@ -270,6 +270,62 @@ const sendExperienceBookingReceived = async (memberEmail, memberName, booking, {
   });
 };
 
+// ── 報名（課程／工作坊／比賽）通知信 ──────────────────────────────
+const REG_GYM_LABEL = { 'gym-hsinchu': '新竹館', 'gym-shilin': '士林館' };
+
+// 報名收到 → 請完成繳費（transfer 且有 bank 才顯示匯款帳號；cash 顯示櫃檯繳費；bank=null 不顯示帳號）
+const sendRegistrationReceived = async (to, { cc, typeLabel, memberName, itemName, gymId, fee, paymentMethod, bank } = {}) => {
+  const gymName = REG_GYM_LABEL[gymId] || '';
+  const money = (n) => `NT$${Number(n || 0).toLocaleString()}`;
+  const isTransfer = paymentMethod === 'transfer';
+  const hasFee = Number(fee) > 0;
+  const payBlock = hasFee ? `
+        <div style="background:#FFF6E9;border:1px solid #E0C08A;border-radius:8px;padding:16px;margin:12px 0">
+          <div style="font-size:16px;color:#8B1A1A"><strong>應繳金額：${money(fee)}</strong></div>
+          <div style="font-size:13px;color:#666;margin-top:4px">${isTransfer ? '請於 3 日內完成轉帳匯款' : '請至櫃檯完成繳費'}</div>
+        </div>` : '';
+  const bankBlock = (isTransfer && bank) ? `
+        <div style="background:#FBF5F5;border:1px solid #E8D5D5;border-radius:8px;padding:16px;margin:12px 0">
+          <div style="font-weight:600;color:#8B1A1A;margin-bottom:6px">匯款帳號（${gymName}）</div>
+          <div><strong>銀行：</strong>${esc(bank.bankName || '')} ${esc(bank.branch || '')}</div>
+          <div><strong>帳號：</strong>${esc(bank.account || '')}</div>
+          <div><strong>戶名：</strong>${esc(bank.accountName || '')}</div>
+        </div>` : '';
+  return sendEmail({
+    to, cc: (cc && cc.length) ? cc : undefined,
+    subject: `【紅石攀岩】${typeLabel}報名成功${hasFee ? '，請完成繳費' : ''}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">${esc(typeLabel)}報名成功</h2>
+        <p>親愛的 ${esc(memberName)}，</p>
+        <p>已收到您的${esc(typeLabel)}報名：<strong>「${esc(itemName)}」</strong>${gymName ? `（${gymName}）` : ''}。${(isTransfer && hasFee) ? '館方確認收款後將再寄出確認信。' : ''}</p>
+        ${payBlock}${bankBlock}
+        ${(isTransfer && bank) ? '<p style="font-size:13px;color:#666">匯款後請保留末五碼，或於「我的課程／我的比賽」上傳，以利館方核對。</p>' : ''}
+        <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+  });
+};
+
+// 報名確認 → 已收款；extraNoticeHtml 供運動按摩等額外注意事項
+const sendRegistrationConfirmed = async (to, { cc, typeLabel, memberName, itemName, gymId, extraNoticeHtml } = {}) => {
+  const gymName = REG_GYM_LABEL[gymId] || '';
+  return sendEmail({
+    to, cc: (cc && cc.length) ? cc : undefined,
+    subject: `【紅石攀岩】${typeLabel}報名確認`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">${esc(typeLabel)}報名確認</h2>
+        <p>親愛的 ${esc(memberName)}，</p>
+        <p>您的${esc(typeLabel)} <strong>「${esc(itemName)}」</strong>${gymName ? `（${gymName}）` : ''} 已<strong>確認收款</strong>！</p>
+        ${extraNoticeHtml || ''}
+        <p>期待與您見面！如有疑問請聯繫館方。</p>
+        <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+  });
+};
+
 // ── 家長 Waiver 簽署連結 ─────────────────────────────────────────
 const sendParentWaiverLink = async (memberId, memberName, parentEmail, parentName, token) => {
   const url = `${CLIENT_URL}/waiver/parent/${token}`;
@@ -370,6 +426,8 @@ module.exports = {
   sendInstallmentOverdueNotice,
   sendExperienceBookingConfirmation,
   sendExperienceBookingReceived,
+  sendRegistrationReceived,
+  sendRegistrationConfirmed,
   sendInstallmentReminders,
   sendParentWaiverLink,
   sendParentCompetitionWaiverLink,

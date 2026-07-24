@@ -212,6 +212,19 @@ router.post('/:id/register',
         if (!registrantData.birthday && regBirthday) patch.birthday = regBirthday;
         if (Object.keys(patch).length) await getDb().collection('members').doc(memberId).update(patch);
       } catch (e) {}
+      // 報名收到通知信（比賽；非同步、失敗不阻斷）
+      try {
+        const _rn = require('../services/registrationNotify');
+        const compDoc = await getDb().collection('competitions').doc(req.params.id).get();
+        const comp = compDoc.exists ? compDoc.data() : {};
+        _rn.notifyRegReceived({
+          to: registration.email, memberId, memberName: registration.name || '',
+          typeLabel: '比賽', itemName: comp.name || '比賽', gymId: comp.gymId,
+          fee: registration.registrationFee || 0,
+          paymentMethod: registration.paymentMethod || req.body.paymentMethod, massage: false,
+        });
+      } catch (e) { console.error('[Email] 比賽報名通知', e.message); }
+
       res.status(201).json({
         registration,
         message: registration.isComplete
@@ -460,6 +473,15 @@ router.post('/registrations/:regId/confirm-payment',
       // 記營收（預收，認列在比賽前一天）
       try { await competitionService.recordCompetitionRevenue({ db, regId: req.params.regId, sign: 1, staffId: req.staff.id, staffName: req.staff.name }); }
       catch (e) { console.error('比賽記帳失敗', e.message); }
+      // 比賽確認收款通知信（非同步、失敗不阻斷）
+      try {
+        const compDoc2 = await db.collection(COLLECTIONS.COMPETITIONS || 'competitions').doc(reg.competitionId).get();
+        const comp2 = compDoc2.exists ? compDoc2.data() : {};
+        require('../services/registrationNotify').notifyRegConfirmed({
+          to: reg.email, memberId: reg.memberId, memberName: reg.name || reg.memberName || '',
+          typeLabel: '比賽', itemName: comp2.name || reg.competitionName || '比賽', gymId: comp2.gymId, massage: false,
+        });
+      } catch (e) { console.error('[Email] 比賽確認通知', e.message); }
       res.json({ success: true, message: '已確認收款' });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }

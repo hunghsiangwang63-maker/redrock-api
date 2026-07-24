@@ -299,6 +299,27 @@ router.post('/sessions/:sessionId/enroll',
         }
       } catch (planErr) { console.error('[分期串接] 插班分期計畫建立失敗', planErr.message); }
 
+      // 報名收到通知信（工作坊/課程單場；非候補；運動按摩不附匯款帳號；非同步、失敗不阻斷）
+      if (!result.isWaitlist) {
+        try {
+          const db3 = getDb();
+          const sDoc = await db3.collection('courseSessions').doc(req.params.sessionId).get();
+          const c = sDoc.exists ? (await db3.collection(COLLECTIONS.COURSES || 'courses').doc(sDoc.data().courseId).get()).data() : null;
+          if (c) {
+            const _rn = require('../services/registrationNotify');
+            const mDoc = await db3.collection(COLLECTIONS.MEMBERS).doc(req.body.memberId).get();
+            _rn.notifyRegReceived({
+              memberId: req.body.memberId,
+              memberName: mDoc.exists ? (mDoc.data().name || '') : '',
+              typeLabel: c.type === 'workshop' ? '工作坊' : '課程',
+              itemName: c.name, gymId: c.gymId || req.staff?.gymId || req.body.gymId,
+              fee: result.feeInfo?.fee || 0, paymentMethod: req.body.paymentMethod || 'transfer',
+              massage: _rn.isMassage(c.name),
+            });
+          }
+        } catch (e) { console.error('[Email] 工作坊報名通知', e.message); }
+      }
+
       res.status(result.isWaitlist ? 200 : 201).json({ ...result, deferralRequest, installmentPlan });
     } catch (err) {
       if (err.code) return res.status(400).json(err);
@@ -1450,6 +1471,18 @@ router.post('/:courseId/enroll-all',
             submittedAt: now, createdAt: now, updatedAt: now,
           });
         } catch (e) { console.error('現金待收款建立失敗', e.message); }
+      }
+
+      // 報名收到通知信（非候補；非同步、失敗不阻斷；運動按摩不附匯款帳號）
+      if (!isWaitlist) {
+        const _rn = require('../services/registrationNotify');
+        _rn.notifyRegReceived({
+          memberId, memberName: req.member?.name || req.body.memberName || '',
+          typeLabel: course.type === 'workshop' ? '工作坊' : '課程',
+          itemName: course.name, gymId: futureSessions[0].gymId || gymId,
+          fee: req.body.deferPayment ? 0 : fee, paymentMethod,
+          massage: _rn.isMassage(course.name),
+        });
       }
 
       res.status(201).json({

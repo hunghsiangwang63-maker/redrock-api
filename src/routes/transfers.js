@@ -197,6 +197,20 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
             await require('../services/passOverlapService').applyCourseOverlapPassExtension({ memberId: en.memberId, courseId: en.courseId });
           }
         } catch (e) { console.error('課程重疊補償失敗（收款已確認）:', e.message); }
+        // 課程/工作坊確認收款通知信（運動按摩附注意事項）
+        try {
+          const enDoc2 = await db.collection('courseEnrollments').doc(t.refId).get();
+          const en2 = enDoc2.exists ? enDoc2.data() : {};
+          const cDoc = en2.courseId ? await db.collection('courses').doc(en2.courseId).get() : null;
+          const c2 = cDoc && cDoc.exists ? cDoc.data() : {};
+          const _rn = require('../services/registrationNotify');
+          const itemName = c2.name || t.courseName || en2.courseName || '課程';
+          _rn.notifyRegConfirmed({
+            memberId: t.memberId, memberName: t.memberName || en2.memberName || '',
+            typeLabel: c2.type === 'workshop' ? '工作坊' : '課程',
+            itemName, gymId: t.gymId || c2.gymId, massage: _rn.isMassage(itemName),
+          });
+        } catch (e) { console.error('[Email] 課程確認通知', e.message); }
       } else if (t.orderType === 'competition' && t.refId) {
         await db.collection('competitionRegistrations').doc(t.refId).update({
           paymentStatus: 'confirmed', ...clearReject, paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,
@@ -204,6 +218,17 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
         // 記比賽營收（預收，認列在比賽前一天）；helper 冪等
         try { await require('../services/competitionService').recordCompetitionRevenue({ db, regId: t.refId, sign: 1, staffId: by, staffName: byName }); }
         catch (e) { console.error('比賽轉帳記帳失敗', e.message); }
+        // 比賽確認收款通知信
+        try {
+          const regDoc = await db.collection('competitionRegistrations').doc(t.refId).get();
+          const reg = regDoc.exists ? regDoc.data() : {};
+          const compDoc = reg.competitionId ? await db.collection('competitions').doc(reg.competitionId).get() : null;
+          const comp = compDoc && compDoc.exists ? compDoc.data() : {};
+          require('../services/registrationNotify').notifyRegConfirmed({
+            to: reg.email, memberId: t.memberId, memberName: reg.name || t.memberName || '',
+            typeLabel: '比賽', itemName: comp.name || t.orderName || '比賽', gymId: comp.gymId || t.gymId, massage: false,
+          });
+        } catch (e) { console.error('[Email] 比賽確認通知', e.message); }
       } else if (t.orderType === 'rental' && t.refId) {
         await db.collection('equipmentRentals').doc(t.refId).update({
           paymentStatus: 'confirmed', status: 'active', ...clearReject, confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,

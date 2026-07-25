@@ -1933,7 +1933,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 
 ## 目前進度（2026-07-25 續2）— 墜測同意書前加「安全影片不可快轉」警語（純前端）
 > 回報：會員填墜測同意書時常快轉→進度停住無法簽署。在 onboarding 兩大方框點「安全墜落測驗同意書」時先跳警語，再進簽署頁。純前端 `MemberOnboardingGate.jsx`，member 已 deploy。
-- ✅ 墜測方框 onClick 由直接 `navigate('/member/fall-test?onboarding=1')` 改 `setShowFallTestWarn(true)` → 警語彈窗：「安全影片**絕對不能快轉**；請從頭以正常速度看完 **90%** 以上才能簽署；快轉/跳看會導致進度停住無法簽署；**如遇問題，請重新開啟或重整瀏覽器**」→〔我知道了，開始觀看〕才 navigate 進簽署頁、〔取消〕或點背景關閉。
+- ✅ 墜測方框 onClick 由直接 `navigate('/member/fall-test?onboarding=1')` 改 `setShowFallTestWarn(true)` → 警語彈窗（三段）：①請從頭以**正常速度**觀看安全影片、看完 **90% 以上**才開放簽署 ②請勿**快轉、跳看或全螢幕播放**，否則進度停住無法簽署 ③**如遇問題，請重新開啟或重整瀏覽器再試** →〔我知道了，開始觀看〕才 navigate 進簽署頁、〔取消〕或點背景關閉。
 - 📌 進度卡住的**根因**先前已在墜測頁修（in-app 瀏覽器無法回報 YT 進度→提示改用 Safari/Chrome＋`playsinline:1`；見 2026-07-15 段）；此警語為事前再提醒、降低快轉踩雷。
 
 ## 待辦

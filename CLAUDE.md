@@ -1924,6 +1924,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **掛鉤點傳 sessions**：enroll-all（週課）傳 `futureSessions`；工作坊 `/sessions/:id/enroll` 傳該單場；`transfers.js` confirm 課程分支查該會員此課程非取消（confirmed/leave、排除補課/試上）報名→組場次清單。比賽信不帶場次（未要求）。
 - **render 驗證**：報名收到信含「課程場次（共 N 堂）」＋逐堂「07/25（六） 19:00–20:30」；課名（梯次）在信中。
 
+## 目前進度（2026-07-25 續）— 課程報名備註：週課補存＋名單/CSV 顯示
+> 回報「課程報名備註哪裡看？」查證：**工作坊**（enrollCourse）本就存 `enrollNote/healthNote/referralSource` 且場次名單顯示 🩹想處理部位/💊健康備註；**但週課 enroll-all 完全沒存這些備註**（前端有送、後端丟棄→資料遺失）；且「如何得知(referralSource)」員工端從不顯示。後端 `/health` `3.137.0-course-enroll-notes`。
+- ✅ **週課 enroll-all 補存備註**：報名建立時把 `healthNote/referralSource/enrollNote/enrollGender/enrollAge` 存進**每個場次報名**（任一場次名單都看得到）。⚠ **只對之後報名生效——改版前的週課報名備註已遺失、無法回溯**。
+- ✅ **名單顯示**：①場次名單（`getSessionRoster`，課程→場次→查看名單）每位學員下方加 📣「如何得知」（原本只有 🩹備註/💊健康備註）②課程層名單（`/courses/:id/enrollments`→回傳補 enrollNote/healthNote/referralSource/gender/age；`rosterModal` 表格加「備註」欄）。enrollNote 標籤由「想處理部位」改通用「備註」（週課/工作坊共用）。
+- ✅ **出缺席 CSV**（`/courses/:id/attendance/download`）：學員姓名/電話後加 **備註/健康備註/如何得知** 三欄（每位取一筆非空）。
+- 📌 欄位語意：`enrollNote`＝自訂備註（運動按摩＝想處理部位，由 `enrollNoteLabel` 決定）；`healthNote`＝健康備註；`referralSource`＝如何得知（可複選、以「、」串接）。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

@@ -1940,6 +1940,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 > 回報公告編輯手機點入後不能上下捲。根因：`GymsPage` 新增/編輯公告 Modal 的**內層白框漏設 `maxHeight`/`overflowY`**（同頁其他 4 個 Modal 都有 `maxHeight:'85vh', overflowY:'auto'`），表單比手機螢幕高時撐出畫面、捲不動、按不到下方欄位/儲存鈕。修：內層框補 `maxHeight:'85vh'+overflowY:'auto'+WebkitOverflowScrolling:'touch'`。commit（redrock-web）。
 - 💡 慣例提醒：fixed 置中 Modal 的內容框必須帶 `maxHeight:'??vh'+overflowY:'auto'`，否則長表單在手機（矮視窗）會溢出且無法捲動。
 
+## 目前進度（2026-07-25 續4）— onboarding gate 全面雙語（英文版）
+> 承墜測警語英文：使用者要整個入場前置 onboarding gate 也翻英文（原本只翻了註冊頁＋入場 QR 流程，gate 純中文）。純前端 `MemberOnboardingGate.jsx`＋`memberI18n.js`，member 已 deploy。
+- ✅ **gate 接 `memberI18n`**（`import { isEn, t }`）：所有 UI 字串中英切換——標頭「Hi {name}, please complete…」、兩大方框（Liability Waiver／Fall Test Consent Form 含 sub/狀態 Signed/Signed(awaiting guardian)/Sign now →）、墜測影片警語（續2 已做）、本人不入場（I won't be climbing…＋確認彈窗）、家長簽署提示、安排墜測（Schedule your fall test／Open today・Closed today／Test here →／skip for now）、已送出申請（Fall test request submitted／Back to home）、各錯誤訊息/載入中/場館名（Hsinchu/Shilin）。
+- **做法**：靜態字串進 `memberI18n` DICT（新增「入場前置 onboarding gate」區塊 ~28 條）用 `t()`；含變數/HTML 的句子用 `isEn()` 三元。**中文模式行為零改動**（查無對照原樣返回）。
+- 📌 現況：會員端英文覆蓋＝底部導航＋首頁快速功能＋入場 QR 流程＋註冊頁＋**onboarding gate**（本次）。其餘頁面（我的票券/課程/比賽/體驗/租借等內頁）仍多為中文，之後有需要再逐頁補 `t()`。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

@@ -1936,6 +1936,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ 墜測方框 onClick 由直接 `navigate('/member/fall-test?onboarding=1')` 改 `setShowFallTestWarn(true)` → 警語彈窗（三段）：①請從頭以**正常速度**觀看安全影片、看完 **90% 以上**才開放簽署 ②請勿**快轉、跳看或全螢幕播放**，否則進度停住無法簽署 ③**如遇問題，請重新開啟或重整瀏覽器再試** →〔我知道了，開始觀看〕才 navigate 進簽署頁、〔取消〕或點背景關閉。
 - 📌 進度卡住的**根因**先前已在墜測頁修（in-app 瀏覽器無法回報 YT 進度→提示改用 Safari/Chrome＋`playsinline:1`；見 2026-07-15 段）；此警語為事前再提醒、降低快轉踩雷。
 
+## 目前進度（2026-07-25 續3）— 修：公告編輯 Modal 手機無法上下捲動（純前端）
+> 回報公告編輯手機點入後不能上下捲。根因：`GymsPage` 新增/編輯公告 Modal 的**內層白框漏設 `maxHeight`/`overflowY`**（同頁其他 4 個 Modal 都有 `maxHeight:'85vh', overflowY:'auto'`），表單比手機螢幕高時撐出畫面、捲不動、按不到下方欄位/儲存鈕。修：內層框補 `maxHeight:'85vh'+overflowY:'auto'+WebkitOverflowScrolling:'touch'`。commit（redrock-web）。
+- 💡 慣例提醒：fixed 置中 Modal 的內容框必須帶 `maxHeight:'??vh'+overflowY:'auto'`，否則長表單在手機（矮視窗）會溢出且無法捲動。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

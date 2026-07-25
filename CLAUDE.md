@@ -1970,7 +1970,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。
 - ✅（已完成 2026-07-11）**刪除測試會員**：21 筆 fixture 已硬刪、票券一併清、0 孤兒；**王大明與全部真實會員保留**（見上方 2026-07-11 進度）。原 7/14 提醒作廢。
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
-- LinePay sandbox 端到端測試 → 啟用線上付款 + 員工端 QR 前端
+- LinePay sandbox 端到端測試 → 啟用線上付款 + 員工端 QR 前端。**adapter 已完整**（v3/HMAC/Confirm、confirmUrl fallback `api.redrocktaiwan.com`、`LINEPAY_ENV` 未設＝sandbox）；**只差使用者到 LINE Pay 沙箱申請 Channel ID/Secret** → 填 `gyms/{gymId}.paymentSettings` + 開 `paymentMethods.enabled.linepay` + 建測試訂單跑 Request→Confirm。
+- 📌 **入場 LinePay 設計決策（2026-07-25 拍板，見 `docs/payment-integration-plan.md` 第10節）**：線上款 pay-first（選館帶該館帳號→付款→產「已付」入場QR→櫃檯掃碼確認不再收費）；**未入場→自動轉單次入場券、效期 30 天**（`source:'linepay-entry-unused'`）；**不做位置限制**（在家先付＝線上預購一次入場，允許）。現金/免費/票券維持掃碼→確認時扣款。
 - 補街口 / 台灣Pay adapter 的 API TODO（依整合手冊 / 收單銀行）
 - 資料移轉（Climbio 18,000+ 筆）——**墜測對照已完成**（2026-07-13：`legacyFallTests` 17,335 筆＋隊員名單 41 筆，新註冊自動認領）；會員基本資料不預先匯入（採「註冊時認領」模式，會員自行註冊＋重簽文件）
 - ✅（已完成 2026-07-04 六）站台隊員 9 折端到端實測 → 見上方進度；**真站台帳號實機亦可直接做**（館別電腦帳號經 `/stations/login` 實測有效，見上方修正），後端邏輯已由 super_admin 打 `/checkin/phone` 等價驗證通過

@@ -197,7 +197,7 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
             await require('../services/passOverlapService').applyCourseOverlapPassExtension({ memberId: en.memberId, courseId: en.courseId });
           }
         } catch (e) { console.error('課程重疊補償失敗（收款已確認）:', e.message); }
-        // 課程/工作坊確認收款通知信（運動按摩附注意事項）
+        // 課程/工作坊確認收款通知信（運動按摩附注意事項；附場次清單）
         try {
           const enDoc2 = await db.collection('courseEnrollments').doc(t.refId).get();
           const en2 = enDoc2.exists ? enDoc2.data() : {};
@@ -205,10 +205,21 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
           const c2 = cDoc && cDoc.exists ? cDoc.data() : {};
           const _rn = require('../services/registrationNotify');
           const itemName = c2.name || t.courseName || en2.courseName || '課程';
+          // 該會員此課程的場次清單（非取消、非補課/試上；依日期排序）
+          let sessions = null;
+          if (en2.courseId && t.memberId) {
+            const enAll = await db.collection('courseEnrollments')
+              .where('courseId', '==', en2.courseId).where('memberId', '==', t.memberId)
+              .where('status', 'in', ['confirmed', 'leave']).get();
+            sessions = enAll.docs.map(d => d.data()).filter(e => !e.isMakeup && !e.isTrial && e.date)
+              .map(e => ({ date: e.date, startTime: e.startTime, endTime: e.endTime }))
+              .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || ''));
+          }
           _rn.notifyRegConfirmed({
             memberId: t.memberId, memberName: t.memberName || en2.memberName || '',
             typeLabel: c2.type === 'workshop' ? '工作坊' : '課程',
             itemName, gymId: t.gymId || c2.gymId, massage: _rn.isMassage(itemName),
+            sessions,
           });
         } catch (e) { console.error('[Email] 課程確認通知', e.message); }
       } else if (t.orderType === 'competition' && t.refId) {

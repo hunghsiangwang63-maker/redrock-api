@@ -42,8 +42,8 @@ const resolveMemberEmail = async (db, memberId) => {
   return d.exists ? (d.data().email || null) : null;
 };
 
-// 報名收到（請完成繳費）
-async function notifyRegReceived({ memberId, to, memberName, typeLabel, itemName, gymId, fee, paymentMethod, massage }) {
+// 報名收到（請完成繳費）；sessions＝[{date,startTime,endTime}]（課程/工作坊帶場次清單）
+async function notifyRegReceived({ memberId, to, memberName, typeLabel, itemName, gymId, fee, paymentMethod, massage, sessions }) {
   try {
     const db = getDb();
     const email = to || await resolveMemberEmail(db, memberId);
@@ -51,19 +51,19 @@ async function notifyRegReceived({ memberId, to, memberName, typeLabel, itemName
     const cc = [await resolveGymEmail(db, gymId), massage ? MASSAGE_CC : null].filter(Boolean);
     // 運動按摩不附匯款帳號
     const bank = (paymentMethod === 'transfer' && !massage) ? await resolveBank(db, gymId) : null;
-    await emailService.sendRegistrationReceived(email, { cc, typeLabel, memberName, itemName, gymId, fee, paymentMethod, bank });
+    await emailService.sendRegistrationReceived(email, { cc, typeLabel, memberName, itemName, gymId, fee, paymentMethod, bank, sessions });
   } catch (e) { console.error('[Email] 報名收到通知', e.message); }
 }
 
-// 確認收款（已收款；運動按摩附注意事項）
-async function notifyRegConfirmed({ memberId, to, memberName, typeLabel, itemName, gymId, massage }) {
+// 確認收款（已收款；運動按摩附注意事項）；sessions 帶場次清單
+async function notifyRegConfirmed({ memberId, to, memberName, typeLabel, itemName, gymId, massage, sessions }) {
   try {
     const db = getDb();
     const email = to || await resolveMemberEmail(db, memberId);
     if (!email) return;
     const cc = [await resolveGymEmail(db, gymId), massage ? MASSAGE_CC : null].filter(Boolean);
     await emailService.sendRegistrationConfirmed(email, {
-      cc, typeLabel, memberName, itemName, gymId,
+      cc, typeLabel, memberName, itemName, gymId, sessions,
       extraNoticeHtml: massage ? MASSAGE_NOTICE_HTML : null,
     });
   } catch (e) { console.error('[Email] 報名確認通知', e.message); }

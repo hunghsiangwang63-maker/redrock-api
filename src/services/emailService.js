@@ -272,9 +272,28 @@ const sendExperienceBookingReceived = async (memberEmail, memberName, booking, {
 
 // ── 報名（課程／工作坊／比賽）通知信 ──────────────────────────────
 const REG_GYM_LABEL = { 'gym-hsinchu': '新竹館', 'gym-shilin': '士林館' };
+const REG_WD = ['日', '一', '二', '三', '四', '五', '六'];
+// 單一場次顯示：07/26（日）14:30–16:00（用 Date.UTC 算星期，避免時區位移）
+const fmtRegSession = (s) => {
+  const [y, m, d] = String(s.date || '').split('-').map(Number);
+  const wd = (y && m && d) ? REG_WD[new Date(Date.UTC(y, m - 1, d)).getUTCDay()] : '';
+  const md = (m && d) ? `${String(m).padStart(2, '0')}/${String(d).padStart(2, '0')}` : (s.date || '');
+  const time = s.startTime ? `${s.startTime}${s.endTime ? `–${s.endTime}` : ''}` : '';
+  return `${md}${wd ? `（${wd}）` : ''}${time ? ` ${time}` : ''}`.trim();
+};
+// 場次清單區塊（sessions＝[{date,startTime,endTime}]，已排序）
+const regSessionsBlock = (sessions) => {
+  if (!Array.isArray(sessions) || !sessions.length) return '';
+  const rows = sessions.map(s => `<div>${esc(fmtRegSession(s))}</div>`).join('');
+  return `
+        <div style="background:#F7F3F3;border-radius:8px;padding:16px;margin:12px 0;font-size:13px;line-height:1.9;text-align:left">
+          <div style="font-weight:600;color:#8B1A1A;margin-bottom:6px">課程場次（共 ${sessions.length} 堂）</div>
+          ${rows}
+        </div>`;
+};
 
 // 報名收到 → 請完成繳費（transfer 且有 bank 才顯示匯款帳號；cash 顯示櫃檯繳費；bank=null 不顯示帳號）
-const sendRegistrationReceived = async (to, { cc, typeLabel, memberName, itemName, gymId, fee, paymentMethod, bank } = {}) => {
+const sendRegistrationReceived = async (to, { cc, typeLabel, memberName, itemName, gymId, fee, paymentMethod, bank, sessions } = {}) => {
   const gymName = REG_GYM_LABEL[gymId] || '';
   const money = (n) => `NT$${Number(n || 0).toLocaleString()}`;
   const isTransfer = paymentMethod === 'transfer';
@@ -299,7 +318,7 @@ const sendRegistrationReceived = async (to, { cc, typeLabel, memberName, itemNam
         <h2 style="color:#8B1A1A">${esc(typeLabel)}報名成功</h2>
         <p>親愛的 ${esc(memberName)}，</p>
         <p>已收到您的${esc(typeLabel)}報名：<strong>「${esc(itemName)}」</strong>${gymName ? `（${gymName}）` : ''}。${(isTransfer && hasFee) ? '館方確認收款後將再寄出確認信。' : ''}</p>
-        ${payBlock}${bankBlock}
+        ${regSessionsBlock(sessions)}${payBlock}${bankBlock}
         ${(isTransfer && bank) ? '<p style="font-size:13px;color:#666">匯款後請保留末五碼，或於「我的課程／我的比賽」上傳，以利館方核對。</p>' : ''}
         <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
       </div>
@@ -308,7 +327,7 @@ const sendRegistrationReceived = async (to, { cc, typeLabel, memberName, itemNam
 };
 
 // 報名確認 → 已收款；extraNoticeHtml 供運動按摩等額外注意事項
-const sendRegistrationConfirmed = async (to, { cc, typeLabel, memberName, itemName, gymId, extraNoticeHtml } = {}) => {
+const sendRegistrationConfirmed = async (to, { cc, typeLabel, memberName, itemName, gymId, extraNoticeHtml, sessions } = {}) => {
   const gymName = REG_GYM_LABEL[gymId] || '';
   return sendEmail({
     to, cc: (cc && cc.length) ? cc : undefined,
@@ -318,7 +337,7 @@ const sendRegistrationConfirmed = async (to, { cc, typeLabel, memberName, itemNa
         <h2 style="color:#8B1A1A">${esc(typeLabel)}報名確認</h2>
         <p>親愛的 ${esc(memberName)}，</p>
         <p>您的${esc(typeLabel)} <strong>「${esc(itemName)}」</strong>${gymName ? `（${gymName}）` : ''} 已<strong>確認收款</strong>！</p>
-        ${extraNoticeHtml || ''}
+        ${regSessionsBlock(sessions)}${extraNoticeHtml || ''}
         <p>期待與您見面！如有疑問請聯繫館方。</p>
         <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
       </div>

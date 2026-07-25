@@ -333,7 +333,8 @@ router.post('/sessions/:sessionId/enroll',
         try {
           const db3 = getDb();
           const sDoc = await db3.collection('courseSessions').doc(req.params.sessionId).get();
-          const c = sDoc.exists ? (await db3.collection(COLLECTIONS.COURSES || 'courses').doc(sDoc.data().courseId).get()).data() : null;
+          const sd = sDoc.exists ? sDoc.data() : null;
+          const c = sd ? (await db3.collection(COLLECTIONS.COURSES || 'courses').doc(sd.courseId).get()).data() : null;
           if (c) {
             const _rn = require('../services/registrationNotify');
             const mDoc = await db3.collection(COLLECTIONS.MEMBERS).doc(req.body.memberId).get();
@@ -344,6 +345,7 @@ router.post('/sessions/:sessionId/enroll',
               itemName: c.name, gymId: c.gymId || req.staff?.gymId || req.body.gymId,
               fee: result.feeInfo?.fee || 0, paymentMethod: req.body.paymentMethod || 'transfer',
               massage: _rn.isMassage(c.name),
+              sessions: sd ? [{ date: sd.date, startTime: sd.startTime, endTime: sd.endTime }] : null,
             });
           }
         } catch (e) { console.error('[Email] 工作坊報名通知', e.message); }
@@ -1511,6 +1513,7 @@ router.post('/:courseId/enroll-all',
           itemName: course.name, gymId: futureSessions[0].gymId || gymId,
           fee: req.body.deferPayment ? 0 : fee, paymentMethod,
           massage: _rn.isMassage(course.name),
+          sessions: futureSessions.map(s => ({ date: s.date, startTime: s.startTime, endTime: s.endTime })),
         });
       }
 

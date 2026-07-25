@@ -53,9 +53,10 @@ module.exports = {
         products: [{ name: productName || '紅石攀岩館', quantity: 1, price: amount }],
       }],
       redirectUrls: {
-        // 使用者付款後導回此處（我方 callback）；orderId 由我方帶上以便對應
-        confirmUrl: `${returnUrls?.confirmUrl || (process.env.API_URL || '') + '/payments/linepay/callback'}?orderId=${orderId}`,
-        cancelUrl: returnUrls?.cancelUrl || `${process.env.CLIENT_URL || ''}/payment/cancel`,
+        // 使用者付款後導回此處（我方 callback）；orderId 由我方帶上以便對應。
+        // API_URL 未設時 fallback 正式後端網域（確保是絕對 HTTPS，LINE 才導得回來）。
+        confirmUrl: `${returnUrls?.confirmUrl || (process.env.API_URL || 'https://api.redrocktaiwan.com') + '/payments/linepay/callback'}?orderId=${orderId}`,
+        cancelUrl: returnUrls?.cancelUrl || `${process.env.CLIENT_URL || 'https://app.redrocktaiwan.com'}/payment/cancel`,
       },
     };
     const bodyStr = JSON.stringify(body);

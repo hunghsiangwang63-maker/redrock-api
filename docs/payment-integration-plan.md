@@ -198,3 +198,28 @@ refund({ providerTxnId, amount, gymSettings })                     // 之後做
 4. **發票**：是否同時要串電子發票（多數金流會搭配）？
 
 > 在拿到金鑰前，**Phase 0（mock 全鏈路 + 前端收斂）完全可以先做**，金鑰到位後只需替換 adapter，不動其餘程式。
+
+---
+
+## 10. 入場（checkin）LinePay 設計決策（2026-07-25 拍板）
+
+> 承會員自助入場 QR：線上款（LinePay/街口/台灣Pay）**只能 pay-first**（線上款是會員在 App 主動付、無法在櫃檯掃碼當下自動收），與現金/免費/票券的「掃碼→確認時扣款」不同節奏。
+
+### 流程（LinePay 入場）
+1. 會員選**場館**（rail 依 `gyms/{gymId}.paymentSettings` 帶該館 LinePay 帳號）→ 選入館身份 → 選 LinePay。
+2. 跳 LinePay 付款 → Confirm 請款成功 → **產生「已付款」入場 QR**。
+3. 櫃檯掃碼 → `confirmCheckIn`（**不再收費**，已付；仍跑既有孤兒防護/墜測遞延/出席等）。
+
+### 「付了款但沒入場」處理 → **A：轉單次入場券、效期 30 天**（拍板）
+- 付款成功但當天未掃碼入場 → 該筆**自動轉為 `singleEntryTickets`**（`ticketType` 依入場身份、`validDate`=購買日、`expiresAt`=購買日 +30 天、`amount`=已付、`paymentMethod:'linepay'`、`source:'linepay-entry-unused'`）。
+- **不做位置限制**（GPS/現場）：在家先付＝線上預購一次入場，允許。
+- 錢不會不見、免退款作業。
+- 實作提示：付款 orderHandler（`checkin`/新 `entry` orderType）標記已付入場；未於效期內 `confirmCheckIn` 者由排程 sweep 轉券（比照現有 pending/單次券機制），或付款當下即開券、掃碼入場時核銷該券（二擇一，實作時定）。
+
+### 現金/免費/票券 維持原樣
+掃碼 → 櫃檯確認時扣款/扣券（不走 pay-first）。→ 入場流程**依付款方式分兩種節奏**。
+
+### 待辦（實作順序）
+1. 先跑通 **LinePay sandbox**（見第 0 節待辦，等 Channel ID/Secret）。
+2. 入場 orderType/orderHandler + 「未用轉券」邏輯。
+3. 會員端入場 QR 的 LinePay PaymentFlow（選館→身份→LinePay→付款→已付 QR）。

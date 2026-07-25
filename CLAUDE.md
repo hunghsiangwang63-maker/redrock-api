@@ -1918,6 +1918,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（打正式 API，插班課程「小蜘蛛人初級班7-8月週五B」原價4400/共7已開2）**：`quote.fee=3143` == `enroll-all 實收 fee=3143` ✅ PASS（測試會員/報名/場次計數/交易全清）。
 - 📋 **定期票查證＝安全、不需比照修**：買定期票（buy_pass）選項與付款金額都用 `pt.price`＝`/checkin/verify` 後端回傳的**折後價**（2.62.0 起隊員9折由後端 fold、附 originalPrice），前端**不自算折扣**；續約用 `renewal.renewalPrice`（後端 verify 算好）；**無載入空窗**（定期票選項在 verify 回來後才出現）；隊員折由後端用真實會員算、不受 `member.isTeamMember` 前端快取過期影響。故定期票「顯示價＝實收價」本就成立。
 
+## 目前進度（2026-07-25）— 課程/工作坊報名通知信加場次清單
+> 需求：課程報名通知信放入梯次與場次資料。後端 `/health` `3.136.0-course-email-sessions`；render 驗證。
+- ✅ **`emailService` 兩信件函式加 `sessions` 參數**（`sendRegistrationReceived`＋`sendRegistrationConfirmed`）：渲染「課程場次（共 N 堂）」區塊，逐堂列 `MM/DD（週X） HH:MM–HH:MM`（`fmtRegSession` 用 `Date.UTC` 算星期避免時區位移）。**梯次**由課名（itemName）帶入（課名本就含梯次，如「小蜘蛛人初級班 7-8月週五B班」）。
+- ✅ **掛鉤點傳 sessions**：enroll-all（週課）傳 `futureSessions`；工作坊 `/sessions/:id/enroll` 傳該單場；`transfers.js` confirm 課程分支查該會員此課程非取消（confirmed/leave、排除補課/試上）報名→組場次清單。比賽信不帶場次（未要求）。
+- **render 驗證**：報名收到信含「課程場次（共 N 堂）」＋逐堂「07/25（六） 19:00–20:30」；課名（梯次）在信中。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

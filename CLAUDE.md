@@ -2017,6 +2017,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **E2E（firebase-admin 直呼 service）**：2 參加者（鄒唯心命中會員→已認領、假名查無→待指派），待指派券可被姓名+生日認領查詢命中，測後清理。
   - 📌 **票券集合**＝`singleEntryTickets`（`ticketType:'experience'`）；比對 key **姓名+生日**（會員多不填身分證）；`pendingAssign` 券 `memberId:null` 不能入場、須指派或認領後才可用。
 
+## 目前進度（2026-07-26 續5）— 器材租借加「置物櫃月租」（士林限定）
+> 需求：士林加租借品項置物櫃，1/3/6 月＝120/350/600、會員自助、確認後直接使用中、不記編號、不用押金；會員端顯示到期日。後端 `/health` `3.143.0-locker-monthly-rental`；E2E（打正式 API）通過。
+- ✅ **後端**（`rentals.js`）：`defaultSettings` 加 `locker`（`mode:'monthly'`、`monthlyTiers:{1:120,3:350,6:600}`、`deposit:0`、`gyms:['gym-shilin']`、active）；`computeRentalItems` 支援月租品項（費用查 `monthlyTiers[item.months]`、押金 0）；`/apply`＋`PUT /:id` 對月租品項**到期日＝借出日＋月數（後端權威、`returnDate=dayjs(pickup).add(months,'month')`、`rentalType='monthly'`）**＋**gym 限制**（非 `cfg.gyms` → 400 `GYM_NOT_ALLOWED`）；一般器材需自帶歸還日。
+- ✅ **會員端**（`MemberRentalPage`）：申請表單頂加「🧗 器材租借／🔐 置物櫃（月租）」切換；置物櫃模式＝選 1/3/6 月（顯示各價）＋起租日 → **到期日自動算**（唯讀）、限士林（他館 disabled）、無押金、器材選擇隱藏；「我的租借」卡片對月租顯示 **🔐 置物櫃月租（N 月）· 起租 X · 到期日 Y**。
+- ✅ **員工端**（`RentalsPage` 費率設定）：月租品項改顯示**三階月費（1/3/6 月）**＋「月租・限士林」標示、可調價（`ITEM_ICONS` 加 locker 🔐）。
+- ✅ **E2E**：士林 3 月→月租 350、到期日 8/01→11/01、`mode:monthly`；新竹→擋「僅士林館提供」。
+- ⚠️ **踩雷＋修復（重要）**：`systemSettings/rentalItems` **原本 doc 不存在**——器材費率一直靠後端 `defaultSettings()`（抱石墊/岩盔/吊帶）當 fallback 顯示。首次 seed locker 只寫 `{locker}` → **doc 一存在就不再走 fallback → 抱石墊/岩盔/吊帶全消失**。修：把三項預設器材（原值 400/800/1000 等）補回 doc、與 locker 並存。**教訓**：`GET /rentals/settings`＝「doc 存在用 doc、否則 defaultSettings」→ 第一次寫這 doc **必須把預設器材一起寫進去**，只寫新項目＝清空預設。（同型陷阱：任何「doc 不存在就 fallback 預設」的 settings，第一次寫入都要帶完整預設。）
+- 📌 **置物櫃生命週期**：櫃檯確認收款→直接「使用中」跑到到期日；無實體歸還/無押金（員工端仍有「歸還」動作、退押金顯示 NT$0、無害）。若要到期完全不走歸還/自動結案＝後續可加。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

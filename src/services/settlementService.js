@@ -30,11 +30,11 @@ const sweepStaleSettlementDrafts = async () => {
 // 比賽/課程臨櫃現金收款確認時呼叫：金額寫進該館今日結帳加減項（note＝人名＋活動名）。
 // 無今日結帳 doc → 建暫存檔（draft，開結帳頁自動載入）；已有（draft/settled）→ 附加到 deductions。
 // 已 settled 的情況：附加後於「當日再次結帳」帶入重算（結帳摘要淨額即時可見）。
-const addCashAdjustment = async ({ gymId, amount, note }) => {
+const addCashAdjustment = async ({ gymId, amount, note, sign = '+', type = '現金補入' }) => {
   if (!gymId || !(Number(amount) > 0)) return { skipped: true };
   const db = getDb();
   const today = dayjs().format('YYYY-MM-DD');
-  const item = { sign: '+', type: '現金補入', amount: Number(amount), note: String(note || '').trim(), auto: true };
+  const item = { sign: sign === '-' ? '-' : '+', type: type || '現金補入', amount: Number(amount), note: String(note || '').trim(), auto: true };
   const snap = await db.collection('dailySettlements')
     .where('gymId', '==', gymId).where('date', '==', today).limit(1).get();
   if (snap.empty) {

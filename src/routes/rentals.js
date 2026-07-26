@@ -152,12 +152,25 @@ router.get('/stats', authenticate, async (req, res) => {
 router.post('/:id/confirm', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    await db.collection('equipmentRentals').doc(req.params.id).update({
+    const ref = db.collection('equipmentRentals').doc(req.params.id);
+    const snap = await ref.get();
+    const r = snap.exists ? snap.data() : {};
+    await ref.update({
       paymentStatus: 'confirmed', status: 'active',
       confirmedBy: req.staff.id, confirmedByName: req.staff.name, confirmedAt: new Date(), updatedAt: new Date(),
     });
     try { await recordRentalRevenue(db, req.params.id, { staffId: req.staff.id, staffName: req.staff.name }); }
     catch (e) { console.error('器材租借記帳失敗', e.message); }
+    // 押金收取（現金持有）→ 當日結帳加減項（＋押金收取，可於結帳頁編輯/移除；冪等）
+    if (Number(r.totalDeposit) > 0 && !r.depositCashAdjDone) {
+      try {
+        await require('../services/settlementService').addCashAdjustment({
+          gymId: r.gymId, sign: '+', type: '押金收取', amount: r.totalDeposit,
+          note: `${r.memberName || ''} 器材押金`.trim(),
+        });
+        await ref.update({ depositCashAdjDone: true });
+      } catch (e) { console.error('押金收取寫入結帳加減項失敗', e.message); }
+    }
     res.json({ success: true, message: '已確認收款，器材已取件' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
@@ -166,12 +179,26 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
 router.post('/:id/return', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    await db.collection('equipmentRentals').doc(req.params.id).update({
+    const ref = db.collection('equipmentRentals').doc(req.params.id);
+    const snap = await ref.get();
+    const r = snap.exists ? snap.data() : {};
+    const willReturn = req.body.depositReturned !== false;
+    await ref.update({
       status: 'returned',
-      depositReturned: req.body.depositReturned !== false,
+      depositReturned: willReturn,
       depositDeductNote: req.body.deductNote || null,
       returnedBy: req.staff.id, returnedByName: req.staff.name, returnedAt: new Date(), updatedAt: new Date(),
     });
+    // 當場退押金（現金取出）→ 當日結帳加減項（−押金退還，部分退可於結帳頁改金額；冪等）
+    if (willReturn && Number(r.totalDeposit) > 0 && !r.depositReturnAdjDone) {
+      try {
+        await require('../services/settlementService').addCashAdjustment({
+          gymId: r.gymId, sign: '-', type: '押金退還', amount: r.totalDeposit,
+          note: `${r.memberName || ''} 器材押金退還${req.body.deductNote ? '（' + req.body.deductNote + '）' : ''}`.trim(),
+        });
+        await ref.update({ depositReturnAdjDone: true });
+      } catch (e) { console.error('押金退還寫入結帳加減項失敗', e.message); }
+    }
     res.json({ success: true, message: '歸還已確認' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
@@ -302,6 +329,16 @@ router.post('/:id/return-deposit', authenticate, async (req, res) => {
       depositReturned: true,
       depositReturnedBy: req.staff.name || req.staff.id, depositReturnedAt: new Date(), updatedAt: new Date(),
     });
+    // 補退押金（現金取出）→ 當日結帳加減項（−押金退還，部分退可於結帳頁改金額；冪等）
+    if (Number(r.totalDeposit) > 0 && !r.depositReturnAdjDone) {
+      try {
+        await require('../services/settlementService').addCashAdjustment({
+          gymId: r.gymId, sign: '-', type: '押金退還', amount: r.totalDeposit,
+          note: `${r.memberName || ''} 器材押金退還${r.depositDeductNote ? '（' + r.depositDeductNote + '）' : ''}`.trim(),
+        });
+        await doc.ref.update({ depositReturnAdjDone: true });
+      } catch (e) { console.error('押金退還寫入結帳加減項失敗', e.message); }
+    }
     res.json({ success: true, message: `押金 NT$${r.totalDeposit} 已退回，租借結案` });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

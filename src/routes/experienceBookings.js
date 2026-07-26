@@ -655,6 +655,17 @@ router.put('/:id/finance', authenticate, requireManager, async (req, res) => {
       financeUpdatedBy: req.staff.id, financeUpdatedByName: req.staff.name || '', financeUpdatedAt: new Date(),
       updatedAt: new Date(),
     });
+    // 教練費（現金支出）→ 當日結帳加減項（−教練費，可於結帳頁改金額；首次設 >0 才記、冪等）
+    const b = doc.data();
+    if (coachFee != null && coachFee > 0 && !b.coachFeeAdjDone) {
+      try {
+        await require('../services/settlementService').addCashAdjustment({
+          gymId: b.gymId, sign: '-', type: '教練費', amount: coachFee,
+          note: `${b.contactName || ''} 體驗教練費`.trim(),
+        });
+        await ref.update({ coachFeeAdjDone: true });
+      } catch (e) { console.error('體驗教練費寫入結帳加減項失敗', e.message); }
+    }
     res.json({ success: true, coachFee, invoiceAmount });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

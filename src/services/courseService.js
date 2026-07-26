@@ -101,11 +101,12 @@ const createCourse = async ({ gymId, staffId, data }) => {
     durationMinutes: data.durationMinutes || 90,
     // 入館權益
     gymAccessDaysBefore: data.gymAccessDaysBefore || 0,
-    gymAccessDaysAfter: data.gymAccessDaysAfter || 1,
-    // 無限練習期間（課程學員身份的有效區間，管理員可手動調整，預設依開課日~最後一堂課+入館緩衝天數計算）
+    gymAccessDaysAfter: data.gymAccessDaysAfter || 1, // 舊：結束後緩衝天數（保留供 per-session 快照相容）
+    gymAccessDays: data.gymAccessDays != null ? Number(data.gymAccessDays) : 60, // 入館有效天數＝自開課日起算的總有效天數
+    // 無限練習期間（課程學員身份的有效區間，管理員可手動覆寫）：預設 開課日 ~ 開課日+入館有效天數
     unlimitedPracticeStart: data.unlimitedPracticeStart || data.startDate || null,
     unlimitedPracticeEnd: data.unlimitedPracticeEnd ||
-      (data.endDate ? dayjs(data.endDate).add(data.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : null),
+      (data.startDate ? dayjs(data.startDate).add(data.gymAccessDays != null ? Number(data.gymAccessDays) : 60, 'day').format('YYYY-MM-DD') : null),
     // 報名開放（null＝隨時開放）：公開開放日前僅「舊生」（同班別任一梯次曾有效報名）可報
     enrollOpenDate: data.enrollOpenDate || null,
     alumniOpenDate: data.alumniOpenDate || null,
@@ -197,7 +198,7 @@ const createSession = async ({ courseId, gymId, staffId, data }) => {
   if (ids.length) {
     const gymAccessStart = course.unlimitedPracticeStart || course.startDate || data.date;
     const gymAccessEnd = course.unlimitedPracticeEnd ||
-      (course.endDate ? dayjs(course.endDate).add(course.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : data.date);
+      (course.startDate ? dayjs(course.startDate).add(course.gymAccessDays != null ? Number(course.gymAccessDays) : 60, 'day').format('YYYY-MM-DD') : data.date);
     const memberDocs = await db.getAll(...ids.map(mid => db.collection('members').doc(mid)));
     const batch = db.batch(); let enrolled = 0;
     for (const mDoc of memberDocs) {

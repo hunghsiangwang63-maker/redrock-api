@@ -1972,6 +1972,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **營收零影響**（0 元不記交易；體驗課 6,975 早於確認收款時另記）。要取消某位＝取消該 checkIn＋還原該券。
 - 📌 **做法備忘**：checkIns **無 `date` 欄**、今日判定用 `checkedInAt`（`checkin.js:413` `where checkedInAt>=today`）→ 手動建的 checkIn 用 `admin.firestore.Timestamp.now()` 即進今日。非會員無法建正規入場（checkIns 綁 memberId）；此團因 9 人全是會員才做得成一人一筆。
 
+## 目前進度（2026-07-26 續）— 修：掃碼確認不複查同日重複 → 可重複入場（温詩妤案例）
+> 回報温詩妤可重複 checkin。查明＝**時序漏洞**（非個案）：同日重複閘門 `runEntryGates` **只在「產生 QR / 電話入場 / verify」時檢查，`confirmCheckIn`（掃碼確認）不複查**（`flow.js` 只在 `createPendingCheckIn` 呼叫 runEntryGates）。後端 `/health` `3.140.0-confirm-recheck-duplicate`。
+- 🔍 **她那 2 筆（course_access／0元／士林／7-26）來歷**：05:40:41 產 QR（pending，尚未入場、閘門過）→ 05:41:29 櫃檯改用**電話入場** `/checkin/phone` 記第1筆（`source:phone`）→ 05:41:49 才掃那張**早產好的 QR** → confirmCheckIn 不複查 → 第2筆成立。**先產 QR→走別條路徑先入場→最後才掃 QR ⇒ 重複**。
+- ✅ **修**（`flow.js confirmCheckIn`，館別比對後、扣券前）：補「今日同館未取消 checkIns」查詢（同 runEntryGates 那條、複合索引已存），已有 → throw `ALREADY_CHECKED_IN`「此會員今日已於 HH:MM 完成入場，如需重新入場請先取消先前那筆」→ **不建第二筆、不扣卡券**。confirm 路由 `err.code→400` 回訊息。commit `3.140.0`。
+- ✅ **清理**：保留 QR 那筆（有 pending＋掃碼人軌跡），電話那筆標 `isCancelled:true`＋原因（course_access 0元不扣卡券/無營收→無需還原）→ 她今日未取消入場＝1 筆、統計恢復正確。
+- 📌 **入場閘門時機備忘**：同日重複/waiver/墜測/分期逾期的 `runEntryGates` 在**產 QR/電話/verify** 檢查；**confirm 現額外複查「同日重複」一項**（其餘關卡 confirm 仍不複查——產碼到掃碼僅數分鐘，waiver/墜測狀態不會變）。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

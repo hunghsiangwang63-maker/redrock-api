@@ -347,6 +347,27 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     throw { code: 'GYM_MISMATCH', message: `此 QR 為「${GYM_NAMES[pending.gymId] || pending.gymId}」入場碼，請至該館掃碼入場` };
   }
 
+  // 同日重複複查（掃碼確認當下）：同日重複閘門原只在「產生 QR / 電話入場 / verify」檢查，confirm 不複查。
+  // 補此縫：先產 QR（閘門過）→ 又走電話/其他路徑先入場 → 最後才掃這張早產好的 QR，會造成重複入場。
+  // pending 不算 checkin，故只查「今日同館未取消的 checkIns」；已有 → 擋、不建第二筆、不扣任何卡券。
+  {
+    const todayStr = taiwanToday();
+    const dupSnap = await db.collection(COLLECTIONS.CHECK_INS)
+      .where('memberId', '==', pending.memberId)
+      .where('gymId', '==', pending.gymId)
+      .where('isCancelled', '==', false)
+      .where('checkedInAt', '>=', new Date(todayStr + 'T00:00:00+08:00'))
+      .where('checkedInAt', '<=', new Date(todayStr + 'T23:59:59+08:00'))
+      .get();
+    if (!dupSnap.empty) {
+      const ex = dupSnap.docs[0].data();
+      const hhmm = ex.checkedInAt?.toDate
+        ? new Date(ex.checkedInAt.toDate().getTime() + 8 * 3600000).toISOString().slice(11, 16)
+        : '';
+      throw { code: 'ALREADY_CHECKED_IN', message: `此會員今日已於 ${hhmm} 完成入場，如需重新入場請先取消先前那筆` };
+    }
+  }
+
   const now = new Date();
   const checkInId = uuidv4();
 

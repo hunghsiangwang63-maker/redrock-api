@@ -1990,6 +1990,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - ⚠️ 7/26 當初 +42,136 差異已發過一次管理員警示通知（歷史事件、未動）；記錄 `differenceAlert` 已改 false。
 - 📌 **教訓**：①暫存檔顯示金額要即時由 denominations 算、別倚賴只在完成結帳才存的 `actualCashBalance`；②**前日餘額查詢不分 draft/settled** → 某日只存 draft 沒完成結帳，會讓隔日結帳 prev 抓到 0（假性大差異）——**跨日補結必連動修隔日 prev**；③補結過去日期不能用 POST（只結 today），需 firebase-admin 依 `dailySettlements.js:275-305` 公式重算。
 
+## 目前進度（2026-07-26 續3）— 課程請假補登 + 「本人不入場」批次設定（非攀爬主帳號免墜測，資料操作）
+- ✅ **葉菲芸今日請假補登**（士林小蜘蛛人初級班 7-8月週日A班，子會員 `7a0bcfcf`）：今日 7/26 場次報名標 `leave`＋場次 enrolledCount 4→3＋`reconcileMakeupEntitlement` 發 1 張補課券（額度 1/上限 2、效期 2026-09-29、請假數 1）。**做法**：requestLeave 會擋請假截止（今日課已過截止）→ 走 firebase-admin 補登：mark leave＋場次−1＋呼叫 `courseService.reconcileMakeupEntitlement(myDb, mem, course, null, {...en,id})`（吃傳入 db、rules=null 自算；場次無候補免遞補）。同過去 補登 慣例。
+- ✅ **「本人不入場」批次設定 `selfEntrySkipped=true`**（非攀爬家長/主帳號免墜測；機制＝3.123.0，可逆）：
+  - **丁雲嬋**（已是主帳號、名下姜荷）先單筆設定。
+  - **批次盤點（680 會員）**：主帳號 611、墜測通過 608（多為 Climbio 移轉帶入）；主帳號+無入場 139（有子女家長 36[墜測未過 19]、無子女 103[墜測未過 33]）。
+  - **設定範圍＝主帳號+無入場+墜測未過+尚未設**：先做 16 家長 → 再「全部一起」做 33 無子女 → **全庫 `selfEntrySkipped=true` 主帳號共 52 位**。
+  - ⚠️ **刻意排除「墜測已通過」的無入場者**：他們本就不用安排墜測，且多為「註冊好還沒來爬」的準會員，標本人不入場會在入場 QR 反白自己、阻礙日後想爬者 → 維持原狀最安全。
+  - **重啟位置（查證，批次設定者一樣找得到）**：`MemberProfilePage:212` 重啟橫幅只看 `member.selfEntrySkipped` 旗標（與怎麼設無關）→ 個人頁頭像卡下「🙋 本人目前設定為不入場」＋「重啟入場文件簽署 →」（確認彈窗→`resume-self-entry`→回首頁 gate 重新要簽）。平常登入不被 gate 卡。
+  - 📌 **判定用集合**：有入場＝`checkIns`（`isCancelled!==true` 的 memberId）；墜測通過＝`fallTests`（`result:'passed'` 的 memberId）；有子女＝`parentMemberId`/`coParentIds` 指向。往後新註冊家長 onboarding gate 第一層本有「🙋 本人不入場」鈕自助。**未處理**：無子女+墜測通過+無入場者（準爬新會員，不動）。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

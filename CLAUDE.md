@@ -1979,6 +1979,17 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **清理**：保留 QR 那筆（有 pending＋掃碼人軌跡），電話那筆標 `isCancelled:true`＋原因（course_access 0元不扣卡券/無營收→無需還原）→ 她今日未取消入場＝1 筆、統計恢復正確。
 - 📌 **入場閘門時機備忘**：同日重複/waiver/墜測/分期逾期的 `runEntryGates` 在**產 QR/電話/verify** 檢查；**confirm 現額外複查「同日重複」一項**（其餘關卡 confirm 仍不複查——產碼到掃碼僅數分鐘，waiver/墜測狀態不會變）。
 
+## 目前進度（2026-07-26 續2）— 結帳：暫存檔「實際現金合計顯示0」修 + 歷史標示draft + 補結7/25新竹（連動7/26）
+> 回報「7/25 新竹結帳實際現金合計為何是0」。查明＝**兩件疊加**：①7/25 只按「存暫存檔」(draft)、**沒按完成結帳** ②顯示 bug。純前端 + 一次資料補結。
+- 🔍 **顯示 bug**：`SettlementSummary` 的「現金清點」明細讀 `denominations`（有值），但「實際現金合計」那行讀傳入的 `actualCash` prop＝`h.actualCashBalance||0`——**draft 只存 denominations、沒存 `actualCashBalance`** → 明細列出 42,136、合計卻顯示 NT$0（自打嘴巴）。且歷史清單 `GET /daily-settlements/` **不過濾 status**（draft 也回傳）→ 未結完的暫存檔混在歷史裡。
+- ✅ **修①顯示（純前端 `DailySettlementPage`）**：`SettlementSummary` 加 `denomTotal`＝點鈔明細加總，`actualCashShown = denomList.length ? denomTotal : actualCash`；「實際現金合計」與無明細情形都改用 `actualCashShown` → 一律與明細一致（draft 正確顯示 42,136）。
+- ✅ **修②歷史標示 draft（純前端）**：歷史清單列 `status==='draft'` → 日期旁紅色標籤「暫存·未完成結帳」＋右側「尚未完成結帳」（取代誤導的「差異 NT$0」）→ 忘按完成結帳一眼看到、仍留清單提醒。commit（redrock-web）。
+- ✅ **③補結 7/25 新竹 + 連動修 7/26（資料操作）**：**7/26 其實已結帳，但因 7/25 沒結、前日餘額查詢（`date<today desc`、不分draft/settled）抓到 7/25 draft 的 closing=0 → 7/26 出現假性 +42,136 差異**（正是 7/25 沒轉過去的現金）。故補結 7/25 **必須同時修 7/26**：
+  - **7/25**：prev＝7/24 closing 39,201、actual＝點鈔 42,136、effCash＝手動 2,437、netAdjust＝+990−495＝+495 → expected 42,133、**diff +3**、closing 42,136、status settled。
+  - **7/26**：prev 0→**42,136**、expected 2,810→**44,946**、**diff 42,136→0**（closing 44,946 不變、不再往後串）。兩筆加 `backSettledNote`。
+  - ⚠️ 7/26 當初 +42,136 差異已發過一次管理員警示通知（歷史事件、未動）；記錄 `differenceAlert` 已改 false。
+- 📌 **教訓**：①暫存檔顯示金額要即時由 denominations 算、別倚賴只在完成結帳才存的 `actualCashBalance`；②**前日餘額查詢不分 draft/settled** → 某日只存 draft 沒完成結帳，會讓隔日結帳 prev 抓到 0（假性大差異）——**跨日補結必連動修隔日 prev**；③補結過去日期不能用 POST（只結 today），需 firebase-admin 依 `dailySettlements.js:275-305` 公式重算。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

@@ -233,8 +233,19 @@ const EXP_TICKET_COLL = 'singleEntryTickets';
 
 // 依 numParticipants 同步體驗入場券數量。allowInitialIssue=true 才允許從 0 發放；
 // 否則只在「已發過券」時同步（加人補發 active、減人作廢多餘 active；不動 used）。
+// 依「姓名＋生日」比對會員（不用身分證，會員多半不填）；需兩者皆相等才算命中。
+async function matchMemberByNameBirthday(db, name, birthday) {
+  const nm = String(name || '').trim();
+  const bd = String(birthday || '').trim();
+  if (!nm || !bd) return null;
+  const snap = await db.collection('members').where('name', '==', nm).get();
+  const hit = snap.docs.find(d => String(d.data().birthday || '').trim() === bd);
+  return hit ? { id: hit.id, name: hit.data().name || nm } : null;
+}
+
 async function syncExperienceTickets(db, booking, staff, allowInitialIssue) {
-  const target = booking.numParticipants || (booking.participants || []).length || 0;
+  const participants = Array.isArray(booking.participants) ? booking.participants : [];
+  const target = booking.numParticipants || participants.length || 0;
   const snap = await db.collection(EXP_TICKET_COLL).where('experienceBookingId', '==', booking.id).get();
   const tickets = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   const active = tickets.filter(t => t.status === 'active');
@@ -244,7 +255,46 @@ async function syncExperienceTickets(db, booking, staff, allowInitialIssue) {
   const now = new Date();
   const todayTW = taiwanToday();
   let issued = 0, voided = 0;
-  if (target > currentTotal) {
+
+  // 逐參加者發券（姓名+生日比對認領；比對不到→待指派 pendingAssign，由場館電腦當天指定發送 或 日後註冊自動認領）。
+  // 只對「之後發的」生效：有 participants 且（尚未發過 或 既有券已是新版含 participantName）才走逐人路徑；
+  // 舊預約（既有券無 participantName）維持原本「數量制、全掛聯絡人」不動。
+  const hasNewStyle = tickets.some(t => t.participantName);
+  const perParticipant = participants.length > 0 && (currentTotal === 0 || hasNewStyle);
+
+  if (perParticipant) {
+    const haveNames = new Set(tickets.filter(t => t.status !== 'cancelled')
+      .map(t => String(t.participantName || '').trim()).filter(Boolean));
+    for (const p of participants) {
+      const pname = String(p.name || '').trim();
+      if (!pname || haveNames.has(pname)) continue;
+      const matched = await matchMemberByNameBirthday(db, pname, p.birthday);
+      const id = _uuid();
+      await db.collection(EXP_TICKET_COLL).doc(id).set({
+        id, memberId: matched ? matched.id : null, memberName: matched ? matched.name : pname,
+        participantName: pname, participantBirthday: p.birthday || null,
+        pendingAssign: !matched, claimed: !!matched, claimedAt: matched ? now : null,
+        originalMemberId: matched ? matched.id : null, gymId: booking.gymId || null,
+        ticketType: 'experience', validDate: booking.bookingDate || null, experienceBookingId: booking.id,
+        issuedAt: todayTW, expiresAt: booking.bookingDate || todayTW,
+        amount: 0, paymentMethod: 'free', status: 'active',
+        approvalDeadline: null, approvedAt: now, approvedBy: staff?.id || null,
+        cancelledAt: null, cancelledBy: null, cancelReason: null,
+        transferHistory: [], usedAt: null, usedCheckInId: null,
+        soldByStaffId: staff?.id || null, soldByStaffName: staff?.name || '',
+        notes: `體驗入場券：${booking.courseType || ''} ${booking.bookingDate || ''}（${pname}）`,
+        createdAt: now, updatedAt: now,
+      });
+      haveNames.add(pname); issued++;
+    }
+    // 參加者被移除 → 作廢其未使用券
+    const curNames = new Set(participants.map(p => String(p.name || '').trim()).filter(Boolean));
+    for (const t of active.filter(t => t.participantName && !curNames.has(String(t.participantName).trim()))) {
+      await db.collection(EXP_TICKET_COLL).doc(t.id).update({ status: 'cancelled', cancelledAt: now, cancelReason: '參加者移除', updatedAt: now });
+      voided++;
+    }
+  } else if (target > currentTotal) {
+    // 舊版相容：數量制、全掛聯絡人
     const batch = db.batch();
     for (let i = 0; i < target - currentTotal; i++) {
       const id = _uuid();

@@ -2,7 +2,7 @@ const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const dayjs = require('dayjs');
-const { authenticate, authenticateAny, requireManager } = require('../middleware/auth');
+const { authenticate, authenticateAny, requireManager, requireManagerOrStation } = require('../middleware/auth');
 const { getDb, getStorage } = require('../config/firebase');
 const XLSX = require('xlsx');
 const { sanitizeSheet } = require('../utils/xlsxSafe');
@@ -667,6 +667,54 @@ router.put('/:id/finance', authenticate, requireManager, async (req, res) => {
       } catch (e) { console.error('體驗教練費寫入結帳加減項失敗', e.message); }
     }
     res.json({ success: true, coachFee, invoiceAmount });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /experience-bookings/:id/tickets - 該預約的單日券清單（供指定發送 UI）──
+router.get('/:id/tickets', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('singleEntryTickets').where('experienceBookingId', '==', req.params.id).get();
+    const tickets = snap.docs.map(d => {
+      const t = d.data();
+      return {
+        id: d.id, participantName: t.participantName || null, participantBirthday: t.participantBirthday || null,
+        memberId: t.memberId || null, memberName: t.memberName || '', status: t.status,
+        pendingAssign: !!t.pendingAssign, claimed: !!t.claimed, validDate: t.validDate || null,
+      };
+    }).filter(t => t.status !== 'cancelled');
+    res.json({ tickets });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── POST /experience-bookings/:id/assign-ticket - 場館電腦/管理員 體驗當天指定發送待指派券 ──
+router.post('/:id/assign-ticket', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const { ticketId, memberId } = req.body;
+    if (!ticketId || !memberId) return res.status(400).json({ error: 'MISSING_PARAM', message: '缺少票券或會員' });
+    const bDoc = await db.collection('experienceBookings').doc(req.params.id).get();
+    if (!bDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
+    const booking = bDoc.data();
+    // 限體驗課程「當天」指定發送（super_admin 例外，供彈性處理）
+    const isSuper = (req.staff?.role) === 'super_admin';
+    if (!isSuper && booking.bookingDate !== taiwanToday()) {
+      return res.status(400).json({ error: 'NOT_EVENT_DAY', message: '僅限體驗課程當天指定發送' });
+    }
+    const tRef = db.collection('singleEntryTickets').doc(ticketId);
+    const tDoc = await tRef.get();
+    if (!tDoc.exists || tDoc.data().experienceBookingId !== req.params.id) return res.status(404).json({ error: 'TICKET_NOT_FOUND', message: '查無此票券' });
+    const t = tDoc.data();
+    if (t.status !== 'active') return res.status(400).json({ error: 'TICKET_INVALID', message: '票券已使用或作廢' });
+    if (!t.pendingAssign) return res.status(400).json({ error: 'ALREADY_ASSIGNED', message: '此票券已指派' });
+    const m = await memberService.getMember(memberId).catch(() => null);
+    if (!m) return res.status(404).json({ error: 'MEMBER_NOT_FOUND', message: '查無此會員' });
+    await tRef.update({
+      memberId, memberName: m.name || '', originalMemberId: memberId,
+      pendingAssign: false, claimed: true, claimedAt: new Date(),
+      assignedBy: req.staff.id, assignedByName: req.staff.name || '', assignedAt: new Date(), updatedAt: new Date(),
+    });
+    res.json({ success: true, memberName: m.name || '', message: `已指定發送給 ${m.name || ''}` });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

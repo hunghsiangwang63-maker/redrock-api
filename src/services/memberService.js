@@ -386,6 +386,27 @@ const claimGuestExperienceBookings = async (db, memberId, member) => {
   } catch (e) { console.error('claimGuestExperienceBookings 失敗（不阻斷建立會員）:', e.message); }
 };
 
+// ── 待指派體驗單日券自動認領（姓名+生日比對）─────────────────────────
+// 逐參加者發券時比對不到會員的券（pendingAssign:true、存 participantName/participantBirthday）：
+// 該參加者日後自己註冊，姓名+生日命中 → 券綁到本人（免櫃檯指定發送）。
+const claimPendingExperienceTickets = async (db, memberId, member) => {
+  try {
+    if (!member?.name || !member?.birthday) return;
+    const nm = String(member.name).trim(), bd = String(member.birthday).trim();
+    const snap = await db.collection('singleEntryTickets').where('pendingAssign', '==', true).get();
+    const batch = db.batch(); let n = 0;
+    snap.docs.forEach(d => {
+      const t = d.data();
+      if (t.status !== 'active' || t.ticketType !== 'experience') return;
+      if (String(t.participantName || '').trim() === nm && String(t.participantBirthday || '').trim() === bd) {
+        batch.update(d.ref, { memberId, memberName: member.name, originalMemberId: memberId, pendingAssign: false, claimed: true, claimedAt: new Date(), updatedAt: new Date() });
+        n++;
+      }
+    });
+    if (n) { await batch.commit(); console.log(`認領待指派體驗券 ${n} 張 → ${memberId}`); }
+  } catch (e) { console.error('claimPendingExperienceTickets 失敗（不阻斷建立會員）:', e.message); }
+};
+
 // ── BeClass 比賽報名自動認領 ─────────────────────────────────────
 // 匯入的比賽報名（memberId:null＋claimPhone/claimName）：會員註冊時電話+姓名比對命中
 // → 報名掛上帳號（App 顯示我的比賽、可用報到 QR）＋通知管理員。
@@ -574,6 +595,8 @@ const createMember = async (memberData, staffId, options = {}) => {
   await claimLegacyVip(db, memberId, member);
 
   await claimGuestExperienceBookings(db, memberId, member);
+  // 待指派體驗單日券自動認領（逐參加者發券時比對不到、之後本人註冊 → 姓名+生日命中綁本人）
+  await claimPendingExperienceTickets(db, memberId, member);
 
   // 計算並更新封鎖狀態
   const blockReasons = await getBlockReasons(memberId, member);

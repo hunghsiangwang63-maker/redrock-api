@@ -2001,6 +2001,22 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - 📌 **判定用集合**：有入場＝`checkIns`（`isCancelled!==true` 的 memberId）；墜測通過＝`fallTests`（`result:'passed'` 的 memberId）；有子女＝`parentMemberId`/`coParentIds` 指向。往後新註冊家長 onboarding gate 第一層本有「🙋 本人不入場」鈕自助。**未處理**：無子女+墜測通過+無入場者（準爬新會員，不動）。
 - ✅ **附帶：退回士林 4 筆與「不入場」矛盾的排測申請**：查士林 `fallTestBookings` pending 5 筆——4 筆申請人已被上面設不入場（許智偉/丁雲嬋/翁宇津/陳依文）＝「申請排測(想爬)」與「不入場」打架。決策：**維持不入場、把這 4 筆排測申請標 `returned`**（`returnReason`＝本人不入場暫退回、日後重啟可重新排測）→ 清站台待辦；剩 1 筆張宸睿（子帳號想測）不動。日後想爬路徑：個人頁「重啟入場文件簽署」→ gate 簽兩份 →「安排墜落測驗（選場館）」重新排（`returned` 不擋新申請）。📌 **教訓**：批次設「不入場」前應排除「有 pending 排測申請」者（那是更強的『想爬』訊號），否則會誤標到想測的人。
 
+## 目前進度（2026-07-26 續4）— 結帳加減項自動記帳擴充（四項）+ 體驗單日券逐參加者發券
+> 兩個功能。後端 `/health` `3.141.0-settlement-auto-adjustments` → `3.142.0-experience-ticket-per-participant`。
+- ✅ **結帳加減項自動記帳擴充（`3.141.0`）**：承 2.77.0（課程/比賽臨櫃現金 confirm→「＋現金補入」加減項），泛化 `settlementService.addCashAdjustment({gymId,amount,note,sign='+',type='現金補入'})`（加 sign/type 參數、相容舊呼叫），新增四記帳點——
+  - **入隊(team_member) 臨櫃現金**：`transfers.js` confirm 的 orderType 清單加 `team_member` → ＋現金補入。
+  - **器材租借押金收取**：`rentals.js` `/confirm` → ＋押金收取＝`totalDeposit`（冪等 `depositCashAdjDone`）。
+  - **器材租借退押金**：`/return`（當場退）＋`/return-deposit`（補退）兩路徑 → −押金退還（冪等 `depositReturnAdjDone`；扣除只存 note 無金額→**靠可編輯金額調整部分退**）。
+  - **體驗教練費**：`experience-bookings/:id/finance` 管理員設 `coachFee>0` → −教練費（首次冪等 `coachFeeAdjDone`，記在設定當天）。
+  - 全部寫**當天結帳、可於結帳頁編輯金額/移除**（`DailySettlementPage` 加減項每列 sign/type/amount/note 皆可改，無鎖 auto）；下拉 `DEDUCTION_TYPES` 加「押金收取／押金退還」。無今日 doc 自動建 draft。
+  - ⚠️ **記帳原因**：課程/比賽/入隊營收是認列制（報名當下記帳），現金確認當天才進抽屜→用加減項補；押金非營收（可退）本就不在 income→用加減項對帳。**入場/POS/租金** 收款當天即記 income、不走加減項（走了會重複）。
+- ✅ **體驗單日券改「逐參加者發券」（`3.142.0`；決策：姓名+生日比對、不用身分證、日後自動認領、只對之後發的生效）**：
+  - **`syncExperienceTickets` 重寫**：有 `participants` 且（尚未發過 or 既有券已含 `participantName`）→ 逐參加者發券，`matchMemberByNameBirthday`（members `where(name==)`＋記憶體比對 birthday）命中→券發本人（`memberId`＋`claimed:true`）、不到→**待指派**（`memberId:null`＋`pendingAssign:true`＋存 `participantName`/`participantBirthday`）。**舊預約（券無 participantName）維持原數量制、全掛聯絡人不動**。
+  - **待指派券兩認領路徑**：① `POST /experience-bookings/:id/assign-ticket`（`requireManagerOrStation`，**限體驗當天** `bookingDate===today`、super_admin 例外）指定發送給選定會員 ② `memberService.claimPendingExperienceTickets`（接 createMember 認領鏈末）——參加者日後註冊、姓名+生日命中 pendingAssign 券→綁本人。
+  - **新端點** `GET /:id/tickets`（列券供 UI）。前端 `ExperienceBookingsPage`：展開載入該預約票券，**參加者名單加「領券」欄**（✅已領券(會員名)／待指派／✅已入場／—）＋**待指派券「指定發送」搜尋指派 UI**（僅體驗當天顯示輸入框，否則提示「當天可指定發送」）。
+  - **E2E（firebase-admin 直呼 service）**：2 參加者（鄒唯心命中會員→已認領、假名查無→待指派），待指派券可被姓名+生日認領查詢命中，測後清理。
+  - 📌 **票券集合**＝`singleEntryTickets`（`ticketType:'experience'`）；比對 key **姓名+生日**（會員多不填身分證）；`pendingAssign` 券 `memberId:null` 不能入場、須指派或認領後才可用。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

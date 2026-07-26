@@ -39,22 +39,38 @@ router.post('/apply', authenticateAny, async (req, res) => {
     } = req.body;
 
     if (!gymId) return res.status(400).json({ code: 'MISSING_GYM', message: '請選擇取貨館別' });
-    if (!pickupDate || !returnDate) return res.status(400).json({ code: 'MISSING_DATE', message: '請選擇借出/歸還日期' });
+    if (!pickupDate) return res.status(400).json({ code: 'MISSING_DATE', message: '請選擇借出日期' });
     if (!items?.length) return res.status(400).json({ code: 'MISSING_ITEMS', message: '請選擇租借項目' });
 
     // 取費率設定
     const settingsDoc = await db.collection('systemSettings').doc('rentalItems').get();
     const settings = settingsDoc.exists ? settingsDoc.data() : defaultSettings();
 
+    // 月租品項（置物櫃）：驗證館別/月數 → 到期日＝借出日＋月數（後端權威）；一般器材需自帶歸還日
+    const monthlyItem = (items || []).map(it => ({ it, cfg: settings[it.type] })).find(x => x.cfg && x.cfg.mode === 'monthly');
+    let effReturnDate = returnDate, effRentalType = rentalType;
+    if (monthlyItem) {
+      const months = Number(monthlyItem.it.months) || 0;
+      if (!(monthlyItem.cfg.monthlyTiers || {})[months]) return res.status(400).json({ code: 'INVALID_MONTHS', message: '請選擇有效的租借月數' });
+      const gyms = monthlyItem.cfg.gyms;
+      if (Array.isArray(gyms) && gyms.length && !gyms.includes(gymId)) {
+        return res.status(400).json({ code: 'GYM_NOT_ALLOWED', message: `${monthlyItem.cfg.name}目前僅 ${gyms.map(g => g === 'gym-shilin' ? '士林館' : g === 'gym-hsinchu' ? '新竹館' : g).join('、')} 提供` });
+      }
+      effRentalType = 'monthly';
+      effReturnDate = dayjs(pickupDate).add(months, 'month').format('YYYY-MM-DD');
+    } else if (!returnDate) {
+      return res.status(400).json({ code: 'MISSING_DATE', message: '請選擇歸還日期' });
+    }
+
     // 計算費用（共用 helper，與修改端點同一份）
-    const { itemsWithFee, totalRentalFee, totalDeposit } = computeRentalItems(settings, items, rentalType);
+    const { itemsWithFee, totalRentalFee, totalDeposit } = computeRentalItems(settings, items, effRentalType);
 
     const id = `rental_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
     await db.collection('equipmentRentals').doc(id).set({
       id, memberId,
       memberName: req.member?.name || req.body.memberName || '',
       memberPhone: req.member?.phone || req.body.memberPhone || '',
-      gymId, pickupDate, returnDate, rentalType,
+      gymId, pickupDate, returnDate: effReturnDate, rentalType: effRentalType,
       items: itemsWithFee,
       totalRentalFee, totalDeposit,
       paymentMethod: paymentMethod || 'transfer',
@@ -70,7 +86,9 @@ router.post('/apply', authenticateAny, async (req, res) => {
     });
 
     res.status(201).json({ success: true, id, totalRentalFee, totalDeposit,
-      message: `申請成功！租金 NT$${totalRentalFee} + 押金 NT$${totalDeposit}，請完成付款` });
+      message: monthlyItem
+        ? `申請成功！月租 NT$${totalRentalFee}（到期日 ${effReturnDate}），請完成付款`
+        : `申請成功！租金 NT$${totalRentalFee} + 押金 NT$${totalDeposit}，請完成付款` });
   } catch (err) {
     if (err.code) return res.status(400).json(err);
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
@@ -209,6 +227,16 @@ function computeRentalItems(settings, items, rentalType) {
   const itemsWithFee = items.map(item => {
     const cfg = settings[item.type];
     if (!cfg) throw { code: 'INVALID_ITEM', message: `無效的器材類型: ${item.type}` };
+    // 月租品項（置物櫃）：費用查 monthlyTiers[月數]、無押金
+    if (cfg.mode === 'monthly') {
+      const months = Number(item.months) || 0;
+      const tier = (cfg.monthlyTiers || {})[months];
+      if (!tier) throw { code: 'INVALID_MONTHS', message: `無效的租借月數（${cfg.name}）` };
+      const qty = item.quantity || 1;
+      const rentalFee = tier * qty;
+      totalRentalFee += rentalFee;
+      return { type: item.type, name: cfg.name, quantity: qty, months, rentalFee, deposit: 0, unitFee: tier, unitDeposit: 0, mode: 'monthly' };
+    }
     const rentalFee = (rentalType === 'weekend' ? cfg.weekendFee : cfg.sevenDayFee) * item.quantity;
     const deposit = cfg.deposit * item.quantity;
     totalRentalFee += rentalFee;
@@ -296,12 +324,20 @@ router.put('/:id', authenticateAny, async (req, res) => {
       return res.status(400).json({ error: 'INVALID_STATUS', message: '器材已取件或已結案，無法修改' });
     }
     const pickupDate = req.body.pickupDate || r.pickupDate;
-    const returnDate = req.body.returnDate || r.returnDate;
-    const rentalType = req.body.rentalType || r.rentalType;
-    const items = Array.isArray(req.body.items) && req.body.items.length ? req.body.items : r.items.map(i => ({ type: i.type, quantity: i.quantity }));
-    if (!pickupDate || !returnDate) return res.status(400).json({ code: 'MISSING_DATE', message: '請選擇借出/歸還日期' });
+    let returnDate = req.body.returnDate || r.returnDate;
+    let rentalType = req.body.rentalType || r.rentalType;
+    const items = Array.isArray(req.body.items) && req.body.items.length ? req.body.items : r.items.map(i => ({ type: i.type, quantity: i.quantity, months: i.months }));
+    if (!pickupDate) return res.status(400).json({ code: 'MISSING_DATE', message: '請選擇借出日期' });
     const settingsDoc = await db.collection('systemSettings').doc('rentalItems').get();
     const settings = settingsDoc.exists ? settingsDoc.data() : defaultSettings();
+    // 月租品項（置物櫃）：到期日＝借出日＋月數（後端權威）；一般器材需自帶歸還日
+    const monthlyItem = (items || []).map(it => ({ it, cfg: settings[it.type] })).find(x => x.cfg && x.cfg.mode === 'monthly');
+    if (monthlyItem) {
+      rentalType = 'monthly';
+      returnDate = dayjs(pickupDate).add(Number(monthlyItem.it.months) || 0, 'month').format('YYYY-MM-DD');
+    } else if (!returnDate) {
+      return res.status(400).json({ code: 'MISSING_DATE', message: '請選擇歸還日期' });
+    }
     const { itemsWithFee, totalRentalFee, totalDeposit } = computeRentalItems(settings, items, rentalType);
     await doc.ref.update({
       pickupDate, returnDate, rentalType,
@@ -360,6 +396,8 @@ function defaultSettings() {
     crashPad: { name: '抱石墊', weekendFee: 400, sevenDayFee: 800, deposit: 1000, description: 'MadRock 兩折式 120×90×12.5cm', active: true },
     helmet:   { name: '岩盔',   weekendFee: 100, sevenDayFee: 200, deposit: 500,  description: '攀岩安全帽', active: true },
     harness:  { name: '攀岩吊帶', weekendFee: 100, sevenDayFee: 200, deposit: 500, description: '攀岩吊帶', active: true },
+    // 置物櫃：月租制（1/3/6 月）、無押金、限士林館；到期日＝借出日＋月數
+    locker:   { name: '置物櫃', mode: 'monthly', monthlyTiers: { 1: 120, 3: 350, 6: 600 }, deposit: 0, gyms: ['gym-shilin'], description: '月租置物櫃', active: true },
   };
 }
 

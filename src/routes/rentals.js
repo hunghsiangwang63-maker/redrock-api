@@ -173,8 +173,10 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
     const ref = db.collection('equipmentRentals').doc(req.params.id);
     const snap = await ref.get();
     const r = snap.exists ? snap.data() : {};
+    // 管理員可編輯備註（選填；留空不動既有值）
+    const noteUpdate = req.body.staffNote != null ? { staffNote: String(req.body.staffNote).trim() } : {};
     await ref.update({
-      paymentStatus: 'confirmed', status: 'active',
+      paymentStatus: 'confirmed', status: 'active', ...noteUpdate,
       confirmedBy: req.staff.id, confirmedByName: req.staff.name, confirmedAt: new Date(), updatedAt: new Date(),
     });
     try { await recordRentalRevenue(db, req.params.id, { staffId: req.staff.id, staffName: req.staff.name }); }

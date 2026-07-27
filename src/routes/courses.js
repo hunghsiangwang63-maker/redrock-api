@@ -547,7 +547,7 @@ router.get('/:courseId/attendance/download',
         attBySession[s.id] = m;
       }
 
-      // 報名備註（每位學員取一筆非空：備註/健康備註/如何得知）
+      // 報名備註（每位學員取一筆非空：備註/健康備註/如何得知/員工備註(收款確認時填)）
       const noteMap = {};
       enrollSnap.docs.forEach(d => {
         const e = d.data();
@@ -555,12 +555,13 @@ router.get('/:courseId/attendance/download',
         if (!n.enrollNote && e.enrollNote) n.enrollNote = e.enrollNote;
         if (!n.healthNote && e.healthNote) n.healthNote = e.healthNote;
         if (!n.referralSource && e.referralSource) n.referralSource = e.referralSource;
+        if (!n.staffNote && e.staffNote) n.staffNote = e.staffNote;
       });
 
       const label = { present: '出席', absent: '缺席', late: '遲到' };
       const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
       const sessCol = (s) => s.date + (s.startTime ? ` ${s.startTime}` : '');
-      const rows = [[q('學員姓名'), q('電話'), q('備註'), q('健康備註'), q('如何得知'), ...sessions.map(s => q(sessCol(s))), q('出席次數')].join(',')];
+      const rows = [[q('學員姓名'), q('電話'), q('備註'), q('健康備註'), q('如何得知'), q('員工備註'), ...sessions.map(s => q(sessCol(s))), q('出席次數')].join(',')];
       memberIds.forEach(mid => {
         const nm = nameMap[mid] || {};
         const nt = noteMap[mid] || {};
@@ -570,7 +571,7 @@ router.get('/:courseId/attendance/download',
           if (st === 'present' || st === 'late') attended++; // 出席/遲到皆計為出席
           return q(label[st] || '');
         });
-        rows.push([q(nm.name), q(nm.phone), q(nt.enrollNote || ''), q(nt.healthNote || ''), q(nt.referralSource || ''), ...cells, attended].join(','));
+        rows.push([q(nm.name), q(nm.phone), q(nt.enrollNote || ''), q(nt.healthNote || ''), q(nt.referralSource || ''), q(nt.staffNote || ''), ...cells, attended].join(','));
       });
 
       const csv = '\uFEFF' + rows.join('\n'); // BOM for Excel UTF-8
@@ -1185,6 +1186,7 @@ router.get('/:courseId/enrollments',
           referralSource: e.referralSource || null,
           enrollGender: e.enrollGender || null,
           enrollAge: e.enrollAge ?? null,
+          staffNote: e.staffNote || null,   // 管理員收款確認時填的備註
         };
       });
       // Sort by enrolledAt desc

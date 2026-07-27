@@ -307,7 +307,7 @@ router.get('/:id/registrations/download',
         '身分證/護照','緊急聯絡人','緊急聯絡人關係','緊急聯絡人手機',
         '身高','臂展','組別','榮譽參賽','友館折扣','報名費',
         '付款狀態','匯款銀行','匯款/繳款日期','匯款末五碼',
-        '簽署狀態','是否候補','備註','報名時間'
+        '簽署狀態','是否候補','備註','員工備註','報名時間'
       ];
 
       const csvRows = [headers.join(',')];
@@ -338,6 +338,7 @@ router.get('/:id/registrations/download',
           signed,
           r.status === 'waitlist' ? '是' : '否',
           `"${(r.memberNote || r.customFieldValues?.notes || '').replace(/"/g, '""')}"`,
+          `"${(r.staffNote || '').replace(/"/g, '""')}"`,
           r.registeredAt?._seconds ? new Date(r.registeredAt._seconds * 1000).toLocaleString('zh-TW') : '',
         ];
         csvRows.push(cols.join(','));

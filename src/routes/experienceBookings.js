@@ -319,6 +319,8 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
     const booking = { id: doc.id, ...doc.data() };
     const _gymCcDoc = await db.collection('gyms').doc(booking.gymId).get();
     const _gymCc = _gymCcDoc.exists ? _gymCcDoc.data().email : undefined; // 確認信副本給該館
+    // 管理員可編輯備註（選填；留空不動既有值）
+    const noteUpdate = req.body.staffNote != null ? { staffNote: String(req.body.staffNote).trim() } : {};
 
     // ── 試上預約：確認收款 ──
     // 新流程：報名當下已佔位（pending）→ 確認收款只標 paymentStatus:'paid'；
@@ -330,7 +332,7 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
           return res.status(400).json({ error: 'TRIAL_EXPIRED', message: '此試上名額已因逾期未繳費釋出，請會員重新報名' });
         }
         await enDoc.ref.update({ paymentStatus: 'paid', paymentDeadline: null, updatedAt: new Date() });
-        await ref.update({ status: 'confirmed', confirmedBy: req.staff.id, confirmedByName: req.staff.name, confirmedAt: new Date(), updatedAt: new Date() });
+        await ref.update({ status: 'confirmed', confirmedBy: req.staff.id, confirmedByName: req.staff.name, confirmedAt: new Date(), updatedAt: new Date(), ...noteUpdate });
         await recordExperienceRevenue(db, ref, booking, req.staff).catch(e => console.error('[體驗營收]', e.message));
         // 試上確認收款 → 自動發 1 張當日體驗券（冪等：sync 依已發張數補差；入場當日豁免墜測）
         await syncExperienceTickets(db, booking, req.staff, true).catch(e => console.error('[試上發券]', e.message));
@@ -351,7 +353,7 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
       }
       await ref.update({
         status: 'confirmed', confirmedBy: req.staff.id, confirmedByName: req.staff.name,
-        confirmedAt: new Date(), updatedAt: new Date(), trialEnrollmentId: trialResult.enrollmentId,
+        confirmedAt: new Date(), updatedAt: new Date(), trialEnrollmentId: trialResult.enrollmentId, ...noteUpdate,
       });
       await recordExperienceRevenue(db, ref, booking, req.staff).catch(e => console.error('[體驗營收]', e.message));
       await syncExperienceTickets(db, booking, req.staff, true).catch(e => console.error('[試上發券]', e.message));
@@ -369,7 +371,7 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
 
     const update = {
       status: 'confirmed', confirmedBy: req.staff.id, confirmedByName: req.staff.name,
-      confirmedAt: new Date(), updatedAt: new Date(),
+      confirmedAt: new Date(), updatedAt: new Date(), ...noteUpdate,
     };
 
     // 教練處理（僅在有帶 coachName 時動教練相關欄位，避免覆蓋成空值造成 desync）：
@@ -755,15 +757,16 @@ router.get('/download', authenticate, requireManager, async (req, res) => {
           '費用': idx===0 ? b.totalFee : '',
           '匯款末五碼': idx===0 ? (b.bankLastFive||'') : '',
           '備註': idx===0 ? (b.notes||'') : '',
+          '員工備註': idx===0 ? (b.staffNote||'') : '',
         });
       });
     });
 
-    if (rows.length===0) rows.push({ '場館':'無資料','預約日期':'','預約時間':'','課程類型':'','總人數':'','狀態':'','聯絡人':'','聯絡電話':'','序號':'','參加者姓名':'','身分證字號':'','生日':'','國籍':'','費用':'','匯款末五碼':'','備註':'' });
+    if (rows.length===0) rows.push({ '場館':'無資料','預約日期':'','預約時間':'','課程類型':'','總人數':'','狀態':'','聯絡人':'','聯絡電話':'','序號':'','參加者姓名':'','身分證字號':'','生日':'','國籍':'','費用':'','匯款末五碼':'','備註':'','員工備註':'' });
 
     const ws = sanitizeSheet(XLSX.utils.json_to_sheet(rows));
     // 欄位寬度
-    ws['!cols'] = [8,12,10,12,8,8,10,12,6,12,14,12,8,8,12,14].map(w=>({wch:w}));
+    ws['!cols'] = [8,12,10,12,8,8,10,12,6,12,14,12,8,8,12,14,16].map(w=>({wch:w}));
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '體驗課程名單');

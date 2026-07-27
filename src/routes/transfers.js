@@ -158,10 +158,13 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
       }
     }
 
+    // 管理員可編輯備註（選填；留空不動既有值，避免無意間清空先前備註）
+    const noteUpdate = req.body.staffNote != null ? { staffNote: String(req.body.staffNote).trim() } : {};
     await ref.update({
       status: 'confirmed', confirmedBy: req.staff.id,
       confirmedAt: now, updatedAt: now, notes: req.body.notes || '',
       confirmedAmount: req.body.confirmedAmount != null && req.body.confirmedAmount !== '' ? Number(req.body.confirmedAmount) : null, // 員工填實際收款金額
+      ...noteUpdate,
     });
     // 依訂單型別確認底層付款（side-effect 失敗不阻斷收款確認）
     try {
@@ -172,7 +175,7 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
       if (t.orderType === 'experience' && t.refId) {
         const bkRef = db.collection('experienceBookings').doc(t.refId);
         await bkRef.update({
-          status: 'confirmed', paymentStatus: 'confirmed', ...clearReject,
+          status: 'confirmed', paymentStatus: 'confirmed', ...clearReject, ...noteUpdate,
           confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
         });
         // 體驗/試上營收記錄（與 /experience-bookings/:id/confirm 同一 helper、冪等）
@@ -188,7 +191,7 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
         } catch (e) { console.error('[體驗營收/transfers]', e.message); }
       } else if (t.orderType === 'course' && t.refId) {
         // 課程營收已於報名時(courses.js enroll, deferPayment=false)記入(認列＝最後一堂課)，此處僅標記付款確認
-        await db.collection('courseEnrollments').doc(t.refId).update({ paymentStatus: 'confirmed', ...clearReject, updatedAt: now });
+        await db.collection('courseEnrollments').doc(t.refId).update({ paymentStatus: 'confirmed', ...clearReject, ...noteUpdate, updatedAt: now });
         // 定期票 × 課程免費期間重疊補償（政策 2026-07-17；收款確認後才套、冪等、不阻斷）
         try {
           const enDoc = await db.collection('courseEnrollments').doc(t.refId).get();
@@ -224,7 +227,7 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
         } catch (e) { console.error('[Email] 課程確認通知', e.message); }
       } else if (t.orderType === 'competition' && t.refId) {
         await db.collection('competitionRegistrations').doc(t.refId).update({
-          paymentStatus: 'confirmed', ...clearReject, paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,
+          paymentStatus: 'confirmed', ...clearReject, ...noteUpdate, paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,
         });
         // 記比賽營收（預收，認列在比賽前一天）；helper 冪等
         try { await require('../services/competitionService').recordCompetitionRevenue({ db, regId: t.refId, sign: 1, staffId: by, staffName: byName }); }
@@ -242,7 +245,7 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
         } catch (e) { console.error('[Email] 比賽確認通知', e.message); }
       } else if (t.orderType === 'rental' && t.refId) {
         await db.collection('equipmentRentals').doc(t.refId).update({
-          paymentStatus: 'confirmed', status: 'active', ...clearReject, confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
+          paymentStatus: 'confirmed', status: 'active', ...clearReject, ...noteUpdate, confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
         });
         // 器材租借轉帳確認收款 → 記營收（租金，冪等）
         try { await require('./rentals').recordRentalRevenue(db, t.refId, { staffId: by, staffName: byName }); }
@@ -250,7 +253,7 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
       } else if (t.orderType === 'team_member' && t.refId) {
         const appRef = db.collection('teamApplications').doc(t.refId);
         await appRef.update({
-          paymentStatus: 'confirmed', status: 'active', paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,
+          paymentStatus: 'confirmed', status: 'active', ...noteUpdate, paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,
         });
         // 開通隊員折扣資格（依年度）
         const app = (await appRef.get()).data();

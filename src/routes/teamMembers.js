@@ -142,6 +142,8 @@ router.post('/applications/:id/confirm-payment', authenticate, requireManagerOrS
     const snap = await ref.get();
     if (!snap.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此攀岩隊入隊申請（可能已刪除）' });
     if (snap.data().paymentStatus === 'confirmed') return res.json({ success: true, message: '已確認收款' }); // 冪等
+    // 管理員可編輯備註（選填；留空不動既有值）
+    const noteUpdate = req.body.staffNote != null ? { staffNote: String(req.body.staffNote).trim() } : {};
     await ref.update({
       paymentStatus: 'confirmed',
       status: 'active',
@@ -149,6 +151,7 @@ router.post('/applications/:id/confirm-payment', authenticate, requireManagerOrS
       paidConfirmedBy: req.staff.id,
       paidConfirmedByName: req.staff.name,
       updatedAt: new Date(),
+      ...noteUpdate,
     });
     // 開通會員實際折扣資格（依年度）
     const app = (await ref.get()).data();
@@ -275,6 +278,7 @@ router.get('/members/download', authenticate, requireManager, async (req, res) =
       '匯款末五碼': r.bankLastFive || '',
       '隊服尺寸': r.noJersey ? '不拿隊服' : (r.jerseySize || ''),
       '付款狀態': r.paymentStatus === 'confirmed' ? '已確認' : '待確認',
+      '員工備註': r.staffNote || '',
       '隊員狀態': r.status === 'active' ? '正式隊員' : r.status === 'cancelled' ? '已退隊' : '待審核',
       '建議團練': r.trainingContent || '',
       '許願活動': r.wishActivities || '',

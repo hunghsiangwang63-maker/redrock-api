@@ -543,14 +543,18 @@ router.get('/reports/active-course-students/download', authenticate, requireMana
     const gymLabel = (g) => g === 'gym-hsinchu' ? '新竹館' : g === 'gym-shilin' ? '士林館' : (g || '');
     const payLabel = (v) => ({ pending: '待確認', confirmed: '已確認', pending_confirm: '待確認', transfer_rejected: '已退回' }[v] || v || '');
 
-    // 已開立發票金額合計（依 enrollmentId 批次查）
+    // 已開立發票金額合計（依 refId=enrollmentId 批次查；只計未作廢的）
     const enrollIds = [...new Set(filtered.flatMap(c => c.members.map(m => m.enrollmentId).filter(Boolean)))];
     const invoicedMap = {};
     for (let i = 0; i < enrollIds.length; i += 10) {
       const chunk = enrollIds.slice(i, i + 10);
       if (!chunk.length) break;
-      const snap = await getDb().collection('invoiceRecords').where('enrollmentId', 'in', chunk).get();
-      snap.docs.forEach(d => { const v = d.data(); invoicedMap[v.enrollmentId] = (invoicedMap[v.enrollmentId] || 0) + (Number(v.amount) || 0); });
+      const snap = await getDb().collection('invoiceRecords').where('refId', 'in', chunk).get();
+      snap.docs.forEach(d => {
+        const v = d.data();
+        if (v.status === 'voided') return;
+        invoicedMap[v.refId] = (invoicedMap[v.refId] || 0) + (Number(v.amount) || 0);
+      });
     }
 
     const rows = [];
@@ -599,12 +603,13 @@ router.get('/reports/active-course-students/download', authenticate, requireMana
 // 課程學員頁「開立發票」：記錄一筆發票資料（日期時間/品項/金額/統編/備註），
 // 並將金額寫入當日結帳「加減項」（+發票開立）使其計入當日營收；不影響原報名時已認列的課程營收交易
 // （課程/比賽營收改用發票開立日期計算的重新設計，留待發票功能正式上線時再討論）。
+// 底層共用 invoiceService（sourceType:'course'，refId=enrollmentId），與比賽報名發票（competitions.js）同一套規則。
 router.get('/course-invoices', authenticate, async (req, res) => {
   try {
     const db = getDb();
     const { enrollmentId, memberId, courseId } = req.query;
-    let ref = db.collection('invoiceRecords');
-    if (enrollmentId) ref = ref.where('enrollmentId', '==', enrollmentId);
+    let ref = db.collection('invoiceRecords').where('sourceType', '==', 'course');
+    if (enrollmentId) ref = ref.where('refId', '==', enrollmentId);
     else if (memberId && courseId) ref = ref.where('memberId', '==', memberId).where('courseId', '==', courseId);
     else if (memberId) ref = ref.where('memberId', '==', memberId);
     else return res.status(400).json({ error: 'MISSING_QUERY', message: '請帶 enrollmentId 或 memberId' });
@@ -615,74 +620,39 @@ router.get('/course-invoices', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// 同一報名（enrollmentId；無則 memberId+courseId）同時最多一張「已開立」發票——
-// 開立後若要修改/重開，須先「作廢」才能再開立新的一張。
+// 同一報名（enrollmentId）同時最多一張「已開立」發票——開立後若要修改/重開，須先「作廢」才能再開立新的一張。
 router.post('/course-invoices', authenticate, requireManager, async (req, res) => {
   try {
     const db = getDb();
     const { enrollmentId, memberId, memberName, courseId, courseName, gymId, itemName, amount, taxId, note, issuedAt } = req.body;
-    if (!memberId || !courseId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '缺少會員或課程資訊' });
-    const amt = Number(amount);
-    if (!(amt > 0)) return res.status(400).json({ error: 'INVALID_AMOUNT', message: '發票金額需大於 0' });
-
-    // 權威擋重複開立：同一報名（或同會員+課程）已有 status:'issued' 的發票 → 400
-    let existingRef = db.collection('invoiceRecords');
-    existingRef = enrollmentId ? existingRef.where('enrollmentId', '==', enrollmentId)
-      : existingRef.where('memberId', '==', memberId).where('courseId', '==', courseId);
-    const existingSnap = await existingRef.where('status', '==', 'issued').limit(1).get();
-    if (!existingSnap.empty) {
-      return res.status(400).json({ error: 'ALREADY_INVOICED', message: '此學員此課程已開立發票，請先作廢後再重新開立' });
-    }
-
-    const { v4: uuidv4 } = require('uuid');
-    const id = uuidv4();
-    const now = new Date();
-    const issuedAtDate = issuedAt ? new Date(issuedAt) : now;
-    const record = {
-      id, sourceType: 'course', status: 'issued',
-      enrollmentId: enrollmentId || null, memberId, memberName: memberName || '',
-      courseId, courseName: courseName || '', gymId: gymId || null,
-      itemName: itemName || courseName || '課程費用',
-      amount: amt, taxId: taxId ? String(taxId).trim() : '',
-      note: note ? String(note).trim() : '',
-      issuedAt: issuedAtDate, staffId: req.staff.id, staffName: req.staff.name || '',
-      createdAt: now, updatedAt: now,
-    };
-    await db.collection('invoiceRecords').doc(id).set(record);
-    // 計入當日營收（結帳加減項；不動原課程認列交易，避免與 accrual 重複計算）
-    try {
-      await require('../services/settlementService').addCashAdjustment({
-        gymId: gymId || null, amount: amt, sign: '+', type: '發票開立',
-        note: `發票開立：${memberName || ''}・${itemName || courseName || '課程費用'}${taxId ? '（統編 ' + taxId + '）' : ''}`,
-      });
-    } catch (e) { console.error('[發票加減項]', e.message); }
+    if (!memberId || !courseId || !enrollmentId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '缺少會員或課程資訊' });
+    const invoiceService = require('../services/invoiceService');
+    const record = await invoiceService.createInvoice(db, {
+      sourceType: 'course', refId: enrollmentId, memberId, memberName,
+      itemName: itemName || courseName || '課程費用', amount, taxId, note, gymId, issuedAt,
+      staffId: req.staff.id, staffName: req.staff.name || '',
+      meta: { enrollmentId, courseId, courseName: courseName || '' },
+    });
     res.json({ success: true, invoice: record });
-  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  } catch (err) {
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
 });
 
 // ── POST /members/course-invoices/:id/void - 作廢發票（沖銷當日加減項；作廢後可重新開立）──
 router.post('/course-invoices/:id/void', authenticate, requireManager, async (req, res) => {
   try {
     const db = getDb();
-    const ref = db.collection('invoiceRecords').doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此發票紀錄' });
-    const inv = doc.data();
-    if (inv.status === 'voided') return res.status(400).json({ error: 'ALREADY_VOIDED', message: '此發票已作廢' });
-    const now = new Date();
-    await ref.update({
-      status: 'voided', voidedAt: now, voidedBy: req.staff.id, voidedByName: req.staff.name || '',
-      voidReason: req.body.voidReason ? String(req.body.voidReason).trim() : '', updatedAt: now,
-    });
-    // 沖銷當日結帳加減項（負向、與開立時對稱；不刪改原始開立紀錄，保留稽核軌跡）
-    try {
-      await require('../services/settlementService').addCashAdjustment({
-        gymId: inv.gymId || null, amount: inv.amount, sign: '-', type: '發票作廢',
-        note: `發票作廢：${inv.memberName || ''}・${inv.itemName || inv.courseName || '課程費用'}（原發票 NT$${inv.amount}）`,
-      });
-    } catch (e) { console.error('[發票作廢加減項]', e.message); }
+    const invoiceService = require('../services/invoiceService');
+    await invoiceService.voidInvoice(db, req.params.id, req.staff.id, req.staff.name, req.body.voidReason);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  } catch (err) {
+    const map = { NOT_FOUND: 404, ALREADY_VOIDED: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
 });
 
 // ── GET /members/download - 下載會員名單（XLSX，含最後兩次入場時間；管理員）──

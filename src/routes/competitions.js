@@ -4,7 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
-const { authenticate, authenticateAny, checkPermission , requireManagerOrStation } = require('../middleware/auth');
+const { authenticate, authenticateAny, checkPermission , requireManagerOrStation, requireManager } = require('../middleware/auth');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const competitionService = require('../services/competitionService');
@@ -1013,13 +1013,68 @@ router.post('/checkin/scan', authenticate, requireManagerOrStation, async (req, 
     if (!hit) return res.status(404).json({ error: 'QR_NOT_FOUND', message: '無效的報到 QR' });
     const { reg, comp } = hit;
     res.json({
-      registrationId: reg.id, memberName: reg.memberName,
-      competitionName: reg.competitionName || comp.name, divisionName: reg.divisionName,
-      eventDate: comp.eventDate, status: reg.status, isComplete: reg.isComplete,
+      registrationId: reg.id, memberId: reg.memberId, memberName: reg.memberName,
+      competitionId: reg.competitionId, competitionName: reg.competitionName || comp.name, divisionName: reg.divisionName,
+      eventDate: comp.eventDate, gymId: comp.gymId || null, status: reg.status, isComplete: reg.isComplete,
       paymentStatus: reg.paymentStatus, registrationFee: reg.registrationFee,
+      // 實收金額預填來源（供開立發票 modal 使用）：店員收款確認時填的金額 > 會員自報匯款金額 > 應繳費用
+      receivedAmount: reg.paidAmount ?? reg.memberPaidAmount ?? reg.registrationFee ?? 0,
       checkedInAt: reg.checkedInAt || null,
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── 比賽報名開立發票（預先建立，待日後發票機串接）─────────────────────
+// 與課程學員發票共用 invoiceService（sourceType:'competition'，refId=registrationId）：
+// 同一報名同時最多一張已開立發票，須先作廢才能重新開立。
+router.get('/registrations/:regId/invoices', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('invoiceRecords')
+      .where('sourceType', '==', 'competition').where('refId', '==', req.params.regId).get();
+    const invoices = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.issuedAt?._seconds || 0) - (a.issuedAt?._seconds || 0));
+    res.json({ invoices });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+router.post('/registrations/:regId/invoices', authenticate, requireManager, async (req, res) => {
+  try {
+    const db = getDb();
+    const regDoc = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(req.params.regId).get();
+    if (!regDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+    const reg = regDoc.data();
+    const compDoc = await db.collection(COLLECTIONS.COMPETITIONS).doc(reg.competitionId).get();
+    const comp = compDoc.exists ? compDoc.data() : {};
+    const { itemName, amount, taxId, note, issuedAt } = req.body;
+    const invoiceService = require('../services/invoiceService');
+    const record = await invoiceService.createInvoice(db, {
+      sourceType: 'competition', refId: req.params.regId,
+      memberId: reg.memberId, memberName: reg.memberName || '',
+      itemName: itemName || `${reg.competitionName || comp.name || '比賽'}報名費`,
+      amount, taxId, note, gymId: comp.gymId || null, issuedAt,
+      staffId: req.staff.id, staffName: req.staff.name || '',
+      meta: { registrationId: req.params.regId, competitionId: reg.competitionId, competitionName: reg.competitionName || comp.name || '', divisionName: reg.divisionName || '' },
+    });
+    res.json({ success: true, invoice: record });
+  } catch (err) {
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+router.post('/invoices/:id/void', authenticate, requireManager, async (req, res) => {
+  try {
+    const db = getDb();
+    const invoiceService = require('../services/invoiceService');
+    await invoiceService.voidInvoice(db, req.params.id, req.staff.id, req.staff.name, req.body.voidReason);
+    res.json({ success: true });
+  } catch (err) {
+    const map = { NOT_FOUND: 404, ALREADY_VOIDED: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
 });
 
 // POST /competitions/checkin/confirm - 確認報到（值班/管理員；不卡墜測）

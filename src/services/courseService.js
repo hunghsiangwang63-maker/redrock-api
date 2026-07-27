@@ -1178,17 +1178,19 @@ const cancelCourseEnrollments = async ({ courseId, memberId, reason }) => {
 
 // ── 逾期未付款自動取消（每日排程）────────────────────────────────
 // 掃 paymentDeadline 已過、仍未確認收款（含被退回未補正）的課程轉帳報名 → 取消整門課、
-// 釋放名額並遞補候補（走 cancelCourseEnrollments）、作廢該報名未確認的轉帳單、記 cancelReason:'payment_expired'。
-// 冪等：cancelCourseEnrollments 只動 active 狀態；已取消者被 status 過濾掉、不重複處理。
+// 釋放名額並遞補候補（走 cancelCourseEnrollments）、作廢該報名未確認的轉帳單、記 cancelReason:'payment_expired'、
+// 沖銷報名當下已記帳的營收（enroll-all 是 accrual 制、報名時就記帳，取消若不沖銷會虛增未來營收）。
+// 冪等：cancelCourseEnrollments 只動 active 狀態；已取消者被 status 過濾掉、不重複處理；
+// 沖銷交易另以 relatedId===e.id 檢查是否已存在，避免排程重跑/單筆重試造成重複沖銷。
 const sweepExpiredCoursePayments = async () => {
   const db = getDb();
   const now = new Date();
-  // paymentDeadline 只掛在主報名(idx0)。單欄位範圍查 < now，記憶體過濾「未確認 + 未取消」。
+  // paymentDeadline 只掛在主報名(idx0)——與 enrollmentFee 同一筆，故 e.enrollmentFee 即為當初記帳金額。
   const snap = await db.collection(ENROLLMENT_COLLECTION).where('paymentDeadline', '<', now).get();
   const expired = snap.docs.map(d => ({ id: d.id, ...d.data() }))
     .filter(e => e.paymentDeadline && e.paymentConfirmed !== true && e.status !== 'cancelled');
 
-  let cancelledGroups = 0, cancelledEnrollments = 0, voidedTransfers = 0;
+  let cancelledGroups = 0, cancelledEnrollments = 0, voidedTransfers = 0, reversedRevenue = 0;
   const seen = new Set(); // 以 (courseId, memberId) 去重，避免同群組重複處理
   for (const e of expired) {
     const key = `${e.courseId}__${e.memberId}`;
@@ -1205,10 +1207,40 @@ const sweepExpiredCoursePayments = async () => {
           voidedTransfers++;
         }
       }
+      // 沖銷報名時已記帳的營收（enrollmentFee>0 才有；冪等：查是否已沖銷過同一筆）
+      if (e.enrollmentFee > 0) {
+        try {
+          const alreadyReversed = await db.collection('transactions')
+            .where('relatedId', '==', e.courseId).where('memberId', '==', e.memberId)
+            .where('type', '==', 'course_refund').where('notes', '==', `課程逾期未付款自動取消・沖銷 ${e.id}`).limit(1).get();
+          if (alreadyReversed.empty) {
+            let recognitionDate = null;
+            try {
+              const cd = await db.collection(COURSE_COLLECTION).doc(e.courseId).get();
+              if (cd.exists) { const c = cd.data(); recognitionDate = c.endDate || c.unlimitedPracticeEnd || null; }
+            } catch (err) {}
+            const { recordTransaction } = require('../utils/revenueLedger');
+            await recordTransaction(db, {
+              gymId: e.gymId || null,
+              type: 'course_refund',
+              totalAmount: -Math.abs(e.enrollmentFee),
+              paymentMethod: 'refund',
+              memberId: e.memberId,
+              memberName: e.memberName || '',
+              relatedId: e.courseId,
+              notes: `課程逾期未付款自動取消・沖銷 ${e.id}`,
+              staffId: null,
+              staffName: '系統自動（逾期未付款）',
+              recognitionDate,
+            });
+            reversedRevenue += e.enrollmentFee;
+          }
+        } catch (err) { console.error('sweepExpiredCoursePayments 沖銷記帳失敗', e.id, err.message); }
+      }
     } catch (err) { console.error('sweepExpiredCoursePayments 單筆失敗', e.id, err.message); }
   }
-  if (cancelledGroups) console.log(`[課程逾期未付款] 取消 ${cancelledGroups} 門課報名（${cancelledEnrollments} 堂）、作廢 ${voidedTransfers} 筆轉帳單`);
-  return { cancelledGroups, cancelledEnrollments, voidedTransfers };
+  if (cancelledGroups) console.log(`[課程逾期未付款] 取消 ${cancelledGroups} 門課報名（${cancelledEnrollments} 堂）、作廢 ${voidedTransfers} 筆轉帳單、沖銷營收 NT$${reversedRevenue}`);
+  return { cancelledGroups, cancelledEnrollments, voidedTransfers, reversedRevenue };
 };
 
 // ── 補課報名 ──────────────────────────────────────────────────────

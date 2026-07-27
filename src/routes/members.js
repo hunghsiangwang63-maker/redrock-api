@@ -385,6 +385,28 @@ const buildActiveCourseStudents = async (gymId) => {
     }
   }
   out.sort((a, b) => b.count - a.count);
+
+  // 店員核對過的收款金額（transferRecords.confirmedAmount，PUT /transfers/:id/confirm 時填）
+  // ——比會員自報的 memberPaidAmount 更權威，優先顯示/供發票金額預填使用。
+  // 單一 refId in 查詢（不加額外 where，避免複合索引）；同一 enrollmentId 若有多筆（退回補正過），取最新確認的一筆。
+  const allEnrollIds = [...new Set(out.flatMap(c => c.members.map(m => m.enrollmentId).filter(Boolean)))];
+  const confirmedMap = {};
+  for (let i = 0; i < allEnrollIds.length; i += 30) {
+    const chunk = allEnrollIds.slice(i, i + 30);
+    if (!chunk.length) break;
+    const snap = await db.collection('transferRecords').where('refId', 'in', chunk).get();
+    snap.docs.forEach(d => {
+      const t = d.data();
+      if (t.status !== 'confirmed' || t.confirmedAmount == null) return;
+      const at = t.confirmedAt?._seconds || t.confirmedAt?.seconds || 0;
+      const prev = confirmedMap[t.refId];
+      if (!prev || at >= prev.at) confirmedMap[t.refId] = { amount: Number(t.confirmedAmount), at };
+    });
+  }
+  out.forEach(c => c.members.forEach(m => {
+    if (m.enrollmentId && confirmedMap[m.enrollmentId]) m.confirmedAmount = confirmedMap[m.enrollmentId].amount;
+  }));
+
   return { courses: out, total: out.reduce((s, c) => s + c.count, 0) };
 };
 
@@ -431,7 +453,8 @@ router.get('/reports/active-course-students/download', authenticate, requireMana
           '費用': m.fee ?? '',
           '付款方式': m.paymentMethod || '',
           '付款狀態': payLabel(m.paymentStatus),
-          '實收金額': m.memberPaidAmount ?? '',
+          '會員自報匯款金額': m.memberPaidAmount ?? '',
+          '店員核對收款金額': m.confirmedAmount ?? '',
           '匯款末五碼': m.bankLastFive || '',
           '匯款日期': m.paymentDate || '',
           '員工備註': m.staffNote || '',
@@ -442,10 +465,10 @@ router.get('/reports/active-course-students/download', authenticate, requireMana
         });
       });
     });
-    if (rows.length === 0) rows.push({ '場館': '無資料', '課程名稱': '', '效期起': '', '效期迄': '', '姓名': '', '電話': '', '費用': '', '付款方式': '', '付款狀態': '', '實收金額': '', '匯款末五碼': '', '匯款日期': '', '員工備註': '', '健康備註': '', '如何得知': '', '自訂備註': '', '已開立發票金額': '' });
+    if (rows.length === 0) rows.push({ '場館': '無資料', '課程名稱': '', '效期起': '', '效期迄': '', '姓名': '', '電話': '', '費用': '', '付款方式': '', '付款狀態': '', '會員自報匯款金額': '', '店員核對收款金額': '', '匯款末五碼': '', '匯款日期': '', '員工備註': '', '健康備註': '', '如何得知': '', '自訂備註': '', '已開立發票金額': '' });
 
     const ws = sanitizeSheet(XLSX.utils.json_to_sheet(rows));
-    ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 10, 10, 10, 20, 20, 14, 20, 12].map(w => ({ wch: w }));
+    ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 12, 12, 10, 10, 20, 20, 14, 20, 12].map(w => ({ wch: w }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '課程學員名單');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -478,6 +501,8 @@ router.get('/course-invoices', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// 同一報名（enrollmentId；無則 memberId+courseId）同時最多一張「已開立」發票——
+// 開立後若要修改/重開，須先「作廢」才能再開立新的一張。
 router.post('/course-invoices', authenticate, requireManager, async (req, res) => {
   try {
     const db = getDb();
@@ -485,12 +510,22 @@ router.post('/course-invoices', authenticate, requireManager, async (req, res) =
     if (!memberId || !courseId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '缺少會員或課程資訊' });
     const amt = Number(amount);
     if (!(amt > 0)) return res.status(400).json({ error: 'INVALID_AMOUNT', message: '發票金額需大於 0' });
+
+    // 權威擋重複開立：同一報名（或同會員+課程）已有 status:'issued' 的發票 → 400
+    let existingRef = db.collection('invoiceRecords');
+    existingRef = enrollmentId ? existingRef.where('enrollmentId', '==', enrollmentId)
+      : existingRef.where('memberId', '==', memberId).where('courseId', '==', courseId);
+    const existingSnap = await existingRef.where('status', '==', 'issued').limit(1).get();
+    if (!existingSnap.empty) {
+      return res.status(400).json({ error: 'ALREADY_INVOICED', message: '此學員此課程已開立發票，請先作廢後再重新開立' });
+    }
+
     const { v4: uuidv4 } = require('uuid');
     const id = uuidv4();
     const now = new Date();
     const issuedAtDate = issuedAt ? new Date(issuedAt) : now;
     const record = {
-      id, sourceType: 'course',
+      id, sourceType: 'course', status: 'issued',
       enrollmentId: enrollmentId || null, memberId, memberName: memberName || '',
       courseId, courseName: courseName || '', gymId: gymId || null,
       itemName: itemName || courseName || '課程費用',
@@ -508,6 +543,31 @@ router.post('/course-invoices', authenticate, requireManager, async (req, res) =
       });
     } catch (e) { console.error('[發票加減項]', e.message); }
     res.json({ success: true, invoice: record });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── POST /members/course-invoices/:id/void - 作廢發票（沖銷當日加減項；作廢後可重新開立）──
+router.post('/course-invoices/:id/void', authenticate, requireManager, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection('invoiceRecords').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此發票紀錄' });
+    const inv = doc.data();
+    if (inv.status === 'voided') return res.status(400).json({ error: 'ALREADY_VOIDED', message: '此發票已作廢' });
+    const now = new Date();
+    await ref.update({
+      status: 'voided', voidedAt: now, voidedBy: req.staff.id, voidedByName: req.staff.name || '',
+      voidReason: req.body.voidReason ? String(req.body.voidReason).trim() : '', updatedAt: now,
+    });
+    // 沖銷當日結帳加減項（負向、與開立時對稱；不刪改原始開立紀錄，保留稽核軌跡）
+    try {
+      await require('../services/settlementService').addCashAdjustment({
+        gymId: inv.gymId || null, amount: inv.amount, sign: '-', type: '發票作廢',
+        note: `發票作廢：${inv.memberName || ''}・${inv.itemName || inv.courseName || '課程費用'}（原發票 NT$${inv.amount}）`,
+      });
+    } catch (e) { console.error('[發票作廢加減項]', e.message); }
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

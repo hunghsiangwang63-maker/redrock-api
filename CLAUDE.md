@@ -2029,6 +2029,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 ## 🔌 關機前狀態（2026-07-27 停電關機）
 > 兩 repo 皆乾淨且已 push（api `3e7b7c7`／web `4b5a675`）；後端 Railway `3.143.0` 上線中、前端已 deploy（雲端不受本機關機影響）。**無任何半途未提交的程式**。本輪完成：加減項自動記帳(3.141)／體驗券逐參加者(3.142)／置物櫃月租(3.143，含 rentalItems fallback 坑修復)。待決策見下方待辦（發票機列印時機、LinePay 金鑰、公開比賽報名頁）。
 
+## 目前進度（2026-07-28）— 計分系統併入工作區 + 修版本分歧（本機落後線上）
+> 使用者詢問「計分系統可否併入這邊一起維護、控版本」→ 討論後定案：**只合併工作區管理範圍，不合併 Firebase 專案**（`redrock-comp` 維持獨立於會員/員工用的 `redrock-dev-a35c1`，理由：現場比賽即時比分可能給觀眾看、存取模式與會員資料不同；後端仍靠 `COMP_FIREBASE_SA` service account 單向推資料，見 `competitionSyncService.js`）。純資料夾搬遷＋補文件，過程中意外抓到一個真的版本分歧並修復。
+- ✅ **資料夾搬遷**：`~/redrock-comp-livescore`（原本已是獨立 git repo＋GitHub remote `hunghsiangwang63-maker/redrock-comp-livescore`，搬前確認 working tree 乾淨）→ `~/Downloads/redrock-comp`（與 `redrock-api`/`redrock-web` 平行）。git 歷史/remote 完整保留，只是目錄位置改變。`~/Downloads` 本身**不是** git repo，頂層 `CLAUDE.md` 補一段「計分系統」子專案介紹（路徑/部署指令/獨立 Firebase 專案原因/對接方式/「本機可能落後線上」提醒）。
+- 🐞 **發現並修復：本機 repo 落後線上版（非快取問題）**：版本盤點時發現 `redrock-comp.web.app` 與自訂網域 `comp.redrocktaiwan.com` 的 `index.html` **md5 不同**（header 為 `no-cache, no-store`，排除快取誤判）、`Last-Modified: 2026-07-15`——比本機 git HEAD（7/14 21:27 那次「favicon 改用琥珀水晶R」commit）還晚。
+  - **根因**：GitHub remote 當時其實還卡在更早的 `1a4882c`——7/14 那兩個 commit（`9d704d4` sync from live+favicon、`8e45c14` favicon 改色）**做了但沒 push**。另一邊，7/15 有人（另一台裝置/另一session）**直接對 Firebase Hosting 部署了新版**、完全繞過這個 git repo，帶進兩個從沒被記錄過的真實修復：①**存檔安全防呆**——比賽快照未由 Firestore `onSnapshot` 真正載入完成前，拒絕整份 `setDoc` 覆蓋存檔（避免用空骨架把雲端選手名單/場次管理員洗掉，註解寫著「曾發生名單剩1人、場次管理員消失」的真實事故）②**批次匯入名單改用「姓名＋組別」比對**——找到既有選手就更新背號（不重複新增），找不到才新增（原本無條件新增）。但那次線上部署是從**舊的本機版本**（無 favicon）部署上去的，所以 favicon 的兩個 `<link>` 標籤也一併消失。
+  - **修復**（比照 2026-07-14 同套做法）：抓線上版 `index.html` 當新基準覆蓋回 `public/index.html`（保留上述兩個線上獨有的真實修復）→ 重新插入 favicon 兩行 `<link>`（diff 驗證只多這兩行、其餘逐字元一致）→ commit（`ba186aa`，含完整修復脈絡供稽核）→ `firebase deploy --only hosting --project redrock-comp`（首次遇 API 500 暫時性錯誤，重跑即成功）→ `git push`（把先前卡住的 7/14 兩個 commit 也一併補推上去）。
+  - **驗證**：三邊（本機 `public/index.html` / `redrock-comp.web.app` / `comp.redrocktaiwan.com`）逐 byte diff 完全一致；本機 HEAD＝origin/main HEAD＝`ba186aa`；`api.redrocktaiwan.com`（`3.155.0`）與 `redrock-web`（`e26d9c4`）同批盤點確認皆本機＝remote＝部署三邊一致。
+- 📌 **教訓**：純靜態單檔 HTML＋獨立 git repo 的專案，若沒有強制「只能透過 git push 部署」的紀律，**直接對 Firebase Hosting 部署會讓 git 變成謊言來源**——之後任何人改這個檔案前，務必先比對線上 `index.html` 與本機是否一致（`Last-Modified`/`md5`），不要假設 git HEAD＝正式環境。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

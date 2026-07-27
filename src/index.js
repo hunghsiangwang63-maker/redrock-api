@@ -30,6 +30,9 @@ app.use(express.json({ limit: '10mb' })); // 需要較大限制以支援 base64 
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
+// API 一律不快取：保證瀏覽器/任何中介層絕不快取回應內容（資料改由前端主動重抓解決，見 useRefetchOnFocus）
+app.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+
 // Railway 在反向代理後方：信任第一層 proxy 以取得真實 client IP（供限流正確計數）
 app.set('trust proxy', 1);
 
@@ -151,7 +154,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.143.0-locker-monthly-rental',
+    version: '3.145.0-no-store-headers',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),

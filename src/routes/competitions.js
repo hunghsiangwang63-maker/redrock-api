@@ -218,7 +218,7 @@ router.post('/:id/register',
         const compDoc = await getDb().collection('competitions').doc(req.params.id).get();
         const comp = compDoc.exists ? compDoc.data() : {};
         _rn.notifyRegReceived({
-          to: registration.email, memberId, memberName: registration.name || '',
+          to: registration.email, memberId, memberName: registration.memberName || '',
           typeLabel: '比賽', itemName: comp.name || '比賽', gymId: comp.gymId,
           fee: registration.registrationFee || 0,
           paymentMethod: registration.paymentMethod || req.body.paymentMethod, massage: false,

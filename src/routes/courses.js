@@ -1103,7 +1103,23 @@ router.get('/leave-makeup-summary/all',
       const overdueMakeups = overdueRights
         .map(r => ({ memberName: nameMap[r.memberId]?.name || '', courseName: r.courseName || '', expiredDate: r.expDate }))
         .sort((a, b) => (a.expiredDate || '').localeCompare(b.expiredDate || ''));
-      res.json({ groups, crossMakeups, overdueMakeups });
+
+      // 歷史請假匯入（如舊 BeClass 表單資料）：對不到系統現有場次、不發補課券，純記錄供查——
+      // 獨立一區、附在最後面，依姓名排序。已比對到會員標 memberId；查無會員只顯示姓名/電話。
+      const hlQuery = gymId ? db.collection('historicalLeaveRecords').where('gymId', '==', gymId) : db.collection('historicalLeaveRecords');
+      const hlSnap = await hlQuery.get();
+      const hlByPerson = {};
+      hlSnap.docs.forEach(d => {
+        const x = d.data();
+        const key = x.memberId || `u:${x.name}:${x.phone || ''}`;
+        if (!hlByPerson[key]) hlByPerson[key] = { memberId: x.memberId || null, name: x.name, phone: x.phone || '', registered: !!x.memberId, records: [] };
+        hlByPerson[key].records.push({ date: x.leaveDate, courseType: x.courseType || '', weekday: x.weekday || '', reason: x.reason || '' });
+      });
+      const historicalLeaves = Object.values(hlByPerson)
+        .map(p => ({ ...p, records: p.records.sort((a, b) => (a.date || '').localeCompare(b.date || '')) }))
+        .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'zh-Hant'));
+
+      res.json({ groups, crossMakeups, overdueMakeups, historicalLeaves });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );

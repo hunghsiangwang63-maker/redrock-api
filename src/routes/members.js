@@ -324,44 +324,190 @@ router.get('/reports/active-passes', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// 課程效期內學員（分課程）共用建構：回傳 { courses, total }
+// 每位學員附完整報名/繳費/備註資訊（供畫面開發票/下載使用）；付款欄位只存在「主報名列」（paymentStatus!=='na'）。
+const buildActiveCourseStudents = async (gymId) => {
+  const db = getDb();
+  const today = taiwanToday(); // 台灣日期（與課程入館資格同源）
+  const courseSnap = await db.collection('courses').get();
+  let courses = courseSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.status !== 'cancelled');
+  if (gymId) courses = courses.filter(c => c.gymId === gymId);
+  const practiceEndOf = (c) => c.unlimitedPracticeEnd
+    || (c.endDate ? dayjs(c.endDate).add(c.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : null);
+  courses = courses.filter(c => {
+    const ps = c.unlimitedPracticeStart || c.startDate;
+    const pe = practiceEndOf(c);
+    return ps && pe && ps <= today && today <= pe;
+  });
+  const out = [];
+  for (const c of courses) {
+    const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', c.id).get();
+    const seen = new Map();
+    const payMap = {};
+    enrollSnap.docs.forEach(d => {
+      const e = d.data();
+      if (e.status !== 'confirmed' || e.pauseStatus === 'paused') return;
+      if (e.isMakeup || e.isTrial) return; // 補課/試上＝單日行為（入場資格僅當天），不列為該班「課程學員」
+      if (!seen.has(e.memberId)) seen.set(e.memberId, { memberId: e.memberId, memberName: e.memberName || '' });
+      const p = payMap[e.memberId] || (payMap[e.memberId] = {});
+      // 付款欄位只在主報名列（idx0）有值：paymentStatus 非 'na' 即為主列
+      if (e.paymentStatus && e.paymentStatus !== 'na') {
+        p.enrollmentId = d.id;
+        p.fee = e.enrollmentFee ?? 0;
+        p.paymentMethod = e.paymentMethod || '';
+        p.paymentStatus = e.paymentStatus;
+        p.paymentConfirmed = e.paymentConfirmed !== false;
+        p.memberPaidAmount = e.memberPaidAmount ?? null;
+        p.bankLastFive = e.bankLastFive || '';
+        p.paymentDate = e.paymentDate || '';
+        p.enrolledAt = e.enrolledAt || null;
+      }
+      if (!p.enrollNote && e.enrollNote) p.enrollNote = e.enrollNote;
+      if (!p.healthNote && e.healthNote) p.healthNote = e.healthNote;
+      if (!p.referralSource && e.referralSource) p.referralSource = e.referralSource;
+      if (!p.staffNote && e.staffNote) p.staffNote = e.staffNote;
+    });
+    let members = [...seen.values()].map(m => ({ ...m, ...(payMap[m.memberId] || {}) }));
+    // 電話以 members 集合權威補齊
+    if (members.length) {
+      const mdocs = await db.getAll(...members.map(m => db.collection('members').doc(m.memberId)));
+      const phoneMap = {};
+      mdocs.forEach(d => { if (d.exists) phoneMap[d.id] = d.data().phone || ''; });
+      members = members.map(m => ({ ...m, memberPhone: phoneMap[m.memberId] || '' }));
+    }
+    if (members.length) {
+      out.push({
+        courseId: c.id, courseName: c.name, gymId: c.gymId,
+        practiceStart: c.unlimitedPracticeStart || c.startDate || null,
+        practiceEnd: practiceEndOf(c),
+        count: members.length, members: members.sort((a, b) => (a.memberName || '').localeCompare(b.memberName || '')),
+      });
+    }
+  }
+  out.sort((a, b) => b.count - a.count);
+  return { courses: out, total: out.reduce((s, c) => s + c.count, 0) };
+};
+
 // ── GET /members/reports/active-course-students - 課程效期內學員（分課程）──
 router.get('/reports/active-course-students', authenticate, async (req, res) => {
   try {
-    const db = getDb();
-    const today = taiwanToday(); // 台灣日期（與課程入館資格同源）
     const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
-    const courseSnap = await db.collection('courses').get();
-    let courses = courseSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.status !== 'cancelled');
-    if (gymId) courses = courses.filter(c => c.gymId === gymId);
-    const practiceEndOf = (c) => c.unlimitedPracticeEnd
-      || (c.endDate ? dayjs(c.endDate).add(c.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : null);
-    courses = courses.filter(c => {
-      const ps = c.unlimitedPracticeStart || c.startDate;
-      const pe = practiceEndOf(c);
-      return ps && pe && ps <= today && today <= pe;
-    });
-    const out = [];
-    for (const c of courses) {
-      const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', c.id).get();
-      const seen = new Map();
-      enrollSnap.docs.forEach(d => {
-        const e = d.data();
-        if (e.status !== 'confirmed' || e.pauseStatus === 'paused') return;
-        if (e.isMakeup || e.isTrial) return; // 補課/試上＝單日行為（入場資格僅當天），不列為該班「課程學員」
-        if (!seen.has(e.memberId)) seen.set(e.memberId, { memberId: e.memberId, memberName: e.memberName || '' });
-      });
-      const members = [...seen.values()];
-      if (members.length) {
-        out.push({
-          courseId: c.id, courseName: c.name, gymId: c.gymId,
-          practiceStart: c.unlimitedPracticeStart || c.startDate || null,
-          practiceEnd: practiceEndOf(c),
-          count: members.length, members: members.sort((a, b) => (a.memberName || '').localeCompare(b.memberName || '')),
-        });
-      }
+    res.json(await buildActiveCourseStudents(gymId));
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /members/reports/active-course-students/download - 課程學員名單下載（XLSX；管理員）──
+// 不帶 courseId＝總表（全部班別彙整一份）；帶 courseId＝單一班別。
+router.get('/reports/active-course-students/download', authenticate, requireManager, async (req, res) => {
+  try {
+    const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
+    const { courses } = await buildActiveCourseStudents(gymId);
+    const courseId = req.query.courseId || null;
+    const filtered = courseId ? courses.filter(c => c.courseId === courseId) : courses;
+
+    const gymLabel = (g) => g === 'gym-hsinchu' ? '新竹館' : g === 'gym-shilin' ? '士林館' : (g || '');
+    const payLabel = (v) => ({ pending: '待確認', confirmed: '已確認', pending_confirm: '待確認', transfer_rejected: '已退回' }[v] || v || '');
+
+    // 已開立發票金額合計（依 enrollmentId 批次查）
+    const enrollIds = [...new Set(filtered.flatMap(c => c.members.map(m => m.enrollmentId).filter(Boolean)))];
+    const invoicedMap = {};
+    for (let i = 0; i < enrollIds.length; i += 10) {
+      const chunk = enrollIds.slice(i, i + 10);
+      if (!chunk.length) break;
+      const snap = await getDb().collection('invoiceRecords').where('enrollmentId', 'in', chunk).get();
+      snap.docs.forEach(d => { const v = d.data(); invoicedMap[v.enrollmentId] = (invoicedMap[v.enrollmentId] || 0) + (Number(v.amount) || 0); });
     }
-    out.sort((a, b) => b.count - a.count);
-    res.json({ courses: out, total: out.reduce((s, c) => s + c.count, 0) });
+
+    const rows = [];
+    filtered.forEach(c => {
+      c.members.forEach(m => {
+        rows.push({
+          '場館': gymLabel(c.gymId),
+          '課程名稱': c.courseName || '',
+          '效期起': c.practiceStart || '',
+          '效期迄': c.practiceEnd || '',
+          '姓名': m.memberName || '',
+          '電話': m.memberPhone || '',
+          '費用': m.fee ?? '',
+          '付款方式': m.paymentMethod || '',
+          '付款狀態': payLabel(m.paymentStatus),
+          '實收金額': m.memberPaidAmount ?? '',
+          '匯款末五碼': m.bankLastFive || '',
+          '匯款日期': m.paymentDate || '',
+          '員工備註': m.staffNote || '',
+          '健康備註': m.healthNote || '',
+          '如何得知': m.referralSource || '',
+          '自訂備註': m.enrollNote || '',
+          '已開立發票金額': invoicedMap[m.enrollmentId] || '',
+        });
+      });
+    });
+    if (rows.length === 0) rows.push({ '場館': '無資料', '課程名稱': '', '效期起': '', '效期迄': '', '姓名': '', '電話': '', '費用': '', '付款方式': '', '付款狀態': '', '實收金額': '', '匯款末五碼': '', '匯款日期': '', '員工備註': '', '健康備註': '', '如何得知': '', '自訂備註': '', '已開立發票金額': '' });
+
+    const ws = sanitizeSheet(XLSX.utils.json_to_sheet(rows));
+    ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 10, 10, 10, 20, 20, 14, 20, 12].map(w => ({ wch: w }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '課程學員名單');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const today = taiwanToday();
+    const fname = courseId ? `course_students_${courseId}_${today}.xlsx` : `course_students_all_${today}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
+    res.send(buf);
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── 開立發票（預先建立，待日後發票機串接）─────────────────────────
+// 課程學員頁「開立發票」：記錄一筆發票資料（日期時間/品項/金額/統編/備註），
+// 並將金額寫入當日結帳「加減項」（+發票開立）使其計入當日營收；不影響原報名時已認列的課程營收交易
+// （課程/比賽營收改用發票開立日期計算的重新設計，留待發票功能正式上線時再討論）。
+router.get('/course-invoices', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const { enrollmentId, memberId, courseId } = req.query;
+    let ref = db.collection('invoiceRecords');
+    if (enrollmentId) ref = ref.where('enrollmentId', '==', enrollmentId);
+    else if (memberId && courseId) ref = ref.where('memberId', '==', memberId).where('courseId', '==', courseId);
+    else if (memberId) ref = ref.where('memberId', '==', memberId);
+    else return res.status(400).json({ error: 'MISSING_QUERY', message: '請帶 enrollmentId 或 memberId' });
+    const snap = await ref.get();
+    const invoices = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.issuedAt?._seconds || 0) - (a.issuedAt?._seconds || 0));
+    res.json({ invoices });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+router.post('/course-invoices', authenticate, requireManager, async (req, res) => {
+  try {
+    const db = getDb();
+    const { enrollmentId, memberId, memberName, courseId, courseName, gymId, itemName, amount, taxId, note, issuedAt } = req.body;
+    if (!memberId || !courseId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '缺少會員或課程資訊' });
+    const amt = Number(amount);
+    if (!(amt > 0)) return res.status(400).json({ error: 'INVALID_AMOUNT', message: '發票金額需大於 0' });
+    const { v4: uuidv4 } = require('uuid');
+    const id = uuidv4();
+    const now = new Date();
+    const issuedAtDate = issuedAt ? new Date(issuedAt) : now;
+    const record = {
+      id, sourceType: 'course',
+      enrollmentId: enrollmentId || null, memberId, memberName: memberName || '',
+      courseId, courseName: courseName || '', gymId: gymId || null,
+      itemName: itemName || courseName || '課程費用',
+      amount: amt, taxId: taxId ? String(taxId).trim() : '',
+      note: note ? String(note).trim() : '',
+      issuedAt: issuedAtDate, staffId: req.staff.id, staffName: req.staff.name || '',
+      createdAt: now, updatedAt: now,
+    };
+    await db.collection('invoiceRecords').doc(id).set(record);
+    // 計入當日營收（結帳加減項；不動原課程認列交易，避免與 accrual 重複計算）
+    try {
+      await require('../services/settlementService').addCashAdjustment({
+        gymId: gymId || null, amount: amt, sign: '+', type: '發票開立',
+        note: `發票開立：${memberName || ''}・${itemName || courseName || '課程費用'}${taxId ? '（統編 ' + taxId + '）' : ''}`,
+      });
+    } catch (e) { console.error('[發票加減項]', e.message); }
+    res.json({ success: true, invoice: record });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

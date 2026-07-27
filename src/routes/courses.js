@@ -1423,10 +1423,11 @@ router.post('/:courseId/enroll-all',
         isWaitlist = enrollStatus === 'waitlist';
         waitlistPosition = isWaitlist ? waitlistMembers.size + 1 : null;
 
-        // 轉帳付款期限：會員轉帳報名 → 報名時間 +2 天（僅主報名 idx===0、非候補、非分期、fee>0）。
-        // 現金於櫃檯即時確認、不設期限。逾期未確認由每日 sweepExpiredCoursePayments 自動取消釋名額。
-        const wantsPaymentDeadline = paymentMethod === 'transfer' && !isWaitlist && !req.body.deferPayment && !willInstallment && fee > 0;
-        paymentDeadline = wantsPaymentDeadline ? require('dayjs')(now).add(2, 'day').toDate() : null;
+        // 政策（2026-07-27）：移除轉帳付款自動期限/自動取消機制——曾發生真實有轉帳/已上傳證明的
+        // 會員因櫃檯逾 2 天沒點「確認」就被排程自動取消整期報名的誤傷案例。改為一律不設期限，
+        // 轉帳/現金皆由管理員在待收款頁人工「確認」或「退回」（沿用既有待收款/退回流程，不受影響）。
+        // sweepExpiredCoursePayments 函式與手動觸發端點保留（供極端情況人工補跑），但不再排程自動執行。
+        paymentDeadline = null;
 
         // 寫入
         firstEnrollmentId = null;

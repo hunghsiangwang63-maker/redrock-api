@@ -154,7 +154,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.148.0-sweep-expired-revenue-reversal',
+    version: '3.149.0-course-payment-deadline-removed',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
@@ -203,11 +203,9 @@ if (require.main === module) {
       const { expiredCount } = await require('./services/bonusService').sweepExpiredBonuses();
       if (expiredCount > 0) console.log(`[紅利排程] 過期停用 ${expiredCount} 筆`);
     } catch (e) { console.error('[紅利排程] 過期清除失敗', e.message); }
-    // 課程轉帳逾期未付款：自動取消報名、釋放名額、作廢未確認轉帳單
-    try {
-      const r = await require('./services/courseService').sweepExpiredCoursePayments();
-      if (r.cancelledGroups > 0) console.log(`[課程逾期] 取消 ${r.cancelledGroups} 門課（${r.cancelledEnrollments} 堂）、作廢 ${r.voidedTransfers} 筆轉帳單`);
-    } catch (e) { console.error('[課程逾期排程] 失敗', e.message); }
+    // 政策（2026-07-27）：課程轉帳逾期自動取消排程已移除——曾誤傷已上傳證明只是櫃檯忘記確認的
+    // 會員（整期報名被自動取消）。改為一律人工：待收款頁由管理員/值班「確認」或「退回」，
+    // sweepExpiredCoursePayments 函式與手動觸發端點 POST /courses/sweep-expired-payments 保留但不排程。
     // 比賽報名逾繳款期限未填匯款資料：自動取消、釋名額、遞補候補
     try {
       const r = await require('./services/competitionService').sweepExpiredCompetitionPayments();

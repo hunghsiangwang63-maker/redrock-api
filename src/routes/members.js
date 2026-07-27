@@ -324,72 +324,54 @@ router.get('/reports/active-passes', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// 課程效期內學員（分課程）共用建構：回傳 { courses, total }
-// 每位學員附完整報名/繳費/備註資訊（供畫面開發票/下載使用）；付款欄位只存在「主報名列」（paymentStatus!=='na'）。
-const buildActiveCourseStudents = async (gymId) => {
-  const db = getDb();
-  const today = taiwanToday(); // 台灣日期（與課程入館資格同源）
-  const courseSnap = await db.collection('courses').get();
-  let courses = courseSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.status !== 'cancelled');
-  if (gymId) courses = courses.filter(c => c.gymId === gymId);
-  const practiceEndOf = (c) => c.unlimitedPracticeEnd
-    || (c.endDate ? dayjs(c.endDate).add(c.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : null);
-  courses = courses.filter(c => {
-    const ps = c.unlimitedPracticeStart || c.startDate;
-    const pe = practiceEndOf(c);
-    return ps && pe && ps <= today && today <= pe;
-  });
-  const out = [];
-  for (const c of courses) {
-    const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', c.id).get();
-    const seen = new Map();
-    const payMap = {};
-    enrollSnap.docs.forEach(d => {
-      const e = d.data();
-      if (e.status !== 'confirmed' || e.pauseStatus === 'paused') return;
-      if (e.isMakeup || e.isTrial) return; // 補課/試上＝單日行為（入場資格僅當天），不列為該班「課程學員」
-      if (!seen.has(e.memberId)) seen.set(e.memberId, { memberId: e.memberId, memberName: e.memberName || '' });
-      const p = payMap[e.memberId] || (payMap[e.memberId] = {});
-      // 付款欄位只在主報名列（idx0）有值：paymentStatus 非 'na' 即為主列
-      if (e.paymentStatus && e.paymentStatus !== 'na') {
-        p.enrollmentId = d.id;
-        p.fee = e.enrollmentFee ?? 0;
-        p.paymentMethod = e.paymentMethod || '';
-        p.paymentStatus = e.paymentStatus;
-        p.paymentConfirmed = e.paymentConfirmed !== false;
-        p.memberPaidAmount = e.memberPaidAmount ?? null;
-        p.receivedAmountOverride = e.receivedAmountOverride ?? null; // 管理員在課程學員頁直接編修的實收金額
-        p.bankLastFive = e.bankLastFive || '';
-        p.paymentDate = e.paymentDate || '';
-        p.enrolledAt = e.enrolledAt || null;
-      }
-      if (!p.enrollNote && e.enrollNote) p.enrollNote = e.enrollNote;
-      if (!p.healthNote && e.healthNote) p.healthNote = e.healthNote;
-      if (!p.referralSource && e.referralSource) p.referralSource = e.referralSource;
-      if (!p.staffNote && e.staffNote) p.staffNote = e.staffNote;
-    });
-    let members = [...seen.values()].map(m => ({ ...m, ...(payMap[m.memberId] || {}) }));
-    // 電話以 members 集合權威補齊
-    if (members.length) {
-      const mdocs = await db.getAll(...members.map(m => db.collection('members').doc(m.memberId)));
-      const phoneMap = {};
-      mdocs.forEach(d => { if (d.exists) phoneMap[d.id] = d.data().phone || ''; });
-      members = members.map(m => ({ ...m, memberPhone: phoneMap[m.memberId] || '' }));
-    }
-    if (members.length) {
-      out.push({
-        courseId: c.id, courseName: c.name, gymId: c.gymId,
-        practiceStart: c.unlimitedPracticeStart || c.startDate || null,
-        practiceEnd: practiceEndOf(c),
-        count: members.length, members: members.sort((a, b) => (a.memberName || '').localeCompare(b.memberName || '')),
-      });
-    }
-  }
-  out.sort((a, b) => b.count - a.count);
+// 課程學員（分課程）共用工具：practiceEnd 計算、單一課程完整學員名單（含繳費/備註）、
+// 全部課程的實收金額 join（跨 active/history 共用，避免邏輯分岔）。
+const practiceEndOf = (c) => c.unlimitedPracticeEnd
+  || (c.endDate ? dayjs(c.endDate).add(c.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : null);
 
-  // 店員核對過的收款金額（transferRecords.confirmedAmount，PUT /transfers/:id/confirm 時填）
-  // ——比會員自報的 memberPaidAmount 更權威，優先顯示/供發票金額預填使用。
-  // 單一 refId in 查詢（不加額外 where，避免複合索引）；同一 enrollmentId 若有多筆（退回補正過），取最新確認的一筆。
+// 單一課程完整學員名單：付款欄位只存在「主報名列」（paymentStatus!=='na'）。
+const buildCourseMemberList = async (db, c) => {
+  const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', c.id).get();
+  const seen = new Map();
+  const payMap = {};
+  enrollSnap.docs.forEach(d => {
+    const e = d.data();
+    if (e.status !== 'confirmed' || e.pauseStatus === 'paused') return;
+    if (e.isMakeup || e.isTrial) return; // 補課/試上＝單日行為（入場資格僅當天），不列為該班「課程學員」
+    if (!seen.has(e.memberId)) seen.set(e.memberId, { memberId: e.memberId, memberName: e.memberName || '' });
+    const p = payMap[e.memberId] || (payMap[e.memberId] = {});
+    // 付款欄位只在主報名列（idx0）有值：paymentStatus 非 'na' 即為主列
+    if (e.paymentStatus && e.paymentStatus !== 'na') {
+      p.enrollmentId = d.id;
+      p.fee = e.enrollmentFee ?? 0;
+      p.paymentMethod = e.paymentMethod || '';
+      p.paymentStatus = e.paymentStatus;
+      p.paymentConfirmed = e.paymentConfirmed !== false;
+      p.memberPaidAmount = e.memberPaidAmount ?? null;
+      p.receivedAmountOverride = e.receivedAmountOverride ?? null; // 管理員在課程學員頁直接編修的實收金額
+      p.bankLastFive = e.bankLastFive || '';
+      p.paymentDate = e.paymentDate || '';
+      p.enrolledAt = e.enrolledAt || null;
+    }
+    if (!p.enrollNote && e.enrollNote) p.enrollNote = e.enrollNote;
+    if (!p.healthNote && e.healthNote) p.healthNote = e.healthNote;
+    if (!p.referralSource && e.referralSource) p.referralSource = e.referralSource;
+    if (!p.staffNote && e.staffNote) p.staffNote = e.staffNote;
+  });
+  let members = [...seen.values()].map(m => ({ ...m, ...(payMap[m.memberId] || {}) }));
+  // 電話以 members 集合權威補齊
+  if (members.length) {
+    const mdocs = await db.getAll(...members.map(m => db.collection('members').doc(m.memberId)));
+    const phoneMap = {};
+    mdocs.forEach(d => { if (d.exists) phoneMap[d.id] = d.data().phone || ''; });
+    members = members.map(m => ({ ...m, memberPhone: phoneMap[m.memberId] || '' }));
+  }
+  return members.sort((a, b) => (a.memberName || '').localeCompare(b.memberName || ''));
+};
+
+// 跨課程一次性 join「實收金額」（transferRecords.confirmedAmount 店員核對 + 管理員直接編修覆蓋），
+// 就地寫入每位學員的 confirmedAmount / receivedAmount。
+const attachReceivedAmounts = async (db, out) => {
   const allEnrollIds = [...new Set(out.flatMap(c => c.members.map(m => m.enrollmentId).filter(Boolean)))];
   const confirmedMap = {};
   for (let i = 0; i < allEnrollIds.length; i += 30) {
@@ -410,8 +392,90 @@ const buildActiveCourseStudents = async (gymId) => {
     // > 會員自報(memberPaidAmount) > 報名應繳費用(fee)
     m.receivedAmount = m.receivedAmountOverride ?? m.confirmedAmount ?? m.memberPaidAmount ?? m.fee ?? 0;
   }));
+};
 
+// 課程效期內學員（分課程）共用建構：回傳 { courses, total }
+const buildActiveCourseStudents = async (gymId) => {
+  const db = getDb();
+  const today = taiwanToday(); // 台灣日期（與課程入館資格同源）
+  const courseSnap = await db.collection('courses').get();
+  let courses = courseSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.status !== 'cancelled');
+  if (gymId) courses = courses.filter(c => c.gymId === gymId);
+  courses = courses.filter(c => {
+    const ps = c.unlimitedPracticeStart || c.startDate;
+    const pe = practiceEndOf(c);
+    return ps && pe && ps <= today && today <= pe;
+  });
+  const out = [];
+  for (const c of courses) {
+    const members = await buildCourseMemberList(db, c);
+    if (members.length) {
+      out.push({
+        courseId: c.id, courseName: c.name, gymId: c.gymId,
+        practiceStart: c.unlimitedPracticeStart || c.startDate || null,
+        practiceEnd: practiceEndOf(c),
+        count: members.length, members,
+      });
+    }
+  }
+  out.sort((a, b) => b.count - a.count);
+  await attachReceivedAmounts(db, out);
   return { courses: out, total: out.reduce((s, c) => s + c.count, 0) };
+};
+
+// 歷史開課（已過期，practiceEnd < today）輕量清單：僅課程資訊＋人數，不含逐位學員明細
+// （供畫面下拉選單使用；點選特定一梯才另打 detail 拉完整資料，避免一次撈全部歷史課程的完整名單）。
+const buildHistoricalCourseMeta = async (gymId) => {
+  const db = getDb();
+  const today = taiwanToday();
+  const courseSnap = await db.collection('courses').get();
+  let courses = courseSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.status !== 'cancelled');
+  if (gymId) courses = courses.filter(c => c.gymId === gymId);
+  courses = courses.filter(c => {
+    const ps = c.unlimitedPracticeStart || c.startDate;
+    const pe = practiceEndOf(c);
+    return pe && pe < today; // 已過期（practiceEnd 早於今天）
+  });
+  const out = [];
+  for (const c of courses) {
+    const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', c.id).get();
+    const seen = new Set();
+    enrollSnap.docs.forEach(d => {
+      const e = d.data();
+      if (e.status !== 'confirmed' || e.pauseStatus === 'paused') return;
+      if (e.isMakeup || e.isTrial) return;
+      seen.add(e.memberId);
+    });
+    if (seen.size) {
+      out.push({
+        courseId: c.id, courseName: c.name, gymId: c.gymId,
+        practiceStart: c.unlimitedPracticeStart || c.startDate || null,
+        practiceEnd: practiceEndOf(c),
+        count: seen.size,
+      });
+    }
+  }
+  out.sort((a, b) => (b.practiceEnd || '').localeCompare(a.practiceEnd || '')); // 最近結束的排前面
+  return out;
+};
+
+// 單一歷史課程完整學員名單（與 active 同形狀，供畫面共用下載/開發票流程）
+const buildHistoricalCourseDetail = async (gymId, courseId) => {
+  const db = getDb();
+  const courseDoc = await db.collection('courses').doc(courseId).get();
+  if (!courseDoc.exists) return null;
+  const c = { id: courseDoc.id, ...courseDoc.data() };
+  if (gymId && c.gymId !== gymId) return null; // 場館範圍防呆
+  const members = await buildCourseMemberList(db, c);
+  if (!members.length) return null;
+  const out = [{
+    courseId: c.id, courseName: c.name, gymId: c.gymId,
+    practiceStart: c.unlimitedPracticeStart || c.startDate || null,
+    practiceEnd: practiceEndOf(c),
+    count: members.length, members,
+  }];
+  await attachReceivedAmounts(db, out);
+  return out[0];
 };
 
 // ── GET /members/reports/active-course-students - 課程效期內學員（分課程）──
@@ -419,6 +483,25 @@ router.get('/reports/active-course-students', authenticate, async (req, res) => 
   try {
     const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
     res.json(await buildActiveCourseStudents(gymId));
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /members/reports/course-students-history - 歷史開課資料（已過期梯次，輕量清單）──
+router.get('/reports/course-students-history', authenticate, async (req, res) => {
+  try {
+    const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
+    const courses = await buildHistoricalCourseMeta(gymId);
+    res.json({ courses, total: courses.reduce((s, c) => s + c.count, 0) });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /members/reports/course-students-history/:courseId - 單一歷史課程完整學員名單 ──
+router.get('/reports/course-students-history/:courseId', authenticate, async (req, res) => {
+  try {
+    const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
+    const course = await buildHistoricalCourseDetail(gymId, req.params.courseId);
+    if (!course) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此歷史課程或無學員資料' });
+    res.json({ course });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -444,13 +527,18 @@ router.put('/course-enrollments/:enrollmentId/received-amount', authenticate, re
 });
 
 // ── GET /members/reports/active-course-students/download - 課程學員名單下載（XLSX；管理員）──
-// 不帶 courseId＝總表（全部班別彙整一份）；帶 courseId＝單一班別。
+// 不帶 courseId＝總表（僅目前效期內班別彙整一份）；帶 courseId＝單一班別
+// （先查現行效期內班別，查無則視為歷史開課再查一次，涵蓋已過期梯次的下載）。
 router.get('/reports/active-course-students/download', authenticate, requireManager, async (req, res) => {
   try {
     const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
     const { courses } = await buildActiveCourseStudents(gymId);
     const courseId = req.query.courseId || null;
-    const filtered = courseId ? courses.filter(c => c.courseId === courseId) : courses;
+    let filtered = courseId ? courses.filter(c => c.courseId === courseId) : courses;
+    if (courseId && filtered.length === 0) {
+      const hist = await buildHistoricalCourseDetail(gymId, courseId);
+      if (hist) filtered = [hist];
+    }
 
     const gymLabel = (g) => g === 'gym-hsinchu' ? '新竹館' : g === 'gym-shilin' ? '士林館' : (g || '');
     const payLabel = (v) => ({ pending: '待確認', confirmed: '已確認', pending_confirm: '待確認', transfer_rejected: '已退回' }[v] || v || '');

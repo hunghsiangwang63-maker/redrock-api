@@ -264,4 +264,72 @@ router.put('/settings/:gymId',
   }
 );
 
+// ── 排班行事曆重要事項標籤（休館/比賽/維修等；獨立於員工排班，不綁 staffId）──
+// GET 查詢範圍：gymId 指定館 + 全館（gymId:null）事項皆回傳；權限比照排班（read=查看、manage=新增/改/刪）。
+router.get('/events',
+  authenticate, checkPermission('schedule.read'),
+  async (req, res) => {
+    try {
+      const gymId = resolveGymId(req, req.query.gymId);
+      const yearMonth = req.query.month || require('dayjs')().format('YYYY-MM');
+      if (!gymId) return res.status(400).json({ error: 'MISSING_GYM', message: '請指定場館' });
+      const events = await scheduleService.getMonthlyScheduleEvents(gymId, yearMonth);
+      res.json({ events, gymId, month: yearMonth });
+    } catch (err) {
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
+router.post('/events',
+  authenticate, checkPermission('schedule.manage'),
+  [
+    body('date').isDate().withMessage('請輸入有效日期'),
+    body('category').isIn(['closure', 'competition', 'maintenance', 'other']).withMessage('類別不正確'),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      // gymId 未帶（或 super_admin 明確帶 null/空字串）＝全館皆顯示；一般帳號一律鎖自己館
+      const gymId = req.staff.role === 'super_admin' ? (req.body.gymId || null) : req.staff.gymId;
+      const event = await scheduleService.createScheduleEvent({
+        gymId, date: req.body.date, allDay: req.body.allDay,
+        startTime: req.body.startTime, endTime: req.body.endTime,
+        category: req.body.category, title: req.body.title, note: req.body.note,
+        createdBy: req.staff.id,
+      });
+      res.status(201).json({ event, message: '重要事項已新增' });
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
+router.put('/events/:eventId',
+  authenticate, checkPermission('schedule.manage'),
+  async (req, res) => {
+    try {
+      const event = await scheduleService.updateScheduleEvent(req.params.eventId, req.body);
+      res.json({ event, message: '重要事項已更新' });
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
+router.delete('/events/:eventId',
+  authenticate, checkPermission('schedule.manage'),
+  async (req, res) => {
+    try {
+      await scheduleService.deleteScheduleEvent(req.params.eventId);
+      res.json({ message: '重要事項已刪除' });
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 module.exports = router;

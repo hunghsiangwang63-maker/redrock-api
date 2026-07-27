@@ -75,6 +75,7 @@ const COLLECTIONS = {
   BONUS_PASSES: 'bonusPasses',
   INSTALLMENT_PLANS: 'installmentPlans',
   SCHEDULE_SHIFTS: 'scheduleShifts',
+  SCHEDULE_EVENTS: 'scheduleEvents',
   COMPETITIONS: 'competitions',
   COMPETITION_REGISTRATIONS: 'competitionRegistrations',
   PASS_ADJUSTMENTS: 'passAdjustments',

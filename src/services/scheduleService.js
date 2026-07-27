@@ -386,6 +386,86 @@ const copyPreviousMonthShifts = async (gymId, targetMonth, createdBy) => {
   return { created: toCreate.length, prevMonth, prevCount: prevShifts.length };
 };
 
+// ── 排班行事曆重要事項標籤（休館/比賽/維修等；獨立於員工排班，不綁 staffId）──
+// gymId: null＝全館皆顯示；allDay=true 為全天資訊，false 則需 startTime/endTime。
+const EVENT_CATEGORIES = ['closure', 'competition', 'maintenance', 'other'];
+
+const createScheduleEvent = async ({ gymId, date, allDay, startTime, endTime, category, title, note, createdBy }) => {
+  if (!date) throw { code: 'MISSING_DATE', message: '請選擇日期' };
+  if (!EVENT_CATEGORIES.includes(category)) throw { code: 'INVALID_CATEGORY', message: '類別不正確' };
+  if (!allDay) {
+    if (!startTime || !endTime) throw { code: 'MISSING_TIME', message: '非全天事項需填寫開始與結束時間' };
+    if (startTime >= endTime) throw { code: 'INVALID_TIME_RANGE', message: '結束時間必須晚於開始時間' };
+  }
+  const db = getDb();
+  const id = uuidv4();
+  const now = new Date();
+  const event = {
+    id, gymId: gymId || null, date,
+    allDay: !!allDay,
+    startTime: allDay ? null : startTime,
+    endTime: allDay ? null : endTime,
+    category, title: (title || '').trim(),
+    note: note || '',
+    createdBy, createdAt: now, updatedAt: now,
+  };
+  await db.collection(COLLECTIONS.SCHEDULE_EVENTS).doc(id).set(event);
+  return event;
+};
+
+const updateScheduleEvent = async (id, { gymId, date, allDay, startTime, endTime, category, title, note }) => {
+  const db = getDb();
+  const ref = db.collection(COLLECTIONS.SCHEDULE_EVENTS).doc(id);
+  const doc = await ref.get();
+  if (!doc.exists) throw { code: 'NOT_FOUND', message: '找不到此事項' };
+
+  const finalAllDay = allDay !== undefined ? !!allDay : doc.data().allDay;
+  const finalStart = startTime !== undefined ? startTime : doc.data().startTime;
+  const finalEnd = endTime !== undefined ? endTime : doc.data().endTime;
+  if (!finalAllDay) {
+    if (!finalStart || !finalEnd) throw { code: 'MISSING_TIME', message: '非全天事項需填寫開始與結束時間' };
+    if (finalStart >= finalEnd) throw { code: 'INVALID_TIME_RANGE', message: '結束時間必須晚於開始時間' };
+  }
+  if (category !== undefined && !EVENT_CATEGORIES.includes(category)) throw { code: 'INVALID_CATEGORY', message: '類別不正確' };
+
+  const updates = { updatedAt: new Date() };
+  if (gymId !== undefined) updates.gymId = gymId || null;
+  if (date !== undefined) updates.date = date;
+  if (allDay !== undefined) updates.allDay = !!allDay;
+  updates.startTime = finalAllDay ? null : finalStart;
+  updates.endTime = finalAllDay ? null : finalEnd;
+  if (category !== undefined) updates.category = category;
+  if (title !== undefined) updates.title = (title || '').trim();
+  if (note !== undefined) updates.note = note;
+
+  await ref.update(updates);
+  return { id, ...doc.data(), ...updates };
+};
+
+const deleteScheduleEvent = async (id) => {
+  const db = getDb();
+  const ref = db.collection(COLLECTIONS.SCHEDULE_EVENTS).doc(id);
+  const doc = await ref.get();
+  if (!doc.exists) throw { code: 'NOT_FOUND', message: '找不到此事項' };
+  await ref.delete();
+};
+
+// gymId 為 null 的事項（全館）與指定館的事項都回傳；月份範圍過濾同 getMonthlyShifts。
+const getMonthlyScheduleEvents = async (gymId, yearMonth) => {
+  const db = getDb();
+  const start = dayjs(`${yearMonth}-01`).format('YYYY-MM-DD');
+  const end = dayjs(`${yearMonth}-01`).endOf('month').format('YYYY-MM-DD');
+
+  const [ownSnap, allGymSnap] = await Promise.all([
+    gymId ? db.collection(COLLECTIONS.SCHEDULE_EVENTS).where('gymId', '==', gymId).get() : Promise.resolve({ docs: [] }),
+    db.collection(COLLECTIONS.SCHEDULE_EVENTS).where('gymId', '==', null).get(),
+  ]);
+  const all = [...ownSnap.docs, ...allGymSnap.docs].map(d => ({ id: d.id, ...d.data() }));
+  return all
+    .filter(e => e.date >= start && e.date <= end)
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.allDay === b.allDay ? 0 : a.allDay ? -1 : 1));
+};
+
 // ── 值班前 2 天提醒（每日 9 點排程呼叫）──────────────────────────
 // 查 date === 台灣今天+2 的班次，對每筆 staffId 發 shift_reminder；
 // 冪等：已送過（reminderSentAt）的略過，避免每日排程重送同一班。
@@ -420,4 +500,9 @@ module.exports = {
   getMonthlyHoursSummary,
   clearMonthShifts,
   copyPreviousMonthShifts,
+  EVENT_CATEGORIES,
+  createScheduleEvent,
+  updateScheduleEvent,
+  deleteScheduleEvent,
+  getMonthlyScheduleEvents,
 };

@@ -358,6 +358,7 @@ const buildActiveCourseStudents = async (gymId) => {
         p.paymentStatus = e.paymentStatus;
         p.paymentConfirmed = e.paymentConfirmed !== false;
         p.memberPaidAmount = e.memberPaidAmount ?? null;
+        p.receivedAmountOverride = e.receivedAmountOverride ?? null; // 管理員在課程學員頁直接編修的實收金額
         p.bankLastFive = e.bankLastFive || '';
         p.paymentDate = e.paymentDate || '';
         p.enrolledAt = e.enrolledAt || null;
@@ -405,6 +406,9 @@ const buildActiveCourseStudents = async (gymId) => {
   }
   out.forEach(c => c.members.forEach(m => {
     if (m.enrollmentId && confirmedMap[m.enrollmentId]) m.confirmedAmount = confirmedMap[m.enrollmentId].amount;
+    // 「實收金額」最終採用值：管理員直接編修(receivedAmountOverride) > 店員核對(confirmedAmount)
+    // > 會員自報(memberPaidAmount) > 報名應繳費用(fee)
+    m.receivedAmount = m.receivedAmountOverride ?? m.confirmedAmount ?? m.memberPaidAmount ?? m.fee ?? 0;
   }));
 
   return { courses: out, total: out.reduce((s, c) => s + c.count, 0) };
@@ -415,6 +419,27 @@ router.get('/reports/active-course-students', authenticate, async (req, res) => 
   try {
     const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
     res.json(await buildActiveCourseStudents(gymId));
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── PUT /members/course-enrollments/:enrollmentId/received-amount - 課程學員頁直接編修「實收金額」（管理員）──
+// 寫在該報名主報名列（fee/paymentMethod 所在列）的 receivedAmountOverride 欄位；
+// 優先序最高（覆蓋店員核對/會員自報/應繳費用），供畫面顯示與開發票金額預填共用。
+router.put('/course-enrollments/:enrollmentId/received-amount', authenticate, requireManager, async (req, res) => {
+  try {
+    const db = getDb();
+    const { enrollmentId } = req.params;
+    const raw = req.body.amount;
+    // 允許清空（回到自動判斷：店員核對>會員自報>應繳費用）
+    const amount = (raw === null || raw === '' || raw === undefined) ? null : Number(raw);
+    if (amount !== null && (isNaN(amount) || amount < 0)) {
+      return res.status(400).json({ error: 'INVALID_AMOUNT', message: '實收金額需為 0 或正數' });
+    }
+    const ref = db.collection('courseEnrollments').doc(enrollmentId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此報名紀錄' });
+    await ref.update({ receivedAmountOverride: amount, receivedAmountEditedBy: req.staff.id, receivedAmountEditedAt: new Date(), updatedAt: new Date() });
+    res.json({ success: true, receivedAmountOverride: amount });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -455,6 +480,7 @@ router.get('/reports/active-course-students/download', authenticate, requireMana
           '付款狀態': payLabel(m.paymentStatus),
           '會員自報匯款金額': m.memberPaidAmount ?? '',
           '店員核對收款金額': m.confirmedAmount ?? '',
+          '實收金額（管理員可編修）': m.receivedAmount ?? '',
           '匯款末五碼': m.bankLastFive || '',
           '匯款日期': m.paymentDate || '',
           '員工備註': m.staffNote || '',
@@ -465,10 +491,10 @@ router.get('/reports/active-course-students/download', authenticate, requireMana
         });
       });
     });
-    if (rows.length === 0) rows.push({ '場館': '無資料', '課程名稱': '', '效期起': '', '效期迄': '', '姓名': '', '電話': '', '費用': '', '付款方式': '', '付款狀態': '', '會員自報匯款金額': '', '店員核對收款金額': '', '匯款末五碼': '', '匯款日期': '', '員工備註': '', '健康備註': '', '如何得知': '', '自訂備註': '', '已開立發票金額': '' });
+    if (rows.length === 0) rows.push({ '場館': '無資料', '課程名稱': '', '效期起': '', '效期迄': '', '姓名': '', '電話': '', '費用': '', '付款方式': '', '付款狀態': '', '會員自報匯款金額': '', '店員核對收款金額': '', '實收金額（管理員可編修）': '', '匯款末五碼': '', '匯款日期': '', '員工備註': '', '健康備註': '', '如何得知': '', '自訂備註': '', '已開立發票金額': '' });
 
     const ws = sanitizeSheet(XLSX.utils.json_to_sheet(rows));
-    ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 12, 12, 10, 10, 20, 20, 14, 20, 12].map(w => ({ wch: w }));
+    ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 12, 12, 16, 10, 10, 20, 20, 14, 20, 12].map(w => ({ wch: w }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '課程學員名單');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });

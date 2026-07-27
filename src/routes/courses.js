@@ -1324,6 +1324,11 @@ router.post('/:courseId/enroll-all',
             if (fullTerm && recent) alumni.isFullTermRenewal = true;
           });
         }
+        // 舊系統（BeClass 等）舊生名單匯入補判：僅補 isAlumni，見 courseService.computeAlumniStatus 同段註解
+        if (!alumni.isAlumni && course.categoryId) {
+          const legacyCats = _attendee?.legacyAlumniCategoryIds || [];
+          if (legacyCats.includes(course.categoryId)) alumni.isAlumni = true;
+        }
       }
 
       // ── 報名開放日 gate（後端權威；員工代報不受限）──

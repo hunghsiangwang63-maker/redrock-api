@@ -1510,6 +1510,15 @@ const computeAlumniStatus = async (db, course, courseId, memberId) => {
       if (fullTerm && recent) alumni.isFullTermRenewal = true;
     });
   }
+  // 舊系統（BeClass 等）舊生名單匯入補判：僅補「舊生(isAlumni)」，不補「續報(isFullTermRenewal)」
+  // （匯入資料只證明曾報名繳費、無法確認整期出席，續報仍須系統內實際紀錄佐證）。
+  if (!alumni.isAlumni && course.categoryId) {
+    try {
+      const mDoc = await db.collection(COLLECTIONS.MEMBERS).doc(memberId).get();
+      const legacyCats = mDoc.exists ? (mDoc.data().legacyAlumniCategoryIds || []) : [];
+      if (legacyCats.includes(course.categoryId)) alumni.isAlumni = true;
+    } catch (e) { /* 查詢失敗不影響其他判斷 */ }
+  }
   return alumni;
 };
 

@@ -309,6 +309,38 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
   }
 };
 
+// ── 舊系統課程舊生名單自動認領（如 BeClass 小蜘蛛人歷史報名，用來判定「舊生報名優惠」）───
+// legacyCourseAlumni：{ name(上課者/小孩姓名), phone(家長電話，已正規化為純數字), categoryId, claimed }。
+// 比對：電話（正規化）+ 姓名（legacyNameMatch，去括號＋包含式；子帳號共用家長電話，name 比對上課者本人姓名）。
+// 命中（可多筆，橫跨多期）→ 把 categoryId 聯集寫入 member.legacyAlumniCategoryIds，
+// 供 courseService.computeAlumniStatus / courses.js enroll-all 判定「舊生(isAlumni)」——
+// 僅補 isAlumni，不補續報(isFullTermRenewal)（匯入資料只證明曾報名繳費，非整期出席佐證）。
+const normalizePhone = (p) => String(p || '').replace(/[^0-9]/g, '');
+
+const claimLegacyCourseAlumni = async (db, memberId, member) => {
+  try {
+    const phone = normalizePhone(member.phone);
+    if (!phone || !member.name) return null;
+    const snap = await db.collection('legacyCourseAlumni').where('phone', '==', phone).get();
+    if (snap.empty) return null;
+    const hits = snap.docs.filter(d => d.data().claimed !== true && legacyNameMatch(d.data().name, member.name));
+    if (!hits.length) return null;
+    const now = new Date();
+    const catIds = new Set();
+    for (const hit of hits) {
+      const x = hit.data();
+      if (x.categoryId) catIds.add(x.categoryId);
+      await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now });
+    }
+    if (!catIds.size) return null;
+    await db.collection(COLLECTIONS.MEMBERS).doc(memberId).update({
+      legacyAlumniCategoryIds: [...catIds], updatedAt: now,
+    });
+    console.log(`[舊生名單認領] ${member.name} ${phone} → categoryIds=${[...catIds].join(',')}`);
+    return [...catIds];
+  } catch (e) { console.error('claimLegacyCourseAlumni 失敗（不阻斷建立會員）:', e.message); return null; }
+};
+
 // ── VIP 自動認領（Climbio VIP 名單，無期限）─────────────────────
 // legacyVips：{ name, phone(可空), family(全家), claimed }。
 // 比對：有電話→電話+姓名；無電話→姓名（legacyNameMatch，含子帳號——名單含小孩本名，
@@ -591,6 +623,8 @@ const createMember = async (memberData, staffId, options = {}) => {
   await claimLegacyCompetitionReg(db, memberId, member);
   // 課程名單預留自動認領（店員先建名單但當時查無會員 → 註冊時姓名比對自動加入該課程）
   await claimPendingCourseEnrollment(db, memberId, member);
+  // 舊系統課程舊生名單自動認領（如 BeClass 小蜘蛛人歷史報名 → 判定「舊生報名優惠」）
+  await claimLegacyCourseAlumni(db, memberId, member);
   // Climbio VIP 名單自動認領（無期限；全家 VIP 含子帳號繼承）
   await claimLegacyVip(db, memberId, member);
 

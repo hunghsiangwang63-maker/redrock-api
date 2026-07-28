@@ -221,9 +221,10 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
         // 認領時自動登錄請假（claim.leaveDates：認領前已請過假的日期）→ 該堂標 leave、不佔名額；
         // 認領後跑補課額度重算（min(cap, 有效請假數)）自動給補課券
         const leaveDates = Array.isArray(claim.leaveDates) ? claim.leaveDates : [];
-        const batch = db.batch(); const cnt = {};
+        const batch = db.batch(); const cnt = {}; const _claimEnrollIds = [];
         for (const s of sessions) {
           const eid = uuidv4();
+          _claimEnrollIds.push(eid);
           const isLeave = leaveDates.includes(s.date);
           batch.set(db.collection('courseEnrollments').doc(eid), {
             id: eid, memberId, memberName: member.name, sessionId: s.id, courseId: claim.courseId, courseName: c.name, gymId,
@@ -242,6 +243,21 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
         }
         for (const s of sessions) if (cnt[s.id]) batch.update(db.collection('courseSessions').doc(s.id), { enrolledCount: (s.enrolledCount || 0) + cnt[s.id], updatedAt: now });
         await batch.commit();
+        // 雙寫（Phase 1）：名單認領批次寫入，一次認領對應一筆 header（純新增、失敗不阻斷認領）
+        try {
+          const { createRegistrationHeader } = require('./courseRegistrationService');
+          await createRegistrationHeader(db, {
+            memberId, memberName: member.name,
+            courseId: claim.courseId, courseName: c.name, gymId,
+            status: 'confirmed',
+            paymentMethod: 'roster-claim', paymentStatus: 'confirmed',
+            fee: 0, originalFee: c.price || 0,
+            healthNote: claim.healthNote || null,
+            sessionCount: sessions.length,
+            sourceEnrollmentIds: _claimEnrollIds,
+            enrolledBy: 'roster-claim',
+          });
+        } catch (e) { console.error('[雙寫] courseRegistrations header 建立失敗（不影響認領）:', e.message); }
         // 停課補課券（豁免配額；效期＝課程結束+補課天數；leaveDates 停課日不發）
         try {
           if (closureSessions.length) {

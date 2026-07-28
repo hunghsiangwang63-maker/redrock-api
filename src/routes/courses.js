@@ -1411,6 +1411,7 @@ router.post('/:courseId/enroll-all',
       let isWaitlist = false;
       let waitlistPosition = null;
       let paymentDeadline = null;
+      const allEnrollmentIds = []; // 雙寫用：本次報名建立的全部 courseEnrollments id（供 header 的 sourceEnrollmentIds 稽核比對）
       await db.runTransaction(async (tx) => {
         // 讀取（交易內所有讀取須在寫入之前）
         // 去重：本課程已有 confirmed / waitlist / leave（請假中）報名 → 擋（避免重複報名+重複收費）
@@ -1455,6 +1456,7 @@ router.post('/:courseId/enroll-all',
         futureSessions.forEach((s, idx) => {
           const enrollmentId = uuidv4();
           if (idx === 0) firstEnrollmentId = enrollmentId;
+          allEnrollmentIds.push(enrollmentId);
           tx.set(db.collection('courseEnrollments').doc(enrollmentId), {
             id: enrollmentId,
             memberId,
@@ -1496,6 +1498,37 @@ router.post('/:courseId/enroll-all',
               : { enrolledCount: FieldValue.increment(1), updatedAt: now });
         });
       });
+
+      // ── 雙寫（Phase 1，課程報名資料模型重構）：與上方 courseEnrollments 平行建立 courseRegistrations header ──
+      // 純新增、不讀取、不影響任何既有功能；失敗只記 log、絕不阻斷報名本身。
+      try {
+        const { createRegistrationHeader } = require('../services/courseRegistrationService');
+        await createRegistrationHeader(db, {
+          memberId, memberName: req.body.memberName || req.member?.name || '',
+          courseId, courseName: course.name, gymId: futureSessions[0]?.gymId || gymId,
+          status: enrollStatus,
+          paymentMethod: isWaitlist ? null : paymentMethod,
+          paymentStatus: isWaitlist ? null : 'pending',
+          fee: isWaitlist ? 0 : fee, originalFee: baseFee,
+          renewalDiscount: renewalDiscount > 0 ? renewalDiscount : null,
+          renewalDiscountType: renewalDiscount > 0 ? renewalDiscountType : null,
+          teamDiscountApplied: !isWaitlist && discountResult.applied,
+          healthNote: req.body.healthNote || null,
+          referralSource: req.body.referralSource || null,
+          enrollNote: req.body.enrollNote || null,
+          enrollGender: req.body.enrollGender || null,
+          enrollAge: req.body.enrollAge != null ? req.body.enrollAge : null,
+          confirmedLeavePolicy: !!req.body.confirmedLeavePolicy,
+          confirmedRefundPolicy: !!req.body.confirmedRefundPolicy,
+          portraitSignature: req.body.portraitSignature || null,
+          guardianSignature: req.body.guardianSignature || null,
+          waitlistPosition: isWaitlist ? waitlistPosition : null,
+          paymentDeadline,
+          sessionCount: futureSessions.length,
+          sourceEnrollmentIds: allEnrollmentIds,
+          enrolledBy: memberId,
+        });
+      } catch (e) { console.error('[雙寫] courseRegistrations header 建立失敗（不影響報名）:', e.message); }
 
       // 營收認列在最後一堂課（course.endDate；無則用無限練習迄日/最後場次日）
       const courseRecognitionDate = course.endDate

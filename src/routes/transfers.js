@@ -198,6 +198,11 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
           if (enDoc.exists) {
             const en = enDoc.data();
             await require('../services/passOverlapService').applyCourseOverlapPassExtension({ memberId: en.memberId, courseId: en.courseId });
+            // 雙寫（Phase 1）：連動更新 header 的 paymentStatus
+            try {
+              const { updateRegistrationStatusByCourseMember } = require('../services/courseRegistrationService');
+              await updateRegistrationStatusByCourseMember(db, en.memberId, en.courseId, { paymentStatus: 'confirmed' });
+            } catch (e2) { console.error('[雙寫] header 付款確認更新失敗（不影響收款確認）:', e2.message); }
           }
         } catch (e) { console.error('課程重疊補償失敗（收款已確認）:', e.message); }
         // 課程/工作坊確認收款通知信（運動按摩附注意事項；附場次清單）

@@ -699,6 +699,26 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     : { enrolledCount: session.enrolledCount + 1, updatedAt: now };
   await sessionDoc.ref.update(updateData);
 
+  // 雙寫（Phase 1）：工作坊單場報名，一筆 enrollment 對應一筆 header（純新增、失敗不阻斷報名）
+  try {
+    const { createRegistrationHeader } = require('./courseRegistrationService');
+    await createRegistrationHeader(db, {
+      memberId, memberName: member.name,
+      courseId: session.courseId, courseName: session.courseName, gymId,
+      status: enrollment.status,
+      paymentMethod: enrollment.paymentMethod, paymentStatus: enrollment.paymentStatus,
+      fee: _fee, originalFee: course.price,
+      teamDiscountApplied: _teamPriceApplied,
+      healthNote, referralSource, enrollNote, enrollGender,
+      enrollAge: enrollment.enrollAge,
+      confirmedLeavePolicy, confirmedRefundPolicy, portraitSignature, guardianSignature,
+      waitlistPosition: enrollment.waitlistPosition,
+      sessionCount: 1,
+      sourceEnrollmentIds: [enrollmentId],
+      enrolledBy: staffId || memberId,
+    });
+  } catch (e) { console.error('[雙寫] courseRegistrations header 建立失敗（不影響報名）:', e.message); }
+
   return {
     enrollment,
     feeInfo,
@@ -1173,6 +1193,11 @@ const cancelCourseEnrollments = async ({ courseId, memberId, reason }) => {
     }
     cancelled++;
   }
+  // 雙寫（Phase 1）：連動更新對應 header 狀態（查無 header 屬正常，雙寫剛起步時舊報名尚無對應 header）
+  try {
+    const { updateRegistrationStatusByCourseMember } = require('./courseRegistrationService');
+    await updateRegistrationStatusByCourseMember(db, memberId, courseId, { status: 'cancelled', cancelledAt: now, cancelReason: reason || '退費取消' });
+  } catch (e) { console.error('[雙寫] header 取消狀態更新失敗（不影響取消）:', e.message); }
   return cancelled;
 };
 

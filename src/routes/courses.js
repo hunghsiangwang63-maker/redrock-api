@@ -860,6 +860,13 @@ router.put('/:courseId',
           : { enabled: false, periods: [] };
       }
 
+      // ── 雙寫（Phase 1，報名設定結構化）：改到的欄位同步鏡射進巢狀分組（dot-path，不影響其他巢狀欄位）──
+      // 尚無任何讀取路徑依賴這兩個巢狀物件，純新增鏡射；用 updates 裡已正規化好的值，確保與扁平欄位一致。
+      const ENROLLMENT_RULE_FIELDS = ['enrollOpenDate', 'alumniOpenDate', 'maxWaitlist', 'reservedSlots', 'reservedSlotsNote', 'teamOpenDate', 'generalOpenDate'];
+      const DISCOUNT_RULE_FIELDS = ['fullTermRenewalDiscount', 'alumniDiscount', 'renewalDeadline', 'teamPrice'];
+      ENROLLMENT_RULE_FIELDS.forEach(f => { if (updates[f] !== undefined) updates[`enrollmentRules.${f}`] = updates[f]; });
+      DISCOUNT_RULE_FIELDS.forEach(f => { if (updates[f] !== undefined) updates[`discountRules.${f}`] = updates[f]; });
+
       await db.collection('courses').doc(req.params.courseId).update(updates);
       // maxStudents 變更 → 同步旗下未取消場次（場次名額是建立時快照；不同步會讓 報名/候補遞補/銷假 的
       // 名額判定停留在舊值——實例：課程 6→7 後場次仍 6，銷假被誤擋 SESSION_FULL）

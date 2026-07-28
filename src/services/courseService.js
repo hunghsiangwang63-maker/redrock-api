@@ -124,6 +124,22 @@ const createCourse = async ({ gymId, staffId, data }) => {
     fullTermRenewalDiscount: data.fullTermRenewalDiscount != null ? Number(data.fullTermRenewalDiscount) || 0 : null,
     alumniDiscount: data.alumniDiscount != null ? Number(data.alumniDiscount) || 0 : null,
     renewalDeadline: data.renewalDeadline || null, // 續報截止日：兩種續報優惠皆只到此日（含當日）；空＝不限
+    // ── 雙寫（Phase 1，報名設定結構化）：與上面扁平欄位平行的巢狀分組，尚無任何讀取路徑依賴 ──
+    enrollmentRules: {
+      enrollOpenDate: data.enrollOpenDate || null,
+      alumniOpenDate: data.alumniOpenDate || null,
+      maxWaitlist: (data.maxWaitlist === '' || data.maxWaitlist === null || data.maxWaitlist === undefined) ? null : Number(data.maxWaitlist),
+      reservedSlots: data.reservedSlots ? Number(data.reservedSlots) : 0,
+      reservedSlotsNote: data.reservedSlotsNote || '',
+      teamOpenDate: data.teamOpenDate || null,
+      generalOpenDate: data.generalOpenDate || null,
+    },
+    discountRules: {
+      fullTermRenewalDiscount: data.fullTermRenewalDiscount != null ? Number(data.fullTermRenewalDiscount) || 0 : null,
+      alumniDiscount: data.alumniDiscount != null ? Number(data.alumniDiscount) || 0 : null,
+      renewalDeadline: data.renewalDeadline || null,
+      teamPrice: (data.teamPrice === '' || data.teamPrice === null || data.teamPrice === undefined) ? null : Number(data.teamPrice),
+    },
     // 退費設定（null＝繼承班別）
     perSessionDeduction: data.perSessionDeduction ?? null,
     handlingFeeRate: data.handlingFeeRate ?? null,

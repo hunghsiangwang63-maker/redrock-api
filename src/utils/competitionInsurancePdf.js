@@ -13,6 +13,11 @@ function getPrinter() {
   return new PdfPrinter(FONTS, null, resolver, () => true);
 }
 
+// pdfmake 的 table 沒有直接的「置中」屬性，用左右各一個彈性欄位夾住固定寬度的表格達成水平置中。
+function centerBlock(tableDef) {
+  return { columns: [{ width: '*', text: '' }, { width: 'auto', ...tableDef }, { width: '*', text: '' }] };
+}
+
 function insuranceTableDef(insurance) {
   const body = [
     [{ text: '承保範圍', rowSpan: insurance.rows.length + 1, alignment: 'center', bold: true, fillColor: '#E0E0E0' },
@@ -68,8 +73,8 @@ function dataTableDef(rows) {
 function buildSheetContent(title, insurance, rows, pageBreakBefore) {
   return [
     { text: title, bold: true, fontSize: 13, alignment: 'center', margin: [0, 0, 0, 6], ...(pageBreakBefore ? { pageBreak: 'before' } : {}) },
-    insuranceTableDef(insurance),
-    rows.length ? dataTableDef(rows) : { text: '（無資料）', italics: true, color: '#999' },
+    centerBlock(insuranceTableDef(insurance)),
+    rows.length ? centerBlock(dataTableDef(rows)) : { text: '（無資料）', italics: true, color: '#999', alignment: 'center' },
   ];
 }
 
@@ -77,7 +82,8 @@ async function buildCompetitionInsurancePdfBuffer({ titleBase, insurance, adults
   const printer = getPrinter();
   const docDefinition = {
     defaultStyle: { font: 'NotoSansTC', fontSize: 9 },
-    pageOrientation: 'landscape',
+    pageSize: 'A4',
+    pageOrientation: 'portrait',
     pageMargins: [24, 24, 24, 24],
     content: [
       ...buildSheetContent(`${titleBase}（成人）`, insurance, adults, false),

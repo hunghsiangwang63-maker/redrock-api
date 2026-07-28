@@ -2038,6 +2038,21 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **驗證**：三邊（本機 `public/index.html` / `redrock-comp.web.app` / `comp.redrocktaiwan.com`）逐 byte diff 完全一致；本機 HEAD＝origin/main HEAD＝`ba186aa`；`api.redrocktaiwan.com`（`3.155.0`）與 `redrock-web`（`e26d9c4`）同批盤點確認皆本機＝remote＝部署三邊一致。
 - 📌 **教訓**：純靜態單檔 HTML＋獨立 git repo 的專案，若沒有強制「只能透過 git push 部署」的紀律，**直接對 Firebase Hosting 部署會讓 git 變成謊言來源**——之後任何人改這個檔案前，務必先比對線上 `index.html` 與本機是否一致（`Last-Modified`/`md5`），不要假設 git HEAD＝正式環境。
 
+## 目前進度（2026-07-28 續）— 開立發票（手動記錄，預先建立）：課程學員總表 + 比賽報名/報到 + 結帳作廢金額扣除
+> 為銜接「發票機串接架構」（`docs/invoice-integration-plan.md`）先做**人工過渡版**——現有（尚未串接）發票機仍靠店員手寫/手動印二聯發票，系統只負責記錄「開了哪張、多少錢」並自動計入當日結帳「加減項」，暫不動原本已認列的營收交易（避免與收款當下的 accrual 重複計算）。日後印表機真正接上，`InvoiceModal` 的「開立」動作可直接改呼叫 `InvoicePrinter.print(...)` 觸發實際列印，UI/資料模型不必大改。後端 commit `2be7227`→`fbaed5a`→`a0a4035`；前端 commit `ff76b69`→`9d38c94`→`ee0aa6b`→`6377cb7`。
+- ✅ **共用後端 `src/services/invoiceService.js`**（`a0a4035` 從 members.js 內的課程專屬邏輯抽出泛化）：新增 `invoiceRecords` 集合，`sourceType+refId` 決定唯一性——同一筆訂單同時最多一張 `status:'issued'`，須先「作廢」（`status:'voided'`）才能重新開立；開立/作廢分別寫入當日結帳「加減項」（`+發票開立`／`-發票作廢`，對稱沖銷，走既有 `settlementService.addCashAdjustment`）。
+- ✅ **共用前端 `src/components/InvoiceModal.jsx`**（`ee0aa6b` 從 MembersPage 內的課程 modal 抽出泛化）：日期時間/品項/金額(預填實收金額)/統一編號(選填)/管理員備註 → 開立；已有作用中發票時只顯示摘要＋「作廢發票」鍵（二次確認）；**「關閉」鈕在任何狀態都在**（＝取消/略過，非阻斷式，不開票不影響原本收款流程）。
+- ✅ **課程**：入口在「**課程學員總表**」（`MembersPage.jsx` 課程學員 tab）——每位學員一顆「🧾 開立發票」，另加「詳細」按鈕看完整報名/繳費資訊；名單每列一律顯示「**實收金額**」（`receivedAmount`，管理員可就地編修 input、onBlur 存檔；非管理員唯讀，且限站台/值班才看得到）；開立發票金額直接採用後端算好的最終實收金額；名單下載（總表/單一班別 XLSX）也帶出已開立發票金額欄（依 refId 查、排除已作廢）。**2026-07-28 拍板：刻意不在「待收款確認」當下開票**——課程發票統一由課程學員總表開立，待收款確認流程維持原樣、只確認金流狀態、不觸發發票。
+- ✅ **比賽**：入口有兩處，各自呼叫各自後端端點但共用同一個 `InvoiceModal`——①員工報到頁（`CheckinPage` 掃到比賽報到 QR 後，`/competitions/checkin/scan` 回應補 `memberId/gymId/receivedAmount` 供帶入）②賽事管理報名總名單列（`CompetitionsPage`，`6377cb7` 從「報名詳細資料」內移出到名單列，不用點進去）。
+- 🐞 **附帶修**：入場成功卡缺少「比賽報到」中文標籤（`ENTRY_TYPE_LABEL` 補 `competition`）。
+- ✅ **結帳「作廢票號碼總金額」改從發票總金額扣除**（原設計「僅備註、不扣總計」，2026-07-28 拍板改回扣除）：`DailySettlementPage.jsx` 的 `SettlementSummary` 顯示 `發票總金額 − 作廢金額` 為主要數字（旁註「合計 X － 作廢 Y」）；後端月銷售 Excel「實收總額/總計/手計總額」與「統一發票明細表」的「發票總金額」欄同步扣除。純顯示/匯出層調整，不動 `income.total` 本身（避免影響營收報表等其他讀者）。後端 `/health` `3.171.0-settlement-void-invoice-deducted`；前端 commit `9ffd020`。
+- 🐞 **附帶修：結帳頁切換館別殘留上一館表單資料**（謝政祥案例，「士林跟新竹都有他的繳費」誤判）：`loadToday()` 原本只在「該館今天有暫存檔」時才更新 local state，切到沒有暫存檔的館別時畫面繼續顯示前一個檢視館別的加減項/點鈔——資料庫其實只有一筆（新竹）。修：無暫存檔時明確重置 denominations/deductions/發票段/作廢清單/卡號/備註等所有欄位。前端 commit `cb21ce9`。
+- 📌 **待擴充（之後執行，同一套 `invoiceService`+`InvoiceModal`，加新 `sourceType` 即可，非工程難題只是排期）**：
+  - **商品銷售（POS）**：`SalesPage` 完成銷售送出成功後。
+  - **器材租借**：`RentalActionModal` **確認歸還**（`action==='return'`）成功後——⚠ 不是確認收款/取件，是**歸還**確認時（租金/押金於歸還當下才算最終定案）。
+  - **入場 QR**：掃碼／確認入場（`confirmCheckIn`）之後。
+  - **總原則**：所有會產生收入的流程最終都要有對應的開立發票入口；**取消/略過鈕為必備**（`InvoiceModal` 已內建，新流程只要正確接上共用元件即自動符合，不用另外設計）。詳見 `docs/invoice-integration-plan.md` 第 9 節。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

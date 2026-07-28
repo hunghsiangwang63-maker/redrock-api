@@ -49,6 +49,7 @@ const createCompetition = async ({ name, description, gymId, registrationStart, 
       childEarlyBird: 840, childRegular: 950,
       teamMemberDiscount: 0.9,
       childAgeLimit: 15, // 幾歲以下算兒童
+      insuranceAdult: 261, insuranceChild: 118, // 保險費（開發票/記營收時從報名費中扣除，不算館內收入）
     },
     // 繳款期限：報名日 + N 天內須完成繳費（含臨櫃繳款），逾期由排程自動剔除名單。預設 3 天。
     paymentDeadlineDays: (paymentDeadlineDays === undefined || paymentDeadlineDays === null || paymentDeadlineDays === '') ? 3 : Math.max(1, parseInt(paymentDeadlineDays) || 3),
@@ -231,6 +232,8 @@ const registerForCompetition = async ({
   let registrationFee = isChild
     ? (isEarlyBird ? fees.childEarlyBird : fees.childRegular) || 950
     : (isEarlyBird ? fees.adultEarlyBird : fees.adultRegular) || 1100;
+  // 保險費（成人/未滿 childAgeLimit 歲兒童）：報名時鎖定存檔，開發票/記營收時從報名費扣除（保險不算館內收入）
+  const insuranceFee = isChild ? (fees.insuranceChild ?? 118) : (fees.insuranceAdult ?? 261);
 
   // 折扣（不疊加，擇優取較低價）：攀岩隊員 9 折 vs 友館折扣（心流/爬森等，會員宣告→櫃檯人工核對）
   const baseFee = registrationFee;
@@ -338,6 +341,8 @@ const registerForCompetition = async ({
     isMinor: !!isMinor,
     // 費用
     registrationFee,
+    insuranceFee, // 保費（成人/兒童，報名時鎖定；開發票/記營收從報名費扣除）
+    isChild: !!isChild,
     isEarlyBird: !!isEarlyBird,
     isTeamDiscount: teamDiscountApplied,   // 攀岩隊員 9 折
 
@@ -609,6 +614,15 @@ const getMemberRegistrations = async (memberId) => {
     .sort((a, b) => (b.registeredAt?._seconds || b.createdAt?._seconds || 0) - (a.registeredAt?._seconds || a.createdAt?._seconds || 0));
 };
 
+// 實收金額（扣除保費）：管理員可直接編修覆蓋(receivedAmountOverride)；否則以
+// 匯款確認金額(paidAmount，缺則會員自報/報名費) − 保費(insuranceFee) 計算，夾下限 0。
+// 保費不算館內收入（比照體驗課程「保險不開發票」），供開立發票與記帳（結帳）共用同一套金額。
+const computeNetReceivedAmount = (reg) => {
+  if (reg.receivedAmountOverride != null) return Number(reg.receivedAmountOverride);
+  const gross = reg.paidAmount ?? reg.memberPaidAmount ?? reg.registrationFee ?? 0;
+  return Math.max(0, gross - (reg.insuranceFee || 0));
+};
+
 // 比賽營收記帳（認列在「比賽前一天」＝eventDate−1）。收款冪等（revenueRecorded），退費記負向。
 // 供 confirm-payment / refund / 轉帳確認 三條路徑共用，避免重複記帳。
 const recordCompetitionRevenue = async ({ db, regId, sign = 1, refund = false, staffId = null, staffName = '' }) => {
@@ -619,8 +633,9 @@ const recordCompetitionRevenue = async ({ db, regId, sign = 1, refund = false, s
   if (!regSnap.exists) return;
   const reg = regSnap.data();
   if (sign > 0 && reg.revenueRecorded) return; // 冪等：收款只記一次
+  // 收款：記淨額（扣保費，保費不算館內營收）；退費：沿用既有 refundAmount 手動金額（不動，退費政策另計）
   const amount = sign > 0
-    ? (reg.paidAmount || reg.registrationFee || 0)
+    ? computeNetReceivedAmount(reg)
     : (reg.refundAmount || reg.paidAmount || reg.registrationFee || 0);
   if (!amount || amount <= 0) return;
   let recognitionDate = null, gymId = reg.gymId || null;
@@ -693,5 +708,5 @@ module.exports = {
   registerForCompetition, signParentCompetitionWaiver,
   sendWebhook, retryWebhook, promoteNextWaitlist, startScoringSync,
   getCompetitionRegistrations, getMemberRegistrations,
-  recordCompetitionRevenue,
+  recordCompetitionRevenue, computeNetReceivedAmount,
 };

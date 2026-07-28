@@ -97,6 +97,8 @@ router.get('/:id', authenticateAny, async (req, res) => {
 router.get('/:id/registrations', authenticate, checkPermission('competitions.manage'), async (req, res) => {
   try {
     const registrations = await competitionService.getCompetitionRegistrations(req.params.id);
+    // 附加「實收金額」（管理員編修 > 匯款確認金額-保費 > 應繳費用-保費），供名單/開發票 modal 顯示與預填
+    registrations.forEach(r => { r.receivedAmount = competitionService.computeNetReceivedAmount(r); });
     res.json({ registrations });
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
@@ -761,6 +763,7 @@ router.post('/registrations/:regId/update-form', authenticateAny, async (req, re
     let registrationFee = isChild
       ? (isEarly ? fees.childEarlyBird : fees.childRegular) || 950
       : (isEarly ? fees.adultEarlyBird : fees.adultRegular) || 1100;
+    const insuranceFee = isChild ? (fees.insuranceChild ?? 118) : (fees.insuranceAdult ?? 261);
     // 折扣擇優（不疊加）：隊員 9 折 vs 友館折扣（沿用原報名選定的友館 reg.partnerGymId；核對狀態不變）
     const _base = registrationFee;
     let feTeamDiscount = false, fePartner = false, fePartnerName = reg.partnerGym || null;
@@ -819,6 +822,8 @@ router.post('/registrations/:regId/update-form', authenticateAny, async (req, re
       registrationFee, isEarlyBird: !!isEarly, isTeamDiscount: feTeamDiscount,
       isPartnerGymDiscount: fePartner, partnerGym: fePartner ? fePartnerName : null,
       partnerGymPending: fePartner ? (reg.partnerGymPending !== false) : false,
+      insuranceFee, isChild: !!isChild,
+      receivedAmountOverride: null, // 生日/身分可能改變（成人⇄兒童）→ 清除手動覆蓋，回歸依新保費自動計算
       // 清除退回旗標
       formReturned: false, formReturnReason: null, formReturnedAt: null,
       updatedAt: new Date(),
@@ -855,6 +860,7 @@ router.post('/registrations/:regId/reregister', authenticateAny, async (req, res
     const age = reg.birthday ? dayjs().diff(dayjs(reg.birthday), 'year') : null;
     const isChild = age !== null && age < (fees.childAgeLimit || 15);
     let registrationFee = isChild ? (isEarly ? fees.childEarlyBird : fees.childRegular) || 950 : (isEarly ? fees.adultEarlyBird : fees.adultRegular) || 1100;
+    const insuranceFee = isChild ? (fees.insuranceChild ?? 118) : (fees.insuranceAdult ?? 261);
     // 折扣擇優（不疊加）：隊員 9 折 vs 友館折扣（沿用原報名友館，重報後仍待核對）
     const _rb = registrationFee;
     let rrTeamDiscount = false, rrPartner = false, rrPartnerName = reg.partnerGym || null;
@@ -898,6 +904,7 @@ router.post('/registrations/:regId/reregister', authenticateAny, async (req, res
         status: finalStatus, waitlistPosition,
         paymentStatus: 'pending', registrationFee, isEarlyBird: !!isEarly, isTeamDiscount: rrTeamDiscount,
         isPartnerGymDiscount: rrPartner, partnerGym: rrPartner ? rrPartnerName : null, partnerGymPending: rrPartner,
+        insuranceFee, isChild: !!isChild, receivedAmountOverride: null,
         cancelReason: null, paymentExpiredAt: null, cancelledAt: null,
         bankLastFive: null, bankName: null, paymentDate: null,   // 需重新繳費
         reregisteredAt: now, updatedAt: now,
@@ -1016,11 +1023,29 @@ router.post('/checkin/scan', authenticate, requireManagerOrStation, async (req, 
       registrationId: reg.id, memberId: reg.memberId, memberName: reg.memberName,
       competitionId: reg.competitionId, competitionName: reg.competitionName || comp.name, divisionName: reg.divisionName,
       eventDate: comp.eventDate, gymId: comp.gymId || null, status: reg.status, isComplete: reg.isComplete,
-      paymentStatus: reg.paymentStatus, registrationFee: reg.registrationFee,
-      // 實收金額預填來源（供開立發票 modal 使用）：店員收款確認時填的金額 > 會員自報匯款金額 > 應繳費用
-      receivedAmount: reg.paidAmount ?? reg.memberPaidAmount ?? reg.registrationFee ?? 0,
+      paymentStatus: reg.paymentStatus, registrationFee: reg.registrationFee, insuranceFee: reg.insuranceFee ?? null,
+      // 實收金額（供開立發票 modal 使用）：管理員編修 > 匯款確認金額-保費 > 會員自報金額-保費 > 應繳費用-保費
+      receivedAmount: competitionService.computeNetReceivedAmount(reg),
       checkedInAt: reg.checkedInAt || null,
     });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── PUT /competitions/registrations/:regId/received-amount - 直接編修「實收金額」（管理員）──
+// 覆蓋後優先於自動計算（匯款確認金額－保費）；供查看名單/開發票 modal 共用。
+router.put('/registrations/:regId/received-amount', authenticate, requireManager, async (req, res) => {
+  try {
+    const db = getDb();
+    const raw = req.body.amount;
+    const amount = (raw === null || raw === '' || raw === undefined) ? null : Number(raw);
+    if (amount !== null && (isNaN(amount) || amount < 0)) {
+      return res.status(400).json({ error: 'INVALID_AMOUNT', message: '實收金額需為 0 或正數' });
+    }
+    const ref = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(req.params.regId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此報名紀錄' });
+    await ref.update({ receivedAmountOverride: amount, receivedAmountEditedBy: req.staff.id, receivedAmountEditedAt: new Date(), updatedAt: new Date() });
+    res.json({ success: true, receivedAmountOverride: amount });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

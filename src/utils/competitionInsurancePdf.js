@@ -1,7 +1,7 @@
 // ── 比賽簽到表暨保險名冊：PDF 輸出（pdfmake，純 JS、無需 LibreOffice/headless Chrome）──
 // 中文字型：bundle 隨附的 Noto Sans TC（OFL 授權，src/assets/fonts/），否則中文會變空白方塊。
 const path = require('path');
-const PdfPrinter = require('pdfmake/js/printer.js').default;
+const PdfPrinter = require('pdfmake/js/Printer.js').default;
 const URLResolver = require('pdfmake/js/URLResolver.js').default;
 const fs = require('fs');
 

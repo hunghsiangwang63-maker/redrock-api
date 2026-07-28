@@ -1494,6 +1494,12 @@ router.post('/:courseId/enroll-all',
             enrollNote: req.body.enrollNote || null,
             enrollGender: req.body.enrollGender || null,
             enrollAge: req.body.enrollAge != null ? req.body.enrollAge : null,
+            // 修 bug（2026-07-28）：原本這 4 個欄位前端有送、後端從未存過（只有工作坊單場 enrollCourse 有存）——
+            // 規則確認打勾與肖像權/法定代理人簽名資料在整期週課報名路徑上一直被默默丟棄。比照 healthNote 複製到每一堂。
+            confirmedLeavePolicy: !!req.body.confirmedLeavePolicy,
+            confirmedRefundPolicy: !!req.body.confirmedRefundPolicy,
+            portraitSignature: req.body.portraitSignature || null,
+            guardianSignature: req.body.guardianSignature || null,
             enrolledBy: memberId,
             enrolledAt: now,
             createdAt: now,

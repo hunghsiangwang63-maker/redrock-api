@@ -296,19 +296,18 @@ router.get('/', authenticate, async (req, res) => {
     const registrations = [];
     const secOf = ts => ts?._seconds || (ts?.toDate ? Math.floor(ts.toDate().getTime()/1000) : 0);
     const dayOf = ts => { const s = secOf(ts); return s ? new Date(s*1000 + 8*3600000).toISOString().slice(0,10) : today; };
-    // 課程（依會員+課程去重，週課多堂只算一筆）
+    // 課程（Phase 3：改讀 courseRegistrations header，一次報名天生一筆，不用再依查詢順序猜哪筆代表整組——
+    // 原本直接查 courseEnrollments 用「查到的第一筆」判斷 _needsCollect，Firestore 未下 orderBy、
+    // 順序不保證是扛費用的那筆，理論上可能誤判成「不用收款」而漏進待辦。header 一筆一組，無此疑慮。）
     try {
-      const snap = await db.collection('courseEnrollments').where('createdAt', '>=', sevenDaysAgo).get();
-      const seen = new Set();
+      const snap = await db.collection('courseRegistrations').where('createdAt', '>=', sevenDaysAgo).get();
       snap.docs.forEach(d => {
-        const e = d.data();
-        if (!['confirmed','waitlist'].includes(e.status) || e.isMakeup) return;
-        if (gymId && e.gymId && e.gymId !== gymId) return;
-        const key = `${e.memberId}_${e.courseId}`;
-        if (seen.has(key)) return; seen.add(key);
+        const h = d.data();
+        if (!['confirmed','waitlist'].includes(h.status)) return;
+        if (gymId && h.gymId && h.gymId !== gymId) return;
         // 查看導向：待收款中→待辦頁；已確認/免費（後台處理、名單帶入）→ 課程頁看名單
-        const _needsCollect = (e.enrollmentFee || 0) > 0 && e.paymentConfirmed !== true;
-        registrations.push({ id:`reg_course_${d.id}`, regType:'course', memberName:e.memberName||'', name:e.courseName||'', detail:e.date||'', createdAt: secOf(e.createdAt), dateStr: dayOf(e.createdAt), gymId:e.gymId, link: _needsCollect ? '/staff/pending-tasks' : '/staff/courses' });
+        const _needsCollect = (h.fee || 0) > 0 && h.paymentStatus !== 'confirmed';
+        registrations.push({ id:`reg_course_${d.id}`, regType:'course', memberName:h.memberName||'', name:h.courseName||'', detail: h.sessionCount ? `共${h.sessionCount}堂` : '', createdAt: secOf(h.createdAt), dateStr: dayOf(h.createdAt), gymId:h.gymId, link: _needsCollect ? '/staff/pending-tasks' : '/staff/courses' });
       });
     } catch(e) {}
     // 比賽

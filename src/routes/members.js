@@ -329,35 +329,45 @@ router.get('/reports/active-passes', authenticate, async (req, res) => {
 const practiceEndOf = (c) => c.unlimitedPracticeEnd
   || (c.endDate ? dayjs(c.endDate).add(c.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : null);
 
-// 單一課程完整學員名單：付款欄位只存在「主報名列」（paymentStatus!=='na'）。
+// 單一課程完整學員名單（Phase 3：改讀 courseRegistrations header——一次報名一筆，不用再逐筆掃
+// slot 猜哪筆是「主報名列」。header 缺的 gymAccessStart 等場次層資訊本就不需要，這裡只要報名層資料）。
 const buildCourseMemberList = async (db, c) => {
   const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', c.id).get();
   const seen = new Map();
-  const payMap = {};
   enrollSnap.docs.forEach(d => {
     const e = d.data();
     if (e.status !== 'confirmed' || e.pauseStatus === 'paused') return;
     if (e.isMakeup || e.isTrial) return; // 補課/試上＝單日行為（入場資格僅當天），不列為該班「課程學員」
     if (!seen.has(e.memberId)) seen.set(e.memberId, { memberId: e.memberId, memberName: e.memberName || '' });
-    const p = payMap[e.memberId] || (payMap[e.memberId] = {});
-    // 付款欄位只在主報名列（idx0）有值：paymentStatus 非 'na' 即為主列
-    if (e.paymentStatus && e.paymentStatus !== 'na') {
-      p.enrollmentId = d.id;
-      p.fee = e.enrollmentFee ?? 0;
-      p.paymentMethod = e.paymentMethod || '';
-      p.paymentStatus = e.paymentStatus;
-      p.paymentConfirmed = e.paymentConfirmed !== false;
-      p.memberPaidAmount = e.memberPaidAmount ?? null;
-      p.receivedAmountOverride = e.receivedAmountOverride ?? null; // 管理員在課程學員頁直接編修的實收金額
-      p.bankLastFive = e.bankLastFive || '';
-      p.paymentDate = e.paymentDate || '';
-      p.enrolledAt = e.enrolledAt || null;
-    }
-    if (!p.enrollNote && e.enrollNote) p.enrollNote = e.enrollNote;
-    if (!p.healthNote && e.healthNote) p.healthNote = e.healthNote;
-    if (!p.referralSource && e.referralSource) p.referralSource = e.referralSource;
-    if (!p.staffNote && e.staffNote) p.staffNote = e.staffNote;
   });
+  const memberIds = [...seen.keys()];
+  const payMap = {};
+  for (let i = 0; i < memberIds.length; i += 30) {
+    const batch = memberIds.slice(i, i + 30);
+    if (!batch.length) break;
+    const hSnap = await db.collection('courseRegistrations')
+      .where('courseId', '==', c.id).where('memberId', 'in', batch).get();
+    hSnap.forEach(d => {
+      const h = d.data();
+      if (h.status === 'cancelled') return; // 該生此課程已整筆取消的 header 不採用（罕見：舊資料重複組殘留）
+      payMap[h.memberId] = {
+        enrollmentId: h.payEnrollmentId,
+        fee: h.fee ?? 0,
+        paymentMethod: h.paymentMethod || '',
+        paymentStatus: h.paymentStatus || '',
+        paymentConfirmed: h.paymentConfirmed !== false,
+        memberPaidAmount: h.memberPaidAmount ?? null,
+        receivedAmountOverride: h.receivedAmountOverride ?? null,
+        bankLastFive: h.bankLastFive || '',
+        paymentDate: h.paymentDate || '',
+        enrolledAt: h.enrolledAt || null,
+        enrollNote: h.enrollNote || '',
+        healthNote: h.healthNote || '',
+        referralSource: h.referralSource || '',
+        staffNote: h.staffNote || '',
+      };
+    });
+  }
   let members = [...seen.values()].map(m => ({ ...m, ...(payMap[m.memberId] || {}) }));
   // 電話以 members 集合權威補齊
   if (members.length) {
@@ -521,7 +531,18 @@ router.put('/course-enrollments/:enrollmentId/received-amount', authenticate, re
     const ref = db.collection('courseEnrollments').doc(enrollmentId);
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此報名紀錄' });
-    await ref.update({ receivedAmountOverride: amount, receivedAmountEditedBy: req.staff.id, receivedAmountEditedAt: new Date(), updatedAt: new Date() });
+    const now = new Date();
+    await ref.update({ receivedAmountOverride: amount, receivedAmountEditedBy: req.staff.id, receivedAmountEditedAt: now, updatedAt: now });
+    // 雙寫（Phase 1）：連動更新 header
+    try {
+      const en = doc.data();
+      if (en.memberId && en.courseId) {
+        const { updateRegistrationStatusByCourseMember } = require('../services/courseRegistrationService');
+        await updateRegistrationStatusByCourseMember(db, en.memberId, en.courseId, {
+          receivedAmountOverride: amount, receivedAmountEditedBy: req.staff.id, receivedAmountEditedAt: now,
+        });
+      }
+    } catch (e) { console.error('[雙寫] header 實收金額更新失敗（不影響編修）:', e.message); }
     res.json({ success: true, receivedAmountOverride: amount });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

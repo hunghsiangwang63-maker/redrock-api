@@ -68,9 +68,15 @@ router.post('/enrollments/:enrollmentId/refund-request',
 
       const courseDoc = await db.collection('courses').doc(courseId).get();
       const course = courseDoc.exists ? courseDoc.data() : null;
-      // 已付金額：彙總所有報名的 paidAmount，若皆為 0 則退而求其次用 enrollmentFee（避免抓到非持費那筆算成 0）
-      const paidAmount = all.reduce((s, e) => s + (e.paidAmount || 0), 0)
-        || all.reduce((s, e) => s + (e.enrollmentFee || 0), 0);
+      // 已付金額（Phase 3：改讀 courseRegistrations header.fee，不用再加總 N 筆 slot——
+      // 原本 all.reduce(...paidAmount) 這個欄位在課程從未被寫入、恆為 0，實際一路都是走 enrollmentFee 那個 fallback）
+      let paidAmount = 0;
+      try {
+        const hSnap = await db.collection('courseRegistrations')
+          .where('courseId', '==', courseId).where('memberId', '==', memberId).get();
+        const h = hSnap.docs.map(d => d.data()).find(x => x.status !== 'cancelled');
+        paidAmount = h ? (h.fee || 0) : all.reduce((s, e) => s + (e.enrollmentFee || 0), 0);
+      } catch (e) { paidAmount = all.reduce((s, e) => s + (e.enrollmentFee || 0), 0); }
       const today = taiwanToday(); // 台灣日期
       const courseStartDate = course?.startDate || null;
       // 退費規則走班別繼承（梯次可覆寫）：每堂扣除/手續費率

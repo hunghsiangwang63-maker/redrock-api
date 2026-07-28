@@ -253,6 +253,8 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
             paymentMethod: 'roster-claim', paymentStatus: 'confirmed',
             fee: 0, originalFee: c.price || 0,
             healthNote: claim.healthNote || null,
+            bankLastFive: claim.bankLastFive || null,
+            memberPaidAmount: claim.paidAmount ?? null,
             sessionCount: sessions.length,
             sourceEnrollmentIds: _claimEnrollIds,
             enrolledBy: 'roster-claim',

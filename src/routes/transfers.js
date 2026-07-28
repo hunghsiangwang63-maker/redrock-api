@@ -108,6 +108,17 @@ router.post('/upload', authenticateAny, upload.single('screenshot'), async (req,
           paymentConfirmed: false,
           updatedAt: now,
         });
+        // 雙寫（Phase 1）：課程訂單連動更新 header 的 memberPaidAmount/paymentConfirmed
+        if (resolvedOrderType === 'course' && linkedOrder.memberId && linkedOrder.courseId) {
+          try {
+            const { updateRegistrationStatusByCourseMember } = require('../services/courseRegistrationService');
+            await updateRegistrationStatusByCourseMember(db, linkedOrder.memberId, linkedOrder.courseId, {
+              paymentStatus: 'pending_confirm',
+              ...(paidAmount ? { memberPaidAmount: Number(paidAmount) } : {}),
+              paymentConfirmed: false,
+            });
+          } catch (e2) { console.error('[雙寫] header 轉帳上傳更新失敗（不影響上傳）:', e2.message); }
+        }
       } catch (e) { console.error('transfer upload link:', e.message); }
     }
 
@@ -198,10 +209,13 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
           if (enDoc.exists) {
             const en = enDoc.data();
             await require('../services/passOverlapService').applyCourseOverlapPassExtension({ memberId: en.memberId, courseId: en.courseId });
-            // 雙寫（Phase 1）：連動更新 header 的 paymentStatus
+            // 雙寫（Phase 1）：連動更新 header 的 paymentStatus（+staffNote，若這次有填）
             try {
               const { updateRegistrationStatusByCourseMember } = require('../services/courseRegistrationService');
-              await updateRegistrationStatusByCourseMember(db, en.memberId, en.courseId, { paymentStatus: 'confirmed' });
+              await updateRegistrationStatusByCourseMember(db, en.memberId, en.courseId, {
+                paymentStatus: 'confirmed', paymentConfirmed: true,
+                ...(noteUpdate.staffNote !== undefined ? { staffNote: noteUpdate.staffNote } : {}),
+              });
             } catch (e2) { console.error('[雙寫] header 付款確認更新失敗（不影響收款確認）:', e2.message); }
           }
         } catch (e) { console.error('課程重疊補償失敗（收款已確認）:', e.message); }

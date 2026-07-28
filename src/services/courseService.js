@@ -725,12 +725,14 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
       paymentMethod: enrollment.paymentMethod, paymentStatus: enrollment.paymentStatus,
       fee: _fee, originalFee: course.price,
       teamDiscountApplied: _teamPriceApplied,
+      bankLastFive, paymentDate,
       healthNote, referralSource, enrollNote, enrollGender,
       enrollAge: enrollment.enrollAge,
       confirmedLeavePolicy, confirmedRefundPolicy, portraitSignature, guardianSignature,
       waitlistPosition: enrollment.waitlistPosition,
       sessionCount: 1,
       sourceEnrollmentIds: [enrollmentId],
+      payEnrollmentId: enrollmentId,
       enrolledBy: staffId || memberId,
     });
   } catch (e) { console.error('[雙寫] courseRegistrations header 建立失敗（不影響報名）:', e.message); }

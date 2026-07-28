@@ -37,6 +37,15 @@ const createRegistrationHeader = async (db, data) => {
     teamDiscountApplied: !!data.teamDiscountApplied,
     installmentPlanId: data.installmentPlanId || null,
     healthNote: data.healthNote || null,
+    staffNote: data.staffNote || null, // 管理員收款確認時填的內部備註（會員看不到）
+    memberPaidAmount: data.memberPaidAmount ?? null, // 會員自填實際匯款金額（/transfers/upload）
+    bankLastFive: data.bankLastFive || null,
+    paymentDate: data.paymentDate || null,
+    paymentConfirmed: data.paymentConfirmed !== false, // 預設 true（未明確標記為 false 即視為未被退回狀態）
+    receivedAmountOverride: data.receivedAmountOverride ?? null, // 管理員在課程學員頁直接編修的實收金額
+    // 扛費用/可被 PUT /course-enrollments/:enrollmentId/received-amount 編修的那筆 courseEnrollments doc id
+    // （沿用現行「編修目標仍是 enrollment 文件」的設計，header 只是提供穩定的顯示/查詢入口）
+    payEnrollmentId: data.payEnrollmentId || (data.sourceEnrollmentIds || [])[0] || null,
     referralSource: data.referralSource || null,
     enrollNote: data.enrollNote || null,
     enrollGender: data.enrollGender || null,

@@ -547,16 +547,19 @@ router.get('/:courseId/attendance/download',
         attBySession[s.id] = m;
       }
 
-      // 報名備註（每位學員取一筆非空：備註/健康備註/如何得知/員工備註(收款確認時填)）
+      // 報名備註（Phase 3：改讀 courseRegistrations header，一次報名一筆、天生無重複，不用再逐筆掃 slot 撿非空值）
       const noteMap = {};
-      enrollSnap.docs.forEach(d => {
-        const e = d.data();
-        const n = noteMap[e.memberId] || (noteMap[e.memberId] = {});
-        if (!n.enrollNote && e.enrollNote) n.enrollNote = e.enrollNote;
-        if (!n.healthNote && e.healthNote) n.healthNote = e.healthNote;
-        if (!n.referralSource && e.referralSource) n.referralSource = e.referralSource;
-        if (!n.staffNote && e.staffNote) n.staffNote = e.staffNote;
-      });
+      if (memberIds.length) {
+        for (let i = 0; i < memberIds.length; i += 30) {
+          const batch = memberIds.slice(i, i + 30);
+          const hSnap = await db.collection('courseRegistrations')
+            .where('courseId', '==', courseId).where('memberId', 'in', batch).get();
+          hSnap.forEach(d => {
+            const h = d.data();
+            noteMap[h.memberId] = { enrollNote: h.enrollNote || '', healthNote: h.healthNote || '', referralSource: h.referralSource || '', staffNote: h.staffNote || '' };
+          });
+        }
+      }
 
       const label = { present: '出席', absent: '缺席', late: '遲到' };
       const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
@@ -1539,6 +1542,7 @@ router.post('/:courseId/enroll-all',
           paymentDeadline,
           sessionCount: futureSessions.length,
           sourceEnrollmentIds: allEnrollmentIds,
+          payEnrollmentId: firstEnrollmentId,
           enrolledBy: memberId,
         });
       } catch (e) { console.error('[雙寫] courseRegistrations header 建立失敗（不影響報名）:', e.message); }

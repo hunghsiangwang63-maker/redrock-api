@@ -567,6 +567,7 @@ router.get('/reports/active-course-students/download', authenticate, requireMana
     // 已開立發票金額合計（依 refId=enrollmentId 批次查；只計未作廢的）
     const enrollIds = [...new Set(filtered.flatMap(c => c.members.map(m => m.enrollmentId).filter(Boolean)))];
     const invoicedMap = {};
+    const invoiceNoMap = {};
     for (let i = 0; i < enrollIds.length; i += 10) {
       const chunk = enrollIds.slice(i, i + 10);
       if (!chunk.length) break;
@@ -575,6 +576,7 @@ router.get('/reports/active-course-students/download', authenticate, requireMana
         const v = d.data();
         if (v.status === 'voided') return;
         invoicedMap[v.refId] = (invoicedMap[v.refId] || 0) + (Number(v.amount) || 0);
+        if (v.invoiceNo) invoiceNoMap[v.refId] = v.invoiceNo;
       });
     }
 
@@ -601,13 +603,14 @@ router.get('/reports/active-course-students/download', authenticate, requireMana
           '如何得知': m.referralSource || '',
           '自訂備註': m.enrollNote || '',
           '已開立發票金額': invoicedMap[m.enrollmentId] || '',
+          '已開立發票號碼': invoiceNoMap[m.enrollmentId] || '',
         });
       });
     });
-    if (rows.length === 0) rows.push({ '場館': '無資料', '課程名稱': '', '效期起': '', '效期迄': '', '姓名': '', '電話': '', '費用': '', '付款方式': '', '付款狀態': '', '會員自報匯款金額': '', '店員核對收款金額': '', '實收金額（管理員可編修）': '', '匯款末五碼': '', '匯款日期': '', '員工備註': '', '健康備註': '', '如何得知': '', '自訂備註': '', '已開立發票金額': '' });
+    if (rows.length === 0) rows.push({ '場館': '無資料', '課程名稱': '', '效期起': '', '效期迄': '', '姓名': '', '電話': '', '費用': '', '付款方式': '', '付款狀態': '', '會員自報匯款金額': '', '店員核對收款金額': '', '實收金額（管理員可編修）': '', '匯款末五碼': '', '匯款日期': '', '員工備註': '', '健康備註': '', '如何得知': '', '自訂備註': '', '已開立發票金額': '', '已開立發票號碼': '' });
 
     const ws = sanitizeSheet(XLSX.utils.json_to_sheet(rows));
-    ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 12, 12, 16, 10, 10, 20, 20, 14, 20, 12].map(w => ({ wch: w }));
+    ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 12, 12, 16, 10, 10, 20, 20, 14, 20, 12, 14].map(w => ({ wch: w }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '課程學員名單');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -645,18 +648,18 @@ router.get('/course-invoices', authenticate, async (req, res) => {
 router.post('/course-invoices', authenticate, requireManager, async (req, res) => {
   try {
     const db = getDb();
-    const { enrollmentId, memberId, memberName, courseId, courseName, gymId, itemName, amount, taxId, note, issuedAt } = req.body;
+    const { enrollmentId, memberId, memberName, courseId, courseName, gymId, itemName, amount, taxId, note, issuedAt, track, number } = req.body;
     if (!memberId || !courseId || !enrollmentId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '缺少會員或課程資訊' });
     const invoiceService = require('../services/invoiceService');
     const record = await invoiceService.createInvoice(db, {
       sourceType: 'course', refId: enrollmentId, memberId, memberName,
-      itemName: itemName || courseName || '課程費用', amount, taxId, note, gymId, issuedAt,
+      itemName: itemName || courseName || '課程費用', amount, taxId, note, gymId, issuedAt, track, number,
       staffId: req.staff.id, staffName: req.staff.name || '',
       meta: { enrollmentId, courseId, courseName: courseName || '' },
     });
     res.json({ success: true, invoice: record });
   } catch (err) {
-    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400 };
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400 };
     if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }

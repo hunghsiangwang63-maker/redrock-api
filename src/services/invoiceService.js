@@ -17,13 +17,21 @@ const getActiveInvoice = async (db, sourceType, refId) => {
   return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
 };
 
+// 發票號碼＝二聯式統一發票格式：2 碼英文字軌 + 8 碼數字（如 AB12345678）
+const TRACK_RE = /^[A-Za-z]{2}$/;
+const NUMBER_RE = /^\d{8}$/;
+
 const createInvoice = async (db, {
   sourceType, refId, memberId, memberName, itemName, amount, taxId, note,
-  gymId, issuedAt, staffId, staffName, meta,
+  gymId, issuedAt, staffId, staffName, meta, track, number,
 }) => {
   const amt = Number(amount);
   if (!(amt > 0)) { const e = new Error('發票金額需大於 0'); e.code = 'INVALID_AMOUNT'; throw e; }
   if (!sourceType || !refId || !memberId) { const e = new Error('缺少必要資訊'); e.code = 'MISSING_FIELDS'; throw e; }
+  const trackVal = String(track || '').trim().toUpperCase();
+  const numberVal = String(number || '').trim();
+  if (!TRACK_RE.test(trackVal)) { const e = new Error('發票字軌須為 2 碼英文字母'); e.code = 'INVALID_TRACK'; throw e; }
+  if (!NUMBER_RE.test(numberVal)) { const e = new Error('發票號碼須為 8 碼數字'); e.code = 'INVALID_NUMBER'; throw e; }
   const existing = await getActiveInvoice(db, sourceType, refId);
   if (existing) { const e = new Error('已開立發票，請先作廢後再重新開立'); e.code = 'ALREADY_INVOICED'; throw e; }
 
@@ -33,6 +41,7 @@ const createInvoice = async (db, {
     id, sourceType, status: 'issued', refId,
     memberId, memberName: memberName || '', gymId: gymId || null,
     itemName: itemName || '費用', amount: amt,
+    track: trackVal, number: numberVal, invoiceNo: `${trackVal}${numberVal}`,
     taxId: taxId ? String(taxId).trim() : '', note: note ? String(note).trim() : '',
     issuedAt: issuedAt ? new Date(issuedAt) : now,
     staffId, staffName: staffName || '',
@@ -44,7 +53,7 @@ const createInvoice = async (db, {
   try {
     await require('./settlementService').addCashAdjustment({
       gymId: gymId || null, amount: amt, sign: '+', type: '發票開立',
-      note: `發票開立：${memberName || ''}・${itemName || '費用'}${taxId ? '（統編 ' + taxId + '）' : ''}`,
+      note: `發票開立：${trackVal}${numberVal}・${memberName || ''}・${itemName || '費用'}${taxId ? '（統編 ' + taxId + '）' : ''}`,
     });
   } catch (e) { console.error('[發票加減項]', e.message); }
   return record;
@@ -65,7 +74,7 @@ const voidInvoice = async (db, id, staffId, staffName, voidReason) => {
   try {
     await require('./settlementService').addCashAdjustment({
       gymId: inv.gymId || null, amount: inv.amount, sign: '-', type: '發票作廢',
-      note: `發票作廢：${inv.memberName || ''}・${inv.itemName || '費用'}（原發票 NT$${inv.amount}）`,
+      note: `發票作廢：${inv.invoiceNo || ''}・${inv.memberName || ''}・${inv.itemName || '費用'}（原發票 NT$${inv.amount}）`,
     });
   } catch (e) { console.error('[發票作廢加減項]', e.message); }
   return { ...inv, status: 'voided' };

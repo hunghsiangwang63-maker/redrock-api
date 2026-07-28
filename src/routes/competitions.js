@@ -1110,19 +1110,19 @@ router.post('/registrations/:regId/invoices', authenticate, requireManager, asyn
     const reg = regDoc.data();
     const compDoc = await db.collection(COLLECTIONS.COMPETITIONS).doc(reg.competitionId).get();
     const comp = compDoc.exists ? compDoc.data() : {};
-    const { itemName, amount, taxId, note, issuedAt } = req.body;
+    const { itemName, amount, taxId, note, issuedAt, track, number } = req.body;
     const invoiceService = require('../services/invoiceService');
     const record = await invoiceService.createInvoice(db, {
       sourceType: 'competition', refId: req.params.regId,
       memberId: reg.memberId, memberName: reg.memberName || '',
       itemName: itemName || `${reg.competitionName || comp.name || '比賽'}報名費`,
-      amount, taxId, note, gymId: comp.gymId || null, issuedAt,
+      amount, taxId, note, gymId: comp.gymId || null, issuedAt, track, number,
       staffId: req.staff.id, staffName: req.staff.name || '',
       meta: { registrationId: req.params.regId, competitionId: reg.competitionId, competitionName: reg.competitionName || comp.name || '', divisionName: reg.divisionName || '' },
     });
     res.json({ success: true, invoice: record });
   } catch (err) {
-    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400 };
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400 };
     if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }

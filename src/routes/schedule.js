@@ -282,7 +282,7 @@ router.get('/events',
 );
 
 router.post('/events',
-  authenticate, checkPermission('schedule.manage'),
+  authenticate, checkPermission('schedule.events'),
   [
     body('date').isDate().withMessage('請輸入有效日期'),
     body('category').isIn(['closure', 'competition', 'maintenance', 'other']).withMessage('類別不正確'),
@@ -307,7 +307,7 @@ router.post('/events',
 );
 
 router.put('/events/:eventId',
-  authenticate, checkPermission('schedule.manage'),
+  authenticate, checkPermission('schedule.events'),
   async (req, res) => {
     try {
       const event = await scheduleService.updateScheduleEvent(req.params.eventId, req.body);
@@ -320,7 +320,7 @@ router.put('/events/:eventId',
 );
 
 router.delete('/events/:eventId',
-  authenticate, checkPermission('schedule.manage'),
+  authenticate, checkPermission('schedule.events'),
   async (req, res) => {
     try {
       await scheduleService.deleteScheduleEvent(req.params.eventId);

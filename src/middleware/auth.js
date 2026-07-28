@@ -38,6 +38,8 @@ const DEFAULT_PERMISSIONS = {
   // ── 排班檢視（part/full 皆可）──
   'schedule.read':         { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
   'schedule.manage':       { super_admin: true, gym_manager: true, full_time: false, part_time: false },
+  // 重要事項（休館/比賽/維修等標籤，獨立於員工排班）：開放正職個人帳號＋場館電腦值班編修（見 COUNTER_PERMS）
+  'schedule.events':       { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
   // ── 櫃檯類（full/part 個人不可；operator 值班或管理員做）──
   'courses.attendance':    { super_admin: true, gym_manager: true, full_time: false, part_time: false },
   'products.sell':         { super_admin: true, gym_manager: true, full_time: false, part_time: false },
@@ -63,6 +65,7 @@ const COUNTER_PERMS = new Set([
   'checkin.create', 'checkin.read',
   'passes.create', 'passes.update', 'installments.manage',
   'courses.attendance', 'products.sell', 'revenue.record', 'competitions.entries',
+  'schedule.events',
 ]);
 
 // 強制登出：帳號文件設 forceLogoutAfter 後，該時間點之前簽發的 token 一律失效

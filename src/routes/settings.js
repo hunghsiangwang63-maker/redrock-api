@@ -259,6 +259,45 @@ router.put('/partner-vendor', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── 比賽保險名冊「承保範圍」固定文字（可從後台調整，不需改程式碼）────────────
+// 結構：ageLabelUnder/ageLabelOver＝年齡分界兩欄標題；rows＝每項保險名稱＋兩欄金額文字。
+const DEFAULT_COMP_INSURANCE = {
+  ageLabelUnder: '限15足歲以下',
+  ageLabelOver: '滿15足歲以上~未滿80歲',
+  rows: [
+    { label: '特定活動死亡及失能保險', under: '無', over: '100萬' },
+    { label: '特定活動醫療保險(實支實付型)', under: '10萬', over: '10萬' },
+    { label: '特定活動緊急救援費用保險', under: '50萬', over: '50萬' },
+  ],
+};
+router.get('/competition-insurance', async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('systemSettings').doc('competitionInsurance').get();
+    const d = doc.exists ? doc.data() : {};
+    res.json({
+      ageLabelUnder: d.ageLabelUnder || DEFAULT_COMP_INSURANCE.ageLabelUnder,
+      ageLabelOver: d.ageLabelOver || DEFAULT_COMP_INSURANCE.ageLabelOver,
+      rows: Array.isArray(d.rows) && d.rows.length ? d.rows : DEFAULT_COMP_INSURANCE.rows,
+    });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+router.put('/competition-insurance', authenticate, async (req, res) => {
+  if (!['super_admin', 'admin'].includes(req.staff?.role))
+    return res.status(403).json({ error: '權限不足' });
+  try {
+    const db = getDb();
+    const ageLabelUnder = String(req.body.ageLabelUnder || '').trim() || DEFAULT_COMP_INSURANCE.ageLabelUnder;
+    const ageLabelOver = String(req.body.ageLabelOver || '').trim() || DEFAULT_COMP_INSURANCE.ageLabelOver;
+    const rows = Array.isArray(req.body.rows)
+      ? req.body.rows.map(r => ({ label: String(r.label || '').trim(), under: String(r.under || '').trim(), over: String(r.over || '').trim() })).filter(r => r.label)
+      : DEFAULT_COMP_INSURANCE.rows;
+    if (!rows.length) return res.status(400).json({ error: 'MISSING_ROWS', message: '請至少填寫一項保險內容' });
+    await db.collection('systemSettings').doc('competitionInsurance').set({ ageLabelUnder, ageLabelOver, rows, updatedAt: new Date() }, { merge: true });
+    res.json({ success: true, ageLabelUnder, ageLabelOver, rows });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /settings/partner-gym-member - 友館隊員入場優惠（啟用 + 折扣率，預設9折）──────
 router.get('/partner-gym-member', async (req, res) => {
   try {

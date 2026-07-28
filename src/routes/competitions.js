@@ -354,6 +354,36 @@ router.get('/:id/registrations/download',
   }
 );
 
+// ── GET /competitions/:id/insurance-roster/download - 簽到表暨保險名冊（xlsx｜pdf，?format= 指定，預設 xlsx）──
+// 正取（confirmed）報名，依組別→姓名排序，成人/未成年分開（isMinor，18歲門檻）；未成年含參賽者+法定代理人簽名。
+router.get('/:id/insurance-roster/download',
+  authenticate, checkPermission('competitions.manage'),
+  async (req, res) => {
+    try {
+      const { buildCompetitionInsuranceRosterData } = require('../services/competitionInsuranceRosterService');
+      const data = await buildCompetitionInsuranceRosterData(req.params.id);
+      const format = req.query.format === 'pdf' ? 'pdf' : 'xlsx';
+      const filenameBase = `insurance_roster_${req.params.id}`;
+      if (format === 'pdf') {
+        const { buildCompetitionInsurancePdfBuffer } = require('../utils/competitionInsurancePdf');
+        const buf = await buildCompetitionInsurancePdfBuffer(data);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filenameBase}.pdf"`);
+        res.send(buf);
+      } else {
+        const { buildCompetitionInsuranceXlsxBuffer } = require('../utils/competitionInsuranceXlsx');
+        const buf = await buildCompetitionInsuranceXlsxBuffer(data);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${filenameBase}.xlsx"`);
+        res.send(buf);
+      }
+    } catch (err) {
+      if (err.code) return res.status(404).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // ── POST /competitions/registrations/:regId/cancel - 會員取消報名（立即釋出名額）──
 router.post('/registrations/:regId/cancel',
   authenticateAny,

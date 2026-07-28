@@ -940,8 +940,9 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
         const prevLeaveDays = rights.filter(r => r.source === 'prev_leave' && r.prevLeaveDate).map(r => `${r.prevLeaveDate}（上期請假${r.redemptionType === 'cash_credit' ? `・${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}` : ''}）`); // 上一期請假、列本期補課
         const leaves = [...realLeaves, ...closureDays.map(d => `${d}（停課）`), ...prevLeaveDays].sort();
         const cap = ens.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rules.maxLeaves;
-        const avail = rights.filter(r => r.status === 'available' && (!r.expiresAt || require('dayjs')().isBefore(require('dayjs')(r.expiresAt.toDate()))));
-        const used = rights.filter(r => r.status === 'used');
+        // 現金折抵（redemptionType:'cash_credit'，如無可補課時段改折抵費用）不算補課次數，僅列在 leaves 供查核
+        const avail = rights.filter(r => r.status === 'available' && r.redemptionType !== 'cash_credit' && (!r.expiresAt || require('dayjs')().isBefore(require('dayjs')(r.expiresAt.toDate()))));
+        const used = rights.filter(r => r.status === 'used' && r.redemptionType !== 'cash_credit');
         const expiresAt = avail[0]?.expiresAt?.toDate?.() || null;
         const bookedMakeups = [...used.map(r => {
           const sx = sessMap[r.usedSessionId];

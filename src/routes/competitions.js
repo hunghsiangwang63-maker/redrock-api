@@ -174,7 +174,7 @@ router.post('/:id/register',
         competitionId: req.params.id,
         memberId,
         memberName: req.body.memberName || req.member?.name,
-        isMinor: req.body.isMinor,
+        isMinor: req.body.isMinor, // 僅供前端相容傳入；後端會用 birthday+比賽當天權威重算並覆寫，不採用此值
         birthday: regBirthday,
         gender: regGender,
         phone: regPhone,
@@ -753,13 +753,14 @@ router.post('/registrations/:regId/update-form', authenticateAny, async (req, re
       newStatus = cCount >= maxP ? 'waitlist' : 'confirmed';
       newWaitlistPos = newStatus === 'waitlist' ? wCount + 1 : null;
     }
-    // 後端權威重算費用（生日→兒童、早鳥）
+    // 後端權威重算費用（生日→兒童、早鳥）；年齡一律以「比賽當天」為基準（非今天）
     const fees = comp.fees || {};
     const { taiwanToday } = require('../utils/taiwanDate');
     const today = taiwanToday();
     const isEarly = comp.earlyBirdDeadline && today <= comp.earlyBirdDeadline;
-    const age = b.birthday ? require('dayjs')().diff(require('dayjs')(b.birthday), 'year') : null;
-    const isChild = age !== null && age < (fees.childAgeLimit || 15);
+    const ageInfo = competitionService.computeCompetitionAgeInfo(b.birthday, comp);
+    const isChild = ageInfo.isChild;
+    const isMinorNow = ageInfo.isMinor;
     let registrationFee = isChild
       ? (isEarly ? fees.childEarlyBird : fees.childRegular) || 950
       : (isEarly ? fees.adultEarlyBird : fees.adultRegular) || 1100;
@@ -824,6 +825,10 @@ router.post('/registrations/:regId/update-form', authenticateAny, async (req, re
       partnerGymPending: fePartner ? (reg.partnerGymPending !== false) : false,
       insuranceFee, isChild: !!isChild,
       receivedAmountOverride: null, // 生日/身分可能改變（成人⇄兒童）→ 清除手動覆蓋，回歸依新保費自動計算
+      // 生日可能被改成使報名對象變成/不再是未成年（以比賽當天為基準重算）；
+      // 若變成未成年而先前沒有法代簽名，isComplete 標 false（擋計分系統推送，等家長簽署），不擋這次表單修改本身
+      isMinor: isMinorNow, parentRequired: isMinorNow,
+      isComplete: !isMinorNow || !!reg.guardianSignatureUrl,
       // 清除退回旗標
       formReturned: false, formReturnReason: null, formReturnedAt: null,
       updatedAt: new Date(),
@@ -853,12 +858,13 @@ router.post('/registrations/:regId/reregister', authenticateAny, async (req, res
     if (comp.registrationEnd && today > comp.registrationEnd) return res.status(400).json({ error: 'REGISTRATION_ENDED', message: '報名期限已截止' });
     const division = (comp.divisions || []).find(d => d.id === reg.divisionId);
     if (!division) return res.status(400).json({ error: 'INVALID_DIVISION', message: '原組別已不存在，請重新報名' });
-    // 費用重算（早鳥/兒童），沿用原生日
+    // 費用重算（早鳥/兒童），沿用原生日；年齡一律以「比賽當天」為基準（非今天）
     const fees = comp.fees || {};
     const isEarly = comp.earlyBirdDeadline && today <= comp.earlyBirdDeadline;
     const dayjs = require('dayjs');
-    const age = reg.birthday ? dayjs().diff(dayjs(reg.birthday), 'year') : null;
-    const isChild = age !== null && age < (fees.childAgeLimit || 15);
+    const ageInfo = competitionService.computeCompetitionAgeInfo(reg.birthday, comp);
+    const isChild = ageInfo.isChild;
+    const isMinorNow = ageInfo.isMinor;
     let registrationFee = isChild ? (isEarly ? fees.childEarlyBird : fees.childRegular) || 950 : (isEarly ? fees.adultEarlyBird : fees.adultRegular) || 1100;
     const insuranceFee = isChild ? (fees.insuranceChild ?? 118) : (fees.insuranceAdult ?? 261);
     // 折扣擇優（不疊加）：隊員 9 折 vs 友館折扣（沿用原報名友館，重報後仍待核對）
@@ -905,6 +911,9 @@ router.post('/registrations/:regId/reregister', authenticateAny, async (req, res
         paymentStatus: 'pending', registrationFee, isEarlyBird: !!isEarly, isTeamDiscount: rrTeamDiscount,
         isPartnerGymDiscount: rrPartner, partnerGym: rrPartner ? rrPartnerName : null, partnerGymPending: rrPartner,
         insuranceFee, isChild: !!isChild, receivedAmountOverride: null,
+        // 重報時間點可能已跨過 18/childAgeLimit 歲生日（沿用原生日、以比賽當天重算）
+        isMinor: isMinorNow, parentRequired: isMinorNow,
+        isComplete: !isMinorNow || !!reg.guardianSignatureUrl,
         cancelReason: null, paymentExpiredAt: null, cancelledAt: null,
         bankLastFive: null, bankName: null, paymentDate: null,   // 需重新繳費
         reregisteredAt: now, updatedAt: now,

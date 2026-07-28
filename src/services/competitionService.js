@@ -17,6 +17,20 @@ const { uploadSignature } = require('./waiverService');
 
 const SCORING_SYSTEMS = ['rating_system', 'competition_management_v2'];
 
+// ── 年齡相關判定（後端權威）：一律以「比賽當天」（competition.eventDate）為基準，不是報名當下 ──
+// isMinor（未滿18歲）＝要不要卡法定代理人簽名；isChild（未滿 childAgeLimit，預設15、賽事可覆寫）＝收費門檻。
+// 無 eventDate（理論上不會發生，賽事必填）才退回報名當天當基準，避免完全無法計算。
+const computeCompetitionAgeInfo = (birthday, competition) => {
+  const refDate = competition?.eventDate ? dayjs(competition.eventDate) : dayjs();
+  const age = birthday ? refDate.diff(dayjs(birthday), 'year') : null;
+  const childAgeLimit = (competition?.fees && competition.fees.childAgeLimit) || 15;
+  return {
+    age,
+    isChild: age !== null && age < childAgeLimit,
+    isMinor: age !== null && age < 18,
+  };
+};
+
 // ══════════════════════════════════════════════════════
 // 賽事管理
 // ══════════════════════════════════════════════════════
@@ -226,9 +240,11 @@ const registerForCompetition = async ({
   const fees = competition.fees || {};
   const todayStr = taiwanToday();
   const isEarlyBird = competition.earlyBirdDeadline && todayStr <= competition.earlyBirdDeadline;
-  const childAgeLimit = fees.childAgeLimit || 15;
-  const age = birthday ? dayjs().diff(dayjs(birthday), 'year') : null;
-  const isChild = age !== null && age < childAgeLimit;
+  // 年齡判定（後端權威）：一律以「比賽當天」為基準，不信任前端傳入的 isMinor（原本直接採用 req.body.isMinor，
+  // 未成年/收費門檻皆改由生日+比賽日期在此重算）
+  const ageInfo = computeCompetitionAgeInfo(birthday, competition);
+  const isChild = ageInfo.isChild;
+  isMinor = ageInfo.isMinor; // 覆寫參數（後端權威，忽略呼叫端傳入值）
   let registrationFee = isChild
     ? (isEarlyBird ? fees.childEarlyBird : fees.childRegular) || 950
     : (isEarlyBird ? fees.adultEarlyBird : fees.adultRegular) || 1100;
@@ -709,4 +725,5 @@ module.exports = {
   sendWebhook, retryWebhook, promoteNextWaitlist, startScoringSync,
   getCompetitionRegistrations, getMemberRegistrations,
   recordCompetitionRevenue, computeNetReceivedAmount,
+  computeCompetitionAgeInfo,
 };

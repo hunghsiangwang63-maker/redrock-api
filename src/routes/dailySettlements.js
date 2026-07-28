@@ -480,7 +480,7 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
     aoa.push(R('', '結束號碼', '', s => s.invoiceLastNumber));
     aoa.push(R('', '作廢號碼', '', s => s.invoiceVoidNumbers));
     aoa.push(R('', '作廢票號碼總金額', '', s => s.voidInvoiceAmount || ''));
-    aoa.push(R('結帳報表', '實收總額', '', s => s.income?.total));
+    aoa.push(R('結帳報表', '實收總額', '', s => (s.income?.total || 0) - (s.voidInvoiceAmount || 0)));
     aoa.push(R('', '退貨總額', '', s => dedSum(s, '其他退款')));
     aoa.push(R('票卡資訊', '優惠卡最前號', '', s => s.cardOrangeFirst));
     aoa.push(R('', '全票最前號', '', s => s.cardFullFirst));
@@ -505,7 +505,7 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
     aoa.push(R('商品販售', '商品', '', s => s.income?.product));
     passLabels.forEach(lb => aoa.push(R('定期票', lb, '', s => itemVal(s, 'passItems', lb))));
     aoa.push(R('教學費', '課程', '', s => s.income?.course));
-    aoa.push(R('總計', '', '', s => s.income?.total));
+    aoa.push(R('總計', '', '', s => (s.income?.total || 0) - (s.voidInvoiceAmount || 0)));
 
     // ── 手動輸入金額（轉換期 settlementManualInput 逐項手動值；當月任一天有填才輸出此區）──
     const manVal = (st, key) => { const v = st.incomeManual?.[key]; return (v !== '' && v != null) ? (Number(v) || 0) : ''; };
@@ -546,7 +546,7 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
       aoa.push(R('商品販售(手動)', '商品', '', st => manVal(st, 'product')));
       aoa.push(R('定期票(手動)', '', '', st => manVal(st, 'pass')));
       aoa.push(R('教學費(手動)', '課程', '', st => manVal(st, 'course')));
-      aoa.push(R('手計總額', '', '', st => manualTotalOf(st)));
+      aoa.push(R('手計總額', '', '', st => { const v = manualTotalOf(st); return v === '' ? '' : v - (st.voidInvoiceAmount || 0); }));
     }
 
     const ws = require('../utils/xlsxSafe').sanitizeSheet(XLSX.utils.aoa_to_sheet(aoa));
@@ -615,7 +615,7 @@ router.get('/invoice-export', authenticate, requireManager, async (req, res) => 
       segs.forEach((sg, idx) => {
         aoa.push([
           idx === 0 ? d.format('YYYY/MM/DD') : '', idx === 0 ? WD[d.day()] : '', idx === 0 ? totalCnt : '',
-          sg.start || '', sg.last || '', idx === 0 ? (s.income?.total ?? '') : '',
+          sg.start || '', sg.last || '', idx === 0 ? ((s.income?.total || 0) - (s.voidInvoiceAmount || 0)) : '',
           idx === 0 ? (s.invoiceVoidNumbers || '') : '',
           idx === 0 ? (s.voidInvoiceAmount || '') : '',
         ]);

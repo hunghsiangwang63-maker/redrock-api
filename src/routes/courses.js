@@ -937,7 +937,7 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
         const rights = rightsByMember[mid] || [];
         const realLeaves = ens.filter(e => e.status === 'leave').map(e => e.date).filter(Boolean);
         const closureDays = rights.filter(r => r.source === 'closure' && r.closureDate).map(r => r.closureDate); // 停課日（豁免、不計請假數）
-        const prevLeaveDays = rights.filter(r => r.source === 'prev_leave' && r.prevLeaveDate).map(r => `${r.prevLeaveDate}（上期請假）`); // 上一期請假、列本期補課
+        const prevLeaveDays = rights.filter(r => r.source === 'prev_leave' && r.prevLeaveDate).map(r => `${r.prevLeaveDate}（上期請假${r.redemptionType === 'cash_credit' ? `・待折抵NT$${r.cashCreditAmount || ''}` : ''}）`); // 上一期請假、列本期補課
         const leaves = [...realLeaves, ...closureDays.map(d => `${d}（停課）`), ...prevLeaveDays].sort();
         const cap = ens.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rules.maxLeaves;
         const avail = rights.filter(r => r.status === 'available' && (!r.expiresAt || require('dayjs')().isBefore(require('dayjs')(r.expiresAt.toDate()))));
@@ -1048,7 +1048,7 @@ router.get('/leave-makeup-summary/all',
           const rights = (mkByCourse[c.id] || {})[mid] || [];
           const realLeaves = ens.filter(e => e.status === 'leave').map(e => e.date).filter(Boolean);
           const closureDays = rights.filter(r => r.source === 'closure' && r.closureDate).map(r => r.closureDate);
-          const prevLeaveDays = rights.filter(r => r.source === 'prev_leave' && r.prevLeaveDate).map(r => `${r.prevLeaveDate}（上期請假）`);
+          const prevLeaveDays = rights.filter(r => r.source === 'prev_leave' && r.prevLeaveDate).map(r => `${r.prevLeaveDate}（上期請假${r.redemptionType === 'cash_credit' ? `・待折抵NT$${r.cashCreditAmount || ''}` : ''}）`);
           const leaves = [...realLeaves, ...closureDays.map(d => `${d}（停課）`), ...prevLeaveDays].sort();
           const cap = ens.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rules.maxLeaves;
           const avail = rights.filter(r => r.status === 'available' && (!r.expiresAt || require('dayjs')().isBefore(require('dayjs')(r.expiresAt.toDate()))));

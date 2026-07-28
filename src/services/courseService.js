@@ -1251,6 +1251,7 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
 
   let makeup = makeupDoc.data();
   if (makeup.memberId !== memberId) throw { code: 'FORBIDDEN' };
+  if (makeup.redemptionType === 'cash_credit') throw { code: 'CASH_CREDIT_NOT_BOOKABLE', message: '此為現金折抵資格（非到課補課），請洽櫃檯處理折抵' };
 
   // 後端權威：停課補課券（source:'closure'）優先消耗——即使前端傳的是配額券，
   // 只要同課程還有可用停課券就改用它（配額券受不變量管、留著彈性較大；停課券為場館欠課、先清）。
@@ -2059,6 +2060,9 @@ const getMemberMakeupRights = async (memberId) => {
   const today = dayjs();
   return snap.docs
     .map(d => ({ id: d.id, ...d.data() }))
+    // 現金折抵（redemptionType:'cash_credit'，如無可補課時段改折抵費用）不是可到課補課的資格，
+    // 不列入會員端「補課資格」（否則會誤以為可以點去約課）
+    .filter(m => m.redemptionType !== 'cash_credit')
     .filter(m => !m.expiresAt || today.isBefore(dayjs(m.expiresAt.toDate())))
     .map(m => ({
       ...m,

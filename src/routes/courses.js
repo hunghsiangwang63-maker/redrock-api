@@ -1017,10 +1017,9 @@ router.get('/leave-makeup-summary/all',
         (await db.getAll(...refs)).forEach(doc => { if (doc.exists) sessMap[doc.id] = doc.data(); });
       }
 
-      // 跨期補課（獨立一區）：載入未結案者，解析 booked 的 target session 課名（供顯示補課班級）
+      // 跨期補課（獨立一區）：含已結案(done)者一併顯示（供查核已完成補課），解析 booked 的 target session 課名（供顯示補課班級）
       const xmAllSnap = await db.collection('crossCohortMakeups').get();
       const xmActive = xmAllSnap.docs.map(d => d.data())
-        .filter(x => x.status !== 'done')
         .filter(x => !gymId || x.gymId === gymId);
       const xmBookSessIds = [...new Set(xmActive.filter(x => x.targetSessionId).map(x => x.targetSessionId))];
       const xmSessName = {};
@@ -1090,7 +1089,9 @@ router.get('/leave-makeup-summary/all',
         targetCourse: x.targetSessionId ? (xmSessName[x.targetSessionId] || '') : '',
         targetDate: x.targetDate || null,
         deadline: x.deadline || null,   // 前期補課期限（一次性設定）
-      })).sort((a, b) => (a.sourceCourse || '').localeCompare(b.sourceCourse || '', 'zh-Hant') || (a.name || '').localeCompare(b.name || '', 'zh-Hant'));
+        status: x.status || 'pending_arrange',   // pending_arrange | booked | done（已結案仍列出供查核）
+        doneAt: x.doneAt ? (x.doneAt.toDate ? x.doneAt.toDate().toISOString().slice(0, 10) : String(x.doneAt).slice(0, 10)) : null,
+      })).sort((a, b) => (a.status === 'done') - (b.status === 'done') || (a.sourceCourse || '').localeCompare(b.sourceCourse || '', 'zh-Hant') || (a.name || '').localeCompare(b.name || '', 'zh-Hant'));
       // 近三個月逾期未補課：補課券 available（未用）但已過期、到期日在近 90 天內
       const d90 = require('dayjs')(today).subtract(90, 'day').format('YYYY-MM-DD');
       const overdueRights = mkSnap.docs.map(d => d.data())

@@ -93,6 +93,31 @@ router.get('/:id', authenticateAny, async (req, res) => {
   }
 });
 
+// ── GET /competitions/:id/quote - 報名前費用預覽（後端權威，與 registerForCompetition 同一份計算函式）──
+// 供會員報名表在送出前就顯示正確金額（含隊員9折/友館折擇優），避免顯示原價、送出才打折的誤解。
+router.get('/:id/quote', authenticateAny, async (req, res) => {
+  try {
+    const memberId = req.query.memberId || req.member?.id;
+    if (!memberId) return res.status(400).json({ error: 'MISSING_MEMBER' });
+    const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 404 });
+    if (deny) return res.status(deny.status).json(deny.body);
+
+    const competition = await competitionService.getCompetition(req.params.id);
+    let birthday = req.query.birthday || null;
+    if (!birthday) {
+      const mDoc = await getDb().collection('members').doc(memberId).get();
+      birthday = mDoc.exists ? (mDoc.data().birthday || null) : null;
+    }
+    const quote = await competitionService.computeCompetitionFee({
+      competition, birthday, memberId, partnerGymId: req.query.partnerGymId || null,
+    });
+    res.json({ quote });
+  } catch (err) {
+    if (err.code) return res.status(404).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 // ── GET /competitions/:id/registrations - 報名名單（工作人員）──────
 router.get('/:id/registrations', authenticate, checkPermission('competitions.manage'), async (req, res) => {
   try {

@@ -31,6 +31,57 @@ const computeCompetitionAgeInfo = (birthday, competition) => {
   };
 };
 
+// ── 報名費計算（後端權威，單一真相）：報名/改表/逾期重報/會員報名前預覽 quote 皆呼叫此函式，
+// 避免各處各自複製一份折扣邏輯導致日後改動漏同步（曾發生：會員報名頁預覽金額忘了套隊員折扣，
+// 已送出報名的後端計算是對的，只有「送出前顯示給會員看」的畫面漏算，讓隊員誤以為沒打折）。
+// 折扣（不疊加，擇優取較低價）：攀岩隊員 9 折 vs 友館折扣（心流/爬森等，會員宣告→櫃檯人工核對）。
+const computeCompetitionFee = async ({ competition, birthday, memberId, partnerGymId }) => {
+  const fees = competition.fees || {};
+  const todayStr = taiwanToday();
+  const isEarlyBird = !!(competition.earlyBirdDeadline && todayStr <= competition.earlyBirdDeadline);
+  const ageInfo = computeCompetitionAgeInfo(birthday, competition);
+  const isChild = ageInfo.isChild;
+  const isMinor = ageInfo.isMinor;
+  const baseFee = isChild
+    ? (isEarlyBird ? fees.childEarlyBird : fees.childRegular) || 950
+    : (isEarlyBird ? fees.adultEarlyBird : fees.adultRegular) || 1100;
+  const insuranceFee = isChild ? (fees.insuranceChild ?? 118) : (fees.insuranceAdult ?? 261);
+
+  let teamFee = baseFee, teamOk = false;
+  if (memberId) {
+    try {
+      const { isActiveTeamMember, applyTeamDiscount } = require('./teamMemberService');
+      const mDoc = await getDb().collection(COLLECTIONS.MEMBERS).doc(memberId).get();
+      if (mDoc.exists && isActiveTeamMember(mDoc.data())) {
+        const r = applyTeamDiscount(baseFee, true);
+        teamFee = r.discounted; teamOk = r.applied;
+      }
+    } catch (e) { /* 查無會員不影響計算 */ }
+  }
+  let partnerFee = baseFee, partnerOk = false, partnerGymName = null;
+  const partnerRate = Number(fees.partnerGymDiscount);
+  if (partnerGymId && partnerRate > 0 && partnerRate < 1) {
+    try {
+      const pgDoc = await getDb().collection('systemSettings').doc('partnerGyms').get();
+      const list = pgDoc.exists && Array.isArray(pgDoc.data().gyms) ? pgDoc.data().gyms : [];
+      const hit = list.find(g => g.id === partnerGymId);
+      if (hit) { partnerFee = Math.round(baseFee * partnerRate); partnerOk = true; partnerGymName = hit.name; }
+    } catch (e) { /* 讀取失敗不套友館折扣 */ }
+  }
+  const cands = [{ fee: baseFee, kind: 'none' }];
+  if (teamOk) cands.push({ fee: teamFee, kind: 'team' });
+  if (partnerOk) cands.push({ fee: partnerFee, kind: 'partner' });
+  const win = cands.reduce((a, b) => (b.fee < a.fee ? b : a));
+
+  return {
+    isEarlyBird, isChild, isMinor, baseFee, insuranceFee,
+    registrationFee: win.fee,
+    teamDiscountApplied: win.kind === 'team',
+    partnerGymApplied: win.kind === 'partner',
+    partnerGymName,
+  };
+};
+
 // ══════════════════════════════════════════════════════
 // 賽事管理
 // ══════════════════════════════════════════════════════
@@ -236,53 +287,16 @@ const registerForCompetition = async ({
   }
   const isWaitlist = confirmedCount >= maxParticipants;
 
-  // 計算費用
-  const fees = competition.fees || {};
-  const todayStr = taiwanToday();
-  const isEarlyBird = competition.earlyBirdDeadline && todayStr <= competition.earlyBirdDeadline;
-  // 年齡判定（後端權威）：一律以「比賽當天」為基準，不信任前端傳入的 isMinor（原本直接採用 req.body.isMinor，
-  // 未成年/收費門檻皆改由生日+比賽日期在此重算）
-  const ageInfo = computeCompetitionAgeInfo(birthday, competition);
-  const isChild = ageInfo.isChild;
-  isMinor = ageInfo.isMinor; // 覆寫參數（後端權威，忽略呼叫端傳入值）
-  let registrationFee = isChild
-    ? (isEarlyBird ? fees.childEarlyBird : fees.childRegular) || 950
-    : (isEarlyBird ? fees.adultEarlyBird : fees.adultRegular) || 1100;
-  // 保險費（成人/未滿 childAgeLimit 歲兒童）：報名時鎖定存檔，開發票/記營收時從報名費扣除（保險不算館內收入）
-  const insuranceFee = isChild ? (fees.insuranceChild ?? 118) : (fees.insuranceAdult ?? 261);
-
-  // 折扣（不疊加，擇優取較低價）：攀岩隊員 9 折 vs 友館折扣（心流/爬森等，會員宣告→櫃檯人工核對）
-  const baseFee = registrationFee;
-  let teamDiscountApplied = false, partnerGymApplied = false, partnerGymName = null;
-  // 隊員候選
-  let teamFee = baseFee, teamOk = false;
-  try {
-    const { isActiveTeamMember, applyTeamDiscount } = require('./teamMemberService');
-    const mDoc = await getDb().collection(COLLECTIONS.MEMBERS).doc(memberId).get();
-    if (mDoc.exists && isActiveTeamMember(mDoc.data())) {
-      const r = applyTeamDiscount(baseFee, true);
-      teamFee = r.discounted; teamOk = r.applied;
-    }
-  } catch (e) { /* 查無會員不影響報名 */ }
-  // 友館候選（賽事有設 partnerGymDiscount 且會員選了清單內的友館）
-  let partnerFee = baseFee, partnerOk = false;
-  const partnerRate = Number(fees.partnerGymDiscount);
-  if (partnerGymId && partnerRate > 0 && partnerRate < 1) {
-    try {
-      const pgDoc = await getDb().collection('systemSettings').doc('partnerGyms').get();
-      const list = pgDoc.exists && Array.isArray(pgDoc.data().gyms) ? pgDoc.data().gyms : [];
-      const hit = list.find(g => g.id === partnerGymId);
-      if (hit) { partnerFee = Math.round(baseFee * partnerRate); partnerOk = true; partnerGymName = hit.name; }
-    } catch (e) { /* 讀取失敗不套友館折扣 */ }
-  }
-  // 擇優：取較低價（皆不套→原價）
-  const cands = [{ fee: baseFee, kind: 'none' }];
-  if (teamOk) cands.push({ fee: teamFee, kind: 'team' });
-  if (partnerOk) cands.push({ fee: partnerFee, kind: 'partner' });
-  const win = cands.reduce((a, b) => b.fee < a.fee ? b : a);
-  registrationFee = win.fee;
-  teamDiscountApplied = win.kind === 'team';
-  partnerGymApplied = win.kind === 'partner';
+  // 計算費用（單一真相函式，年齡判定/折扣擇優皆在其中，與 quote 端點/其他改表路徑共用）
+  const feeInfo = await computeCompetitionFee({ competition, birthday, memberId, partnerGymId });
+  isMinor = feeInfo.isMinor; // 覆寫參數（後端權威，忽略呼叫端傳入值）
+  const isChild = feeInfo.isChild;
+  const isEarlyBird = feeInfo.isEarlyBird;
+  const insuranceFee = feeInfo.insuranceFee;
+  let registrationFee = feeInfo.registrationFee;
+  const teamDiscountApplied = feeInfo.teamDiscountApplied;
+  const partnerGymApplied = feeInfo.partnerGymApplied;
+  const partnerGymName = feeInfo.partnerGymName;
 
   // 必填：性別/生日/手機/Email（自動帶會員資料、會員資料缺漏由報名表補填；帶進計分系統與保險名冊）
   if (gender !== 'male' && gender !== 'female') {
@@ -725,5 +739,5 @@ module.exports = {
   sendWebhook, retryWebhook, promoteNextWaitlist, startScoringSync,
   getCompetitionRegistrations, getMemberRegistrations,
   recordCompetitionRevenue, computeNetReceivedAmount,
-  computeCompetitionAgeInfo,
+  computeCompetitionAgeInfo, computeCompetitionFee,
 };

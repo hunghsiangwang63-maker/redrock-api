@@ -98,11 +98,22 @@ const getGymStatusForDate = async (gymId, dateStr) => {
       (!a.publishAt || a.publishAt.toDate() <= now)
     );
 
+  // 目前實際時刻是否落在 [openStr, closeStr) 區間內（供會員端顯示「營業中／休息中」用，
+  // 不影響 isOpen/status——那兩者是既有休館判定/定期票補償來源，語意維持「今天有無營業」不變）。
+  // 以 UTC+8 手動換算取現在時刻，不依賴伺服器本機時區（比照 utils/taiwanDate.js 的做法）。
+  const isWithinHours = (openStr, closeStr) => {
+    if (!openStr || !closeStr) return false;
+    const nowTW = new Date(Date.now() + 8 * 3600000);
+    const cur = `${String(nowTW.getUTCHours()).padStart(2, '0')}:${String(nowTW.getUTCMinutes()).padStart(2, '0')}`;
+    return cur >= openStr && cur < closeStr;
+  };
+
   // 1. 臨時休館
   const closureAnnouncement = dateAnnouncements.find(a => a.type === 'closure');
   if (closureAnnouncement) {
     return {
       isOpen: false,
+      isOpenNow: null,   // 今日無營業時段（休館）
       todayHours: null,
       status: 'closed',
       statusLabel: '休館',
@@ -114,8 +125,10 @@ const getGymStatusForDate = async (gymId, dateStr) => {
   // 2. 特殊營業時間
   const specialHours = dateAnnouncements.find(a => a.type === 'special_hours');
   if (specialHours) {
+    const hasWindow = specialHours.specialOpen !== '00:00' || specialHours.specialClose !== '00:00';
     return {
-      isOpen: specialHours.specialOpen !== '00:00' || specialHours.specialClose !== '00:00',
+      isOpen: hasWindow,
+      isOpenNow: hasWindow ? isWithinHours(specialHours.specialOpen, specialHours.specialClose) : null,
       todayHours: specialHours.specialOpen && specialHours.specialClose
         ? `${specialHours.specialOpen} - ${specialHours.specialClose}`
         : null,
@@ -133,6 +146,7 @@ const getGymStatusForDate = async (gymId, dateStr) => {
   if (!hours || hours.closed) {
     return {
       isOpen: false,
+      isOpenNow: null,   // 今日無營業時段（公休）
       todayHours: null,
       status: 'regular_closed',
       statusLabel: '公休',
@@ -142,6 +156,7 @@ const getGymStatusForDate = async (gymId, dateStr) => {
 
   return {
     isOpen: true,
+    isOpenNow: isWithinHours(hours.open, hours.close),
     todayHours: `${hours.open} - ${hours.close}`,
     status: 'open',
     statusLabel: '營業中',

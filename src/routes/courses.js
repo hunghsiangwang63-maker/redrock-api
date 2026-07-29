@@ -779,31 +779,20 @@ router.post('/:courseId/reopen',
       if (sessionsReopened > 0) await sessBatch.commit();
 
       // 還原報名：這次課程整體取消時被標記 course_cancelled、且對應場次確實有被還原者
+      // 注意：取消課程（DELETE /:courseId）當初標記 course_cancelled 時**不會**去動場次的
+      // enrolledCount（該欄位在課程/場次取消時本就沒被扣減）——因此這裡還原報名狀態時也**不能**
+      // 反向 +1，否則會與從未被扣減過的原值重複疊加（實測驗證過：若還原時 +1，人數會從 1 累加成 2）。
       const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', courseId).where('status', '==', 'course_cancelled').get();
       const enrollBatch = db.batch();
-      const sessionIncrement = new Map(); // sessionId → 需 +1 的正取人數
       let enrollmentsRestored = 0;
       enrollSnap.docs.forEach(d => {
         const e = d.data();
         if (e.sessionId && !reopenedSessionIds.has(e.sessionId)) return; // 對應場次沒被還原就不還原報名
         const restoreStatus = (e.leaveAt || e.leaveReason) ? 'leave' : 'confirmed';
         enrollBatch.update(d.ref, { status: restoreStatus, updatedAt: now });
-        if (restoreStatus === 'confirmed' && e.sessionId) {
-          sessionIncrement.set(e.sessionId, (sessionIncrement.get(e.sessionId) || 0) + 1);
-        }
         enrollmentsRestored++;
       });
       if (enrollmentsRestored > 0) await enrollBatch.commit();
-
-      // 場次正取人數 +1（僅還原為 confirmed 者才佔名額，比照 enrolledCount 不含 leave 的慣例）
-      if (sessionIncrement.size > 0) {
-        const { FieldValue } = require('firebase-admin').firestore;
-        const incBatch = db.batch();
-        sessionIncrement.forEach((n, sid) => {
-          incBatch.update(db.collection('courseSessions').doc(sid), { enrolledCount: FieldValue.increment(n), updatedAt: now });
-        });
-        await incBatch.commit();
-      }
 
       await courseRef.update({
         status: 'active', cancelledAt: null, cancelledBy: null,

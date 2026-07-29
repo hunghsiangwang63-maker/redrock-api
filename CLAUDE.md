@@ -2058,6 +2058,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📋 **查證：插班加成「沒算上去」其實是規則本身如此（非 bug）**：唯一符合的實例是林映杉（新竹「小蜘蛛人進階班 7-8月週六B班」7/24 轉帳報名）——課程原價 4,400、共 7 堂未取消場次、報名時已上 2 堂剩 5 堂，剩餘比例 5/7≈71%。**插班加成規則＝剩餘堂數 <50% 才加 5%**，71% ≥ 50% 故不加成、只單純比例計費 4,400×5/7=3,143（與 `courseService.js`/`courses.js` 兩處算式、及 7/24 已驗證的 E2E 案例完全一致）。使用者確認**不用修改**。
 - ✅ **員工課程列表「梯次」排序改依狀態＋開課日期＋名稱**（純前端 commit `55f10d8`）：原排序＝已結束/取消排最後、其餘依星期→開始時間。改：**狀態分層**——進行中(`ongoing`)最前 → 報名中/即將開始/已滿(`enrolling`/`starting_soon`/`full`) → 已結束(`ended`) → 取消(`cancelled`)最後；同層內依**開課日期→名稱**排序。
 - ✅ **會員端課程總覽移除剩餘名額數字**（純前端，同 commit）：週課梯次卡原顯示「剩 N 位」，工作坊本就只顯示「尚有名額」（3.133.0 起）——統一改**週課也只顯示「尚有名額」**（額滿仍顯示「額滿」，數字不再外露）。**不影響**課程詳情頁的「插班計費（剩 N/M 堂）」與「共 N 堂·已開始 M 堂·剩餘 K 堂」——那是billing用的堂數說明、非報名名額，維持顯示。
+- ✅ **課程取消後可「重新開啟」**（回報「【新竹館】小蜘蛛人初級班 7-8月週二A班」誤取消想復原；後端 `/health` `3.173.0-course-reopen`；正式 API E2E 驗證）：新 `POST /courses/:courseId/reopen`（`courses.manage`）＋前端課程列表在 `status==='cancelled'` 的梯次上加「重新開啟」鈕（取代原本只有「刪除」）。還原邏輯與 `DELETE /:courseId`（取消課程）對稱：
+  - **場次**：還原該課程 `status:'cancelled'` 且**無 `cancelReason`** 的場次為 `scheduled`——**刻意排除**休館停課（`closureCancelSession` 會設 `cancelReason:'休館停課'`）取消的場次，那批已各自走過發豁免補課券等補償流程，不應被課程重開誤還原。
+  - **報名**：還原該課程 `status:'course_cancelled'`（此狀態值僅 `DELETE /:courseId` 會寫入，不會與其他取消原因的報名混淆，判斷不需比對時間戳）者，依 `leaveAt`/`leaveReason` 是否存在推斷還原成 `leave` 或 `confirmed`；僅還原「對應場次也確實被還原」的報名。
+  - 課程本身：`status:'active'`、清 `cancelledAt/cancelledBy`、記 `reopenedAt/reopenedBy`。
+  - **本次過程抓到兩個與此無關、但影響到「取消課程」既有功能的真 bug（一併修復）**：
+    1. **`DELETE /:courseId`（取消課程）的通知信查詢缺 Firestore 複合索引**（`courseEnrollments` 的 `courseId+status(in)+date`），導致場次/課程已批次標記取消成功後，緊接著的「查已報名會員寄通知信」查詢直接 `FAILED_PRECONDITION` 拋錯、回 500——**即場次與課程其實已經取消了，但前端會顯示「取消失敗」**（本次實測踩到、原本用戶那次取消 0 報名故無感，但只要課程有任何 confirmed/leave 報名就會炸）。補 `firestore.indexes.json` 新複合索引並 `firebase deploy --only firestore:indexes` 部署解決。
+    2. **原本設計「取消課程時 `enrolledCount` 不會被扣減」**——第一版 reopen 因此天真地在還原報名時 `+1` 場次人數，造成與從未被扣減過的原值重複疊加（實測從 1 累加成 2）。修：還原報名**不動** `enrolledCount`（維持與取消時對稱：取消不減、重開不加）。
+  - **E2E（打正式 API，含休館停課場次干擾項）**：建課程(2場次：1一般1休館停課)+1筆confirmed報名 → 取消(現在成功不再500) → 場次1變cancelled(無reason)/場次2維持cancelled(有reason)、報名變course_cancelled → 重新開啟 → 場次1還原scheduled(enrolledCount正確維持原值、無重複疊加)、場次2**維持不動**(仍cancelled+休館停課原因)、報名還原confirmed；再次呼叫 reopen（已是 active）→ 正確擋 400 `NOT_CANCELLED`。fixtures 測後全清。
+  - **回填**：先前意外提早呼叫（索引/計數邏輯修好前）已導致該實際課程一度處於「課程 active 但 4 個未來場次仍 cancelled」的中間態，已手動直接重設場次狀態修復；該課現況正常（`ongoing`、0/6，因原本就沒人報名不受計數 bug 影響）。
 
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。

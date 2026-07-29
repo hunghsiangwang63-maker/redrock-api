@@ -2074,6 +2074,18 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端新共用 `utils/gymOpenStatus.js`**（`gymOpenLabel(todayStatus)`）：依 `isOpenNow` 回傳文字+色系，套用在**首頁「今日場館」小卡**（`MemberHomePage.jsx`）與**場館頁「今日狀態」大卡**（`MemberGymsPage.jsx`，含漸層底色：綠/琥珀/紅）兩處，統一三態顯示。
 - **E2E（打正式 API，注入真實公告測試）**：①注入當日 `closure` 公告 → `isOpenNow:null`（今日休館）②改注入當日 `special_hours`（09:00-10:00，現在17:29已過）→ `isOpen:true`(今天有時段)但 `isOpenNow:false`（休息中）——**證明特殊營業時間正確覆寫掉了原本 15:00-23:00 標準時段的判斷**（若沒覆寫會誤判營業中）③清除測試公告後兩館皆恢復 `isOpenNow:true`（現在17:29在15:00-23:00內）。字串時刻比較（`>=open && <close`）另以純函式驗證開門/打烊邊界正確。
 
+## 目前進度（2026-07-29 續2）— 士林入場快照姓名更正 + 修：比賽報名隊員折扣「填完表單看到原價」+ 四處費用計算收斂為單一真相
+- ✅ **士林今日入場「姓名」顯示更正（資料修正）**：回報今天士林入場名單有一筆姓名顯示「姓名」——查證非系統 bug：該會員（陳怡安）自助註冊時姓名欄位本人打成「姓名」兩字（表單本身空字串起始+placeholder是範例名「王小明」，非系統瑕疵），入場當下（15:34）快照就存了這個舊值，**6分鐘後（15:40）她的會員資料已被改正為「陳怡安」**，但入場記錄是當下快照、不會回頭更新。已將該筆 checkIn 的 `memberName` 快照直接更正為「陳怡安」（純顯示欄位，不影響入場資格/金額）。
+- ✅ **修：比賽報名隊員 9 折「送出前顯示原價」**（回報：隊員填完報名表要付款，畫面顯示990、沒打折——實際送出後端本來就會正確收891，純粹是**送出前的預覽畫面**沒算到折扣）。後端 `/health` `3.175.0-competition-fee-quote`→`3.176.0-competition-fee-dedup`；正式 API 驗證（真實隊員 3 位＋throwaway 隊員 E2E）。
+  - **根因**：`MemberCompetitionsPage.jsx` 的 `calcFee`（報名 modal 顯示用）從一開始就只算早鳥/兒童/友館折扣，**完全沒有隊員9折邏輯**——這段計算跟後端 `registerForCompetition` 各自獨立寫、從未同步過，是典型的「前端另外複製一份折扣計算」漏算類型（與稍早課程插班溢繳 bug 同型態）。
+  - ✅ **抽出後端單一真相 `competitionService.computeCompetitionFee({competition, birthday, memberId, partnerGymId})`**：把年齡/早鳥/兒童費率＋隊員9折/友館折擇優（不疊加）整段邏輯收斂成一個函式，回傳 `{registrationFee, teamDiscountApplied, partnerGymApplied, partnerGymName, insuranceFee, isChild, isMinor, isEarlyBird}`。
+  - ✅ **新增 `GET /competitions/:id/quote?memberId=&partnerGymId=`**（authenticateAny＋checkMemberOwnership，可查子會員）呼叫此函式，供前端送出前顯示正確金額。
+  - ✅ **`registerForCompetition` 改呼叫此函式**（取代原本 inline 重複的一份）；另外**順手把另外三個各自平行複製同一段折扣邏輯的地方也一併收斂**：`update-form`（退回修改重送）、`reregister`（逾期重報）、`verify-partner-gym` 駁回重算——四處全部改呼叫同一個 `computeCompetitionFee`，徹底消除「四份各自維護、日後改一處忘了同步另一處」的風險（本次隊員折扣漏算正是這類風險的活教材）。
+  - ✅ **前端**：報名 modal 改 `useEffect` 打 `/quote`（依 `selectedComp`/`registerForId`/`partnerGymId` 變動重打），顯示「費用計算中…」直到算好；**送出前(nextStep 從 step1 跳 step2)擋下**（quote 未算好不能繼續，避免像先前課程插班那樣在空窗期看到錯誤金額就填完轉帳資訊）；顯示文字補「🧗 隊員優惠」標籤。瀏覽清單（尚未選定報名對象）維持前端粗算但**補上登入者本人的隊員身份判斷**（`member.isTeamMember` 已由 `/auth/member/me` 算好、免額外呼叫），與後端擇優邏輯一致但不含友館核對外的精確性（僅供瀏覽參考，實際以 quote 為準）。
+  - **E2E（打正式 API）**：quote 端點對真實隊員（林祺堂）回 `registrationFee:891, teamDiscountApplied:true`、非隊員（莊振翔）回 `990, false`，與既有真實報名記錄完全吻合；throwaway 隊員會員完整跑過 `reregister`→891/true、`update-form`→891/true 兩條重算路徑確認重構沒改變行為。
+  - ⚠️ **清理踩雷**：E2E 用的是**真實開放中賽事**（`scoringSyncEnabled:true`、已對接 redrock-comp 計分系統），throwaway 報名 `reregister` 後 `status:confirmed` 觸發了對計分系統的**真實 webhook 推送**（假選手「【測試】隊員報名驗證」寫進 redrock-comp）——直接刪 Firestore 文件不會清到跨專案的計分系統資料。改用**正式 `/cancel` API 端點**（本就會呼叫 `removeCompAthlete` 移除計分系統選手）清除，而非只刪本地文件。**教訓：對「已對接計分系統的正式賽事」做 E2E，若報名會落到 `confirmed` 狀態，务必走正式取消端點清理、不能只刪 Firestore 文件**（redrock-api 沒有 `COMP_FIREBASE_SA` 本機憑證可直接查/清跨專案資料，只能透過會呼叫對應清除邏輯的正式端點）。
+- 📋 **課程舊生優惠註記**：榮謙宇、榮謙如（`crossCohortMakeups` 記錄的前一梯青少年班學員）已於 `members.legacyAlumniCategoryIds` 補記「青少年初級班」（`5c425d99-442d-4619-9df8-858f131a5fca`，即改名前的「青少年班培訓班」），比照舊系統舊生匯入判定機制（`courseService.js` 讀 `legacyAlumniCategoryIds`）——之後兩位報名任一梯青少年初級班會自動判定為舊生、套用該班別的舊生優惠。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

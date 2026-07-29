@@ -747,6 +747,79 @@ router.delete('/:courseId',
   }
 );
 
+// ── POST /courses/:courseId/reopen - 取消課程後重新開啟（還原場次/報名，與 DELETE /:courseId 對稱）──
+// 只還原「當初隨這次課程取消而一併取消」的場次/報名（用 updatedAt 與 course.cancelledAt 精準比對同一批次），
+// 不動休館停課（closureCancelSession，cancelReason:'closure'）或其他時間點個別取消的場次，避免誤還原不相干的取消。
+router.post('/:courseId/reopen',
+  authenticate, checkPermission('courses.manage'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const courseId = req.params.courseId;
+      const courseRef = db.collection('courses').doc(courseId);
+      const courseDoc = await courseRef.get();
+      if (!courseDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到課程' });
+      const course = courseDoc.data();
+      if (course.status !== 'cancelled') return res.status(400).json({ error: 'NOT_CANCELLED', message: '此課程未取消，無需重新開啟' });
+      const cancelledAt = course.cancelledAt;
+      const sameBatch = (ts) => ts && cancelledAt && ts.isEqual ? ts.isEqual(cancelledAt) : (ts?.seconds === cancelledAt?.seconds && ts?.nanoseconds === cancelledAt?.nanoseconds);
+      const now = new Date();
+
+      // 還原場次：這次課程取消當下一併取消、且未被其他原因（如休館停課）標記過的場次
+      const sessSnap = await db.collection('courseSessions').where('courseId', '==', courseId).where('status', '==', 'cancelled').get();
+      const sessBatch = db.batch();
+      let sessionsReopened = 0;
+      const reopenedSessionIds = new Set();
+      sessSnap.docs.forEach(d => {
+        const s = d.data();
+        if (s.cancelReason) return; // 休館停課等有明確原因者不還原
+        if (!sameBatch(s.updatedAt)) return; // 只還原這次取消動作當時一起取消的場次
+        sessBatch.update(d.ref, { status: 'scheduled', updatedAt: now });
+        reopenedSessionIds.add(d.id);
+        sessionsReopened++;
+      });
+      if (sessionsReopened > 0) await sessBatch.commit();
+
+      // 還原報名：這次課程取消時被標記 course_cancelled、且對應場次確實有被還原者
+      const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', courseId).where('status', '==', 'course_cancelled').get();
+      const enrollBatch = db.batch();
+      const sessionIncrement = new Map(); // sessionId → 需 +1 的正取人數
+      let enrollmentsRestored = 0;
+      enrollSnap.docs.forEach(d => {
+        const e = d.data();
+        if (!sameBatch(e.updatedAt)) return;
+        if (e.sessionId && !reopenedSessionIds.has(e.sessionId)) return; // 對應場次沒被還原就不還原報名
+        const restoreStatus = (e.leaveAt || e.leaveReason) ? 'leave' : 'confirmed';
+        enrollBatch.update(d.ref, { status: restoreStatus, updatedAt: now });
+        if (restoreStatus === 'confirmed' && e.sessionId) {
+          sessionIncrement.set(e.sessionId, (sessionIncrement.get(e.sessionId) || 0) + 1);
+        }
+        enrollmentsRestored++;
+      });
+      if (enrollmentsRestored > 0) await enrollBatch.commit();
+
+      // 場次正取人數 +1（僅還原為 confirmed 者才佔名額，比照 enrolledCount 不含 leave 的慣例）
+      if (sessionIncrement.size > 0) {
+        const { FieldValue } = require('firebase-admin').firestore;
+        const incBatch = db.batch();
+        sessionIncrement.forEach((n, sid) => {
+          incBatch.update(db.collection('courseSessions').doc(sid), { enrolledCount: FieldValue.increment(n), updatedAt: now });
+        });
+        await incBatch.commit();
+      }
+
+      await courseRef.update({
+        status: 'active', cancelledAt: null, cancelledBy: null,
+        reopenedAt: now, reopenedBy: req.staff.id, updatedAt: now,
+      });
+
+      res.json({ message: '課程已重新開啟', sessionsReopened, enrollmentsRestored });
+    } catch (err) {
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 
 // DELETE /courses/:courseId/permanent - 永久刪除課程（含場次/報名，僅限無在籍學員）
 router.delete('/:courseId/permanent',

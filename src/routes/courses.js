@@ -748,8 +748,9 @@ router.delete('/:courseId',
 );
 
 // ── POST /courses/:courseId/reopen - 取消課程後重新開啟（還原場次/報名，與 DELETE /:courseId 對稱）──
-// 只還原「當初隨這次課程取消而一併取消」的場次/報名（用 updatedAt 與 course.cancelledAt 精準比對同一批次），
-// 不動休館停課（closureCancelSession，cancelReason:'closure'）或其他時間點個別取消的場次，避免誤還原不相干的取消。
+// 還原此課程「取消且無其他明確原因」的場次（不動休館停課 closureCancelSession 設的 cancelReason:'closure'
+// 場次，那批已各自走過補償/發券流程）；報名則靠 DELETE /:courseId 專屬寫入的 status:'course_cancelled'
+// 辨識（此狀態值只有課程整體取消這條路徑會寫，不會與其他取消原因混淆，不需比對時間戳）。
 router.post('/:courseId/reopen',
   authenticate, checkPermission('courses.manage'),
   async (req, res) => {
@@ -761,11 +762,9 @@ router.post('/:courseId/reopen',
       if (!courseDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到課程' });
       const course = courseDoc.data();
       if (course.status !== 'cancelled') return res.status(400).json({ error: 'NOT_CANCELLED', message: '此課程未取消，無需重新開啟' });
-      const cancelledAt = course.cancelledAt;
-      const sameBatch = (ts) => ts && cancelledAt && ts.isEqual ? ts.isEqual(cancelledAt) : (ts?.seconds === cancelledAt?.seconds && ts?.nanoseconds === cancelledAt?.nanoseconds);
       const now = new Date();
 
-      // 還原場次：這次課程取消當下一併取消、且未被其他原因（如休館停課）標記過的場次
+      // 還原場次：狀態為取消、且無明確其他原因（休館停課等）者
       const sessSnap = await db.collection('courseSessions').where('courseId', '==', courseId).where('status', '==', 'cancelled').get();
       const sessBatch = db.batch();
       let sessionsReopened = 0;
@@ -773,21 +772,19 @@ router.post('/:courseId/reopen',
       sessSnap.docs.forEach(d => {
         const s = d.data();
         if (s.cancelReason) return; // 休館停課等有明確原因者不還原
-        if (!sameBatch(s.updatedAt)) return; // 只還原這次取消動作當時一起取消的場次
         sessBatch.update(d.ref, { status: 'scheduled', updatedAt: now });
         reopenedSessionIds.add(d.id);
         sessionsReopened++;
       });
       if (sessionsReopened > 0) await sessBatch.commit();
 
-      // 還原報名：這次課程取消時被標記 course_cancelled、且對應場次確實有被還原者
+      // 還原報名：這次課程整體取消時被標記 course_cancelled、且對應場次確實有被還原者
       const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', courseId).where('status', '==', 'course_cancelled').get();
       const enrollBatch = db.batch();
       const sessionIncrement = new Map(); // sessionId → 需 +1 的正取人數
       let enrollmentsRestored = 0;
       enrollSnap.docs.forEach(d => {
         const e = d.data();
-        if (!sameBatch(e.updatedAt)) return;
         if (e.sessionId && !reopenedSessionIds.has(e.sessionId)) return; // 對應場次沒被還原就不還原報名
         const restoreStatus = (e.leaveAt || e.leaveReason) ? 'leave' : 'confirmed';
         enrollBatch.update(d.ref, { status: restoreStatus, updatedAt: now });

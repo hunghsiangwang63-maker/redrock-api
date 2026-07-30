@@ -131,9 +131,11 @@ router.get('/public/category/:categoryId', async (req, res) => {
     const cat = catDoc.data();
     if (cat.isActive === false) return res.status(404).json({ error: 'NOT_ACTIVE', message: '此班別目前未開放' });
 
-    // 沿用既有 getCourses（單一真相：類別介紹/海報/規則解析、尚有名額判斷皆在裡面）；不分館別，兩館的梯次都列出
+    // 沿用既有 getCourses（單一真相：類別介紹/海報/規則解析、尚有名額判斷、statusLabel 皆在裡面）；不分館別，兩館的梯次都列出
+    // 排除 statusLabel==='ended'（已結束的梯次，即使 status 欄位仍是 active 也不該顯示可報名）；
+    // 'ongoing'（已開課、插班中）、'enrolling'/'starting_soon'/'full' 皆保留——插班與候補本就支援。
     const all = await courseService.getCourses(null);
-    const cohorts = all.filter(c => c.categoryId === req.params.categoryId && c.status === 'active' && c.isActive !== false);
+    const cohorts = all.filter(c => c.categoryId === req.params.categoryId && c.status === 'active' && c.isActive !== false && c.statusLabel !== 'ended');
 
     // 工作坊型梯次另附未來場次清單（供訪客在同一頁挑選具體場次）
     const today = taiwanToday();

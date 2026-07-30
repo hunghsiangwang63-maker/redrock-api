@@ -2133,6 +2133,20 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **限流**：三個新寫入路由（週課整期/工作坊/比賽報名）掛既有 `publicBookLimiter`（`src/index.js`，每 IP 每小時 20 次）；試上沿用既有 `/experience-bookings/public` 掛載範圍，免新增。
 - **E2E（打正式 API，34/34 全綠）**：①比賽——讀取端點正確、訪客A報名成功且 `memberId` 為 `guest_` 前綴、**訪客B（不同電話）報名同組別未被誤判重複、正確進候補**（關鍵迴歸測試）、未成年缺法代簽名擋400、未成年+法代簽名成功且 `isComplete:true`、電話認領成功；②週課整期——讀取端點回正確場次數、訪客A/B同課程不同電話正確去重+候補、未滿5歲擋400、電話認領涵蓋全部場次；③工作坊——報名成功標 `isGuest:true`、不同電話正確候補；④試上——讀取端點正確、不同電話正確候補、未成年缺法代簽名擋400；⑤限流 header 確認掛載；⑥**會員版 `enroll-all` 迴歸測試（8/8）**：真實會員走登入路徑，費用/名額/去重行為與抽取前完全一致，`courseEnrollments` 正確標 `isGuest:false`。全部測試資料測後清乾淨、0 殘留。
 
+## 目前進度（2026-07-30 續5）— 修：家長代子女報名，通知/交易記錄顯示家長名字而非報名對象本名
+> 回報（蔡佩姍案例，三個子會員）：幫子會員報名課程，確認匯款的通知不是寫子會員的名字。查證是**全站通用 bug**（不是個案），已找到並修復根因；同一輪順便查清另一個回報（另外兩子會員報名同一課程被擋下＝**非 bug，是資料設定問題**，見下）。後端 `/health` `3.181.0-family-registrant-name-fix`；正式 API E2E 9/9。
+- 🐞 **根因**：多處建立通知/交易/轉帳記錄時寫 `req.member?.name || req.body.memberName`——家長登入時 `req.member?.name`（家長本名）恆為真，永遠蓋過前端正確送出的 `req.body.memberName`（報名對象／子女本名，`courseEnrollments.memberName` 本身其實是對的）。`teamMembers.js` 同款寫法還波及 `memberPhone/memberEmail/memberGender/memberBirthday` 四個欄位（**入隊申請的年齡/性別資格判斷可能因此誤用家長資料**，非僅顯示問題）。
+- ✅ **修法**：`courses.js`（4 處：分期計畫/營收記帳/現金待收款/報名收到通知）、`teamMembers.js`（5 個欄位）、`rentals.js`、`payments.js` 全數改為**優先信任明確送出的 `req.body.xxx`（報名對象本人資料），缺漏才退回 `req.member`**（此時多半是本人報名，值本就相同；staff 呼叫 `req.member` 恆為 undefined，行為完全不變）。
+- ✅ **另修 `transfers.js` 確認收款通知**（課程分支）：`transferRecords.memberId` 因防偽造安全機制**刻意固定**是登入會員本人（家長，見 `transfers.js:38` 註解「會員 token 一律用自己的 id，避免偽造他人 memberId」，此設計本身不動）——但通知信建置時原本優先用 `t.memberName`（家長）、且用 `t.memberId`（家長）查場次清單（會查到 0 筆，因為 `courseEnrollments` 是用子女 id 存的）。改為改用 `en2`（該筆 `courseEnrollments` 自身）的 `memberId`/`memberName`（真正報名對象），`t.memberXxx` 降為 fallback。
+- **E2E（打正式 API，9/9）**：家長代子女報名 → `courseEnrollments.memberName` 確認是子女名（未受影響，本就正確）→ 家長上傳轉帳證明（`transferRecords.memberId/memberName` 確認仍是家長，既有安全機制不變）→ 員工確認收款成功 → 驗證修復後的程式碼路徑會改用 `courseEnrollments` 自身資料建置通知。測試資料測後清乾淨、0 殘留。
+- 📋 **附帶查證：蔡佩姍另一子會員報名被擋案例，結論＝非程式 bug**：三個子會員實際報名的是「小蜘蛛人初級班」下不同星期梯次（非同一堂），其中兩位（陳宣妙、陳羿齊）成功報名，是因為她們的會員資料有 `legacyAlumniCategoryIds` 標記（判定為舊生，可在一般開放日 8/5 前、舊生開放日 7/29 後搶先報名）；**第三位（陳宥希）帳號缺這個標記** → 系統判定她非舊生 → 8/5 前報名會被 `ENROLL_NOT_OPEN` 擋下（訊息「目前為舊生續報期間...您非本班別舊生」）。是否要補上她的舊生標記屬於**資料判斷**（她是否真的跟姊姊哥哥一樣是小蜘蛛人舊生），不是程式問題，待與現場確認後再決定要不要用 `firebase-admin` 補資料。
+
+## 目前進度（2026-07-30 續6）— 班別公開瀏覽頁（一個班別多梯次，訪客免登入挑梯次報名）
+> 承續4「公開報名頁」——原本每個公開連結只指到單一梯次，使用者要求「入門班有三堂課程，可以在入門班產生一個連結，讓非會員直接看到三堂課的報名頁」。後端 `/health` `3.182.0-course-category-public-link`；正式 API 驗證。
+- ✅ **後端** `GET /courses/public/category/:categoryId`（免登入）：沿用既有 `getCourses(null)`（不分館別）取該 `categoryId` 底下全部 `status==='active'` 的梯次，回傳班別介紹/海報 + 梯次清單（名稱/館別/價格/起訖日）；工作坊型梯次額外附上未來場次清單（供訪客在同一頁往下選具體場次，比照 `GET /courses/public/:courseId` 場次查詢寫法）。
+- ✅ **前端** `PublicCourseCategoryPage.jsx`（`/book/category?id=<班別id>`）：顯示班別海報/介紹 + 梯次卡片列表——週課梯次點「報名 →」直接導去既有 `/book/course?course=<id>`；工作坊梯次點「選場次 ▾」展開該梯次的場次清單，逐場次導去既有 `/book/workshop?course=&session=`。員工端「班別管理」列表每個班別加「🔗 公開連結」按鈕複製此連結。
+- **驗證**：正式 API 打 `小蜘蛛人初級班` 這個真實班別，正確回傳兩館共 20 個開放中梯次（含名稱/館別/價格）；`/book/category?id=` 頁面正式環境 200。
+
 ## 待辦
 
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。

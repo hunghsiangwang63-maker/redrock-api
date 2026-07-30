@@ -121,6 +121,46 @@ router.get('/public/:courseId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// GET /courses/public/category/:categoryId — 班別詳情+底下全部梯次（免登入，供「一個班別多梯次」的公開報名頁使用）
+// 例：入門班有三個梯次（週一/週三/週五），這裡一次列出，訪客自己挑要報哪一梯。
+router.get('/public/category/:categoryId', async (req, res) => {
+  try {
+    const db = getDb();
+    const catDoc = await db.collection('courseCategories').doc(req.params.categoryId).get();
+    if (!catDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此班別' });
+    const cat = catDoc.data();
+    if (cat.isActive === false) return res.status(404).json({ error: 'NOT_ACTIVE', message: '此班別目前未開放' });
+
+    // 沿用既有 getCourses（單一真相：類別介紹/海報/規則解析、尚有名額判斷皆在裡面）；不分館別，兩館的梯次都列出
+    const all = await courseService.getCourses(null);
+    const cohorts = all.filter(c => c.categoryId === req.params.categoryId && c.status === 'active' && c.isActive !== false);
+
+    // 工作坊型梯次另附未來場次清單（供訪客在同一頁挑選具體場次）
+    const today = taiwanToday();
+    const withSessions = await Promise.all(cohorts.map(async (c) => {
+      if (c.type !== 'workshop') return { ...c, sessions: null };
+      const sessSnap = await db.collection('courseSessions')
+        .where('courseId', '==', c.id).where('status', '==', 'scheduled').get();
+      const sessions = sessSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(s => s.date >= today)
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map(s => ({ id: s.id, date: s.date, startTime: s.startTime, endTime: s.endTime }));
+      return { ...c, sessions };
+    }));
+
+    res.json({
+      category: {
+        id: catDoc.id, name: cat.name, description: cat.description || '', imageUrl: cat.imageUrl || null,
+      },
+      cohorts: withSessions.map(c => ({
+        id: c.id, name: c.name, type: c.type, price: c.price, gymId: c.gymId,
+        startDate: c.startDate, endDate: c.endDate, statusLabel: c.statusLabel || null,
+        sessions: c.sessions,
+      })),
+    });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // GET /courses/public/session/:sessionId — 試上場次詳情（免登入，供公開試上預約頁顯示）
 router.get('/public/session/:sessionId', async (req, res) => {
   try {

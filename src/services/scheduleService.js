@@ -429,11 +429,24 @@ const createRecurringScheduleEvents = async ({ gymId, startDate, recurType, allD
   // 起始日期起算最長 1 年（含起始日當天），依循環類型逐一往後推算日期，超過範圍即停止
   const maxEnd = dayjs(startDate).add(MAX_EVENT_RECURRING_MONTHS, 'month');
   const dates = [];
-  let cur = dayjs(startDate);
-  const step = (d) => recurType === 'weekly' ? d.add(7, 'day') : recurType === 'biweekly' ? d.add(14, 'day') : d.add(1, 'month');
-  while (cur.isBefore(maxEnd) || cur.isSame(maxEnd, 'day')) {
-    dates.push(cur.format('YYYY-MM-DD'));
-    cur = step(cur);
+  if (recurType === 'monthly') {
+    // 每月固定「日期」：每次都從起始日直接 +N 個月（而非用上一次算好的日期繼續疊加），
+    // 避免 dayjs 月底自動夾這種「疊加會累積偏移」的問題——
+    // 例：1/31 起算，疊加式 1/31→2/28→(2/28+1月)=3/28（錯，應為 3/31）；改成每次都以起始日 1/31 為準 +N 個月才正確。
+    let i = 0;
+    while (true) {
+      const d = dayjs(startDate).add(i, 'month');
+      if (d.isAfter(maxEnd, 'day')) break;
+      dates.push(d.format('YYYY-MM-DD'));
+      i++;
+    }
+  } else {
+    const stepDays = recurType === 'weekly' ? 7 : 14;
+    let cur = dayjs(startDate);
+    while (cur.isBefore(maxEnd) || cur.isSame(maxEnd, 'day')) {
+      dates.push(cur.format('YYYY-MM-DD'));
+      cur = cur.add(stepDays, 'day');
+    }
   }
   if (dates.length === 0) throw { code: 'NO_DATES', message: '無法產生任何日期' };
 

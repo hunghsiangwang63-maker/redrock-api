@@ -1059,7 +1059,7 @@ router.put('/:courseId',
     try {
       const db = getDb();
       const allowedFields = [
-        'name', 'cohortName', 'categoryId', 'description', 'imageUrl', 'price', 'pricePerSession', 'maxStudents', 'maxWaitlist', 'reservedSlots', 'reservedSlotsNote', 'instructor',
+        'name', 'cohortName', 'categoryId', 'description', 'imageUrl', 'price', 'pricePerSession', 'maxStudents', 'maxWaitlist', 'instructor',
         'startDate', 'endDate', 'startTime', 'endTime', 'weekdays',
         'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays', 'makeupDeadlineDate', 'handlingFeeRate', 'preStartFeeRate',
         'enrollOpenDate', 'alumniOpenDate', 'fullTermRenewalDiscount', 'alumniDiscount', 'renewalDeadline',
@@ -1094,10 +1094,6 @@ router.put('/:courseId',
       if (req.body.maxWaitlist !== undefined) {
         updates.maxWaitlist = (req.body.maxWaitlist === '' || req.body.maxWaitlist === null) ? null : Number(req.body.maxWaitlist);
       }
-      // 已佔用名額：留空('')＝0
-      if (req.body.reservedSlots !== undefined) {
-        updates.reservedSlots = (req.body.reservedSlots === '' || req.body.reservedSlots === null) ? 0 : Number(req.body.reservedSlots);
-      }
       // 分期規則
       if (req.body.installment !== undefined) {
         const inst = req.body.installment;
@@ -1108,7 +1104,7 @@ router.put('/:courseId',
 
       // ── 雙寫（Phase 1，報名設定結構化）：改到的欄位同步鏡射進巢狀分組（dot-path，不影響其他巢狀欄位）──
       // 尚無任何讀取路徑依賴這兩個巢狀物件，純新增鏡射；用 updates 裡已正規化好的值，確保與扁平欄位一致。
-      const ENROLLMENT_RULE_FIELDS = ['enrollOpenDate', 'alumniOpenDate', 'maxWaitlist', 'reservedSlots', 'reservedSlotsNote', 'teamOpenDate', 'generalOpenDate'];
+      const ENROLLMENT_RULE_FIELDS = ['enrollOpenDate', 'alumniOpenDate', 'maxWaitlist', 'teamOpenDate', 'generalOpenDate'];
       const DISCOUNT_RULE_FIELDS = ['fullTermRenewalDiscount', 'alumniDiscount', 'renewalDeadline', 'teamPrice'];
       ENROLLMENT_RULE_FIELDS.forEach(f => { if (updates[f] !== undefined) updates[`enrollmentRules.${f}`] = updates[f]; });
       DISCOUNT_RULE_FIELDS.forEach(f => { if (updates[f] !== undefined) updates[`discountRules.${f}`] = updates[f]; });
@@ -1643,7 +1639,7 @@ async function handleEnrollAll(req, res) {
           if (e.isMakeup || e.isTrial) return; // 課程名額以「常態學員」計：補課/試上單堂佔位不佔整期名額
           (e.status === 'waitlist' ? waitlistMembers : confirmedMembers).add(e.memberId);
         });
-        const occupied = confirmedMembers.size + (course.reservedSlots || 0); // 含外部帶入的已佔用名額
+        const occupied = confirmedMembers.size;
         enrollStatus = 'confirmed';
         if (occupied >= maxStudents) {
           const wcap = (course.maxWaitlist === null || course.maxWaitlist === undefined) ? Infinity : course.maxWaitlist;

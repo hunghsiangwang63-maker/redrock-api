@@ -93,9 +93,6 @@ const createCourse = async ({ gymId, staffId, data }) => {
     // 候補上限：留空(''/null/undefined)＝不限候補；0＝不開放候補；正整數＝候補名額
     maxWaitlist: (data.maxWaitlist === '' || data.maxWaitlist === null || data.maxWaitlist === undefined)
       ? null : Number(data.maxWaitlist),
-    // 已佔用正取名額（外部帶入，如 BeClass 既有報名）：剩餘＝maxStudents−實報名−reservedSlots
-    reservedSlots: data.reservedSlots ? Number(data.reservedSlots) : 0,
-    reservedSlotsNote: data.reservedSlotsNote || '',   // 佔用原因說明（誰佔的/來源，員工端顯示）
     price: data.price || 0,             // 工作坊：店員手填總價；週課：由 createWeeklySessions 依 pricePerSession×totalSessions 連動算出
     pricePerSession: data.pricePerSession != null ? Number(data.pricePerSession) || 0 : 0, // 週課單堂價（工作坊不用）
     totalSessions: data.totalSessions || 0,   // 總堂數（建立後可更新）
@@ -135,8 +132,6 @@ const createCourse = async ({ gymId, staffId, data }) => {
       enrollOpenDate: data.enrollOpenDate || null,
       alumniOpenDate: data.alumniOpenDate || null,
       maxWaitlist: (data.maxWaitlist === '' || data.maxWaitlist === null || data.maxWaitlist === undefined) ? null : Number(data.maxWaitlist),
-      reservedSlots: data.reservedSlots ? Number(data.reservedSlots) : 0,
-      reservedSlotsNote: data.reservedSlotsNote || '',
       teamOpenDate: data.teamOpenDate || null,
       generalOpenDate: data.generalOpenDate || null,
     },
@@ -1762,8 +1757,7 @@ const getCourses = async (gymId) => {
 
   return courses.map(c => {
     const realEnrolled = enrolledByCourse[c.id]?.size || 0;
-    // reservedSlots：從 BeClass 等外部帶入的「已佔用正取名額」，計入佔用數（剩餘=max−實報名−reserved）
-    const enrolledCount = realEnrolled + (c.reservedSlots || 0);
+    const enrolledCount = realEnrolled;
     const cat = catMap[c.categoryId] || null;
     const _rules = resolveRules(c, cat); // 班別繼承+梯次覆寫解析後的規則（供會員端顯示，勿直接讀 course 欄位）
     return {

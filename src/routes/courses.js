@@ -1759,7 +1759,9 @@ async function handleEnrollAll(req, res) {
         const periods = installmentService.buildPeriodsFromConfig(course.installment, fee, today);
         if (periods) {
           coursePlan = await installmentService.createInstallmentPlan({
-            memberId, memberName: req.member?.name || req.body.memberName || '',
+            // 家長代子女報名時 req.body.memberName 才是報名對象（子女）本名，req.member?.name 是登入者（家長）——
+            // 優先信任明確送出的 memberName，避免顯示成家長名（req.member 對 staff 呼叫恆為 undefined，行為不變）。
+            memberId, memberName: req.body.memberName || req.member?.name || '',
             gymId: futureSessions[0].gymId || gymId,
             relatedType: 'course', relatedId: courseId, itemName: course.name,
             recognitionDate: courseRecognitionDate, installments: periods,
@@ -1778,7 +1780,7 @@ async function handleEnrollAll(req, res) {
           totalAmount: fee,
           paymentMethod,
           memberId,
-          memberName: req.member?.name || req.body.memberName || '',
+          memberName: req.body.memberName || req.member?.name || '', // 同上，優先用報名對象本名
           relatedId: courseId,
           notes: `課程報名：${course.name}（整堂課，共${futureSessions.length}場）`,
           staffId: req.staff?.id || null,
@@ -1794,7 +1796,7 @@ async function handleEnrollAll(req, res) {
           const trId = uuidv4();
           await db.collection('transferRecords').doc(trId).set({
             id: trId, orderType: 'course', refId: firstEnrollmentId,
-            memberId, memberName: req.member?.name || req.body.memberName || '',
+            memberId, memberName: req.body.memberName || req.member?.name || '', // 同上，優先用報名對象本名
             gymId: futureSessions[0].gymId || gymId,
             courseId, courseName: course.name, orderName: course.name,
             amount: fee, paymentMethod: 'cash', status: 'pending',
@@ -1808,7 +1810,7 @@ async function handleEnrollAll(req, res) {
       if (!isWaitlist) {
         const _rn = require('../services/registrationNotify');
         _rn.notifyRegReceived({
-          memberId, memberName: req.member?.name || req.body.memberName || '',
+          memberId, memberName: req.body.memberName || req.member?.name || '', // 同上，優先用報名對象本名
           to: isGuestEnroll ? (req.body._guestEmail || null) : undefined,
           typeLabel: course.type === 'workshop' ? '工作坊' : '課程',
           itemName: course.name, gymId: futureSessions[0].gymId || gymId,

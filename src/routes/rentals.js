@@ -68,8 +68,9 @@ router.post('/apply', authenticateAny, async (req, res) => {
     const id = `rental_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
     await db.collection('equipmentRentals').doc(id).set({
       id, memberId,
-      memberName: req.member?.name || req.body.memberName || '',
-      memberPhone: req.member?.phone || req.body.memberPhone || '',
+      // 家長代子女租借時，req.body.xxx 才是租借對象（子女）本人資料，優先信任明確送出的欄位
+      memberName: req.body.memberName || req.member?.name || '',
+      memberPhone: req.body.memberPhone || req.member?.phone || '',
       gymId, pickupDate, returnDate: effReturnDate, rentalType: effRentalType,
       items: itemsWithFee,
       totalRentalFee, totalDeposit,

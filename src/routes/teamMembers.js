@@ -71,11 +71,13 @@ router.post('/apply', authenticateAny, async (req, res) => {
     const id = `team_${memberId}_${year}`;
     await db.collection('teamApplications').doc(id).set({
       id, memberId, year,
-      memberName: req.member?.name || req.body.memberName || '',
-      memberPhone: req.member?.phone || req.body.memberPhone || '',
-      memberEmail: req.member?.email || req.body.memberEmail || '',
-      memberGender: req.member?.gender || req.body.memberGender || '',
-      memberBirthday: req.member?.birthday || req.body.memberBirthday || '',
+      // 家長代子女申請入隊時，req.body.xxx 才是申請對象（子女）本人資料；req.member 是登入者（家長）——
+      // 優先信任明確送出的欄位，避免生日/性別/聯絡資訊全部誤存成家長的（影響年齡資格判斷等）。
+      memberName: req.body.memberName || req.member?.name || '',
+      memberPhone: req.body.memberPhone || req.member?.phone || '',
+      memberEmail: req.body.memberEmail || req.member?.email || '',
+      memberGender: req.body.memberGender || req.member?.gender || '',
+      memberBirthday: req.body.memberBirthday || req.member?.birthday || '',
       // 山協必填
       idNumber: idNumber || '',
       address: address || '',

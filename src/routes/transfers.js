@@ -227,18 +227,23 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
           const c2 = cDoc && cDoc.exists ? cDoc.data() : {};
           const _rn = require('../services/registrationNotify');
           const itemName = c2.name || t.courseName || en2.courseName || '課程';
-          // 該會員此課程的場次清單（非取消、非補課/試上；依日期排序）
+          // 該報名對象此課程的場次清單（非取消、非補課/試上；依日期排序）
+          // ⚠ 用 en2.memberId（該筆報名記錄本身的擁有者）而非 t.memberId：家長代子女報名時，
+          // transferRecords.memberId 出於防偽造安全考量固定是登入會員本人（家長），
+          // 但實際報名對象（courseEnrollments.memberId）才是子女——若用 t.memberId 查場次會查到 0 筆。
           let sessions = null;
-          if (en2.courseId && t.memberId) {
+          if (en2.courseId && en2.memberId) {
             const enAll = await db.collection('courseEnrollments')
-              .where('courseId', '==', en2.courseId).where('memberId', '==', t.memberId)
+              .where('courseId', '==', en2.courseId).where('memberId', '==', en2.memberId)
               .where('status', 'in', ['confirmed', 'leave']).get();
             sessions = enAll.docs.map(d => d.data()).filter(e => !e.isMakeup && !e.isTrial && e.date)
               .map(e => ({ date: e.date, startTime: e.startTime, endTime: e.endTime }))
               .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || ''));
           }
           _rn.notifyRegConfirmed({
-            memberId: t.memberId, memberName: t.memberName || en2.memberName || '',
+            // memberId 維持用 t.memberId（登入會員本人）解析寄送信箱——子帳號通常沒有獨立 email，
+            // 通知本就該寄給管理帳號的家長；memberName 才需要顯示「真正報名的人」，改優先用 en2.memberName。
+            memberId: t.memberId, memberName: en2.memberName || t.memberName || '',
             typeLabel: c2.type === 'workshop' ? '工作坊' : '課程',
             itemName, gymId: t.gymId || c2.gymId, massage: _rn.isMassage(itemName),
             sessions,

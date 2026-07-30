@@ -18,7 +18,7 @@ router.post('/', authenticateAny, async (req, res) => {
     const payment = await paymentService.createPayment({
       provider, orderType, orderRef, gymId, amount,
       memberId: req.member?.id || req.body.memberId || null,
-      memberName: req.member?.name || req.body.memberName || '',
+      memberName: req.body.memberName || req.member?.name || '', // 家長代子女付款時，memberName 應為付款對象本名
     });
     res.status(201).json({
       paymentId: payment.id, status: payment.status,

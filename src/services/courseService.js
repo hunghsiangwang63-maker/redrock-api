@@ -214,6 +214,16 @@ const createSession = async ({ courseId, gymId, staffId, data }) => {
 
   await db.collection(SESSION_COLLECTION).doc(id).set(session);
 
+  // 同步課程總堂數（此端點也用於「新增場次」單堂加開，含週課與工作坊）：
+  // ⚠ course.totalSessions 若不同步，① 工作坊插班費用 calcEnrollmentFee 會用到過期堂數算錯（甚至算出 fee=0）
+  // ② 週課的整期總價快取 price（=pricePerSession×totalSessions）也會跟著過期。兩者這裡一併修正。
+  const newTotalSessions = (course.totalSessions || 0) + 1;
+  const courseUpdates = { totalSessions: newTotalSessions, updatedAt: now };
+  if (course.type !== 'workshop') {
+    courseUpdates.price = Math.round((Number(course.pricePerSession) || 0) * newTotalSessions);
+  }
+  await db.collection(COURSE_COLLECTION).doc(courseId).update(courseUpdates);
+
   // 帶入學員（新增場次時可個別勾選）：為選定會員建立此場次報名
   // 費用 0＋已確認（學員整期費用已繳，加開場次不另計費）；gymAccess 沿用課程無限練習期
   const ids = Array.isArray(data.enrollMemberIds) ? [...new Set(data.enrollMemberIds.filter(Boolean))] : [];

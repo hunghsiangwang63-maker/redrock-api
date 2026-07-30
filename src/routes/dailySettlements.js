@@ -60,6 +60,9 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     const suggestedInvoiceStart = /^\d+$/.test(prevInvoiceLast)
       ? String(Number(prevInvoiceLast) + 1).padStart(prevInvoiceLast.length, '0')
       : '';
+    // 字軌同樣延續前一天最後一段的字軌（換發票本才需要手動改）；舊資料（尚無 invoiceSegments）留空
+    const prevSegs = prevSnap.empty ? [] : (prevSnap.docs[0].data().invoiceSegments || []);
+    const suggestedInvoiceTrack = prevSegs.length ? String(prevSegs[prevSegs.length - 1].track || '') : '';
 
     // 統計今日五大類收入
     const todayStart = dayjs().startOf('day').toDate();
@@ -192,6 +195,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       denominations: { d1:0, d5:0, d10:0, d50:0, d100:0, d500:0, d1000:0 },
       invoiceLastNumber: '',
       suggestedInvoiceStart,   // 前一天最後發票號+1（前端帶入，可改）
+      suggestedInvoiceTrack,   // 前一天最後一段的字軌（前端帶入，可改；換發票本才需要手動改）
       difference: null,
       status: 'draft',
     };

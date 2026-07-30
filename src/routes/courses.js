@@ -120,7 +120,7 @@ router.get('/public/:courseId', async (req, res) => {
         categoryName: enriched.categoryName || null,
         categoryDescription: enriched.categoryDescription || null,
         categoryImageUrl: enriched.categoryImageUrl || null,
-        price: enriched.price, gymId: enriched.gymId,
+        price: enriched.price, pricePerSession: enriched.pricePerSession || 0, gymId: enriched.gymId,
         startDate: enriched.startDate, endDate: enriched.endDate,
         enrollOpenDate: enriched.enrollOpenDate || null,
       },

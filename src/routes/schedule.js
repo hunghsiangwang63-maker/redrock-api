@@ -306,6 +306,32 @@ router.post('/events',
   }
 );
 
+// ── POST /events/recurring - 重要事項循環安排（每週／每兩週／每月固定日期，起始日期起算最長 1 年）──
+router.post('/events/recurring',
+  authenticate, checkPermission('schedule.events'),
+  [
+    body('startDate').isDate().withMessage('請輸入有效起始日期'),
+    body('recurType').isIn(['weekly', 'biweekly', 'monthly']).withMessage('循環類型不正確'),
+    body('category').isIn(['closure', 'competition', 'maintenance', 'other']).withMessage('類別不正確'),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const gymId = req.staff.role === 'super_admin' ? (req.body.gymId || null) : req.staff.gymId;
+      const result = await scheduleService.createRecurringScheduleEvents({
+        gymId, startDate: req.body.startDate, recurType: req.body.recurType,
+        allDay: req.body.allDay, startTime: req.body.startTime, endTime: req.body.endTime,
+        category: req.body.category, title: req.body.title, note: req.body.note,
+        createdBy: req.staff.id,
+      });
+      res.status(201).json({ ...result, message: `已建立 ${result.count} 筆循環重要事項` });
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 router.put('/events/:eventId',
   authenticate, checkPermission('schedule.events'),
   async (req, res) => {

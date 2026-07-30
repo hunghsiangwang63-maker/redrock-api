@@ -413,6 +413,52 @@ const createScheduleEvent = async ({ gymId, date, allDay, startTime, endTime, ca
   return event;
 };
 
+// ── 重要事項循環安排（每週／每兩週／每月固定日期）：起始日期起算，最長 1 年 ──
+const EVENT_RECUR_TYPES = ['weekly', 'biweekly', 'monthly'];
+const MAX_EVENT_RECURRING_MONTHS = 12;
+
+const createRecurringScheduleEvents = async ({ gymId, startDate, recurType, allDay, startTime, endTime, category, title, note, createdBy }) => {
+  if (!startDate) throw { code: 'MISSING_DATE', message: '請選擇起始日期' };
+  if (!EVENT_RECUR_TYPES.includes(recurType)) throw { code: 'INVALID_RECUR_TYPE', message: '循環類型須為每週/每兩週/每月固定日期' };
+  if (!EVENT_CATEGORIES.includes(category)) throw { code: 'INVALID_CATEGORY', message: '類別不正確' };
+  if (!allDay) {
+    if (!startTime || !endTime) throw { code: 'MISSING_TIME', message: '非全天事項需填寫開始與結束時間' };
+    if (startTime >= endTime) throw { code: 'INVALID_TIME_RANGE', message: '結束時間必須晚於開始時間' };
+  }
+
+  // 起始日期起算最長 1 年（含起始日當天），依循環類型逐一往後推算日期，超過範圍即停止
+  const maxEnd = dayjs(startDate).add(MAX_EVENT_RECURRING_MONTHS, 'month');
+  const dates = [];
+  let cur = dayjs(startDate);
+  const step = (d) => recurType === 'weekly' ? d.add(7, 'day') : recurType === 'biweekly' ? d.add(14, 'day') : d.add(1, 'month');
+  while (cur.isBefore(maxEnd) || cur.isSame(maxEnd, 'day')) {
+    dates.push(cur.format('YYYY-MM-DD'));
+    cur = step(cur);
+  }
+  if (dates.length === 0) throw { code: 'NO_DATES', message: '無法產生任何日期' };
+
+  const db = getDb();
+  const now = new Date();
+  const recurrenceGroupId = uuidv4();
+  const batch = db.batch();
+  const events = dates.map(date => {
+    const id = uuidv4();
+    const event = {
+      id, gymId: gymId || null, date,
+      allDay: !!allDay,
+      startTime: allDay ? null : startTime,
+      endTime: allDay ? null : endTime,
+      category, title: (title || '').trim(), note: note || '',
+      recurrenceGroupId, recurType,
+      createdBy, createdAt: now, updatedAt: now,
+    };
+    batch.set(db.collection(COLLECTIONS.SCHEDULE_EVENTS).doc(id), event);
+    return event;
+  });
+  await batch.commit();
+  return { events, count: events.length, recurrenceGroupId };
+};
+
 const updateScheduleEvent = async (id, { gymId, date, allDay, startTime, endTime, category, title, note }) => {
   const db = getDb();
   const ref = db.collection(COLLECTIONS.SCHEDULE_EVENTS).doc(id);
@@ -502,6 +548,9 @@ module.exports = {
   copyPreviousMonthShifts,
   EVENT_CATEGORIES,
   createScheduleEvent,
+  createRecurringScheduleEvents,
+  EVENT_RECUR_TYPES,
+  MAX_EVENT_RECURRING_MONTHS,
   updateScheduleEvent,
   deleteScheduleEvent,
   getMonthlyScheduleEvents,

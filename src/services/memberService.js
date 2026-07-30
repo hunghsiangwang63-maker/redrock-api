@@ -457,6 +457,56 @@ const claimPendingExperienceTickets = async (db, memberId, member) => {
   } catch (e) { console.error('claimPendingExperienceTickets 失敗（不阻斷建立會員）:', e.message); }
 };
 
+// ── 認領公開訪客課程/工作坊/試上報名 ───────────────────────────────
+// 免登入公開報名頁（週課整期/單堂工作坊/試上）建立時 memberId 為 guest_<uuid> 佔位字串（非 null，避免
+// 與其他訪客同場次/同梯次誤判重複報名，見 courses.js handleEnrollAll / experienceBookings.js handleTrialBooking
+// 的說明）、並標 isGuest:true + contactPhone。註冊會員後用電話比對綁定，之後「我的課程」看得到。
+const claimGuestCourseEnrollments = async (db, memberId, member) => {
+  try {
+    if (!member?.phone) return;
+    const snap = await db.collection('courseEnrollments').where('contactPhone', '==', member.phone).get();
+    const batch = db.batch(); let n = 0;
+    snap.docs.forEach(d => {
+      const e = d.data();
+      if (e.isGuest && e.status !== 'cancelled' && e.status !== 'course_cancelled') {
+        batch.update(d.ref, { memberId, claimedFromGuest: true, updatedAt: new Date() });
+        n++;
+      }
+    });
+    if (n) { await batch.commit(); console.log(`認領訪客課程/工作坊/試上報名 ${n} 筆 → ${memberId}`); }
+    // 同步認領 courseRegistrations header（Phase 1 雙寫，僅供顯示查詢用；失敗不影響上面主要認領）
+    try {
+      const hSnap = await db.collection('courseRegistrations').where('contactPhone', '==', member.phone).get();
+      const hBatch = db.batch(); let hn = 0;
+      hSnap.docs.forEach(d => {
+        const h = d.data();
+        if (h.isGuest && h.status !== 'cancelled') { hBatch.update(d.ref, { memberId, claimedFromGuest: true, updatedAt: new Date() }); hn++; }
+      });
+      if (hn) await hBatch.commit();
+    } catch (e) { console.error('claimGuestCourseEnrollments header 認領失敗（不阻斷）:', e.message); }
+  } catch (e) { console.error('claimGuestCourseEnrollments 失敗（不阻斷建立會員）:', e.message); }
+};
+
+// ── 認領公開訪客比賽報名 ──────────────────────────────────────────
+// 與上方 claimGuestCourseEnrollments 同款（memberId 為 guest_<uuid>、isGuest:true）；比賽報名文件既有欄位叫
+// `phone`（非 contactPhone），比對時沿用該集合原本的欄位名。與 claimLegacyCompetitionReg（BeClass 匯入舊資料、
+// 用 claimPhone+模糊姓名比對）是完全不同的兩套機制，勿混淆。
+const claimGuestCompetitionRegistrations = async (db, memberId, member) => {
+  try {
+    if (!member?.phone) return;
+    const snap = await db.collection('competitionRegistrations').where('phone', '==', member.phone).get();
+    const batch = db.batch(); let n = 0;
+    snap.docs.forEach(d => {
+      const r = d.data();
+      if (r.isGuest && r.status !== 'cancelled') {
+        batch.update(d.ref, { memberId, claimedFromGuest: true, updatedAt: new Date() });
+        n++;
+      }
+    });
+    if (n) { await batch.commit(); console.log(`認領訪客比賽報名 ${n} 筆 → ${memberId}`); }
+  } catch (e) { console.error('claimGuestCompetitionRegistrations 失敗（不阻斷建立會員）:', e.message); }
+};
+
 // ── BeClass 比賽報名自動認領 ─────────────────────────────────────
 // 匯入的比賽報名（memberId:null＋claimPhone/claimName）：會員註冊時電話+姓名比對命中
 // → 報名掛上帳號（App 顯示我的比賽、可用報到 QR）＋通知管理員。
@@ -649,6 +699,9 @@ const createMember = async (memberData, staffId, options = {}) => {
   await claimGuestExperienceBookings(db, memberId, member);
   // 待指派體驗單日券自動認領（逐參加者發券時比對不到、之後本人註冊 → 姓名+生日命中綁本人）
   await claimPendingExperienceTickets(db, memberId, member);
+  // 公開訪客報名認領（比賽/課程整期/工作坊/試上；電話比對，見各函式說明）
+  await claimGuestCourseEnrollments(db, memberId, member);
+  await claimGuestCompetitionRegistrations(db, memberId, member);
 
   // 計算並更新封鎖狀態
   const blockReasons = await getBlockReasons(memberId, member);

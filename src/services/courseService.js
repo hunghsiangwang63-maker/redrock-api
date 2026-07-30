@@ -594,10 +594,15 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
   paymentDate, bankLastFive, healthNote, referralSource,
   confirmedLeavePolicy, confirmedRefundPolicy, portraitSignature, guardianSignature,
   enrollGender, enrollAge, enrollNote,
+  // 訪客（免登入公開報名，見 POST /courses/public/sessions/:sessionId/enroll）：memberId 為 guest_<uuid> 佔位字串，
+  // 沒有會員文件可讀 → 跳過 getMember，用呼叫端傳入的聯絡資訊組一個最小 member 物件，隊員/員工優惠一律不適用。
+  isGuestBooking = false, guestName, guestPhone, guestEmail,
 }) => {
   const db = getDb();
 
-  const member = await getMember(memberId);
+  const member = isGuestBooking
+    ? { id: memberId, name: guestName || '', isBlocked: false, isStaff: false }
+    : await getMember(memberId);
   if (member.isBlocked) throw { code: 'MEMBER_BLOCKED', message: '帳號已封鎖，無法報名' };
 
   const sessionDoc = await db.collection(SESSION_COLLECTION).doc(sessionId).get();
@@ -641,8 +646,9 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
   const feeInfo = calcEnrollmentFee(course, completedSessions);
 
   // 工作坊分階段報名＋隊員分級定價（僅 workshop、且設了 team/general 開放日或隊員價時生效；店員代報 byStaff 不受 gate 限）
-  const _isTeam = require('../services/teamMemberService').isActiveTeamMember(member);
-  const _isStaff = member.isStaff === true; // 員工會員（比對到員工帳號者）——比照隊員，於 teamOpenDate 起可報
+  // 訪客沒有會員記錄，一律視為非隊員/非員工（不套用相關優惠，也不受 teamOpenDate 專屬期限制）
+  const _isTeam = isGuestBooking ? false : require('../services/teamMemberService').isActiveTeamMember(member);
+  const _isStaff = isGuestBooking ? false : member.isStaff === true; // 員工會員（比對到員工帳號者）——比照隊員，於 teamOpenDate 起可報
   if (course.type === 'workshop' && !byStaff && (course.teamOpenDate || course.generalOpenDate)) {
     const _t = taiwanToday();
     if (_isTeam || _isStaff) {
@@ -703,6 +709,9 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     enrollGender: enrollGender || null,   // 報名收集：性別（供講師參考）
     enrollAge: (enrollAge != null && enrollAge !== '') ? Number(enrollAge) : null, // 年齡
     enrollNote: enrollNote || null,       // 自訂備註（如想特別處理的部位）
+    isGuest: !!isGuestBooking,
+    contactPhone: isGuestBooking ? (guestPhone || null) : null,
+    contactEmail: isGuestBooking ? (guestEmail || null) : null,
     createdAt: now,
     updatedAt: now,
   };
@@ -734,6 +743,7 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
       sourceEnrollmentIds: [enrollmentId],
       payEnrollmentId: enrollmentId,
       enrolledBy: staffId || memberId,
+      isGuest: enrollment.isGuest, contactPhone: enrollment.contactPhone,
     });
   } catch (e) { console.error('[雙寫] courseRegistrations header 建立失敗（不影響報名）:', e.message); }
 

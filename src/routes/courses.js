@@ -19,7 +19,7 @@ const { checkMemberOwnership } = require('../utils/memberOwnership');
 const courseService = require('../services/courseService');
 const { createWeeklySessions, updateSession } = courseService;
 const memberService = require('../services/memberService');
-const { isUnder5 } = require('../utils/age');
+const { isUnder5, isMinor } = require('../utils/age');
 const { getDb, getStorage, COLLECTIONS } = require('../config/firebase');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
@@ -77,6 +77,70 @@ router.post('/',
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );
+
+// ══════════════════════════════════════════════════════
+// 公開讀取（免登入，供公開報名頁顯示課程/場次資訊）
+// ══════════════════════════════════════════════════════
+
+// GET /courses/public/:courseId — 課程詳情+未來場次（免登入）
+router.get('/public/:courseId', async (req, res) => {
+  try {
+    const db = getDb();
+    const courseDoc = await db.collection('courses').doc(req.params.courseId).get();
+    if (!courseDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此課程' });
+    const raw = courseDoc.data();
+    if (raw.status !== 'active' || raw.isActive === false) return res.status(404).json({ error: 'NOT_ACTIVE', message: '此課程目前未開放報名' });
+
+    // 沿用既有 getCourses（單一真相：類別介紹/海報/規則解析皆在裡面），取這一門即可
+    const all = await courseService.getCourses(raw.gymId);
+    const enriched = all.find(c => c.id === req.params.courseId) || { id: req.params.courseId, ...raw };
+
+    const today = taiwanToday();
+    const sessSnap = await db.collection('courseSessions')
+      .where('courseId', '==', req.params.courseId)
+      .where('status', '==', 'scheduled')
+      .get();
+    const sessions = sessSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .filter(s => s.date >= today)
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map(s => ({ id: s.id, date: s.date, startTime: s.startTime, endTime: s.endTime, gymId: s.gymId }));
+
+    res.json({
+      course: {
+        id: enriched.id, name: enriched.name, type: enriched.type,
+        description: enriched.description || '',
+        categoryName: enriched.categoryName || null,
+        categoryDescription: enriched.categoryDescription || null,
+        categoryImageUrl: enriched.categoryImageUrl || null,
+        price: enriched.price, gymId: enriched.gymId,
+        startDate: enriched.startDate, endDate: enriched.endDate,
+        enrollOpenDate: enriched.enrollOpenDate || null,
+      },
+      sessions,
+    });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// GET /courses/public/session/:sessionId — 試上場次詳情（免登入，供公開試上預約頁顯示）
+router.get('/public/session/:sessionId', async (req, res) => {
+  try {
+    const db = getDb();
+    const sDoc = await db.collection('courseSessions').doc(req.params.sessionId).get();
+    if (!sDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此場次' });
+    const session = sDoc.data();
+    const cDoc = await db.collection('courses').doc(session.courseId).get();
+    const course = cDoc.exists ? cDoc.data() : {};
+    const trialRules = courseService.resolveRules(course, await courseService.getCategoryOf(db, course.categoryId));
+    res.json({
+      session: {
+        id: sDoc.id, date: session.date, startTime: session.startTime, endTime: session.endTime,
+        gymId: session.gymId, courseName: session.courseName,
+      },
+      allowTrial: trialRules.allowTrial === true,
+      trialPrice: trialRules.trialPrice || 0,
+    });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
 
 // ══════════════════════════════════════════════════════
 // 場次
@@ -358,6 +422,68 @@ router.post('/sessions/:sessionId/enroll',
     }
   }
 );
+
+// ── POST /courses/public/sessions/:sessionId/enroll - 訪客報名單堂工作坊（免登入，先轉帳）────
+// 不建帳號（memberId 用不會碰撞的 guest_<uuid> 佔位字串，避免與其他訪客誤判重複報名/名額計算漂移）；
+// 一律轉帳、無分期/無定期票練習期遞延（訪客沒有既有票券關係）；未成年一律要求本人+法定代理人皆線上簽名。
+router.post('/public/sessions/:sessionId/enroll', async (req, res) => {
+  try {
+    const { guestName, guestPhone, guestEmail, guestBirthday, portraitSignature, guardianSignature,
+      healthNote, referralSource, enrollGender, enrollAge, enrollNote,
+      bankLastFive, paymentDate } = req.body;
+    if (!guestName || !String(guestName).trim()) return res.status(400).json({ code:'MISSING_CONTACT', message:'請填寫姓名' });
+    if (!guestPhone || !String(guestPhone).trim()) return res.status(400).json({ code:'MISSING_PHONE', message:'請填寫聯絡電話' });
+    if (!guestBirthday) return res.status(400).json({ code:'MISSING_BIRTHDAY', message:'請填寫生日' });
+    if (isUnder5(guestBirthday)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程' });
+    if (!portraitSignature) return res.status(400).json({ code:'CONSENT_REQUIRED', message:'請先完成簽名' });
+    if (isMinor(guestBirthday) && !guardianSignature) return res.status(400).json({ code:'GUARDIAN_SIGNATURE_REQUIRED', message:'未滿 18 歲需法定代理人簽名' });
+    if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code:'MISSING_TRANSFER', message:'請填寫匯款帳號末五碼' });
+    if (!paymentDate || !String(paymentDate).trim()) return res.status(400).json({ code:'MISSING_PAYMENT_DATE', message:'請填寫轉帳日期' });
+
+    const sessionDoc = await getDb().collection('courseSessions').doc(req.params.sessionId).get();
+    if (!sessionDoc.exists) return res.status(404).json({ code:'SESSION_NOT_FOUND', message:'找不到此場次' });
+    const session = sessionDoc.data();
+
+    const memberId = `guest_${uuidv4()}`;
+    const result = await courseService.enrollCourse({
+      memberId,
+      isGuestBooking: true, guestName: String(guestName).trim(), guestPhone: String(guestPhone).trim(), guestEmail: (guestEmail||'').trim(),
+      sessionId: req.params.sessionId,
+      gymId: session.gymId,
+      staffId: null, byStaff: false,
+      enrollGender, enrollAge, enrollNote,
+      paymentDate, bankLastFive,
+      healthNote, referralSource,
+      confirmedLeavePolicy: req.body.confirmedLeavePolicy,
+      confirmedRefundPolicy: req.body.confirmedRefundPolicy,
+      portraitSignature, guardianSignature,
+    });
+
+    // 報名收到通知信（非候補；運動按摩不附匯款帳號；非同步、失敗不阻斷）
+    if (!result.isWaitlist) {
+      try {
+        const courseDoc = await getDb().collection(COLLECTIONS.COURSES || 'courses').doc(session.courseId).get();
+        const c = courseDoc.exists ? courseDoc.data() : null;
+        if (c) {
+          const _rn = require('../services/registrationNotify');
+          _rn.notifyRegReceived({
+            to: (guestEmail||'').trim(), memberId, memberName: String(guestName).trim(),
+            typeLabel: c.type === 'workshop' ? '工作坊' : '課程',
+            itemName: c.name, gymId: c.gymId || session.gymId,
+            fee: result.feeInfo?.fee || 0, paymentMethod: 'transfer',
+            massage: _rn.isMassage(c.name),
+            sessions: [{ date: session.date, startTime: session.startTime, endTime: session.endTime }],
+          });
+        }
+      } catch (e) { console.error('[Email] 訪客工作坊報名通知', e.message); }
+    }
+
+    res.status(result.isWaitlist ? 200 : 201).json({ ...result, message: result.isWaitlist ? result.message : '報名成功！請於期限內完成匯款，之後若在 app.redrocktaiwan.com 註冊會員（用同一支電話），此報名會自動歸入您的帳號。' });
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
 
 // ══════════════════════════════════════════════════════
 // 請假
@@ -1335,23 +1461,33 @@ router.post('/:courseId/cancel-waitlist', authenticateAny, async (req, res) => {
 });
 
 // POST /courses/:courseId/enroll-all - 報名整個週課（自動加入所有場次）
-router.post('/:courseId/enroll-all',
-  authenticateAny,
-  async (req, res) => {
+// 週課整期報名核心邏輯：登入會員路徑（authenticateAny）與訪客公開路徑（POST /public/:courseId/enroll-all）共用同一份，
+// 差異只在 req.body 於呼叫前是否已被公開路由預先塞入 memberId=guest_<uuid>／memberName／_isGuestEnroll 等旗標——
+// memberId/memberName/paymentMethod 的解析本就優先讀 req.body，訪客路由只要在呼叫前寫好 req.body 即可共用，
+// 不需要另外複製一份費用/名額/候補計算（避免重蹈本檔案已知的「同段邏輯平行複製、日後漏同步」教訓）。
+async function handleEnrollAll(req, res) {
     try {
       const db = getDb();
       const courseId = req.params.courseId;
       const memberId = req.body.memberId || req.member?.id;
       const gymId = req.body.gymId || req.staff?.gymId || null;
       const paymentMethod = req.body.paymentMethod || 'cash';
+      const isGuestEnroll = !!req.body._isGuestEnroll;
 
       if (!memberId) return res.status(400).json({ error: 'MISSING_MEMBER' });
 
-      // 會員只能為自己或子會員整期報名（防帶他人 memberId；查無會員視為無權）
-      const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
-      if (deny) return res.status(deny.status).json(deny.body);
-      // 後端權威：未滿 5 歲無法報名課程（實際上課者＝memberId，家長代子時已解析為子會員）
-      const _attendee = await memberService.getMember(memberId).catch(() => null);
+      if (isGuestEnroll) {
+        // 訪客：未滿 5 歲擋（無會員文件可讀，用送出的生日直接判）；未成年（<18）一律要求本人+法定代理人皆已線上簽名
+        if (isUnder5(req.body._guestBirthday)) return res.status(400).json({ code: 'AGE_UNDER_5', message: '未滿 5 歲無法報名課程' });
+        if (!req.body.portraitSignature) return res.status(400).json({ code: 'CONSENT_REQUIRED', message: '請先完成簽名' });
+        if (isMinor(req.body._guestBirthday) && !req.body.guardianSignature) return res.status(400).json({ code: 'GUARDIAN_SIGNATURE_REQUIRED', message: '未滿 18 歲需法定代理人簽名' });
+      } else {
+        // 會員只能為自己或子會員整期報名（防帶他人 memberId；查無會員視為無權）
+        const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
+        if (deny) return res.status(deny.status).json(deny.body);
+      }
+      // 後端權威：未滿 5 歲無法報名課程（實際上課者＝memberId，家長代子時已解析為子會員；訪客無會員文件、上面已另外擋過）
+      const _attendee = isGuestEnroll ? null : await memberService.getMember(memberId).catch(() => null);
       if (isUnder5(_attendee)) return res.status(400).json({ code: 'AGE_UNDER_5', message: '未滿 5 歲無法報名課程' });
       // 🧪 模擬報名：短路，不建真實報名（不佔名額）
       if (_attendee?.isSimulation) return res.json(await require('../services/simulationService').handleSimulatedRegistration(db, { type: 'course', member: _attendee, targetId: courseId, payload: req.body }));
@@ -1562,6 +1698,9 @@ router.post('/:courseId/enroll-all',
             confirmedRefundPolicy: !!req.body.confirmedRefundPolicy,
             portraitSignature: req.body.portraitSignature || null,
             guardianSignature: req.body.guardianSignature || null,
+            isGuest: isGuestEnroll,
+            contactPhone: isGuestEnroll ? (req.body._guestPhone || null) : null,
+            contactEmail: isGuestEnroll ? (req.body._guestEmail || null) : null,
             enrolledBy: memberId,
             enrolledAt: now,
             createdAt: now,
@@ -1603,6 +1742,7 @@ router.post('/:courseId/enroll-all',
           sourceEnrollmentIds: allEnrollmentIds,
           payEnrollmentId: firstEnrollmentId,
           enrolledBy: memberId,
+          isGuest: isGuestEnroll, contactPhone: isGuestEnroll ? (req.body._guestPhone || null) : null,
         });
       } catch (e) { console.error('[雙寫] courseRegistrations header 建立失敗（不影響報名）:', e.message); }
 
@@ -1664,10 +1804,12 @@ router.post('/:courseId/enroll-all',
       }
 
       // 報名收到通知信（非候補；非同步、失敗不阻斷；運動按摩不附匯款帳號）
+      // 訪客沒有會員文件可查 email，直接帶 to 覆蓋（notifyRegReceived 的 to 優先於用 memberId 查會員 email）
       if (!isWaitlist) {
         const _rn = require('../services/registrationNotify');
         _rn.notifyRegReceived({
           memberId, memberName: req.member?.name || req.body.memberName || '',
+          to: isGuestEnroll ? (req.body._guestEmail || null) : undefined,
           typeLabel: course.type === 'workshop' ? '工作坊' : '課程',
           itemName: course.name, gymId: futureSessions[0].gymId || gymId,
           fee: req.body.deferPayment ? 0 : fee, paymentMethod,
@@ -1702,8 +1844,33 @@ router.post('/:courseId/enroll-all',
       }
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }
-  }
-);
+}
+
+router.post('/:courseId/enroll-all', authenticateAny, handleEnrollAll);
+
+// ── POST /courses/public/:courseId/enroll-all - 訪客整期報名（免登入，先轉帳）───────────
+// 不建帳號（memberId 用不會碰撞的 guest_<uuid> 佔位字串，避免與其他訪客誤判重複報名/名額計算漂移）；
+// 一律轉帳、無分期、無舊生/隊員折扣（訪客沒有既有會員關係，這些折扣天生就不會命中，見上方 handleEnrollAll 共用邏輯）；
+// 未成年一律要求本人+法定代理人皆線上完成簽名。把 guest 欄位塞進 req.body 後直接委派給共用核心邏輯。
+router.post('/public/:courseId/enroll-all', async (req, res) => {
+  const { guestName, guestPhone, guestEmail, guestBirthday, bankLastFive, paymentDate } = req.body;
+  if (!guestName || !String(guestName).trim()) return res.status(400).json({ code: 'MISSING_CONTACT', message: '請填寫姓名' });
+  if (!guestPhone || !String(guestPhone).trim()) return res.status(400).json({ code: 'MISSING_PHONE', message: '請填寫聯絡電話' });
+  if (!guestBirthday) return res.status(400).json({ code: 'MISSING_BIRTHDAY', message: '請填寫生日' });
+  if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code: 'MISSING_TRANSFER', message: '請填寫匯款帳號末五碼' });
+  if (!paymentDate || !String(paymentDate).trim()) return res.status(400).json({ code: 'MISSING_PAYMENT_DATE', message: '請填寫轉帳日期' });
+
+  req.body.memberId = `guest_${uuidv4()}`;
+  req.body.memberName = String(guestName).trim();
+  req.body.paymentMethod = 'transfer';
+  req.body._isGuestEnroll = true;
+  req.body._guestPhone = String(guestPhone).trim();
+  req.body._guestEmail = (guestEmail || '').trim();
+  req.body._guestBirthday = guestBirthday;
+  delete req.body.paymentPlan; // 訪客不提供分期（沒有既有會員關係）
+
+  return handleEnrollAll(req, res);
+});
 
 module.exports = router;
 

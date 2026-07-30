@@ -2,6 +2,7 @@ const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const dayjs = require('dayjs');
+const { v4: uuidv4 } = require('uuid');
 const { authenticate, authenticateAny, requireManager, requireManagerOrStation } = require('../middleware/auth');
 const { getDb, getStorage } = require('../config/firebase');
 const XLSX = require('xlsx');
@@ -10,13 +11,126 @@ const emailService = require('../services/emailService');
 const courseService = require('../services/courseService');
 const scheduleService = require('../services/scheduleService');
 const memberService = require('../services/memberService');
+const { uploadSignature } = require('../services/waiverService');
 const { COURSE_TYPES, parseBookingTime, courseTypeLabel, addExperienceToCourseAndSchedule, reassignExperienceCoach,
         updateExperienceSchedule,
         cleanupExperienceCourseAndSchedule, syncExperienceTickets, voidExperienceTickets, buildInsuranceXlsBuffer,
         defaultSettings, recordExperienceRevenue, reverseExperienceRevenue } = require('../services/experienceService');
-const { isUnder5 } = require('../utils/age');
+const { isUnder5, isMinor } = require('../utils/age');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { notifyRoleInGym } = require('../services/notificationService');
+
+// ── 試上：綁定週課場次（另收試上費、免保險、佔名額）─────────────────────
+// 共用給登入會員路徑（POST /、memberId 為真）與訪客公開路徑（POST /public、memberId 恆為 null）。
+// memberId 恆為 null 時視為訪客：memberId 用不會碰撞的佔位字串 guest_<uuid>（而非字面 null），
+// 避免多位訪客報名同一場次時被 Firestore 的 where(memberId==null) 誤判成同一人（ALREADY_ENROLLED / 名額計算漂移）。
+async function handleTrialBooking(req, res, db, memberId) {
+  const { contactName, contactEmail, contactPhone, paymentDate, bankLastFive, notes } = req.body;
+  const sDoc = await db.collection('courseSessions').doc(req.body.trialSessionId).get();
+  if (!sDoc.exists) return res.status(404).json({ code:'SESSION_NOT_FOUND', message:'找不到試上場次' });
+  const session = sDoc.data();
+  const cDoc = await db.collection('courses').doc(session.courseId).get();
+  const course = cDoc.exists ? cDoc.data() : {};
+  // 試上開關/試上費走班別規則繼承（梯次可覆寫）
+  const trialRules = courseService.resolveRules(course, await courseService.getCategoryOf(db, course.categoryId));
+  if (trialRules.allowTrial !== true) return res.status(400).json({ code:'TRIAL_NOT_ALLOWED', message:'此課程未開放試上' });
+
+  let trialMemberId, trialName, trialEmail, trialPhone, isGuestTrial = false;
+  let consentSignatureUrl = null, guardianSignatureUrl = null;
+
+  if (!memberId) {
+    // ── 訪客（免登入）試上報名 ──
+    isGuestTrial = true;
+    const { guestName, guestPhone, guestEmail, guestBirthday, signatureData, guardianSignature } = req.body;
+    if (!guestName || !String(guestName).trim()) return res.status(400).json({ code:'MISSING_CONTACT', message:'請填寫姓名' });
+    if (!guestPhone || !String(guestPhone).trim()) return res.status(400).json({ code:'MISSING_PHONE', message:'請填寫聯絡電話' });
+    if (!guestBirthday) return res.status(400).json({ code:'MISSING_BIRTHDAY', message:'請填寫生日' });
+    if (isUnder5(guestBirthday)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
+    if (!signatureData) return res.status(400).json({ code:'CONSENT_REQUIRED', message:'請先完成簽名' });
+    if (isMinor(guestBirthday) && !guardianSignature) return res.status(400).json({ code:'GUARDIAN_SIGNATURE_REQUIRED', message:'未滿 18 歲需法定代理人簽名' });
+    if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code:'MISSING_TRANSFER', message:'請填寫匯款帳號末五碼' });
+
+    trialMemberId = `guest_${uuidv4()}`;
+    trialName = String(guestName).trim();
+    trialEmail = (guestEmail || '').trim();
+    trialPhone = String(guestPhone).trim();
+    consentSignatureUrl = await uploadSignature(trialMemberId, 'member', signatureData);
+    if (guardianSignature) guardianSignatureUrl = await uploadSignature(trialMemberId, 'guardian', guardianSignature);
+  } else {
+    // 額滿不再直接擋：報名即佔位、滿了列候補（候補也滿由 enrollTrial 擋 WAITLIST_FULL）
+    if (req.body.consentSigned !== true) return res.status(400).json({ code:'CONSENT_REQUIRED', message:'請先簽署免責同意書' });
+    // 家長代子帳號報名試上：綁定到子會員（驗證擁有權，比照 /checkin/qr/create）。
+    // booking / 名單 / 單日券的 memberId 皆綁子會員，入場時子帳號才拿得到自己的券。
+    trialMemberId = memberId;
+    trialName = contactName || req.member?.name || '';
+    trialEmail = contactEmail || req.member?.email || '';
+    trialPhone = contactPhone || req.member?.phone || '';
+    if (req.body.childMemberId && req.body.childMemberId !== memberId) {
+      const childDoc = await db.collection('members').doc(req.body.childMemberId).get();
+      if (!childDoc.exists || childDoc.data().parentMemberId !== memberId) {
+        return res.status(403).json({ code:'FORBIDDEN', message:'只能為自己或自己的子會員報名試上' });
+      }
+      const child = childDoc.data();
+      trialMemberId = req.body.childMemberId;
+      trialName = contactName || child.name || '';
+      trialEmail = contactEmail || child.email || req.member?.email || '';
+      trialPhone = contactPhone || child.phone || req.member?.phone || '';
+    }
+
+    // 後端權威：未滿 5 歲無法報名試上（實際參加者＝trialMemberId，家長代子時為子會員）
+    const _trialMember = await memberService.getMember(trialMemberId).catch(() => null);
+    if (isUnder5(_trialMember)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
+  }
+
+  const trialFee = trialRules.trialPrice || 0;
+  const id = `trial_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+
+  // 報名當下即佔名額（pending 待繳費）：滿→候補；逾繳費期限由排程釋放並候補轉正
+  const paymentDeadline = courseService.trialPaymentDeadline(session);
+  let trialEnroll;
+  try {
+    trialEnroll = await courseService.enrollTrial({
+      memberId: trialMemberId, memberName: trialName,
+      sessionId: req.body.trialSessionId, gymId: session.gymId,
+      trialFee, bookingId: id, staffId: null,
+      paymentStatus: 'pending', paymentDeadline,
+      maxWaitlist: course.maxWaitlist ?? null,
+    });
+  } catch (e) {
+    const code = e.code || 'TRIAL_ENROLL_FAILED';
+    return res.status(400).json({ code, message: e.message || '試上報名失敗' });
+  }
+  const isWaitlist = trialEnroll.status === 'waitlist';
+  await db.collection('experienceBookings').doc(id).set({
+    id, memberId: trialMemberId, bookedByMemberId: isGuestTrial ? null : memberId, gymId: session.gymId, kind: 'trial',
+    trialCourseId: session.courseId, trialSessionId: req.body.trialSessionId, courseName: session.courseName,
+    bookingDate: session.date, bookingTime: `${session.startTime||''}~${session.endTime||''}`,
+    courseType: 'trial',
+    contactName: trialName,
+    contactEmail: trialEmail,
+    contactPhone: trialPhone,
+    participants: [{ name: trialName }],
+    numParticipants: 1,
+    totalFee: trialFee,
+    paymentDate: paymentDate||null, bankLastFive: bankLastFive||null,
+    paymentMethod: isGuestTrial ? 'transfer' : (req.body.paymentMethod || 'transfer'),
+    memberPaidAmount: req.body.paidAmount ? Number(req.body.paidAmount) : null, // 會員自填實際匯款金額
+    consentSigned: true, needsInsurance: false,
+    isGuest: isGuestTrial, source: isGuestTrial ? 'public' : null,
+    consentSignatureUrl, guardianSignatureUrl,
+    notes: notes||'',
+    trialEnrollmentId: trialEnroll.enrollmentId,
+    isWaitlist, paymentDeadline,
+    status: 'pending', createdAt: new Date(), updatedAt: new Date(),
+  });
+  return res.status(201).json({
+    success:true, id, isTrial:true, totalFee: trialFee,
+    isWaitlist, paymentDeadline: paymentDeadline.toISOString(),
+    message: isWaitlist
+      ? '此場次已額滿，已為您排入候補；有名額釋出將依序轉正'
+      : '試上預約已送出，名額已為您保留，請於期限內完成付款',
+  });
+}
 
 router.post('/', authenticateAny, async (req, res) => {
   try {
@@ -34,87 +148,7 @@ router.post('/', authenticateAny, async (req, res) => {
       totalFee, paymentDate, bankLastFive, notes,
     } = req.body;
 
-    // ── 試上：綁定週課場次（另收試上費、免保險、佔名額）───────────────
-    if (req.body.trialSessionId) {
-      if (!memberId) return res.status(401).json({ code:'UNAUTHORIZED', message:'請先登入會員' });
-      const sDoc = await db.collection('courseSessions').doc(req.body.trialSessionId).get();
-      if (!sDoc.exists) return res.status(404).json({ code:'SESSION_NOT_FOUND', message:'找不到試上場次' });
-      const session = sDoc.data();
-      const cDoc = await db.collection('courses').doc(session.courseId).get();
-      const course = cDoc.exists ? cDoc.data() : {};
-      // 試上開關/試上費走班別規則繼承（梯次可覆寫）
-      const trialRules = courseService.resolveRules(course, await courseService.getCategoryOf(db, course.categoryId));
-      if (trialRules.allowTrial !== true) return res.status(400).json({ code:'TRIAL_NOT_ALLOWED', message:'此課程未開放試上' });
-      // 額滿不再直接擋：報名即佔位、滿了列候補（候補也滿由 enrollTrial 擋 WAITLIST_FULL）
-      if (req.body.consentSigned !== true) return res.status(400).json({ code:'CONSENT_REQUIRED', message:'請先簽署免責同意書' });
-      // 家長代子帳號報名試上：綁定到子會員（驗證擁有權，比照 /checkin/qr/create）。
-      // booking / 名單 / 單日券的 memberId 皆綁子會員，入場時子帳號才拿得到自己的券。
-      let trialMemberId = memberId;
-      let trialName = contactName || req.member?.name || '';
-      let trialEmail = contactEmail || req.member?.email || '';
-      let trialPhone = contactPhone || req.member?.phone || '';
-      if (req.body.childMemberId && req.body.childMemberId !== memberId) {
-        const childDoc = await db.collection('members').doc(req.body.childMemberId).get();
-        if (!childDoc.exists || childDoc.data().parentMemberId !== memberId) {
-          return res.status(403).json({ code:'FORBIDDEN', message:'只能為自己或自己的子會員報名試上' });
-        }
-        const child = childDoc.data();
-        trialMemberId = req.body.childMemberId;
-        trialName = contactName || child.name || '';
-        trialEmail = contactEmail || child.email || req.member?.email || '';
-        trialPhone = contactPhone || child.phone || req.member?.phone || '';
-      }
-
-      // 後端權威：未滿 5 歲無法報名試上（實際參加者＝trialMemberId，家長代子時為子會員）
-      const _trialMember = await memberService.getMember(trialMemberId).catch(() => null);
-      if (isUnder5(_trialMember)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
-
-      const trialFee = trialRules.trialPrice || 0;
-      const id = `trial_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
-
-      // 報名當下即佔名額（pending 待繳費）：滿→候補；逾繳費期限由排程釋放並候補轉正
-      const paymentDeadline = courseService.trialPaymentDeadline(session);
-      let trialEnroll;
-      try {
-        trialEnroll = await courseService.enrollTrial({
-          memberId: trialMemberId, memberName: trialName,
-          sessionId: req.body.trialSessionId, gymId: session.gymId,
-          trialFee, bookingId: id, staffId: null,
-          paymentStatus: 'pending', paymentDeadline,
-          maxWaitlist: course.maxWaitlist ?? null,
-        });
-      } catch (e) {
-        const code = e.code || 'TRIAL_ENROLL_FAILED';
-        return res.status(400).json({ code, message: e.message || '試上報名失敗' });
-      }
-      const isWaitlist = trialEnroll.status === 'waitlist';
-      await db.collection('experienceBookings').doc(id).set({
-        id, memberId: trialMemberId, bookedByMemberId: memberId, gymId: session.gymId, kind: 'trial',
-        trialCourseId: session.courseId, trialSessionId: req.body.trialSessionId, courseName: session.courseName,
-        bookingDate: session.date, bookingTime: `${session.startTime||''}~${session.endTime||''}`,
-        courseType: 'trial',
-        contactName: trialName,
-        contactEmail: trialEmail,
-        contactPhone: trialPhone,
-        participants: [{ name: trialName }],
-        numParticipants: 1,
-        totalFee: trialFee,
-        paymentDate: paymentDate||null, bankLastFive: bankLastFive||null, paymentMethod: req.body.paymentMethod || 'transfer',
-        memberPaidAmount: req.body.paidAmount ? Number(req.body.paidAmount) : null, // 會員自填實際匯款金額
-        consentSigned: true, needsInsurance: false,
-        notes: notes||'',
-        trialEnrollmentId: trialEnroll.enrollmentId,
-        isWaitlist, paymentDeadline,
-        status: 'pending', createdAt: new Date(), updatedAt: new Date(),
-      });
-      return res.status(201).json({
-        success:true, id, isTrial:true, totalFee: trialFee,
-        isWaitlist, paymentDeadline: paymentDeadline.toISOString(),
-        message: isWaitlist
-          ? '此場次已額滿，已為您排入候補；有名額釋出將依序轉正'
-          : '試上預約已送出，名額已為您保留，請於期限內完成付款',
-      });
-    }
+    if (req.body.trialSessionId) return handleTrialBooking(req, res, db, memberId);
 
     if (!gymId) return res.status(400).json({ code:'MISSING_GYM', message:'請選擇場館' });
     if (!bookingDate) return res.status(400).json({ code:'MISSING_DATE', message:'請填寫體驗日期' });
@@ -220,6 +254,9 @@ router.get('/public-settings', async (req, res) => {
 router.post('/public', async (req, res) => {
   try {
     const db = getDb();
+    // 訪客試上報名（免登入，memberId 恆為 null → handleTrialBooking 內走訪客分支）
+    if (req.body.trialSessionId) return handleTrialBooking(req, res, db, null);
+
     const {
       gymId, bookingDate, bookingTime, courseType,
       contactName, contactEmail, contactPhone, facebookName,

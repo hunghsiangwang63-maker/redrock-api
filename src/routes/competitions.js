@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
+const { v4: uuidv4 } = require('uuid');
 const { authenticate, authenticateAny, checkPermission , requireManagerOrStation, requireManager } = require('../middleware/auth');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { getDb, COLLECTIONS } = require('../config/firebase');
@@ -151,6 +152,119 @@ router.post('/:id/sync-scoring', authenticate, checkPermission('competitions.man
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }
 });
+
+// ══════════════════════════════════════════════════════
+// 公開報名（免登入、訪客，先轉帳；IP 限流見 index.js）
+// ══════════════════════════════════════════════════════
+
+// ── GET /competitions/public/:id - 賽事詳情（免登入，供公開報名頁顯示）───
+router.get('/public/:id', async (req, res) => {
+  try {
+    const competition = await competitionService.getCompetition(req.params.id);
+    if (competition.status !== 'open') return res.status(404).json({ error: 'NOT_OPEN', message: '此賽事目前未開放報名' });
+    let partnerGyms = [];
+    try {
+      const pgDoc = await getDb().collection('systemSettings').doc('partnerGyms').get();
+      partnerGyms = pgDoc.exists && Array.isArray(pgDoc.data().gyms) ? pgDoc.data().gyms.map(g => ({ id: g.id, name: g.name })) : [];
+    } catch (e) {}
+    res.json({
+      competition: {
+        id: competition.id, name: competition.name, description: competition.description || '',
+        gymId: competition.gymId, eventDate: competition.eventDate,
+        registrationStart: competition.registrationStart, registrationEnd: competition.registrationEnd,
+        earlyBirdDeadline: competition.earlyBirdDeadline || null,
+        divisions: (competition.divisions || []).map(d => ({ id: d.id, name: d.name, maxParticipants: d.maxParticipants || 40 })),
+        customFields: competition.customFields || [],
+        fees: competition.fees || {},
+        waiverContent: competition.waiverContent || { zh: '', en: '' },
+        paymentDeadlineDays: competition.paymentDeadlineDays || 3,
+      },
+      partnerGyms,
+    });
+  } catch (err) {
+    if (err.code) return res.status(404).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+// ── POST /competitions/public/:id/register - 訪客報名比賽 ─────────
+// 不建帳號（memberId 用不會碰撞的 guest_<uuid> 佔位字串，避免與其他訪客誤判重複報名/名額計算漂移）；
+// 一律轉帳，未成年一律要求本人+法定代理人皆線上完成簽名（不落回 email 遠端補簽分支）。
+router.post('/public/:id/register',
+  [
+    body('divisionId').notEmpty().withMessage('請選擇報名組別'),
+    body('signatureData').notEmpty().withMessage('請完成簽名'),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const { guestName, gender, birthday, phone, email } = req.body;
+      if (!guestName || !String(guestName).trim()) return res.status(400).json({ error: 'MISSING_CONTACT', message: '請填寫姓名' });
+      if (!phone || !String(phone).trim()) return res.status(400).json({ error: 'MISSING_PHONE', message: '請填寫手機號碼' });
+      if (!String(req.body.bankLastFive || '').trim()) return res.status(400).json({ error: 'MISSING_BANK_LAST_FIVE', message: '請填寫匯款帳號末五碼' });
+      if (!String(req.body.paymentDate || '').trim()) return res.status(400).json({ error: 'MISSING_PAYMENT_DATE', message: '請填寫轉帳日期' });
+
+      const competition = await competitionService.getCompetition(req.params.id);
+      // 未成年（依生日、比賽當天為基準）一律要求法定代理人已線上簽名——不像登入版可以落回「寄 email 給家長之後補簽」
+      const ageInfo = competitionService.computeCompetitionAgeInfo(birthday, competition);
+      if (ageInfo.isMinor && !req.body.guardianSignature) {
+        return res.status(400).json({ error: 'GUARDIAN_SIGNATURE_REQUIRED', message: '未滿 18 歲需法定代理人簽名' });
+      }
+
+      const memberId = `guest_${uuidv4()}`;
+      const registration = await competitionService.registerForCompetition({
+        competitionId: req.params.id,
+        memberId,
+        memberName: String(guestName).trim(),
+        isGuest: true,
+        birthday, gender, phone: String(phone).trim(), email,
+        divisionId: req.body.divisionId,
+        customFieldValues: req.body.customFieldValues,
+        signatureData: req.body.signatureData,
+        guardianSignature: req.body.guardianSignature,
+        parentName: req.body.parentName,
+        parentPhone: req.body.parentPhone,
+        parentRelation: req.body.parentRelation,
+        // 保險用欄位
+        idNumber: req.body.idNumber,
+        emergencyContact: req.body.emergencyContact,
+        emergencyRelation: req.body.emergencyRelation,
+        emergencyPhone: req.body.emergencyPhone,
+        // 比賽欄位
+        height: req.body.height,
+        armSpan: req.body.armSpan,
+        isHonorary: req.body.isHonorary,
+        memberNote: req.body.memberNote,
+        partnerGymId: req.body.partnerGymId,
+        // 付款（訪客一律轉帳）
+        paymentMethod: 'transfer',
+        paymentDate: req.body.paymentDate,
+        bankName: req.body.bankName,
+        bankLastFive: req.body.bankLastFive,
+        ip: req.ip,
+      });
+
+      try {
+        const _rn = require('../services/registrationNotify');
+        const compDoc = await getDb().collection('competitions').doc(req.params.id).get();
+        const comp = compDoc.exists ? compDoc.data() : {};
+        _rn.notifyRegReceived({
+          to: registration.email, memberId, memberName: registration.memberName || '',
+          typeLabel: '比賽', itemName: comp.name || '比賽', gymId: comp.gymId,
+          fee: registration.registrationFee || 0, paymentMethod: 'transfer', massage: false,
+        });
+      } catch (e) { console.error('[Email] 訪客比賽報名通知', e.message); }
+
+      res.status(201).json({
+        registration,
+        message: '報名成功！請於期限內完成匯款，之後若在 app.redrocktaiwan.com 註冊會員（用同一支電話），此報名會自動歸入您的帳號。',
+      });
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
 
 // ══════════════════════════════════════════════════════
 // 報名（會員端）

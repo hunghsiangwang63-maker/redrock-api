@@ -242,7 +242,9 @@ const registerForCompetition = async ({
   height, armSpan, isHonorary, memberNote, partnerGymId,
   // 付款
   paymentDate, bankLastFive, bankName, paymentMethod, paidAmount,
-  ip
+  ip,
+  // 訪客（免登入公開報名，見 POST /competitions/public/:id/register）：memberId 為 guest_<uuid> 佔位字串
+  isGuest = false,
 }) => {
   const db = getDb();
   const competition = await getCompetition(competitionId);
@@ -345,7 +347,7 @@ const registerForCompetition = async ({
 
   const registration = {
     id: registrationId, competitionId, competitionName: competition.name,
-    memberId, memberName, divisionId, divisionName: division.name,
+    memberId, memberName, isGuest: !!isGuest, divisionId, divisionName: division.name,
     status: isWaitlist ? 'waitlist' : 'confirmed',
     waitlistPosition: isWaitlist ? waitlistCount + 1 : null,
     customFieldValues: customFieldValues || {},

@@ -59,6 +59,8 @@ const createRegistrationHeader = async (db, data) => {
     sessionCount: data.sessionCount != null ? data.sessionCount : null,
     sourceEnrollmentIds: data.sourceEnrollmentIds || [],
     enrolledBy: data.enrolledBy || data.memberId,
+    isGuest: !!data.isGuest,
+    contactPhone: data.contactPhone || null,
     enrolledAt: now,
     createdAt: now,
     updatedAt: now,

@@ -233,7 +233,6 @@ router.put('/draft', authenticate, requireStationAuth, async (req, res) => {
       invoiceStartNumber: b.invoiceStartNumber || '', invoiceLastNumber: b.invoiceLastNumber || '',
       invoiceVoidNumbers: b.invoiceVoidNumbers || '',
       voidInvoiceAmount: Number(b.voidInvoiceAmount) || 0,   // 作廢票號碼總金額（打錯發票金額，總計扣除）
-      cardOrangeFirst: b.cardOrangeFirst || '', cardFullFirst: b.cardFullFirst || '',
       checkinCount: b.checkinCount ?? null, notes: b.notes || '',
       incomeManual: b.incomeManual || null, paymentManual: b.paymentManual || null,
       savedBy: req.staff.id, savedByName: req.staff.name, updatedAt: new Date(),
@@ -259,7 +258,7 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
     const wasSettled = existDoc && existDoc.data().status === 'settled';
 
     const { income, payment, deductions, denominations, invoiceLastNumber, notes,
-      invoiceStartNumber, invoiceVoidNumbers, cardOrangeFirst, cardFullFirst, checkinCount,
+      invoiceStartNumber, invoiceVoidNumbers, checkinCount,
       incomeManual, paymentManual, invoiceSegments, resettleReason } = req.body;  // 轉換期手動輸入並列（系統值與手動值都存）
 
     // 發票多段：優先 invoiceSegments 陣列；否則回退舊單段欄位。相容性：仍寫 invoiceStartNumber=首段.start、invoiceLastNumber=末段.last
@@ -306,12 +305,10 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
       differenceAlert: Math.abs(difference) > 200,
       invoiceSegments: segments,   // 多段發票
       invoiceLastNumber: lastLast || '',
-      // 月銷售紀錄用：發票起訖/作廢號、票卡最前號、當日 check-in 人數
+      // 月銷售紀錄用：發票起訖/作廢號、當日 check-in 人數
       invoiceStartNumber: firstStart || '',
       invoiceVoidNumbers: invoiceVoidNumbers || '',
       voidInvoiceAmount: Number(req.body.voidInvoiceAmount) || 0,   // 作廢票號碼總金額（打錯發票金額，總計扣除）
-      cardOrangeFirst: cardOrangeFirst || '',
-      cardFullFirst: cardFullFirst || '',
       checkinCount: checkinCount ?? null,
       notes: notes || '',
       status: 'settled',
@@ -482,8 +479,6 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
     aoa.push(R('', '作廢票號碼總金額', '', s => s.voidInvoiceAmount || ''));
     aoa.push(R('結帳報表', '實收總額', '', s => (s.income?.total || 0) - (s.voidInvoiceAmount || 0)));
     aoa.push(R('', '退貨總額', '', s => dedSum(s, '其他退款')));
-    aoa.push(R('票卡資訊', '優惠卡最前號', '', s => s.cardOrangeFirst));
-    aoa.push(R('', '全票最前號', '', s => s.cardFullFirst));
     aoa.push(R('收支', '定線費', '', s => dedSum(s, '定線費')));
     aoa.push(R('', '教練費', '', s => dedSum(s, '教練費')));
     aoa.push(R('', '領取現金', '', s => dedSum(s, '現金領取')));

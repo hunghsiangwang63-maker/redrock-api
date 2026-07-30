@@ -2108,6 +2108,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（打正式 API）**：throwaway 會員發放一張票 → 回傳票券文件確認無 `amount`/`paymentMethod` 欄位 → 查 `transactions` 該類型交易數為 0（確認沒有再產生幽靈收入）。測試資料已清。
 - ✅ **查證：不需修正每日結帳快照**（原本以為這 4 天的已結帳記錄可能被灌水，追查後發現是誤判）：`GET /daily-settlements/today` 的收入計算只挑 `transactions` 裡 `type==='rental'/'course'/'pass'` 三種加進收入，**明確跳過其他類型（含 `single_entry_ticket`）不計算**（`dailySettlements.js:140` 註解本就寫明）——這 4 筆幽靈交易的日期恰好有 3 天已結帳，但完全沒被算進那幾天的結帳金額，純屬巧合、與此 bug 無關，**已確認不需回頭修正任何一天的結帳快照**。真正會受影響的是 `/revenue` 營收報表（讀所有交易類型加總），但該報表即時查詢 `transactions`、非凍結快照，刪除幽靈交易後已自動修正、免另外處理。
 
+## 目前進度（2026-07-30 續2）— 拿掉結帳頁「優惠卡/全票最前號碼」兩欄位（連同轉換期開關一併移除）
+> 承先前月銷售 Excel 移除三個卡號欄（`3.170.0`）時保留的兩個結帳頁輸入欄位——當時註記「要一併移除再說」，本次直接拿掉。後端 `/health` `3.179.0-settlement-drop-card-first-numbers`。
+- ✅ **前端 `DailySettlementPage.jsx`**：移除「票卡資訊 / 人數」卡片內的「優惠卡最前號碼」「全票最前號碼」兩個輸入框與 `cardOrangeFirst`/`cardFullFirst` state（含暫存檔載入、buildBody 送出、當日再次結帳預填三處引用），卡片改名「今日人數」只留 check-in 人數。
+- ✅ **移除轉換期開關「結帳：顯示優惠卡／全票最前號碼」**（`settlementShowCardNumbers`）：該開關本就只用來控制這兩個欄位的顯示、拿掉欄位後即為死開關，一併移除——`SettingsPage.jsx` 的 checkbox＋state 預設值、後端 `settings.js` `GET/PUT /settings/transition` 的 default/收參/寫入皆移除（`PUT` 沿用原本整份覆寫的 `.set()`，之後任何人存一次設定即會自動清掉 Firestore 舊值，不需手動清資料）。
+- ✅ **後端 `dailySettlements.js`**：`PUT /draft`、`POST /`（結帳）皆移除 `cardOrangeFirst`/`cardFullFirst` 的存取；`monthly-export` Excel 移除「票卡資訊」那兩列（優惠卡最前號／全票最前號）。**月銷售 Excel 這是首次移除**（先前 3.170.0 只動了 `invoice-export`／統一發票明細表，`monthly-export` 這兩列當時沒動、這次一併拿掉）。
+- **驗證**：全域 grep 兩個欄位名與開關名於前後端皆 0 殘留；`vite build` 通過（staff target），已 firebase deploy。
+
 ## 待辦
 - 🔧 **【比賽部分暫緩】公開報名頁（免登入）**：讓非會員也能用連結預約/報名。規格已定：**先轉帳**（填末五碼→員工端待收款確認）、**訪客不建帳號**（存 guest 預約、無 memberId）、**之後註冊用電話認領**（沿用現有認領機制）、**IP 限流**（比照註冊）。①**體驗** ✅ 已完成（見上方續7）②**比賽**（待做） `/register/competition/<id>`（複雜：組別/早鳥兒童費/**免責簽名本人+法代**/推計分系統）——**待拍板**：比賽免責簽名要公開頁當場簽(A) 還是報名後補(B)。想做時從這開工。
 

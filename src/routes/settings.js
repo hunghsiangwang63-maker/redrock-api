@@ -344,7 +344,7 @@ router.put('/chalk-rental', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// ── 系統轉換期設定（結帳手動輸入並列／卡號顯示、入場已付費）──────────────
+// ── 系統轉換期設定（結帳手動輸入並列、入場已付費）──────────────
 // GET：任何登入員工/站台可讀（結算頁、入場頁需依此切換）
 router.get('/transition', authenticate, async (req, res) => {
   try {
@@ -352,7 +352,6 @@ router.get('/transition', authenticate, async (req, res) => {
     const doc = await db.collection('systemSettings').doc('transitionSettings').get();
     res.json(doc.exists ? doc.data() : {
       settlementManualInput: false,     // 結帳：所有項目手動輸入與系統值並列
-      settlementShowCardNumbers: true,  // 結帳：顯示優惠卡/全票最前號碼（之後拿掉）
       checkinAlreadyPaid: false,        // 入場電話搜尋：『已付費』直接放行選項
       checkinLegacyDiscountCard: false, // 入場電話搜尋：可手動套『舊折扣卡 8 折』（持實體舊卡未轉入者）
     });
@@ -365,10 +364,9 @@ router.put('/transition', authenticate, async (req, res) => {
     return res.status(403).json({ error: '權限不足' });
   try {
     const db = getDb();
-    const { settlementManualInput, settlementShowCardNumbers, checkinAlreadyPaid, checkinLegacyDiscountCard } = req.body;
+    const { settlementManualInput, checkinAlreadyPaid, checkinLegacyDiscountCard } = req.body;
     await db.collection('systemSettings').doc('transitionSettings').set({
       settlementManualInput: !!settlementManualInput,
-      settlementShowCardNumbers: !!settlementShowCardNumbers,
       checkinAlreadyPaid: !!checkinAlreadyPaid,
       checkinLegacyDiscountCard: !!checkinLegacyDiscountCard,
       updatedAt: new Date(),

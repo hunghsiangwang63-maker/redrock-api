@@ -2146,6 +2146,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **後端** `GET /courses/public/category/:categoryId`（免登入）：沿用既有 `getCourses(null)`（不分館別）取該 `categoryId` 底下全部 `status==='active'` 的梯次，回傳班別介紹/海報 + 梯次清單（名稱/館別/價格/起訖日）；工作坊型梯次額外附上未來場次清單（供訪客在同一頁往下選具體場次，比照 `GET /courses/public/:courseId` 場次查詢寫法）。
 - ✅ **前端** `PublicCourseCategoryPage.jsx`（`/book/category?id=<班別id>`）：顯示班別海報/介紹 + 梯次卡片列表——週課梯次點「報名 →」直接導去既有 `/book/course?course=<id>`；工作坊梯次點「選場次 ▾」展開該梯次的場次清單，逐場次導去既有 `/book/workshop?course=&session=`。員工端「班別管理」列表每個班別加「🔗 公開連結」按鈕複製此連結。
 - **驗證**：正式 API 打 `小蜘蛛人初級班` 這個真實班別，正確回傳兩館共 20 個開放中梯次（含名稱/館別/價格）；`/book/category?id=` 頁面正式環境 200。
+- 🐞 **修：排除已結束的梯次**（`/health` `3.182.1-category-exclude-ended`）：使用者問「進行中的也有開放嗎」——查證回答**有**（`statusLabel==='ongoing'` 的插班中梯次本就會列出、沿用既有插班計費），但順便發現真的漏洞：原本只濾 `status==='active'`（生命週期旗標，取消才會變 `cancelled`），**沒排除 `statusLabel==='ended'`**（單純 endDate 已過、從未手動取消的自然結束梯次）——實測「虹瑩進階班」底下就有 2 個 5-7月已結束梯次會被誤列成可報名。改在 filter 加 `c.statusLabel !== 'ended'`；`ongoing`/`enrolling`/`starting_soon`/`full` 皆保留。修復後複查「虹瑩進階班」只剩 2 個當期 8-9月梯次（皆額滿候補中）。
+- 📋 **陳宥希補標記舊生**（資料操作，非程式修正）：使用者確認她跟姊姊哥哥一樣是小蜘蛛人舊生，`legacyAlumniCategoryIds` 補上 `arrayUnion(小蜘蛛人初級班 categoryId)` → 現在跟兩位手足一樣可在 8/5 前提前報名。
 
 ## 待辦
 

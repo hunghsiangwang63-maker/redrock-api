@@ -179,7 +179,7 @@ router.get('/public/session/:sessionId', async (req, res) => {
         gymId: session.gymId, courseName: session.courseName,
       },
       allowTrial: trialRules.allowTrial === true,
-      trialPrice: trialRules.trialPrice || 0,
+      trialPrice: courseService.getEffectiveTrialPrice(course, trialRules),
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
@@ -1051,10 +1051,11 @@ router.put('/:courseId',
     try {
       const db = getDb();
       const allowedFields = [
-        'name', 'cohortName', 'categoryId', 'description', 'imageUrl', 'price', 'maxStudents', 'maxWaitlist', 'reservedSlots', 'reservedSlotsNote', 'instructor',
+        'name', 'cohortName', 'categoryId', 'description', 'imageUrl', 'price', 'pricePerSession', 'maxStudents', 'maxWaitlist', 'reservedSlots', 'reservedSlotsNote', 'instructor',
         'startDate', 'endDate', 'startTime', 'endTime', 'weekdays',
         'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays', 'makeupDeadlineDate', 'handlingFeeRate', 'preStartFeeRate',
         'enrollOpenDate', 'alumniOpenDate', 'fullTermRenewalDiscount', 'alumniDiscount', 'renewalDeadline',
+        'fullTermRenewalDiscountEnabled', 'fullTermRenewalDiscountRate', 'alumniDiscountEnabled', 'alumniDiscountRate',
         'teamOpenDate', 'generalOpenDate', 'teamPrice',
         'skipSignature', 'collectGenderAge', 'enrollNoteLabel', 'enrollNoteRequired',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',
@@ -1063,16 +1064,23 @@ router.put('/:courseId',
       ];
       const updates = { updatedAt: new Date() };
       allowedFields.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
-      // 梯次名稱/班別變更 → 顯示名 name 重組為「班別名 梯次名」
+      // 梯次名稱/班別變更、或週課調整單堂價（需用目前總堂數重算整期總價）→ 讀一次現有文件
+      let _curDoc = null;
+      if (updates.cohortName !== undefined || updates.categoryId !== undefined || updates.pricePerSession !== undefined) {
+        _curDoc = await db.collection('courses').doc(req.params.courseId).get();
+      }
+      const cur = _curDoc && _curDoc.exists ? _curDoc.data() : {};
       if (updates.cohortName !== undefined || updates.categoryId !== undefined) {
-        const curDoc = await db.collection('courses').doc(req.params.courseId).get();
-        const cur = curDoc.exists ? curDoc.data() : {};
         const cohortName = updates.cohortName ?? cur.cohortName;
         const categoryId = updates.categoryId ?? cur.categoryId;
         if (cohortName && categoryId) {
           const cat = await courseService.getCategoryOf(db, categoryId);
           if (cat?.name) updates.name = `${cat.name} ${cohortName}`;
         }
+      }
+      // 週課調整單堂價 → 整期總價（快取欄位 price）同步重算＝單堂價×目前總堂數（不重新產生場次）
+      if (updates.pricePerSession !== undefined) {
+        updates.price = Math.round((Number(updates.pricePerSession) || 0) * (cur.totalSessions || 0));
       }
       // 候補上限：留空('')＝不限候補(null)，否則轉數字
       if (req.body.maxWaitlist !== undefined) {
@@ -1557,47 +1565,8 @@ async function handleEnrollAll(req, res) {
       const now = new Date();
       const maxStudents = course.maxStudents || Infinity;
 
-      // ── 舊生狀態（gate 與續報優惠共用）：同班別任一梯次曾有效報名（confirmed/leave、排除試上/補課）──
-      // isCurrent＝該梯次未結束（當期在籍）；isPrev＝已結束（上一期/隔期學員）。
-      const _needAlumni = (!req.staff && course.enrollOpenDate && today < course.enrollOpenDate)
-        || (course.fullTermRenewalDiscount > 0) || (course.alumniDiscount > 0);
-      // isFullTermRenewal＝續報資格（前一期/當期「整期」報名，插班不算）；isAlumni＝舊生（曾報名過或插班生）
-      const alumni = { isFullTermRenewal: false, isAlumni: false };
-      if (_needAlumni) {
-        const myEn = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
-          .where('memberId', '==', memberId).get();
-        // 依課程彙整：active（confirmed/leave）＋全部堂數（含 cancelled，供「整期」判定——插班生堂數必不足）；排除試上/補課
-        const byCourse = {};
-        myEn.docs.forEach(d => {
-          const e = d.data();
-          if (e.isTrial || e.isMakeup) return;
-          if (!e.courseId || e.courseId === courseId) return;
-          const b = byCourse[e.courseId] || (byCourse[e.courseId] = { active: 0, total: 0 });
-          b.total += 1;
-          if (['confirmed', 'leave'].includes(e.status)) b.active += 1;
-        });
-        const otherIds = Object.keys(byCourse).filter(cid2 => byCourse[cid2].active > 0);
-        // 「前一期」＝該梯結束日在目標梯開課前 60 天內（涵蓋進行中的當期）；更早期別的整期學員歸舊生
-        const dayjs = require('dayjs');
-        const prevTermCutoff = dayjs(course.startDate || today).subtract(60, 'day').format('YYYY-MM-DD');
-        for (let i = 0; i < otherIds.length; i += 20) {
-          const refs = otherIds.slice(i, i + 20).map(id => db.collection('courses').doc(id));
-          (await db.getAll(...refs)).forEach(doc => {
-            if (!doc.exists) return;
-            const c2 = doc.data();
-            if (!c2.categoryId || c2.categoryId !== course.categoryId) return;
-            alumni.isAlumni = true;
-            const fullTerm = !c2.totalSessions || byCourse[doc.id].total >= c2.totalSessions;
-            const recent = !c2.endDate || c2.endDate >= prevTermCutoff;
-            if (fullTerm && recent) alumni.isFullTermRenewal = true;
-          });
-        }
-        // 舊系統（BeClass 等）舊生名單匯入補判：僅補 isAlumni，見 courseService.computeAlumniStatus 同段註解
-        if (!alumni.isAlumni && course.categoryId) {
-          const legacyCats = _attendee?.legacyAlumniCategoryIds || [];
-          if (legacyCats.includes(course.categoryId)) alumni.isAlumni = true;
-        }
-      }
+      // ── 舊生/續報狀態（後端權威，courseService 單一實作；gate 與續報優惠共用）──
+      const alumni = await courseService.computeAlumniStatus(db, course, courseId, memberId);
 
       // ── 報名開放日 gate（後端權威；員工代報不受限）──
       // 公開開放日前：僅舊生（isCurrent 或 isPrev）可報；舊生開放日前全擋。兩欄皆空＝隨時開放。
@@ -1613,41 +1582,25 @@ async function handleEnrollAll(req, res) {
         }
       }
 
-      // 後端權威計算費用（不信任前端傳入的金額），邏輯與前端顯示一致：
-      // 插班報名按剩餘場次比例計收，低於一半加成；隊員身份再套用九折（滿NT$100適用）
+      // 後端權威計算費用（不信任前端傳入的金額）：週課單堂價×場次數（插班直接乘剩餘堂數，無加成）、
+      // 續報/舊生比率折扣（各自開關，續報優先不疊加）、隊員9折——唯一算式見 courseService.computeWeeklyCourseFee。
       // ── fee 為純讀取、與名額/候補無關 → 置於交易外先算好 ──
       const allActiveSessions = sessionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       const completedCount = allActiveSessions.filter(s => s.date < today).length;
       const totalCount = allActiveSessions.length;
-      const isLateJoin = completedCount > 0;
-      const remainingCount = totalCount - completedCount;
-      const ratio = totalCount > 0 ? remainingCount / totalCount : 1;
-      const isBelowHalf = ratio < 0.5;
-      const surcharge = course.midpointSurcharge || 1.05;
-      const baseFee = isLateJoin
-        ? Math.round((course.price || 0) * ratio * (isBelowHalf ? surcharge : 1))
-        : (course.price || 0);
 
-      // ── 續報/舊生優惠（NT$ 折抵，後端權威）：續報（前一期整期）優先，其次舊生（曾報名/插班）；不疊加，折後再套隊員9折 ──
-      // 期限＝續報截止日 renewalDeadline（含當日，兩種優惠共用）；過期不折。空＝不限期限。
-      let renewalDiscount = 0, renewalDiscountType = null;
-      const renewalOpen = !course.renewalDeadline || today <= course.renewalDeadline;
-      if (renewalOpen && alumni.isFullTermRenewal && (course.fullTermRenewalDiscount > 0)) {
-        renewalDiscount = Number(course.fullTermRenewalDiscount); renewalDiscountType = 'full_term_renewal';
-      } else if (renewalOpen && alumni.isAlumni && (course.alumniDiscount > 0)) {
-        renewalDiscount = Number(course.alumniDiscount); renewalDiscountType = 'alumni';
-      }
-      const feeAfterRenewal = Math.max(0, baseFee - renewalDiscount);
-
-      const { isActiveTeamMember, applyTeamDiscount } = require('../services/teamMemberService');
+      const { isActiveTeamMember } = require('../services/teamMemberService');
       const { getMember } = require('../services/memberService');
       let isTeam = false;
       try {
         const member = await getMember(memberId);
         isTeam = isActiveTeamMember(member);
       } catch (e) { /* 查無會員不影響報名，視為非隊員 */ }
-      const discountResult = applyTeamDiscount(feeAfterRenewal, isTeam);
-      const fee = discountResult.discounted;
+
+      const {
+        fee, baseFee, renewalDiscount, renewalDiscountType, discountResult,
+      } = courseService.computeWeeklyCourseFee(course, { completedCount, totalCount, alumni, isTeam });
+
       const willInstallment = course.installment?.enabled && req.body.paymentPlan === 'installment' && !req.body.deferPayment;
 
       // ── 交易：去重 + 名額/候補判定 + 建立報名（原子，杜絕並發雙擊造成重複報名/重複收費）──

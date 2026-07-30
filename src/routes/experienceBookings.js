@@ -82,7 +82,7 @@ async function handleTrialBooking(req, res, db, memberId) {
     if (isUnder5(_trialMember)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
   }
 
-  const trialFee = trialRules.trialPrice || 0;
+  const trialFee = courseService.getEffectiveTrialPrice(course, trialRules);
   const id = `trial_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
 
   // 報名當下即佔名額（pending 待繳費）：滿→候補；逾繳費期限由排程釋放並候補轉正
@@ -573,7 +573,7 @@ router.put('/:id/member-edit', authenticateAny, async (req, res) => {
       }
       const targetCourse = sess.courseId ? (await db.collection('courses').doc(sess.courseId).get()).data() : null;
       const targetRules = courseService.resolveRules(targetCourse || {}, await courseService.getCategoryOf(db, targetCourse?.categoryId));
-      const targetPrice = targetRules.trialPrice || 0;
+      const targetPrice = courseService.getEffectiveTrialPrice(targetCourse || {}, targetRules);
       if ((booking.totalFee || 0) !== targetPrice) {
         return res.status(400).json({ error:'PRICE_MISMATCH', message:'新場次試上費不同，請取消後重新報名' });
       }

@@ -446,9 +446,10 @@ router.post('/single-entry',
       const issuedAt = dayjs().format('YYYY-MM-DD');
       const expiresAt = dayjs().add(1, 'year').format('YYYY-MM-DD');
       const approvalDeadline = dayjs().add(24, 'hour').toDate();
-      const amount = req.body.amount !== undefined ? parseInt(req.body.amount) : 200;
-      const paymentMethod = req.body.paymentMethod || 'cash';
 
+      // 發放單次入場券為館方招待/贈券性質，不收款——不記金額、不記付款方式、不記營收交易
+      // （原本預設 amount:200/paymentMethod:cash 並記帳，但前端從未讓店員填金額，等於每次發放都
+      // 憑空多記一筆NT$200現金收入；發放本身無實際收款，用票入場當下也走「單次入場券（免費）」。）
       const ticket = {
         id: ticketId,
         memberId: req.body.memberId,
@@ -456,7 +457,6 @@ router.post('/single-entry',
         originalMemberId: req.body.memberId,
         gymId: req.staff.gymId,
         issuedAt, expiresAt,
-        amount, paymentMethod,
         status: 'pending_approval',      // 待審核，不可使用
         approvalDeadline,                 // 24小時後自動取消
         approvedAt: null,
@@ -469,29 +469,11 @@ router.post('/single-entry',
         usedCheckInId: null,
         soldByStaffId: req.staff.id,
         soldByStaffName: req.staff.name,
-        paymentId: req.body.paymentId || null,
         notes: req.body.notes || '',
         createdAt: now, updatedAt: now,
       };
 
       await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(ticketId).set(ticket);
-
-      // 記錄交易（發放時即記錄，因為款項於發放時收取）
-      if (amount > 0) {
-        const { recordTransaction } = require('../utils/revenueLedger');
-        await recordTransaction(db, {
-          gymId: req.staff.gymId,
-          type: 'single_entry_ticket',
-          totalAmount: amount,
-          paymentMethod,
-          memberId: req.body.memberId,
-          memberName: member.name,
-          relatedId: ticketId,
-          notes: '單次入場券發放',
-          staffId: req.staff.id,
-          staffName: req.staff.name,
-        });
-      }
 
       // 發送審核通知給 gym_manager 和 super_admin
       await notifySingleEntryTicketApproval({

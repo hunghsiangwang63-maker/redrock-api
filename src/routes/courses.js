@@ -51,7 +51,15 @@ router.post('/',
   authenticate, checkPermission('courses.manage'), auditLog('course.create'),
   [
     body('name').notEmpty().withMessage('請輸入課程名稱'),
-    body('price').isNumeric().withMessage('請輸入課程費用'),
+    // 工作坊：手填總價 price；週課：手填單堂價 pricePerSession（整期總價由產生場次時連動算出）
+    body('price').custom((value, { req }) => {
+      if (req.body.type === 'workshop' && (value === undefined || value === null || isNaN(Number(value)))) throw new Error('請輸入課程費用');
+      return true;
+    }),
+    body('pricePerSession').custom((value, { req }) => {
+      if (req.body.type !== 'workshop' && (value === undefined || value === null || isNaN(Number(value)))) throw new Error('請輸入單堂費用');
+      return true;
+    }),
     body('maxStudents').isInt({ min: 1 }).withMessage('請輸入最大人數'),
     body('maxWaitlist').optional({ checkFalsy: true }).isInt({ min: 0 }).withMessage('候補上限須為 0 以上整數'),
   ],

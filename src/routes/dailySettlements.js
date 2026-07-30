@@ -262,12 +262,13 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
       incomeManual, paymentManual, invoiceSegments, resettleReason } = req.body;  // 轉換期手動輸入並列（系統值與手動值都存）
 
     // 發票多段：優先 invoiceSegments 陣列；否則回退舊單段欄位。相容性：仍寫 invoiceStartNumber=首段.start、invoiceLastNumber=末段.last
+    // track＝字軌（如 AB），跟著發票捲可能換；舊資料無此欄位一律回退空字串。
     const segments = (Array.isArray(invoiceSegments) && invoiceSegments.length
-      ? invoiceSegments.map(sg => ({ start: String(sg.start ?? '').trim(), last: String(sg.last ?? '').trim() }))
+      ? invoiceSegments.map(sg => ({ track: String(sg.track ?? '').trim().toUpperCase(), start: String(sg.start ?? '').trim(), last: String(sg.last ?? '').trim() }))
       : ((invoiceStartNumber || invoiceLastNumber)
-        ? [{ start: String(invoiceStartNumber || '').trim(), last: String(invoiceLastNumber || '').trim() }]
+        ? [{ track: '', start: String(invoiceStartNumber || '').trim(), last: String(invoiceLastNumber || '').trim() }]
         : [])
-    ).filter(sg => sg.start || sg.last);
+    ).filter(sg => sg.track || sg.start || sg.last);
     const firstStart = segments.length ? segments[0].start : (invoiceStartNumber || '');
     const lastLast = segments.length ? segments[segments.length - 1].last : (invoiceLastNumber || '');
 
@@ -588,6 +589,16 @@ router.get('/invoice-export', authenticate, requireManager, async (req, res) => 
     const byDate = {};
     snap.docs.forEach(d => { const s = d.data(); if (!gymId || s.gymId === gymId) byDate[s.date] = s; });
 
+    // 未帶 track query param 時，若整段期間所有有填字軌的段落都同一個字軌 → 自動帶入表頭；不同字軌混用則留空由人工填
+    let headerTrack = track;
+    if (!headerTrack) {
+      const tracksSeen = new Set();
+      Object.values(byDate).forEach(s => {
+        (Array.isArray(s.invoiceSegments) ? s.invoiceSegments : []).forEach(sg => { if (sg.track) tracksSeen.add(sg.track); });
+      });
+      if (tracksSeen.size === 1) headerTrack = [...tracksSeen][0];
+    }
+
     const WD = ['日', '一', '二', '三', '四', '五', '六'];
     const rocYear = year - 1911;
     const aoa = [];
@@ -595,7 +606,7 @@ router.get('/invoice-export', authenticate, requireManager, async (req, res) => 
     aoa.push(['', '', '', '中 華 民 國', '', `${rocYear}年`, `${m1}/${m2}月`]);
     aoa.push(['統一編號', '', '', taxId]);
     aoa.push(['營業人名稱', '', '', bizName]);
-    aoa.push(['發票字軌', '', '', track]);
+    aoa.push(['發票字軌', '', '', headerTrack]);
     aoa.push(['開立日期', '星期', '交易客次', '開立發票起號', '開立發票迄號', '發票總金額', '作廢發票號碼', '作廢票號碼總金額']);
 
     const segCount = (st, en) => (/^\d+$/.test(String(st)) && /^\d+$/.test(String(en))) ? (parseInt(en, 10) - parseInt(st, 10) + 1) : 0;
@@ -605,12 +616,14 @@ router.get('/invoice-export', authenticate, requireManager, async (req, res) => 
       if (!s) { aoa.push([d.format('YYYY/MM/DD'), WD[d.day()], '', '', '', '', '']); d = d.add(1, 'day'); continue; }
       // 多段發票逐段列（無 invoiceSegments 則回退舊單段）；日彙總（客次/金額/卡號）放第一段列
       const segs = (Array.isArray(s.invoiceSegments) && s.invoiceSegments.length)
-        ? s.invoiceSegments : [{ start: s.invoiceStartNumber || '', last: s.invoiceLastNumber || '' }];
+        ? s.invoiceSegments : [{ track: '', start: s.invoiceStartNumber || '', last: s.invoiceLastNumber || '' }];
       const totalCnt = segs.reduce((a, sg) => a + segCount(sg.start, sg.last), 0) || '';
+      // 起迄號單元格若段落自己有字軌 → 前綴字軌-號碼，避免跨日換捲/多字軌混用時看不出區別
+      const numCell = (sg, val) => (sg.track && val) ? `${sg.track}-${val}` : (val || '');
       segs.forEach((sg, idx) => {
         aoa.push([
           idx === 0 ? d.format('YYYY/MM/DD') : '', idx === 0 ? WD[d.day()] : '', idx === 0 ? totalCnt : '',
-          sg.start || '', sg.last || '', idx === 0 ? ((s.income?.total || 0) - (s.voidInvoiceAmount || 0)) : '',
+          numCell(sg, sg.start), numCell(sg, sg.last), idx === 0 ? ((s.income?.total || 0) - (s.voidInvoiceAmount || 0)) : '',
           idx === 0 ? (s.invoiceVoidNumbers || '') : '',
           idx === 0 ? (s.voidInvoiceAmount || '') : '',
         ]);

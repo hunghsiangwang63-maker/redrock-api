@@ -2160,6 +2160,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（23/23，含兩個過程中發現並修復的真 bug 驗證）**：全期/續報9折/舊生95折/隊員疊加續報/quote-enroll-all 一致性/試上公式與覆寫/插班精確計費（剩餘<50%亦無加成）/`unlimitedPracticeStart`首堂日修正/手動新增場次連動 totalSessions＋price/工作坊 `calcEnrollmentFee`+`midpointSurcharge` 完全不受影響（含驗證上述 bug 修復前後對照）。fixtures 全清。
 - 🖥️ **員工端實機驗證**（staff.redrocktaiwan.com）：課程列表價格顯示正確（含遷移後的小數點四捨五入值）；編輯梯次 Modal 開啟正常——單堂費用/試上費公式預設/續報舊生開關全部正確渲染、無 console error。會員端（`MemberCoursesPage.jsx`）僅靠 build 成功+程式碼核對驗證，未能實機登入會員帳號測試（無測試會員憑證）；核心計費邏輯已由 `/quote` 端點 API 層級驗證正確，此頁純顯示層變動風險低。
 
+## 目前進度（2026-07-31）— 會員端加日文對照字典（承英文字典，改中/英/日三段循環）
+> 先前已做過英文對照字典（`memberI18n.js`，底部導航/入場QR全流程/註冊頁/入場前置 gate），使用者要求「加一個簡單的日文對照字典，讓日本人可以註冊入場」。純前端 `redrock-web`，commit `84763b7`，member/staff 皆已 build+deploy。
+- ✅ **`memberI18n.js` 新增 `DICT_JA`**（比照 `DICT_EN` 同一批 ~150 個中文 key，涵蓋範圍相同：底部導航／首頁快速功能／入場 QR 共用+擋下畫面+身分方式+付款特約+續約租借+QR頁／註冊頁／入場前置 onboarding gate）；新增 `isJa()`；`t(zh)` 改依 `getMemberLang()` 三路分流（`en`→`DICT_EN`、`ja`→`DICT_JA`、其餘原樣返回，查無對照皆安全 fallback 原文，中文模式行為零改動）。
+- ✅ **`toggleMemberLang()` 改三段循環** `zh → en → ja → zh`；新增 `nextLangLabel()`（顯示「下一個語言」：中文模式顯示 `EN`、英文模式顯示 `日本語`、日文模式顯示 `中文`）取代原本寫死的 `getMemberLang()==='en'?'中文':'EN'` 二元判斷，兩個切換鈕（`MemberHomePage.jsx`、`MemberRegisterPage.jsx`）改用之。
+- ✅ **新增 `tt(zh, en, ja)` 三選一 helper**：給含變數/JSX 的手刻句子用（原本這類句子是用 `isEn()` 三元手刻，只有中英兩種）；`MemberOnboardingGate.jsx`（~10 處，含墜測影片警語彈窗/家長簽署提示/本人不入場確認/排測完成畫面等）與 `MemberQRPage.jsx`（~15 處，含票券張數/定期票效期單位/租借器材合計/友館隊員與特約廠商優惠文案/續約倒數與分期期數/QR 有效時間倒數/入場證件提醒等）全數 `isEn()` 三元改 `tt()` 補上日文版本。純字典查詢的 `t()` 字串（絕大多數靜態 UI 文字）不需逐一修改，字典補上日文後自動生效。
+- **驗證**：`isEn(` 全域 grep 於 `src/pages/member/`＋`src/components/` 0 殘留；member/staff 兩 target build 皆通過（無新增 build 警告）；`firebase deploy` 後 curl 確認 `app.redrocktaiwan.com` 首頁 bundle hash 與本次 build 產出一致。
+- 📌 **範圍**：與英文字典相同，僅覆蓋認證後 `/member/*` 會員 app（首頁/入場QR/註冊/onboarding gate）；免登入訪客報名頁（`/book/*`，`PublicCourseEnrollPage.jsx` 等 5 個）用 plain axios、獨立於 `memberI18n.js` 之外，本次未觸及（純中文），日後若要讓這些頁也支援日文需另外處理。
+
 ## 待辦
 
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。

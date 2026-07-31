@@ -473,13 +473,21 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
       .filter(k => Object.values(entryGroups[k].byDate).some(v => v > 0))
       .sort(entryOrderSort);
 
+    // 該日發票號碼帶字軌前綴（比照 invoice-export 的 numCell 處理）：首段字軌用於起始號碼、末段字軌用於結束號碼
+    const segTrack = (s, pos) => {
+      const segs = Array.isArray(s.invoiceSegments) ? s.invoiceSegments : [];
+      if (!segs.length) return '';
+      return (pos === 'first' ? segs[0] : segs[segs.length - 1])?.track || '';
+    };
+    const withTrack = (s, pos, num) => (num && segTrack(s, pos)) ? `${segTrack(s, pos)}-${num}` : (num || '');
+
     const R = (a, b, c, fn) => [a, b, c, ...dates.map(dt => fn ? val(dt, fn) : '')];
     const aoa = [];
     aoa.push(['項目', '', '', ...dayCols]);
     aoa.push(['', '星期', '', ...wdCols]);
     aoa.push(R('check-in 人數', '', '', s => s.checkinCount));
-    aoa.push(R('發票', '起始號碼', '', s => s.invoiceStartNumber));
-    aoa.push(R('', '結束號碼', '', s => s.invoiceLastNumber));
+    aoa.push(R('發票', '起始號碼', '', s => withTrack(s, 'first', s.invoiceStartNumber)));
+    aoa.push(R('', '結束號碼', '', s => withTrack(s, 'last', s.invoiceLastNumber)));
     aoa.push(R('', '作廢號碼', '', s => s.invoiceVoidNumbers));
     aoa.push(R('', '作廢票號碼總金額', '', s => s.voidInvoiceAmount || ''));
     aoa.push(R('結帳報表', '實收總額', '', s => (s.income?.total || 0) - (s.voidInvoiceAmount || 0)));

@@ -1585,8 +1585,28 @@ const isTargetOpen = (mode, regularCount) => {
   return (regularCount || 0) >= 2;
 };
 
+// 批次取出多個 categoryId 對應的 alumniGroup（舊生資格互通標籤）；未設定者為 null。
+const getAlumniGroupMap = async (db, categoryIds) => {
+  const ids = [...new Set((categoryIds || []).filter(Boolean))];
+  const map = {};
+  for (let i = 0; i < ids.length; i += 20) {
+    const refs = ids.slice(i, i + 20).map(id => db.collection(CATEGORY_COLLECTION).doc(id));
+    (await db.getAll(...refs)).forEach(doc => { if (doc.exists) map[doc.id] = doc.data().alumniGroup || null; });
+  }
+  return map;
+};
+
+// 判斷兩個班別是否視為「同一舊生範疇」：完全同一 categoryId，或雙方都設了同一個 alumniGroup
+// （雙向對稱標籤——如小蜘蛛人/青少年/成人共用同一 alumniGroup，任一旁舊生互通其他班別）。
+const sameAlumniScope = (catA, catB, groupMap) => {
+  if (!catA || !catB) return false;
+  if (catA === catB) return true;
+  const ga = groupMap[catA], gb = groupMap[catB];
+  return !!ga && ga === gb;
+};
+
 // ── 舊生/續報狀態（後端權威）──────────────────────────────────────
-// isAlumni＝同班別任一梯次曾有效報名（confirmed/leave，排除試上/補課）；
+// isAlumni＝同班別（或同 alumniGroup 互通班別）任一梯次曾有效報名（confirmed/leave，排除試上/補課）；
 // isFullTermRenewal＝其中有「前一期(結束<開課前60天內)整期(堂數達 totalSessions)」報名。
 // ⚠ 與 courses.js handleEnrollAll 共用同一份（皆呼叫此函式，勿另外複製一份判定邏輯）。
 const computeAlumniStatus = async (db, course, courseId, memberId) => {
@@ -1606,25 +1626,29 @@ const computeAlumniStatus = async (db, course, courseId, memberId) => {
   });
   const otherIds = Object.keys(byCourse).filter(cid2 => byCourse[cid2].active > 0);
   const prevTermCutoff = dayjs(course.startDate || today).subtract(60, 'day').format('YYYY-MM-DD');
+
+  const otherCourseCats = {}; // courseId -> 課程文件
   for (let i = 0; i < otherIds.length; i += 20) {
     const refs = otherIds.slice(i, i + 20).map(id => db.collection(COURSE_COLLECTION).doc(id));
-    (await db.getAll(...refs)).forEach(doc => {
-      if (!doc.exists) return;
-      const c2 = doc.data();
-      if (!c2.categoryId || c2.categoryId !== course.categoryId) return;
-      alumni.isAlumni = true;
-      const fullTerm = !c2.totalSessions || byCourse[doc.id].total >= c2.totalSessions;
-      const recent = !c2.endDate || c2.endDate >= prevTermCutoff;
-      if (fullTerm && recent) alumni.isFullTermRenewal = true;
-    });
+    (await db.getAll(...refs)).forEach(doc => { if (doc.exists) otherCourseCats[doc.id] = doc.data(); });
   }
+  const groupMap = await getAlumniGroupMap(db, [course.categoryId, ...Object.values(otherCourseCats).map(c => c.categoryId)]);
+  Object.entries(otherCourseCats).forEach(([cid2, c2]) => {
+    if (!sameAlumniScope(c2.categoryId, course.categoryId, groupMap)) return;
+    alumni.isAlumni = true;
+    const fullTerm = !c2.totalSessions || byCourse[cid2].total >= c2.totalSessions;
+    const recent = !c2.endDate || c2.endDate >= prevTermCutoff;
+    if (fullTerm && recent) alumni.isFullTermRenewal = true;
+  });
+
   // 舊系統（BeClass 等）舊生名單匯入補判：僅補「舊生(isAlumni)」，不補「續報(isFullTermRenewal)」
   // （匯入資料只證明曾報名繳費、無法確認整期出席，續報仍須系統內實際紀錄佐證）。
   if (!alumni.isAlumni && course.categoryId) {
     try {
       const mDoc = await db.collection(COLLECTIONS.MEMBERS).doc(memberId).get();
       const legacyCats = mDoc.exists ? (mDoc.data().legacyAlumniCategoryIds || []) : [];
-      if (legacyCats.includes(course.categoryId)) alumni.isAlumni = true;
+      const legacyGroupMap = await getAlumniGroupMap(db, [course.categoryId, ...legacyCats]);
+      if (legacyCats.some(lc => sameAlumniScope(lc, course.categoryId, legacyGroupMap))) alumni.isAlumni = true;
     } catch (e) { /* 查詢失敗不影響其他判斷 */ }
   }
   return alumni;

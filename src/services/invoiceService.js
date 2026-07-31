@@ -8,6 +8,7 @@
  * 不動原本認列的營收交易（避免與 accrual 重複計算）。
  */
 const { v4: uuidv4 } = require('uuid');
+const { isValidTaiwanTaxId } = require('../utils/taiwanTaxId');
 
 const COLL = 'invoiceRecords';
 
@@ -33,6 +34,8 @@ const createInvoice = async (db, {
   const numberVal = String(number || '').trim();
   if (!TRACK_RE.test(trackVal)) { const e = new Error('發票字軌須為 2 碼英文字母'); e.code = 'INVALID_TRACK'; throw e; }
   if (!NUMBER_RE.test(numberVal)) { const e = new Error('發票號碼須為 8 碼數字'); e.code = 'INVALID_NUMBER'; throw e; }
+  const taxIdVal = taxId ? String(taxId).trim() : '';
+  if (taxIdVal && !isValidTaiwanTaxId(taxIdVal)) { const e = new Error('統一編號檢查碼錯誤，請確認號碼是否正確'); e.code = 'INVALID_TAX_ID'; throw e; }
   const existing = await getActiveInvoice(db, sourceType, refId);
   if (existing) { const e = new Error('已開立發票，請先作廢後再重新開立'); e.code = 'ALREADY_INVOICED'; throw e; }
 
@@ -43,7 +46,7 @@ const createInvoice = async (db, {
     memberId: memberId || null, memberName: memberName || '', gymId: gymId || null,
     itemName: itemName || '費用', amount: amt,
     track: trackVal, number: numberVal, invoiceNo: `${trackVal}${numberVal}`,
-    taxId: taxId ? String(taxId).trim() : '', note: note ? String(note).trim() : '',
+    taxId: taxIdVal, note: note ? String(note).trim() : '',
     issuedAt: issuedAt ? new Date(issuedAt) : now,
     staffId, staffName: staffName || '',
     createdAt: now, updatedAt: now,

@@ -1209,7 +1209,7 @@ router.post('/registrations/:regId/invoices', authenticate, requireManager, asyn
     });
     res.json({ success: true, invoice: record });
   } catch (err) {
-    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400 };
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400, INVALID_TAX_ID: 400 };
     if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }

@@ -27,7 +27,8 @@ const createInvoice = async (db, {
 }) => {
   const amt = Number(amount);
   if (!(amt > 0)) { const e = new Error('發票金額需大於 0'); e.code = 'INVALID_AMOUNT'; throw e; }
-  if (!sourceType || !refId || !memberId) { const e = new Error('缺少必要資訊'); e.code = 'MISSING_FIELDS'; throw e; }
+  // memberId 選填：POS 銷售常見匿名交易（無會員綁定），此類發票允許 memberId 為 null
+  if (!sourceType || !refId) { const e = new Error('缺少必要資訊'); e.code = 'MISSING_FIELDS'; throw e; }
   const trackVal = String(track || '').trim().toUpperCase();
   const numberVal = String(number || '').trim();
   if (!TRACK_RE.test(trackVal)) { const e = new Error('發票字軌須為 2 碼英文字母'); e.code = 'INVALID_TRACK'; throw e; }
@@ -39,7 +40,7 @@ const createInvoice = async (db, {
   const now = new Date();
   const record = {
     id, sourceType, status: 'issued', refId,
-    memberId, memberName: memberName || '', gymId: gymId || null,
+    memberId: memberId || null, memberName: memberName || '', gymId: gymId || null,
     itemName: itemName || '費用', amount: amt,
     track: trackVal, number: numberVal, invoiceNo: `${trackVal}${numberVal}`,
     taxId: taxId ? String(taxId).trim() : '', note: note ? String(note).trim() : '',

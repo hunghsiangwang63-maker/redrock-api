@@ -56,7 +56,7 @@ router.get('/', authenticate, async (req, res) => {
           date: r.createdAt?._seconds ? new Date(r.createdAt._seconds*1000).toISOString().slice(0,10) : today,
           createdAt: r.createdAt?._seconds || 0,
           gymId: r.gymId, memberName: r.memberName,
-          link: '/staff/passes?tab=courseRequests',
+          link: '/staff/pending-tasks',   // 審核走本頁「審核」鈕開 CourseAdjustmentReviewModal，此連結僅比照 pass_adjustment 停留原頁（無「票券頁 courseRequests」分頁，舊連結為死連結）
           record: { id: d.id, ...r },
         });
       });

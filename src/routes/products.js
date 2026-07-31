@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const { authenticate, checkPermission, auditLog, requireManager } = require('../middleware/auth');
+const { authenticate, checkPermission, auditLog, requireManager, requireManagerOrStation } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
@@ -306,6 +306,56 @@ router.post('/sell', authenticate, auditLog('product.sell'), async (req, res) =>
         : `銷售完成，總計 NT$${totalAmount}`,
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── 商品銷售開立發票（預先建立，待日後發票機串接；手動記帳版，比照課程/比賽/入場同一套）──
+// 底層共用 invoiceService（sourceType:'product'，refId=saleId）；memberId 選填（POS 常見匿名交易）。
+router.get('/sales/:saleId/invoices', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('invoiceRecords')
+      .where('sourceType', '==', 'product').where('refId', '==', req.params.saleId).get();
+    const invoices = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.issuedAt?._seconds || 0) - (a.issuedAt?._seconds || 0));
+    res.json({ invoices });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+router.post('/sales/:saleId/invoices', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const saleDoc = await db.collection('productSales').doc(req.params.saleId).get();
+    if (!saleDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到銷售紀錄' });
+    const sale = saleDoc.data();
+    const { itemName, amount, taxId, note, issuedAt, track, number } = req.body;
+    const invoiceService = require('../services/invoiceService');
+    const record = await invoiceService.createInvoice(db, {
+      sourceType: 'product', refId: req.params.saleId,
+      memberId: sale.memberId || null, memberName: sale.memberName || '',
+      itemName: itemName || (sale.items || []).map(i => i.productName).join('、') || '商品銷售',
+      amount, taxId, note, gymId: sale.gymId, issuedAt, track, number,
+      staffId: req.staff.id, staffName: req.staff.name || '',
+      meta: { saleId: req.params.saleId },
+    });
+    res.json({ success: true, invoice: record });
+  } catch (err) {
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+router.post('/invoices/:id/void', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const invoiceService = require('../services/invoiceService');
+    await invoiceService.voidInvoice(db, req.params.id, req.staff.id, req.staff.name, req.body.voidReason);
+    res.json({ success: true });
+  } catch (err) {
+    const map = { NOT_FOUND: 404, ALREADY_VOIDED: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
 });
 
 // ── POST /products/sales/:saleId/return - 商品退貨（整筆）──────────

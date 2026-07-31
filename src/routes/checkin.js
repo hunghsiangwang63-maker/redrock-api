@@ -208,6 +208,55 @@ router.post('/cancel',
   }
 );
 
+// ── 入場開立發票（預先建立，待日後發票機串接；手動記帳版，比照課程/比賽同一套）──
+// 底層共用 invoiceService（sourceType:'checkin'，refId=checkInId）。
+router.get('/:checkInId/invoices', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('invoiceRecords')
+      .where('sourceType', '==', 'checkin').where('refId', '==', req.params.checkInId).get();
+    const invoices = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.issuedAt?._seconds || 0) - (a.issuedAt?._seconds || 0));
+    res.json({ invoices });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+router.post('/:checkInId/invoices', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const checkInDoc = await db.collection(COLLECTIONS.CHECK_INS).doc(req.params.checkInId).get();
+    if (!checkInDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到入場紀錄' });
+    const ci = checkInDoc.data();
+    const { itemName, amount, taxId, note, issuedAt, track, number } = req.body;
+    const invoiceService = require('../services/invoiceService');
+    const record = await invoiceService.createInvoice(db, {
+      sourceType: 'checkin', refId: req.params.checkInId,
+      memberId: ci.memberId, memberName: ci.memberName || '',
+      itemName: itemName || '入場費', amount, taxId, note, gymId: ci.gymId, issuedAt, track, number,
+      staffId: req.staff.id, staffName: req.staff.name || '',
+      meta: { checkInId: req.params.checkInId, entryType: ci.entryType || '' },
+    });
+    res.json({ success: true, invoice: record });
+  } catch (err) {
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+router.post('/invoices/:id/void', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const invoiceService = require('../services/invoiceService');
+    await invoiceService.voidInvoice(db, req.params.id, req.staff.id, req.staff.name, req.body.voidReason);
+    res.json({ success: true });
+  } catch (err) {
+    const map = { NOT_FOUND: 404, ALREADY_VOIDED: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 // ── GET /checkin/eligibility/:memberId - 查詢會員入場類型資格（手機入場篩選用）──
 router.get('/eligibility/:memberId', authenticate, requireManagerOrStation, async (req, res) => {
   try {

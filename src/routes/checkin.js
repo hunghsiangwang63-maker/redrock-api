@@ -211,20 +211,6 @@ router.post('/cancel',
   }
 );
 
-// ── POST /checkin/:checkInId/add-rental - 事後補加租借（已入場後才決定要租岩鞋/粉袋）──
-router.post('/:checkInId/add-rental', authenticate, requireManagerOrStation, async (req, res) => {
-  try {
-    const result = await checkinService.addRentalToCheckIn(
-      req.params.checkInId, { addShoes: !!req.body.addShoes, addChalk: !!req.body.addChalk },
-      req.staff.id, req.staff.name);
-    res.json({ success: true, ...result });
-  } catch (err) {
-    const map = { NOT_FOUND: 404, ALREADY_CANCELLED: 400, NOTHING_TO_ADD: 400 };
-    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
-    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
-  }
-});
-
 // ── 會員自助「補租器材」QR 流程（已入場後在 App 選補租項目+付款方式 → 產生 QR → 店員掃碼確認才真正扣費）──
 // 比照入場 QR 同一套模式；親子帳號家長可代子會員的入場紀錄操作（checkMemberOwnership）。
 

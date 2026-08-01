@@ -653,13 +653,13 @@ const addRentalToCheckIn = async (checkInId, { addShoes, addChalk }, staffId, st
   const db = getDb();
   const ref = db.collection(COLLECTIONS.CHECK_INS).doc(checkInId);
   const doc = await ref.get();
-  if (!doc.exists) { const e = new Error('找不到此入場紀錄'); e.code = 'NOT_FOUND'; throw e; }
+  if (!doc.exists) { throw { code: 'NOT_FOUND', message: '找不到此入場紀錄' }; }
   const c = doc.data();
-  if (c.isCancelled) { const e = new Error('此入場已取消'); e.code = 'ALREADY_CANCELLED'; throw e; }
+  if (c.isCancelled) { throw { code: 'ALREADY_CANCELLED', message: '此入場已取消' }; }
 
   const newShoes = !!addShoes && !c.rentShoes;
   const newChalk = !!addChalk && !c.rentChalk;
-  if (!newShoes && !newChalk) { const e = new Error('沒有新增項目（可能已租過）'); e.code = 'NOTHING_TO_ADD'; throw e; }
+  if (!newShoes && !newChalk) { throw { code: 'NOTHING_TO_ADD', message: '沒有新增項目（可能已租過）' }; }
 
   const addCost = (newShoes ? 100 : 0) + (newChalk ? 50 : 0);
   const paymentMethod = paymentMethodOverride || c.paymentMethod || 'cash';
@@ -700,14 +700,14 @@ const RENTAL_ADDON_TTL_MS = 30 * 60 * 1000;
 const requestRentalAddon = async (checkInId, memberId, { addShoes, addChalk, paymentMethod }) => {
   const db = getDb();
   const ciDoc = await db.collection(COLLECTIONS.CHECK_INS).doc(checkInId).get();
-  if (!ciDoc.exists) { const e = new Error('找不到此入場紀錄'); e.code = 'NOT_FOUND'; throw e; }
+  if (!ciDoc.exists) { throw { code: 'NOT_FOUND', message: '找不到此入場紀錄' }; }
   const c = ciDoc.data();
-  if (c.memberId !== memberId) { const e = new Error('只能為自己的入場紀錄補租器材'); e.code = 'FORBIDDEN'; throw e; }
-  if (c.isCancelled) { const e = new Error('此入場已取消'); e.code = 'ALREADY_CANCELLED'; throw e; }
+  if (c.memberId !== memberId) { throw { code: 'FORBIDDEN', message: '只能為自己的入場紀錄補租器材' }; }
+  if (c.isCancelled) { throw { code: 'ALREADY_CANCELLED', message: '此入場已取消' }; }
   const newShoes = !!addShoes && !c.rentShoes;
   const newChalk = !!addChalk && !c.rentChalk;
-  if (!newShoes && !newChalk) { const e = new Error('沒有可補租的項目（可能已租過）'); e.code = 'NOTHING_TO_ADD'; throw e; }
-  if (!paymentMethod) { const e = new Error('請選擇付款方式'); e.code = 'MISSING_PAYMENT_METHOD'; throw e; }
+  if (!newShoes && !newChalk) { throw { code: 'NOTHING_TO_ADD', message: '沒有可補租的項目（可能已租過）' }; }
+  if (!paymentMethod) { throw { code: 'MISSING_PAYMENT_METHOD', message: '請選擇付款方式' }; }
 
   const id = uuidv4();
   const now = new Date();
@@ -731,11 +731,11 @@ const getRentalAddonDoc = async (token) => {
 const scanRentalAddon = async (token, staffGymId = null, isSuperAdmin = false) => {
   const db = getDb();
   const doc = await db.collection(RENTAL_ADDON_COLLECTION).doc(token).get();
-  if (!doc.exists) { const e = new Error('找不到此補租請求或已逾期'); e.code = 'NOT_FOUND'; throw e; }
+  if (!doc.exists) { throw { code: 'NOT_FOUND', message: '找不到此補租請求或已逾期' }; }
   const p = doc.data();
-  if (p.status !== 'pending') { const e = new Error('此補租請求已處理過'); e.code = 'ALREADY_PROCESSED'; throw e; }
+  if (p.status !== 'pending') { throw { code: 'ALREADY_PROCESSED', message: '此補租請求已處理過' }; }
   if (p.expiresAt && dayjs().isAfter(dayjs(p.expiresAt.toDate ? p.expiresAt.toDate() : p.expiresAt))) {
-    const e = new Error('此補租請求已逾期，請會員重新產生'); e.code = 'EXPIRED'; throw e;
+    throw { code: 'EXPIRED', message: '此補租請求已逾期，請會員重新產生' };
   }
   if (staffGymId && !isSuperAdmin && p.gymId !== staffGymId) {
     throw { code: 'GYM_MISMATCH', message: `此為「${GYM_NAMES[p.gymId] || p.gymId}」的補租請求，請至該館掃碼確認` };
@@ -747,11 +747,11 @@ const confirmRentalAddon = async (token, staffId, staffName, staffGymId = null, 
   const db = getDb();
   const ref = db.collection(RENTAL_ADDON_COLLECTION).doc(token);
   const doc = await ref.get();
-  if (!doc.exists) { const e = new Error('找不到此補租請求或已逾期'); e.code = 'NOT_FOUND'; throw e; }
+  if (!doc.exists) { throw { code: 'NOT_FOUND', message: '找不到此補租請求或已逾期' }; }
   const p = doc.data();
-  if (p.status !== 'pending') { const e = new Error('此補租請求已處理過'); e.code = 'ALREADY_PROCESSED'; throw e; }
+  if (p.status !== 'pending') { throw { code: 'ALREADY_PROCESSED', message: '此補租請求已處理過' }; }
   if (p.expiresAt && dayjs().isAfter(dayjs(p.expiresAt.toDate ? p.expiresAt.toDate() : p.expiresAt))) {
-    const e = new Error('此補租請求已逾期，請會員重新產生'); e.code = 'EXPIRED'; throw e;
+    throw { code: 'EXPIRED', message: '此補租請求已逾期，請會員重新產生' };
   }
   if (staffGymId && !isSuperAdmin && p.gymId !== staffGymId) {
     throw { code: 'GYM_MISMATCH', message: `此為「${GYM_NAMES[p.gymId] || p.gymId}」的補租請求，請至該館掃碼確認` };

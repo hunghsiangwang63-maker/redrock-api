@@ -186,7 +186,10 @@ router.get('/my-today', authenticateMember, async (req, res) => {
       .sort((a, b) => (b.checkedInAt?.toMillis?.() || 0) - (a.checkedInAt?.toMillis?.() || 0));
     if (rows.length === 0) return res.json({ checkedIn: false });
     const latest = rows[0];
-    res.json({ checkedIn: true, gymId: latest.gymId || null, checkedInAt: latest.checkedInAt, checkInId: latest.id });
+    res.json({
+      checkedIn: true, gymId: latest.gymId || null, checkedInAt: latest.checkedInAt, checkInId: latest.id,
+      rentShoes: !!latest.rentShoes, rentChalk: !!latest.rentChalk, // 供會員端「補租器材」判斷已租過哪些
+    });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -218,6 +221,72 @@ router.post('/:checkInId/add-rental', authenticate, requireManagerOrStation, asy
   } catch (err) {
     const map = { NOT_FOUND: 404, ALREADY_CANCELLED: 400, NOTHING_TO_ADD: 400 };
     if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+// ── 會員自助「補租器材」QR 流程（已入場後在 App 選補租項目+付款方式 → 產生 QR → 店員掃碼確認才真正扣費）──
+// 比照入場 QR 同一套模式；親子帳號家長可代子會員的入場紀錄操作（checkMemberOwnership）。
+
+// POST /checkin/:checkInId/add-rental/request（會員端，authenticateAny）
+router.post('/:checkInId/add-rental/request', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const ciDoc = await db.collection(COLLECTIONS.CHECK_INS).doc(req.params.checkInId).get();
+    if (!ciDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此入場紀錄' });
+    const ci = ciDoc.data();
+    if (req.member) {
+      const deny = await checkMemberOwnership(req.member, ci.memberId, { onMissing: 403, message: '只能為自己或自己子會員的入場紀錄補租器材' });
+      if (deny) return res.status(deny.status).json(deny.body);
+    }
+    const result = await checkinService.requestRentalAddon(req.params.checkInId, ci.memberId, {
+      addShoes: !!req.body.addShoes, addChalk: !!req.body.addChalk, paymentMethod: req.body.paymentMethod,
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+// GET /checkin/add-rental/status/:token（會員輪詢；token 可能帶 rentaladd: 前綴）
+router.get('/add-rental/status/:token', authenticateAny, async (req, res) => {
+  try {
+    const p = await checkinService.getRentalAddonDoc(req.params.token.replace(/^rentaladd:/, ''));
+    if (!p) return res.json({ status: 'expired' });
+    if (req.member) {
+      const deny = await checkMemberOwnership(req.member, p.memberId, { onMissing: 'allow' });
+      if (deny) return res.status(deny.status).json(deny.body);
+    }
+    let status = p.status;
+    if (status === 'pending' && p.expiresAt) {
+      const exp = p.expiresAt.toDate ? p.expiresAt.toDate() : new Date(p.expiresAt);
+      if (dayjs().isAfter(dayjs(exp))) status = 'expired';
+    }
+    res.json({ status });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// POST /checkin/add-rental/scan（店員掃碼預覽；token 帶 rentaladd: 前綴）
+router.post('/add-rental/scan', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const token = String(req.body.token || '').replace(/^rentaladd:/, '');
+    const result = await checkinService.scanRentalAddon(token, req.staff?.gymId || null, req.staff?.role === 'super_admin');
+    res.json(result);
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+// POST /checkin/add-rental/confirm（店員確認，真正扣費；token 帶 rentaladd: 前綴）
+router.post('/add-rental/confirm', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const token = String(req.body.token || '').replace(/^rentaladd:/, '');
+    const result = await checkinService.confirmRentalAddon(token, req.staff.id, req.staff.name, req.staff?.gymId || null, req.staff?.role === 'super_admin');
+    res.json({ success: true, ...result });
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }
 });

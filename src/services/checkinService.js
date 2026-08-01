@@ -31,4 +31,8 @@ module.exports = {
   revertRenewal: cancel.revertRenewal,
   PRICES: pricing.PRICES,
   addRentalToCheckIn: flow.addRentalToCheckIn,
+  requestRentalAddon: flow.requestRentalAddon,
+  getRentalAddonDoc: flow.getRentalAddonDoc,
+  scanRentalAddon: flow.scanRentalAddon,
+  confirmRentalAddon: flow.confirmRentalAddon,
 };

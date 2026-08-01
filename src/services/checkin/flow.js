@@ -642,10 +642,14 @@ const getTodayStats = async (gymId) => {
 };
 
 // ── 事後補加租借（已入場後才決定要租岩鞋/粉袋，比照入場當下加租同一費率）──────────
-// 只針對「這次新加的」項目收費（已租過的不重複收）；沿用原入場付款方式（免費入場則預設現金）。
+// 只針對「這次新加的」項目收費（已租過的不重複收）。
+// paymentMethodOverride：會員自助 QR 流程可自選付款方式（可能跟原入場不同）；未指定則沿用原入場付款方式
+// （免費入場則預設現金）——沿用是為了 dailySettlements「今日付款方式」統計以「一筆入場=一種付款方式」歸類，
+// 若改用不同方式覆蓋，該筆入場的付款方式統計會全部改記為新方式（總額/租借金額本身仍完全正確，只有「付款方式細項」
+// 這個次要統計在混付時可能不夠精確，可接受）。
 // 只更新 amountPaid/shoesPrice/chalkPrice，entryFee 不動（入場費本身不受影響）；另記一筆獨立交易
 // （entryFee:0，故 revenue.js／dailySettlements 的「租借」欄會正確吃到全額、不誤算進入場費）。
-const addRentalToCheckIn = async (checkInId, { addShoes, addChalk }, staffId, staffName) => {
+const addRentalToCheckIn = async (checkInId, { addShoes, addChalk }, staffId, staffName, paymentMethodOverride = null) => {
   const db = getDb();
   const ref = db.collection(COLLECTIONS.CHECK_INS).doc(checkInId);
   const doc = await ref.get();
@@ -658,7 +662,7 @@ const addRentalToCheckIn = async (checkInId, { addShoes, addChalk }, staffId, st
   if (!newShoes && !newChalk) { const e = new Error('沒有新增項目（可能已租過）'); e.code = 'NOTHING_TO_ADD'; throw e; }
 
   const addCost = (newShoes ? 100 : 0) + (newChalk ? 50 : 0);
-  const paymentMethod = c.paymentMethod || 'cash'; // 沿用原付款方式；免費入場(null)預設現金
+  const paymentMethod = paymentMethodOverride || c.paymentMethod || 'cash';
   const now = new Date();
   const updates = {
     amountPaid: (c.amountPaid || 0) + addCost,
@@ -688,4 +692,76 @@ const addRentalToCheckIn = async (checkInId, { addShoes, addChalk }, staffId, st
   return { checkInId, addCost, rentShoes: c.rentShoes || newShoes, rentChalk: c.rentChalk || newChalk };
 };
 
-module.exports = { GYM_NAMES, createPendingCheckIn, scanQrCode, confirmCheckIn, countByEntryType, getTodayStats, addRentalToCheckIn };
+// ── 會員自助「補租器材」QR 流程：已入場後在 App 選補租項目+付款方式 → 產生 QR → 店員掃碼確認才真正扣費 ──
+// 比照入場 QR（qr/create→scan→confirm）同一套模式，獨立集合 pendingRentalAddons（30 分鐘效期）。
+const RENTAL_ADDON_COLLECTION = 'pendingRentalAddons';
+const RENTAL_ADDON_TTL_MS = 30 * 60 * 1000;
+
+const requestRentalAddon = async (checkInId, memberId, { addShoes, addChalk, paymentMethod }) => {
+  const db = getDb();
+  const ciDoc = await db.collection(COLLECTIONS.CHECK_INS).doc(checkInId).get();
+  if (!ciDoc.exists) { const e = new Error('找不到此入場紀錄'); e.code = 'NOT_FOUND'; throw e; }
+  const c = ciDoc.data();
+  if (c.memberId !== memberId) { const e = new Error('只能為自己的入場紀錄補租器材'); e.code = 'FORBIDDEN'; throw e; }
+  if (c.isCancelled) { const e = new Error('此入場已取消'); e.code = 'ALREADY_CANCELLED'; throw e; }
+  const newShoes = !!addShoes && !c.rentShoes;
+  const newChalk = !!addChalk && !c.rentChalk;
+  if (!newShoes && !newChalk) { const e = new Error('沒有可補租的項目（可能已租過）'); e.code = 'NOTHING_TO_ADD'; throw e; }
+  if (!paymentMethod) { const e = new Error('請選擇付款方式'); e.code = 'MISSING_PAYMENT_METHOD'; throw e; }
+
+  const id = uuidv4();
+  const now = new Date();
+  const cost = (newShoes ? 100 : 0) + (newChalk ? 50 : 0);
+  await db.collection(RENTAL_ADDON_COLLECTION).doc(id).set({
+    id, checkInId, memberId, memberName: c.memberName, gymId: c.gymId,
+    addShoes: newShoes, addChalk: newChalk, cost, paymentMethod,
+    status: 'pending', createdAt: now, expiresAt: new Date(now.getTime() + RENTAL_ADDON_TTL_MS),
+  });
+  // token 帶 rentaladd: 前綴（比照 compchk:/staffentry: 慣例），QR 掃到後店員端才能分流到正確流程
+  return { token: `rentaladd:${id}`, cost, addShoes: newShoes, addChalk: newChalk };
+};
+
+// 擁有權驗證交由路由層（checkMemberOwnership，比照 /checkin/qr/status/:qrToken 同一套模式）。
+const getRentalAddonDoc = async (token) => {
+  const db = getDb();
+  const doc = await db.collection(RENTAL_ADDON_COLLECTION).doc(token).get();
+  return doc.exists ? doc.data() : null;
+};
+
+const scanRentalAddon = async (token, staffGymId = null, isSuperAdmin = false) => {
+  const db = getDb();
+  const doc = await db.collection(RENTAL_ADDON_COLLECTION).doc(token).get();
+  if (!doc.exists) { const e = new Error('找不到此補租請求或已逾期'); e.code = 'NOT_FOUND'; throw e; }
+  const p = doc.data();
+  if (p.status !== 'pending') { const e = new Error('此補租請求已處理過'); e.code = 'ALREADY_PROCESSED'; throw e; }
+  if (p.expiresAt && dayjs().isAfter(dayjs(p.expiresAt.toDate ? p.expiresAt.toDate() : p.expiresAt))) {
+    const e = new Error('此補租請求已逾期，請會員重新產生'); e.code = 'EXPIRED'; throw e;
+  }
+  if (staffGymId && !isSuperAdmin && p.gymId !== staffGymId) {
+    throw { code: 'GYM_MISMATCH', message: `此為「${GYM_NAMES[p.gymId] || p.gymId}」的補租請求，請至該館掃碼確認` };
+  }
+  return { token, memberName: p.memberName, gymId: p.gymId, addShoes: p.addShoes, addChalk: p.addChalk, cost: p.cost, paymentMethod: p.paymentMethod };
+};
+
+const confirmRentalAddon = async (token, staffId, staffName, staffGymId = null, isSuperAdmin = false) => {
+  const db = getDb();
+  const ref = db.collection(RENTAL_ADDON_COLLECTION).doc(token);
+  const doc = await ref.get();
+  if (!doc.exists) { const e = new Error('找不到此補租請求或已逾期'); e.code = 'NOT_FOUND'; throw e; }
+  const p = doc.data();
+  if (p.status !== 'pending') { const e = new Error('此補租請求已處理過'); e.code = 'ALREADY_PROCESSED'; throw e; }
+  if (p.expiresAt && dayjs().isAfter(dayjs(p.expiresAt.toDate ? p.expiresAt.toDate() : p.expiresAt))) {
+    const e = new Error('此補租請求已逾期，請會員重新產生'); e.code = 'EXPIRED'; throw e;
+  }
+  if (staffGymId && !isSuperAdmin && p.gymId !== staffGymId) {
+    throw { code: 'GYM_MISMATCH', message: `此為「${GYM_NAMES[p.gymId] || p.gymId}」的補租請求，請至該館掃碼確認` };
+  }
+  const result = await addRentalToCheckIn(p.checkInId, { addShoes: p.addShoes, addChalk: p.addChalk }, staffId, staffName, p.paymentMethod);
+  await ref.update({ status: 'confirmed', confirmedAt: new Date(), confirmedBy: staffId });
+  return result;
+};
+
+module.exports = {
+  GYM_NAMES, createPendingCheckIn, scanQrCode, confirmCheckIn, countByEntryType, getTodayStats, addRentalToCheckIn,
+  requestRentalAddon, getRentalAddonDoc, scanRentalAddon, confirmRentalAddon,
+};

@@ -641,4 +641,51 @@ const getTodayStats = async (gymId) => {
   };
 };
 
-module.exports = { GYM_NAMES, createPendingCheckIn, scanQrCode, confirmCheckIn, countByEntryType, getTodayStats };
+// ── 事後補加租借（已入場後才決定要租岩鞋/粉袋，比照入場當下加租同一費率）──────────
+// 只針對「這次新加的」項目收費（已租過的不重複收）；沿用原入場付款方式（免費入場則預設現金）。
+// 只更新 amountPaid/shoesPrice/chalkPrice，entryFee 不動（入場費本身不受影響）；另記一筆獨立交易
+// （entryFee:0，故 revenue.js／dailySettlements 的「租借」欄會正確吃到全額、不誤算進入場費）。
+const addRentalToCheckIn = async (checkInId, { addShoes, addChalk }, staffId, staffName) => {
+  const db = getDb();
+  const ref = db.collection(COLLECTIONS.CHECK_INS).doc(checkInId);
+  const doc = await ref.get();
+  if (!doc.exists) { const e = new Error('找不到此入場紀錄'); e.code = 'NOT_FOUND'; throw e; }
+  const c = doc.data();
+  if (c.isCancelled) { const e = new Error('此入場已取消'); e.code = 'ALREADY_CANCELLED'; throw e; }
+
+  const newShoes = !!addShoes && !c.rentShoes;
+  const newChalk = !!addChalk && !c.rentChalk;
+  if (!newShoes && !newChalk) { const e = new Error('沒有新增項目（可能已租過）'); e.code = 'NOTHING_TO_ADD'; throw e; }
+
+  const addCost = (newShoes ? 100 : 0) + (newChalk ? 50 : 0);
+  const paymentMethod = c.paymentMethod || 'cash'; // 沿用原付款方式；免費入場(null)預設現金
+  const now = new Date();
+  const updates = {
+    amountPaid: (c.amountPaid || 0) + addCost,
+    paymentMethod,
+    updatedAt: now,
+  };
+  if (newShoes) { updates.rentShoes = true; updates.shoesPrice = (c.shoesPrice || 0) + 100; }
+  if (newChalk) { updates.rentChalk = true; updates.chalkPrice = (c.chalkPrice || 0) + 50; }
+  await ref.update(updates);
+
+  const { recordTransaction } = require('../../utils/revenueLedger');
+  await recordTransaction(db, {
+    gymId: c.gymId,
+    type: 'checkin',
+    totalAmount: addCost,
+    paymentMethod,
+    memberId: c.memberId,
+    memberName: c.memberName,
+    relatedId: checkInId,
+    staffId, staffName: staffName || '',
+    entryFee: 0, // 純租借加購，不含入場費
+    shoesPrice: newShoes ? 100 : 0,
+    entryType: c.entryType || null,
+    notes: `事後補加租借：${[newShoes && '岩鞋', newChalk && '粉袋'].filter(Boolean).join('、')}`,
+  });
+
+  return { checkInId, addCost, rentShoes: c.rentShoes || newShoes, rentChalk: c.rentChalk || newChalk };
+};
+
+module.exports = { GYM_NAMES, createPendingCheckIn, scanQrCode, confirmCheckIn, countByEntryType, getTodayStats, addRentalToCheckIn };

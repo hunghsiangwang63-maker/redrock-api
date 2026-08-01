@@ -208,6 +208,20 @@ router.post('/cancel',
   }
 );
 
+// ── POST /checkin/:checkInId/add-rental - 事後補加租借（已入場後才決定要租岩鞋/粉袋）──
+router.post('/:checkInId/add-rental', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const result = await checkinService.addRentalToCheckIn(
+      req.params.checkInId, { addShoes: !!req.body.addShoes, addChalk: !!req.body.addChalk },
+      req.staff.id, req.staff.name);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const map = { NOT_FOUND: 404, ALREADY_CANCELLED: 400, NOTHING_TO_ADD: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 // ── 入場開立發票（預先建立，待日後發票機串接；手動記帳版，比照課程/比賽同一套）──
 // 底層共用 invoiceService（sourceType:'checkin'，refId=checkInId）。
 router.get('/:checkInId/invoices', authenticate, requireManagerOrStation, async (req, res) => {

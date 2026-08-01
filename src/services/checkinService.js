@@ -30,4 +30,5 @@ module.exports = {
   computePaidEntryAmount: pricing.computePaidEntryAmount,
   revertRenewal: cancel.revertRenewal,
   PRICES: pricing.PRICES,
+  addRentalToCheckIn: flow.addRentalToCheckIn,
 };

@@ -2168,6 +2168,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **驗證**：`isEn(` 全域 grep 於 `src/pages/member/`＋`src/components/` 0 殘留；member/staff 兩 target build 皆通過（無新增 build 警告）；`firebase deploy` 後 curl 確認 `app.redrocktaiwan.com` 首頁 bundle hash 與本次 build 產出一致。
 - 📌 **範圍**：與英文字典相同，僅覆蓋認證後 `/member/*` 會員 app（首頁/入場QR/註冊/onboarding gate）；免登入訪客報名頁（`/book/*`，`PublicCourseEnrollPage.jsx` 等 5 個）用 plain axios、獨立於 `memberI18n.js` 之外，本次未觸及（純中文），日後若要讓這些頁也支援日文需另外處理。
 
+## 目前進度（2026-08-02）— 單次入場券發放加數量設定（最多12張，批次合併通知與審核）
+> 需求：員工端發放單次入場券原本一次只能發一張，加數量欄位，一次最多12張。發放仍為贈券性質（無金額）、仍需審核。後端 `/health` `3.200.0-single-entry-ticket-batch-issue`；E2E（打正式 API）**19/19**。commit 後端 `b8783e2`、前端 `1cc9883`。
+- ✅ **後端 `POST /passes/single-entry` 加 `quantity`（1~12，選填，預設1）**：`quantity>1` 時用 `db.batch()` 一次寫入 N 筆票券文件，共用新欄位 `batchId`（uuid）+`batchTotal`；逐張仍各自 `memberId/notes/issuedAt/expiresAt/approvalDeadline` 齊全，之後可各自使用/轉移，互不影響。
+- ✅ **通知與待辦清單合併（避免一次發12張灌爆待辦）**：`notifySingleEntryTicketApproval` 加 `quantity`/`batchId` 參數，N 張只發**一則**通知（訊息含「發放了 N 張」）；`GET /pending-tasks` 建 `ticket_approval` 任務時依 `batchId` 分組，同批只出現**一筆**待辦（標題「單次入場券待審核（×N）」），無 batchId 的單張發放沿用原行為（各自一筆）。
+- ✅ **新增批次核准/拒絕端點**：`POST /passes/single-entry/batch/:batchId/approve`（`checkPermission('passes.approve')`，逐張檢查 24 小時審核期限、逾期自動取消、其餘一次核准生效）、`POST /passes/single-entry/batch/:batchId/reject`（整批標 cancelled）。路徑與既有 `/single-entry/:id/approve` 依 URL segment 數量區分、不衝突。
+- ✅ **前端**：`PassesPage.jsx` 發放 Modal 加「發放數量」輸入（1~12，超界自動夾）；`TicketApprovalModal.jsx` 對批次顯示「×N」、核准鈕呼叫批次端點；`PendingTasksPage.jsx` 待辦卡對批次顯示「×N」、拒絕呼叫 `rejectTicketBatch`。
+- **E2E（打正式 API，19/19）**：發5張→共用batchId→pending-tasks 合併1筆(`isBatch/quantity/title×5`皆對)→單張(qty預設1)不受影響無batchId→qty=13 擋400→批次核准5張全active→批次拒絕(另發3張)3張全cancelled。fixtures 全清。腳本 `scratchpad/ticket-batch-e2e.mjs`。
+
 ## 待辦
 
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。

@@ -145,7 +145,7 @@ router.post('/', authenticateAny, async (req, res) => {
       gymId, bookingDate, bookingTime, courseType,
       contactName, contactEmail, contactPhone, facebookName,
       participants, // [{ name, idNumber, birthday, nationality }]
-      totalFee, paymentDate, bankLastFive, notes,
+      totalFee, paymentDate, bankLastFive, paymentMethod, notes,
     } = req.body;
 
     if (req.body.trialSessionId) return handleTrialBooking(req, res, db, memberId);
@@ -209,6 +209,7 @@ router.post('/', authenticateAny, async (req, res) => {
       totalFee: computedFee,
       paymentDate: paymentDate||null,
       bankLastFive: bankLastFive||null,
+      paymentMethod: paymentMethod || 'transfer', // cash/transfer/linepay/jkopay/taiwanpay；未帶則沿用預設轉帳（供 recordExperienceRevenue 記正確付款方式）
       memberPaidAmount: req.body.paidAmount ? Number(req.body.paidAmount) : null, // 會員自填實際匯款金額
       notes: notes||'',
       status: 'pending', // pending | confirmed | cancelled

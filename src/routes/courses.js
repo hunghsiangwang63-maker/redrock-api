@@ -1488,8 +1488,10 @@ router.get('/:courseId/enrollments',
         const docs = await db.getAll(...refs);
         docs.forEach(doc => { if (doc.exists) { const m = doc.data(); memberInfoMap[doc.id] = { name: m.name, phone: m.phone }; } });
       }
-      // 報名 header（courseRegistrations，一人一課一筆）：補 paymentStatus/管理員編修實收金額覆蓋值；
-      // 比照 getSessionRoster/roster.download 的既有 join 慣例（見 courses.js:731、:791）。
+      // 報名 header（courseRegistrations，一人一課一筆）：權威來源——經查證真實資料，courseEnrollments
+      // 每堂場次副本的 fee/paymentMethod/bankLastFive/paymentDate 並非每筆都可靠填寫（週課常見全 0/null），
+      // 實際應繳總額/付款資訊以 header 為準（與 members.js buildCourseMemberList 同一套權威來源，
+      // 見 members.js:361-376）；header 缺（少數無 header 的舊資料）才退回場次副本值。
       const headerMap = {};
       if (memberIds.length) {
         for (let i = 0; i < memberIds.length; i += 30) {
@@ -1498,7 +1500,12 @@ router.get('/:courseId/enrollments',
             .where('courseId', '==', courseId).where('memberId', 'in', batch).get();
           hSnap.forEach(hd => {
             const h = hd.data();
-            headerMap[h.memberId] = { paymentStatus: h.paymentStatus || '', receivedAmountOverride: h.receivedAmountOverride ?? null, payEnrollmentId: h.payEnrollmentId || null };
+            headerMap[h.memberId] = {
+              paymentStatus: h.paymentStatus || '', receivedAmountOverride: h.receivedAmountOverride ?? null, payEnrollmentId: h.payEnrollmentId || null,
+              fee: h.fee, paymentMethod: h.paymentMethod, bankLastFive: h.bankLastFive, paymentDate: h.paymentDate,
+              memberPaidAmount: h.memberPaidAmount, enrolledAt: h.enrolledAt,
+              enrollNote: h.enrollNote, healthNote: h.healthNote, referralSource: h.referralSource, staffNote: h.staffNote,
+            };
           });
         }
       }
@@ -1522,8 +1529,11 @@ router.get('/:courseId/enrollments',
         const header = headerMap[e.memberId] || {};
         const confirmedAmount = header.payEnrollmentId && confirmedMap[header.payEnrollmentId] != null
           ? confirmedMap[header.payEnrollmentId].amount : null;
-        const memberPaidAmount = e.memberPaidAmount ?? null;
-        const fee = e.fee || 0;
+        const paymentMethod = header.paymentMethod || e.paymentMethod || '';
+        const bankLastFive = header.bankLastFive || e.bankLastFive || '';
+        const paymentDate = header.paymentDate || e.paymentDate || '';
+        const memberPaidAmount = header.memberPaidAmount ?? e.memberPaidAmount ?? null;
+        const fee = header.fee ?? e.fee ?? 0;
         // 「實收金額」最終採用值：管理員直接編修 > 店員核對 > 會員自報 > 報名應繳費用（與 members.js attachReceivedAmounts 同一套優先序）
         const receivedAmount = header.receivedAmountOverride ?? confirmedAmount ?? memberPaidAmount ?? fee ?? 0;
         return {
@@ -1532,27 +1542,27 @@ router.get('/:courseId/enrollments',
           memberName: info.name || e.memberName || '',
           memberPhone: info.phone || e.memberPhone || '',
           status: e.status || 'confirmed',
-          paymentMethod: e.paymentMethod || '',
+          paymentMethod,
           paymentConfirmed: e.paymentConfirmed !== false,
           paymentStatus: header.paymentStatus || '',
           memberPaidAmount,
           confirmedAmount,
           receivedAmountOverride: header.receivedAmountOverride ?? null,
           receivedAmount,
-          bankLastFive: e.bankLastFive || '',
-          paymentDate: e.paymentDate || '',
-          enrolledAt: e.enrolledAt || e.createdAt || null,
+          bankLastFive,
+          paymentDate,
+          enrolledAt: header.enrolledAt || e.enrolledAt || e.createdAt || null,
           date: e.date || '',
           startTime: e.startTime || '',
           fee,
           maxLeavesAllowed: e.maxLeavesAllowed ?? null,  // 插班個別可請假次數（null=用課程整期預設）
-          // 報名備註
-          enrollNote: e.enrollNote || null,
-          healthNote: e.healthNote || null,
-          referralSource: e.referralSource || null,
+          // 報名備註（header 優先，缺才退回場次副本；比照 members.js buildCourseMemberList）
+          enrollNote: header.enrollNote || e.enrollNote || null,
+          healthNote: header.healthNote || e.healthNote || null,
+          referralSource: header.referralSource || e.referralSource || null,
           enrollGender: e.enrollGender || null,
           enrollAge: e.enrollAge ?? null,
-          staffNote: e.staffNote || null,   // 管理員收款確認時填的備註
+          staffNote: header.staffNote || e.staffNote || null,   // 管理員收款確認時填的備註
         };
       });
       // Sort by enrolledAt desc

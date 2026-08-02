@@ -1488,9 +1488,44 @@ router.get('/:courseId/enrollments',
         const docs = await db.getAll(...refs);
         docs.forEach(doc => { if (doc.exists) { const m = doc.data(); memberInfoMap[doc.id] = { name: m.name, phone: m.phone }; } });
       }
+      // 報名 header（courseRegistrations，一人一課一筆）：補 paymentStatus/管理員編修實收金額覆蓋值；
+      // 比照 getSessionRoster/roster.download 的既有 join 慣例（見 courses.js:731、:791）。
+      const headerMap = {};
+      if (memberIds.length) {
+        for (let i = 0; i < memberIds.length; i += 30) {
+          const batch = memberIds.slice(i, i + 30);
+          const hSnap = await db.collection('courseRegistrations')
+            .where('courseId', '==', courseId).where('memberId', 'in', batch).get();
+          hSnap.forEach(hd => {
+            const h = hd.data();
+            headerMap[h.memberId] = { paymentStatus: h.paymentStatus || '', receivedAmountOverride: h.receivedAmountOverride ?? null, payEnrollmentId: h.payEnrollmentId || null };
+          });
+        }
+      }
+      // 店員核對收款金額（transferRecords.confirmedAmount，比照 members.js attachReceivedAmounts 同一套邏輯）
+      const payEnrollmentIds = [...new Set(Object.values(headerMap).map(h => h.payEnrollmentId).filter(Boolean))];
+      const confirmedMap = {};
+      for (let i = 0; i < payEnrollmentIds.length; i += 30) {
+        const chunk = payEnrollmentIds.slice(i, i + 30);
+        const tSnap = await db.collection('transferRecords').where('refId', 'in', chunk).get();
+        tSnap.docs.forEach(td => {
+          const t = td.data();
+          if (t.status !== 'confirmed' || t.confirmedAmount == null) return;
+          const at = t.confirmedAt?._seconds || t.confirmedAt?.seconds || 0;
+          const prev = confirmedMap[t.refId];
+          if (!prev || at >= prev.at) confirmedMap[t.refId] = { amount: Number(t.confirmedAmount), at };
+        });
+      }
       const enrollments = rosterDocs.map(d => {
         const e = d.data();
         const info = memberInfoMap[e.memberId] || {};
+        const header = headerMap[e.memberId] || {};
+        const confirmedAmount = header.payEnrollmentId && confirmedMap[header.payEnrollmentId] != null
+          ? confirmedMap[header.payEnrollmentId].amount : null;
+        const memberPaidAmount = e.memberPaidAmount ?? null;
+        const fee = e.fee || 0;
+        // 「實收金額」最終採用值：管理員直接編修 > 店員核對 > 會員自報 > 報名應繳費用（與 members.js attachReceivedAmounts 同一套優先序）
+        const receivedAmount = header.receivedAmountOverride ?? confirmedAmount ?? memberPaidAmount ?? fee ?? 0;
         return {
           id: d.id,
           memberId: e.memberId,
@@ -1499,13 +1534,17 @@ router.get('/:courseId/enrollments',
           status: e.status || 'confirmed',
           paymentMethod: e.paymentMethod || '',
           paymentConfirmed: e.paymentConfirmed !== false,
-          memberPaidAmount: e.memberPaidAmount ?? null,
+          paymentStatus: header.paymentStatus || '',
+          memberPaidAmount,
+          confirmedAmount,
+          receivedAmountOverride: header.receivedAmountOverride ?? null,
+          receivedAmount,
           bankLastFive: e.bankLastFive || '',
           paymentDate: e.paymentDate || '',
           enrolledAt: e.enrolledAt || e.createdAt || null,
           date: e.date || '',
           startTime: e.startTime || '',
-          fee: e.fee || 0,
+          fee,
           maxLeavesAllowed: e.maxLeavesAllowed ?? null,  // 插班個別可請假次數（null=用課程整期預設）
           // 報名備註
           enrollNote: e.enrollNote || null,

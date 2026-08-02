@@ -1583,9 +1583,11 @@ const getSessionRoster = async (sessionId) => {
 // ── 課程狀態標籤（報名中/即將開始/進行中/已滿/已結束/已取消）──────
 // 可作為試上/補課場次（開關 mode）：'off'=強制不開放｜'on'=強制開放｜'auto'/未設=常態報名達 2 人自動開放。
 // 試上、補課為「兩個獨立開關」（trialTarget / makeupTarget）。regularCount＝常態報名不重複人數（不含試上/補課）。
-// 週課一律視為開放，不再受開關限制（2026-08 起簡化）；courseType 未帶入時沿用舊開關邏輯（供未遷移的呼叫端相容）。
+// 週課預設一律開放（2026-08 起簡化，不再受「常態報名達 2 人」門檻限制），
+// 但仍尊重明確設為 'off' 的特殊情況（如密集班刻意不開放作補課）。
+// courseType 未帶入時沿用舊開關邏輯（供未遷移的呼叫端相容）。
 const isTargetOpen = (mode, regularCount, courseType) => {
-  if (courseType === 'weekly') return true;
+  if (courseType === 'weekly') return mode !== 'off';
   if (mode === 'off') return false;
   if (mode === 'on') return true;
   return (regularCount || 0) >= 2;

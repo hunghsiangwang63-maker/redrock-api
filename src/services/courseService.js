@@ -52,7 +52,10 @@ const resolveRules = (course, category) => {
     if (gv !== undefined && gv !== null) return gv;
     return RULE_DEFAULTS[k];
   };
-  return Object.fromEntries(Object.keys(RULE_DEFAULTS).map(k => [k, pick(k)]));
+  const rules = Object.fromEntries(Object.keys(RULE_DEFAULTS).map(k => [k, pick(k)]));
+  // 週課一律開放補課／試上（2026-08 起簡化：只要課程開放、班別彼此可互相補課即可選，不再受個別開關限制）
+  if (course?.type === 'weekly') { rules.allowMakeup = true; rules.allowTrial = true; }
+  return rules;
 };
 const getCategoryOf = async (db, categoryId) => {
   if (!categoryId) return null;
@@ -1402,11 +1405,11 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
     if (origGym && targetGym && origGym !== targetGym) {
       throw { code: 'DIFFERENT_GYM', message: '補課只能在同一場館進行' };
     }
-    // 目標梯次「可作為補課場次」開關（makeupTarget：off 強制不開放如密集班；auto 需常態報名達 2 人）
+    // 目標梯次「可作為補課場次」——週課一律開放（2026-08 起簡化）；非週課仍走 makeupTarget 開關
     const tRegSnap = await db.collection(ENROLLMENT_COLLECTION)
       .where('courseId', '==', session.courseId).where('status', '==', 'confirmed').get();
     const tReg = new Set(); tRegSnap.docs.forEach(x => { const e = x.data(); if (!e.isMakeup && !e.isTrial) tReg.add(e.memberId); });
-    if (!isTargetOpen(targetCourse.makeupTarget, tReg.size)) {
+    if (!isTargetOpen(targetCourse.makeupTarget, tReg.size, targetCourse.type)) {
       throw { code: 'MAKEUP_TARGET_CLOSED', message: '此梯次目前未開放作為補課場次，請改選其他梯次' };
     }
   }
@@ -1580,7 +1583,9 @@ const getSessionRoster = async (sessionId) => {
 // ── 課程狀態標籤（報名中/即將開始/進行中/已滿/已結束/已取消）──────
 // 可作為試上/補課場次（開關 mode）：'off'=強制不開放｜'on'=強制開放｜'auto'/未設=常態報名達 2 人自動開放。
 // 試上、補課為「兩個獨立開關」（trialTarget / makeupTarget）。regularCount＝常態報名不重複人數（不含試上/補課）。
-const isTargetOpen = (mode, regularCount) => {
+// 週課一律視為開放，不再受開關限制（2026-08 起簡化）；courseType 未帶入時沿用舊開關邏輯（供未遷移的呼叫端相容）。
+const isTargetOpen = (mode, regularCount, courseType) => {
+  if (courseType === 'weekly') return true;
   if (mode === 'off') return false;
   if (mode === 'on') return true;
   return (regularCount || 0) >= 2;
@@ -1810,8 +1815,8 @@ const getCourses = async (gymId) => {
       makeupDeadlineDate: c.makeupDeadlineDate || null,     // 固定補課到期日（覆蓋結束+天數）
       trialTarget: c.trialTarget || 'auto',
       makeupTarget: c.makeupTarget || 'auto',
-      trialTargetOpen: isTargetOpen(c.trialTarget, realEnrolled),   // effective：可否被當試上場次
-      makeupTargetOpen: isTargetOpen(c.makeupTarget, realEnrolled), // effective：可否被當補課場次
+      trialTargetOpen: isTargetOpen(c.trialTarget, realEnrolled, c.type),   // effective：可否被當試上場次
+      makeupTargetOpen: isTargetOpen(c.makeupTarget, realEnrolled, c.type), // effective：可否被當補課場次
       statusLabel: computeStatusLabel(c, enrolledCount),
       // 工作坊專用：任一未取消未來場次仍有名額（部分場次額滿不算整體額滿）
       anySessionOpen: c.type === 'workshop' ? !!workshopAnyOpen[c.id] : undefined,
@@ -2095,7 +2100,7 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
   enrSnap.docs.forEach(x => { const e = x.data(); if (e.isMakeup || e.isTrial) return; (regularByCourse[e.courseId] = regularByCourse[e.courseId] || new Set()).add(e.memberId); });
   const trialCourses = {};
   candidates.forEach(c => {
-    if (!isTargetOpen(c.trialTarget, regularByCourse[c.id]?.size || 0)) return; // 試上開關（達2人/on）才列出
+    if (!isTargetOpen(c.trialTarget, regularByCourse[c.id]?.size || 0, c.type)) return; // 週課一律列出；非週課仍走開關
     const rules = resolveRules(c, cats[c.categoryId]);
     trialCourses[c.id] = { trialPrice: getEffectiveTrialPrice(c, rules), courseName: c.name, instructor: c.instructor || '', maxWaitlist: (c.maxWaitlist ?? null), categoryName: cats[c.categoryId]?.name || '其他', cohortName: c.cohortName || '' };
   });

@@ -849,6 +849,7 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
 
   const courseDoc = await db.collection(COURSE_COLLECTION).doc(enrollment.courseId).get();
   const course = courseDoc.exists ? courseDoc.data() : {};
+  if (course.type === 'workshop') throw { code: 'WORKSHOP_NO_LEAVE', message: '工作坊活動不提供請假功能' };
   const rules = resolveRules(course, await getCategoryOf(db, course.categoryId));
 
   // 請假截止：上課前 leaveDeadlineHours 小時（以台灣時間為準）

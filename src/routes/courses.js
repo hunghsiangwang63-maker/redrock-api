@@ -1535,6 +1535,10 @@ router.put('/:courseId/members/:memberId/max-leaves',
     try {
       const db = getDb();
       const { courseId, memberId } = req.params;
+      const courseSnap = await db.collection('courses').doc(courseId).get();
+      if (courseSnap.exists && courseSnap.data().type === 'workshop') {
+        return res.status(400).json({ error: 'WORKSHOP_NO_LEAVE', message: '工作坊活動不提供請假功能' });
+      }
       const raw = req.body.maxLeavesAllowed;
       // 傳 null/空 = 清除覆蓋（回到課程整期預設）
       const value = (raw === null || raw === '' || raw === undefined) ? null : parseInt(raw, 10);

@@ -235,6 +235,10 @@ router.get('/', authenticate, async (req, res) => {
           } catch (e) {}
         }
         const isCash = t.paymentMethod === 'cash';
+        // transferRecords.memberName 因防偽造安全機制固定是登入會員本人（付款人／家長）——
+        // 家長代子女報名時實際報名對象是子女，顯示應以訂單文件（orderDoc）自己的 memberName 為準
+        // （courseEnrollments/competitionRegistrations/equipmentRentals/teamApplications 皆已改為優先存報名對象本人姓名）。
+        const displayMemberName = orderDoc?.memberName || t.memberName;
         // 比賽報名有申請友館優惠 → 直接帶出選了哪個友館，待辦列表/確認彈窗都能一眼看到，不用另外點進報名詳情
         const partnerGym = (t.orderType === 'competition' && orderDoc?.isPartnerGymDiscount) ? (orderDoc.partnerGym || '友館') : null;
         const partnerGymPending = partnerGym ? !!orderDoc.partnerGymPending : false;
@@ -242,13 +246,13 @@ router.get('/', authenticate, async (req, res) => {
           id: `transfer_${d.id}`, type: 'transfer_confirm', targetId: d.id,
           title: isCash ? '現金待收款' : '轉帳待確認收款',
           method: t.paymentMethod || 'transfer',   // cash→值班確認；transfer→管理員確認
-          desc: `${t.memberName || ''} — ${t.orderName || t.courseName || ''}${t.bankLastFive ? `（末五碼 ${t.bankLastFive}）` : ''}`,
+          desc: `${displayMemberName || ''} — ${t.orderName || t.courseName || ''}${t.bankLastFive ? `（末五碼 ${t.bankLastFive}）` : ''}`,
           date: t.paymentDate || (t.createdAt?._seconds ? new Date(t.createdAt._seconds*1000).toISOString().slice(0,10) : today),
           createdAt: t.createdAt?._seconds || 0,
-          gymId: t.gymId, memberName: t.memberName, amount: t.amount,
+          gymId: t.gymId, memberName: displayMemberName, amount: t.amount,
           partnerGym, partnerGymPending,
           link: '/staff/pending-tasks',
-          record: { id: d.id, ...t, partnerGym, partnerGymPending },
+          record: { id: d.id, ...t, memberName: displayMemberName, payerName: t.memberName, partnerGym, partnerGymPending },
         });
       }
     } catch(e) { console.error('transfer_confirm tasks error:', e.message); }

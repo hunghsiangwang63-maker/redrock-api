@@ -2188,6 +2188,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **續：「課程」chip 改名「課程請假/補課」**（commit `3101ae8`）：使用者確認名稱更貼切內容（移出名單認領後純剩請假/銷假/補課/退費/代班）。
 - ✅ **續：「會員」chip 改名「VIP會員認領」**（commit `f88509f`）：該分類目前唯一對應型別 `legacy_vip_claimed`（Climbio VIP 名單自動認領，通知兩館館長核對身分），現存 917 筆通知中 0 筆（尚無新認領），改名更精確反映內容。
 
+## 目前進度（2026-08-02 續2）— 統一付款方式選擇元件（器材租借/比賽/攀岩隊/入場QR/首頁補租）
+> 承「付款 modal 有幾種狀況會呼叫出來」的盤點：發現 `PaymentSection.jsx`（現金/轉帳/LinePay/街口/台灣Pay 選擇元件）只在課程/體驗頁真正被畫出來，`MemberRentalPage`/`MemberCompetitionsPage`/`MemberTeamPage` 三頁都 import 了卻是死程式碼、各自手刻重複的付款按鈕列表（3 種不同視覺樣式、`{k,l}` vs `{key,label}` 兩套 key 命名）。使用者要求清死 import＋統一元件，並問「可以跟入場QR一起整合嗎」——一併納入。純前端 `redrock-web`，commit `2041d6c`，member/staff 皆已 build+deploy。
+- ✅ **`PaymentSection.jsx` 加 5 個選填 props（向下相容原 4 個課程/體驗呼叫點，未傳新 props 行為不變）**：`variant`(grid/pill/list，三種視覺樣式)、`onSelect`(即選即送，供 QR 主步驟)、`showLabel`(外層已有自訂說明文字時關閉內建「付款方式」標題)、`disabled`(送出中鎖定不可再點)、`t`(選填翻譯函式，供會員端 memberI18n 用，未傳則原樣顯示中文)。
+- ✅ **`MemberRentalPage.jsx`**：清死 import，5 個分散 state（payMethod/payDate/bankLastFive/bankName/rentPaidAmount）合併成單一 `paymentData` 物件。**順帶修正一個真問題**：原按鈕列表只有 4 個選項、「現金」被合併進「轉帳」按鈕（標籤寫「現金/轉帳」但實際送出值恆為 `'transfer'`、恆要求填匯款末五碼+日期）——現在現金是真正獨立選項，選了不需要填任何匯款欄位（比照課程/體驗頁本就有的現金行為）。後端 `POST /rentals` 原本就沒有 enum 限制 paymentMethod，'cash' 可直接接受、免動後端。
+- ✅ **`MemberCompetitionsPage.jsx`**：清死 import，主報名步驟（5 種方式+日期範圍限制報名後3日內）與「重新填寫繳費資訊」退回補正流程（僅現金/轉帳）兩處都改用共用元件；`editForm`（報名資料修正頁內嵌的一個小 `<select>`，非獨立「選付款方式」情境）維持原樣不動、不在此次範圍。
+- ✅ **`MemberTeamPage.jsx`**：清死 import，改用共用元件但 `methods=['transfer']`——隊費政策不變（現場文案「恕不接受電子支付」保留），純粹統一底層元件、不擴大可選方式。
+- ✅ **`MemberQRPage.jsx`（入場QR，3 處）＋`MemberHomePage.jsx`（首頁補租器材，1 處）**：改用共用元件（`variant='list'`/`'pill'`），保留原本「點選即送出」與「送出中鎖定」的互動，且透過新增的 `t` prop **完整保留既有中/英/日三語翻譯**（QR 頁是這個專案特別投入過 i18n 的頁面，未加 `t` 支援直接套用會讓翻譯退化成只有中文，此次確認沒有這個問題）。
+- **驗證**：member/staff 兩 target 每一步修改後皆單獨 build 驗證通過（無新增 warning）；6 個檔案全域 grep 確認無殘留 `filterPayments`/`useEnabledPayments`/舊分散 state 引用；已 deploy，未跑瀏覽器實機（會員端多頁面付款流程需登入+建立真實訂單，風險與 CLAUDE.md 慣例一致，留待使用者或下次有登入憑證時驗證）。
+- 📌 **範圍界線**：`PaymentFlow.jsx`（另一個完全不同的元件，即時線上付款導轉/輪詢流程，`ONLINE_PAYMENT_ENABLED` 建置期旗標控制）刻意不動——這次統一的是「選擇打算用什麼方式付款、之後手動核對/上傳證明」這條路徑，跟 PaymentFlow 的「導去金流閘道即時付款」是兩個不同性質的流程，沒有合併的理由。線上支付三種（LinePay/街口/台灣Pay）維持系統設定預設關閉（`useEnabledPayments`，`DEFAULT_ENABLED` 僅現金/轉帳為 true），待金流 API 真正串接後由管理員在系統設定開啟即可全站生效，不需要再改前端。
+
 ## 待辦
 
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。

@@ -227,13 +227,17 @@ router.get('/', authenticate, async (req, res) => {
       const snap = await ref.get();
       for (const d of snap.docs) {
         const t = d.data();
+        let orderDoc = null;
         if (t.orderType && t.refId && ORDER_COLL[t.orderType]) {
           try {
-            const o = (await db.collection(ORDER_COLL[t.orderType]).doc(t.refId).get()).data();
-            if (o && (o.status === 'cancelled' || o.paymentStatus === 'refunded')) continue; // 訂單已取消/退費 → 跳過
+            orderDoc = (await db.collection(ORDER_COLL[t.orderType]).doc(t.refId).get()).data();
+            if (orderDoc && (orderDoc.status === 'cancelled' || orderDoc.paymentStatus === 'refunded')) continue; // 訂單已取消/退費 → 跳過
           } catch (e) {}
         }
         const isCash = t.paymentMethod === 'cash';
+        // 比賽報名有申請友館優惠 → 直接帶出選了哪個友館，待辦列表/確認彈窗都能一眼看到，不用另外點進報名詳情
+        const partnerGym = (t.orderType === 'competition' && orderDoc?.isPartnerGymDiscount) ? (orderDoc.partnerGym || '友館') : null;
+        const partnerGymPending = partnerGym ? !!orderDoc.partnerGymPending : false;
         tasks.push({
           id: `transfer_${d.id}`, type: 'transfer_confirm', targetId: d.id,
           title: isCash ? '現金待收款' : '轉帳待確認收款',
@@ -242,8 +246,9 @@ router.get('/', authenticate, async (req, res) => {
           date: t.paymentDate || (t.createdAt?._seconds ? new Date(t.createdAt._seconds*1000).toISOString().slice(0,10) : today),
           createdAt: t.createdAt?._seconds || 0,
           gymId: t.gymId, memberName: t.memberName, amount: t.amount,
+          partnerGym, partnerGymPending,
           link: '/staff/pending-tasks',
-          record: { id: d.id, ...t },
+          record: { id: d.id, ...t, partnerGym, partnerGymPending },
         });
       }
     } catch(e) { console.error('transfer_confirm tasks error:', e.message); }

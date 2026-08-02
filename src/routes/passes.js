@@ -425,13 +425,15 @@ router.get('/single-entry/pending',
   }
 );
 
-// ── POST /passes/single-entry - 發放單次入場券（需審核）──────────
+// ── POST /passes/single-entry - 發放單次入場券（需審核，可一次發放多張）──
 // Group A：館別電腦(值班)或管理員；發放後為 pending_approval，管理員審核才生效（已有通知）
+// quantity 1~12：>1 張時共用 batchId，通知與待辦審核合併為一筆（避免灌爆待辦清單）
 router.post('/single-entry',
   authenticate, requireManagerOrStation,
   [
     body('memberId').notEmpty().withMessage('請指定會員'),
     body('notes').trim().notEmpty().withMessage('請填寫備註說明（發放原因）'),
+    body('quantity').optional().isInt({ min: 1, max: 12 }).withMessage('數量須為 1~12 張'),
   ],
   validate,
   async (req, res) => {
@@ -441,7 +443,8 @@ router.post('/single-entry',
       const memberService = require('../services/memberService');
 
       const member = await memberService.getMember(req.body.memberId);
-      const ticketId = uuidv4();
+      const quantity = Number(req.body.quantity) || 1;
+      const batchId = quantity > 1 ? uuidv4() : null;
       const now = new Date();
       const issuedAt = dayjs().format('YYYY-MM-DD');
       const expiresAt = dayjs().add(1, 'year').format('YYYY-MM-DD');
@@ -450,34 +453,43 @@ router.post('/single-entry',
       // 發放單次入場券為館方招待/贈券性質，不收款——不記金額、不記付款方式、不記營收交易
       // （原本預設 amount:200/paymentMethod:cash 並記帳，但前端從未讓店員填金額，等於每次發放都
       // 憑空多記一筆NT$200現金收入；發放本身無實際收款，用票入場當下也走「單次入場券（免費）」。）
-      const ticket = {
-        id: ticketId,
-        memberId: req.body.memberId,
-        memberName: member.name,
-        originalMemberId: req.body.memberId,
-        gymId: req.staff.gymId,
-        issuedAt, expiresAt,
-        status: 'pending_approval',      // 待審核，不可使用
-        approvalDeadline,                 // 24小時後自動取消
-        approvedAt: null,
-        approvedBy: null,
-        cancelledAt: null,
-        cancelledBy: null,
-        cancelReason: null,
-        transferHistory: [],
-        usedAt: null,
-        usedCheckInId: null,
-        soldByStaffId: req.staff.id,
-        soldByStaffName: req.staff.name,
-        notes: req.body.notes || '',
-        createdAt: now, updatedAt: now,
-      };
+      const batch = db.batch();
+      const tickets = [];
+      for (let i = 0; i < quantity; i++) {
+        const ticketId = uuidv4();
+        const ticket = {
+          id: ticketId,
+          memberId: req.body.memberId,
+          memberName: member.name,
+          originalMemberId: req.body.memberId,
+          gymId: req.staff.gymId,
+          batchId, batchTotal: quantity,
+          issuedAt, expiresAt,
+          status: 'pending_approval',      // 待審核，不可使用
+          approvalDeadline,                 // 24小時後自動取消
+          approvedAt: null,
+          approvedBy: null,
+          cancelledAt: null,
+          cancelledBy: null,
+          cancelReason: null,
+          transferHistory: [],
+          usedAt: null,
+          usedCheckInId: null,
+          soldByStaffId: req.staff.id,
+          soldByStaffName: req.staff.name,
+          notes: req.body.notes || '',
+          createdAt: now, updatedAt: now,
+        };
+        batch.set(db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(ticketId), ticket);
+        tickets.push(ticket);
+      }
+      await batch.commit();
 
-      await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(ticketId).set(ticket);
-
-      // 發送審核通知給 gym_manager 和 super_admin
+      // 發送審核通知給 gym_manager 和 super_admin（多張時只發一則）
       await notifySingleEntryTicketApproval({
-        ticketId,
+        ticketId: tickets[0].id,
+        batchId,
+        quantity,
         memberName: member.name,
         gymId: req.staff.gymId,
         issuedByStaffName: req.staff.name,
@@ -485,8 +497,11 @@ router.post('/single-entry',
       });
 
       res.status(201).json({
-        ticket,
-        message: '單次入場券已發放，等待館長或管理員審核（24小時內）',
+        tickets,
+        ticket: tickets[0],
+        message: quantity > 1
+          ? `已發放 ${quantity} 張單次入場券，等待館長或管理員審核（24小時內）`
+          : '單次入場券已發放，等待館長或管理員審核（24小時內）',
       });
     } catch (err) {
       if (err.code === 'MEMBER_NOT_FOUND') return res.status(404).json(err);
@@ -602,6 +617,107 @@ router.post('/single-entry/:id/reject',
       });
 
       res.json({ message: '已拒絕，入場券已取消', ticketId: req.params.id });
+    } catch (err) {
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
+// ── POST /passes/single-entry/batch/:batchId/approve - 批次審核通過 ──
+// 對應一次發放多張（quantity>1）的批次；只審核仍為 pending_approval 且未逾期的票券。
+router.post('/single-entry/batch/:batchId/approve',
+  authenticate, checkPermission('passes.approve'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const snap = await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS)
+        .where('batchId', '==', req.params.batchId)
+        .where('status', '==', 'pending_approval')
+        .get();
+
+      if (snap.empty) return res.status(404).json({ error: 'BATCH_NOT_FOUND', message: '找不到待審核的票券批次' });
+
+      const now = new Date();
+      const batch = db.batch();
+      let approvedCount = 0, expiredCount = 0;
+      let sample = null;
+      snap.forEach(d => {
+        const t = d.data();
+        if (dayjs().isAfter(dayjs(t.approvalDeadline.toDate()))) {
+          batch.update(d.ref, { status: 'cancelled', cancelReason: 'approval_timeout', updatedAt: now });
+          expiredCount++;
+        } else {
+          batch.update(d.ref, { status: 'active', approvedAt: now, approvedBy: req.staff.id, approvedByName: req.staff.name, updatedAt: now });
+          approvedCount++;
+          if (!sample) sample = t;
+        }
+      });
+      await batch.commit();
+
+      if (approvedCount === 0) {
+        return res.status(400).json({ error: 'APPROVAL_TIMEOUT', message: '已超過24小時審核期限，此批票券已自動取消' });
+      }
+
+      const { createNotification } = require('../services/notificationService');
+      await createNotification({
+        gymId: sample.gymId,
+        targetStaffId: sample.soldByStaffId,
+        type: 'single_entry_ticket_approved',
+        title: '單次入場券審核通過',
+        body: `${req.staff.name} 已審核通過 ${sample.memberName} 的 ${approvedCount} 張單次入場券。`,
+        referenceId: req.params.batchId,
+        referenceType: 'singleEntryTicketBatch',
+      });
+
+      res.json({
+        message: expiredCount > 0
+          ? `審核通過 ${approvedCount} 張，另有 ${expiredCount} 張已逾24小時審核期限自動取消`
+          : `審核通過，${approvedCount} 張入場券已啟用`,
+        approvedCount, expiredCount,
+      });
+    } catch (err) {
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
+// ── POST /passes/single-entry/batch/:batchId/reject - 批次拒絕 ───────
+router.post('/single-entry/batch/:batchId/reject',
+  authenticate, checkPermission('passes.approve'),
+  [body('reason').notEmpty().withMessage('請填寫拒絕原因')],
+  validate,
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const snap = await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS)
+        .where('batchId', '==', req.params.batchId)
+        .where('status', '==', 'pending_approval')
+        .get();
+
+      if (snap.empty) return res.status(404).json({ error: 'BATCH_NOT_FOUND', message: '找不到待審核的票券批次' });
+
+      const now = new Date();
+      const batch = db.batch();
+      let sample = null;
+      snap.forEach(d => {
+        const t = d.data();
+        if (!sample) sample = t;
+        batch.update(d.ref, { status: 'cancelled', cancelledAt: now, cancelledBy: req.staff.id, cancelReason: req.body.reason, updatedAt: now });
+      });
+      await batch.commit();
+
+      const { createNotification } = require('../services/notificationService');
+      await createNotification({
+        gymId: sample.gymId,
+        targetStaffId: sample.soldByStaffId,
+        type: 'single_entry_ticket_rejected',
+        title: '單次入場券審核未通過',
+        body: `${req.staff.name} 拒絕了 ${sample.memberName} 的 ${snap.size} 張單次入場券。原因：${req.body.reason}`,
+        referenceId: req.params.batchId,
+        referenceType: 'singleEntryTicketBatch',
+      });
+
+      res.json({ message: `已拒絕，${snap.size} 張入場券已取消`, rejectedCount: snap.size });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }

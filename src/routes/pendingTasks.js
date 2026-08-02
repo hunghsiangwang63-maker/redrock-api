@@ -257,22 +257,46 @@ router.get('/', authenticate, async (req, res) => {
       }
     } catch(e) { console.error('transfer_confirm tasks error:', e.message); }
 
-    // 10. 單次入場券待審核（票券審核）
+    // 10. 單次入場券待審核（票券審核）——同一批次（batchId，一次發放多張）合併成一筆待辦，
+    // 避免一次發 12 張灌爆待辦清單；批次以 batchId 當 targetId，前端據此走批次審核/拒絕端點。
     try {
       let ref = db.collection('singleEntryTickets').where('status', '==', 'pending_approval');
       if (gymId) ref = ref.where('gymId', '==', gymId);
       const snap = await ref.get();
+      const singles = [];
+      const batches = new Map();
       snap.forEach(d => {
-        const t = d.data();
+        const t = { id: d.id, ...d.data() };
+        if (t.batchId) {
+          if (!batches.has(t.batchId)) batches.set(t.batchId, []);
+          batches.get(t.batchId).push(t);
+        } else {
+          singles.push(t);
+        }
+      });
+      singles.forEach(t => {
         tasks.push({
-          id: `ticket_${d.id}`, type: 'ticket_approval', targetId: d.id,
+          id: `ticket_${t.id}`, type: 'ticket_approval', targetId: t.id,
           title: '單次入場券待審核',
-          desc: `${t.memberName || ''}${t.amount ? ` — NT$${t.amount}` : ''}${t.soldByStaffName ? `（${t.soldByStaffName} 發放）` : ''}`,
+          desc: `${t.memberName || ''}${t.soldByStaffName ? `（${t.soldByStaffName} 發放）` : ''}`,
           date: t.issuedAt?._seconds ? new Date(t.issuedAt._seconds*1000).toISOString().slice(0,10) : today,
           createdAt: t.createdAt?._seconds || t.issuedAt?._seconds || 0,
           gymId: t.gymId, memberName: t.memberName,
           link: '/staff/passes?tab=tickets',
-          record: { id: d.id, ...t },
+          record: { ...t, id: t.id },
+        });
+      });
+      batches.forEach((list, batchId) => {
+        const first = list[0];
+        tasks.push({
+          id: `ticket_batch_${batchId}`, type: 'ticket_approval', targetId: batchId,
+          title: `單次入場券待審核（×${list.length}）`,
+          desc: `${first.memberName || ''} — 共 ${list.length} 張${first.soldByStaffName ? `（${first.soldByStaffName} 發放）` : ''}`,
+          date: first.issuedAt?._seconds ? new Date(first.issuedAt._seconds*1000).toISOString().slice(0,10) : today,
+          createdAt: first.createdAt?._seconds || first.issuedAt?._seconds || 0,
+          gymId: first.gymId, memberName: first.memberName,
+          link: '/staff/passes?tab=tickets',
+          record: { ...first, id: first.id, isBatch: true, batchId, quantity: list.length, ticketIds: list.map(x => x.id) },
         });
       });
     } catch(e) {}

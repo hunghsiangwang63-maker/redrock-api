@@ -57,17 +57,21 @@ const notifyRoleInGym = async ({ gymId, role, type, title, body, referenceId, re
 };
 
 // ── 單次入場券審核通知 ───────────────────────────────────────────
-const notifySingleEntryTicketApproval = async ({ ticketId, memberName, gymId, issuedByStaffName, notes }) => {
+// batchId 有值時（一次發放多張）合併為單一通知，避免發 N 則幾乎相同的通知
+const notifySingleEntryTicketApproval = async ({ ticketId, batchId, quantity, memberName, gymId, issuedByStaffName, notes }) => {
   const title = '單次入場券待審核';
-  const body = `${issuedByStaffName} 為會員 ${memberName} 發放了一張單次入場券${notes ? `（備註：${notes}）` : ''}，請於 24 小時內審核。`;
+  const qtyText = quantity > 1 ? `發放了 ${quantity} 張單次入場券` : '發放了一張單次入場券';
+  const body = `${issuedByStaffName} 為會員 ${memberName} ${qtyText}${notes ? `（備註：${notes}）` : ''}，請於 24 小時內審核。`;
+  const referenceId = batchId || ticketId;
+  const referenceType = batchId ? 'singleEntryTicketBatch' : 'singleEntryTicket';
 
   // 通知同館 gym_manager
   await notifyRoleInGym({
     gymId, role: 'gym_manager',
     type: 'single_entry_ticket_approval',
     title, body,
-    referenceId: ticketId,
-    referenceType: 'singleEntryTicket',
+    referenceId,
+    referenceType,
   });
 
   // 通知所有 super_admin
@@ -75,8 +79,8 @@ const notifySingleEntryTicketApproval = async ({ ticketId, memberName, gymId, is
     gymId, role: 'super_admin',
     type: 'single_entry_ticket_approval',
     title, body,
-    referenceId: ticketId,
-    referenceType: 'singleEntryTicket',
+    referenceId,
+    referenceType,
   });
 };
 

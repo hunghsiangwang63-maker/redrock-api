@@ -2175,6 +2175,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **新增批次核准/拒絕端點**：`POST /passes/single-entry/batch/:batchId/approve`（`checkPermission('passes.approve')`，逐張檢查 24 小時審核期限、逾期自動取消、其餘一次核准生效）、`POST /passes/single-entry/batch/:batchId/reject`（整批標 cancelled）。路徑與既有 `/single-entry/:id/approve` 依 URL segment 數量區分、不衝突。
 - ✅ **前端**：`PassesPage.jsx` 發放 Modal 加「發放數量」輸入（1~12，超界自動夾）；`TicketApprovalModal.jsx` 對批次顯示「×N」、核准鈕呼叫批次端點；`PendingTasksPage.jsx` 待辦卡對批次顯示「×N」、拒絕呼叫 `rejectTicketBatch`。
 - **E2E（打正式 API，19/19）**：發5張→共用batchId→pending-tasks 合併1筆(`isBatch/quantity/title×5`皆對)→單張(qty預設1)不受影響無batchId→qty=13 擋400→批次核准5張全active→批次拒絕(另發3張)3張全cancelled。fixtures 全清。腳本 `scratchpad/ticket-batch-e2e.mjs`。
+- 🧹 **清測試通知**：使用者發現通知面板混入 34 筆先前各 session 留下的測試通知（【E2E】/【練習】命名，含這次批次票券測試自己產生的），firebase-admin 直接依明確測試命名慣例批次刪除；另有 1 筆「Sean 拒絕了朱智萩的單次入場券。原因：test」因指向真實會員、非明確測試命名，保留給使用者自行判斷。
+
+## 目前進度（2026-08-02 續）— 待辦頁通知分類重新盤點（原大多落在「全部／系統」）
+> 使用者回報：近七天動態雖有分類 chip，但實際通知大多落在「全部」或「系統」，分類形同虛設。純前端 `redrock-web`，commit `fb5072f`，member/staff 皆已 build+deploy。
+- 🔍 **根因**：`PendingTasksPage.jsx` 的 `NOTIF_CAT`（通知 type → 分類 key 對照表）長期只涵蓋一小部分型別，`notifCatOf(t) = NOTIF_CAT[t] || 'system'`——凡是不在表裡的 type 一律落 fallback「系統」。直接查 Firestore `notifications` 集合（過濾掉測試資料後 917 筆、18 種 distinct type）比對，**近 70%（含最大宗的卡片綁定揭露 245+74 筆、課程名單認領 147 筆、補課 78 筆、90日票舊系統認領 69 筆、結帳差異 51 筆）從未被納入對照表**，全數落在「系統」。
+- ✅ **全站盤點所有實際會建立通知的呼叫點**（`createNotification`/`notifyRoleInGym` 直接呼叫 + `notificationService.js` 內的 wrapper 函式 `notifySingleEntryTicketApproval`/`notifyCardBindDisclosure`），重寫 `NOTIF_CAT` 補齊：課程（補 `course_refund`/`course_substitute`/`course_substitute_cancel`/`course_roster_claimed`）、轉帳（補 `experience_refund`）、票券（補 `single_entry_ticket_approval`/`legacy_pass_claimed`）、比賽（補 `competition_refund_request`/`competition_reg_claimed`）；**新增三個分類 chip**：卡片（`discount_bind_disclosure`/`black_bind_disclosure`/`legacy_discount_bind_disclosure`）、會員（`legacy_vip_claimed`）、結帳（`settlement_difference`）。`stocktake_discrepancy`（庫存盤點差異，僅3筆）明確列為系統分類（非遺漏、是刻意——無更貼切的既有分類）。
+- ✅ **順修 `NOTIF_LINK` 一個打錯的舊 key**：`card_bind_disclosure`（從未對應到任何實際 type）→ 改對正確的三個 `xxx_bind_disclosure`；另補 `course_refund`/`competition_refund_request`/`competition_reg_claimed`/`settlement_difference`/`stocktake_discrepancy` 的預設導向（分別 `/staff/courses`、`/staff/pending-tasks`、`/staff/competitions`、`/staff/settlement`、`/staff/sales`）。
+- **驗證**：寫模擬腳本套用新對照表跑過全部 917 筆現存通知，**0 筆落入非預期 fallback**（僅 `stocktake_discrepancy` 落系統分類，屬刻意設計非遺漏）。build 兩 target 通過。
 
 ## 待辦
 

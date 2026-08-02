@@ -241,9 +241,10 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
               .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || ''));
           }
           _rn.notifyRegConfirmed({
-            // memberId 維持用 t.memberId（登入會員本人）解析寄送信箱——子帳號通常沒有獨立 email，
-            // 通知本就該寄給管理帳號的家長；memberName 才需要顯示「真正報名的人」，改優先用 en2.memberName。
-            memberId: t.memberId, memberName: en2.memberName || t.memberName || '',
+            // memberId 改用 en2.memberId（實際報名對象，可能是子會員）——registrationNotify 的
+            // resolveMemberEmails 對子會員會解析「主家長＋全部共同家長」的 email，兩邊都收得到；
+            // 若只用上傳轉帳單的 t.memberId（登入操作者），共同家長中沒操作的那位會收不到。
+            memberId: en2.memberId || t.memberId, memberName: en2.memberName || t.memberName || '',
             typeLabel: c2.type === 'workshop' ? '工作坊' : '課程',
             itemName, gymId: t.gymId || c2.gymId, massage: _rn.isMassage(itemName),
             sessions,

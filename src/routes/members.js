@@ -85,7 +85,15 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
   try {
     if (!req.member?.id) return res.status(401).json({ error: 'UNAUTHORIZED' });
     const db = getDb();
-    const kids = await db.collection(COLLECTIONS.MEMBERS).where('parentMemberId', '==', req.member.id).get();
+    // 子會員判定含共同家長（coParentIds），與 /members/my/children、checkMemberOwnership 一致——
+    // 否則共同家長（非 parentMemberId 那位）看不到共同子女的通知。
+    const [kidsSnap, coKidsSnap] = await Promise.all([
+      db.collection(COLLECTIONS.MEMBERS).where('parentMemberId', '==', req.member.id).get(),
+      db.collection(COLLECTIONS.MEMBERS).where('coParentIds', 'array-contains', req.member.id).get(),
+    ]);
+    const kidsMap = new Map();
+    [...kidsSnap.docs, ...coKidsSnap.docs].forEach(d => kidsMap.set(d.id, d));
+    const kids = { docs: [...kidsMap.values()] };
     const ids = [req.member.id, ...kids.docs.map(d => d.id)];
     const SOURCES = [
       { coll: 'courseEnrollments',        type: 'course',      label: '課程報名', link: '/member/courses',     name: (o) => o.courseName },

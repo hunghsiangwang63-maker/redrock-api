@@ -2198,6 +2198,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **驗證**：member/staff 兩 target 每一步修改後皆單獨 build 驗證通過（無新增 warning）；6 個檔案全域 grep 確認無殘留 `filterPayments`/`useEnabledPayments`/舊分散 state 引用；已 deploy，未跑瀏覽器實機（會員端多頁面付款流程需登入+建立真實訂單，風險與 CLAUDE.md 慣例一致，留待使用者或下次有登入憑證時驗證）。
 - 📌 **範圍界線**：`PaymentFlow.jsx`（另一個完全不同的元件，即時線上付款導轉/輪詢流程，`ONLINE_PAYMENT_ENABLED` 建置期旗標控制）刻意不動——這次統一的是「選擇打算用什麼方式付款、之後手動核對/上傳證明」這條路徑，跟 PaymentFlow 的「導去金流閘道即時付款」是兩個不同性質的流程，沒有合併的理由。線上支付三種（LinePay/街口/台灣Pay）維持系統設定預設關閉（`useEnabledPayments`，`DEFAULT_ENABLED` 僅現金/轉帳為 true），待金流 API 真正串接後由管理員在系統設定開啟即可全站生效，不需要再改前端。
 
+## 目前進度（2026-08-02 續3）— 課程「報名名單」加「詳細」按鈕，補齊尚未開課梯次的完整資料查詢
+> 承先前查證「報名表含備註的詳細資料，員工端可以在哪裡查詢？」——確認「會員 → 課程學員」報表的詳細資料彈窗（`CourseRegDetailModal`）只涵蓋**效期內／已過期**兩種梯次（`buildActiveCourseStudents`/`buildHistoricalCourseDetail` 的日期篩選皆不含「尚未開課」`ps > today` 這種情形），使用者確認要在**課程管理 → 報名名單**（`CoursesPage.jsx`，本就對任何梯次皆可開，含尚未開課的）也加同一顆「詳細」按鈕、顯示完整資料（含原本這裡缺的匯款日期）。後端 `/health` `3.202.0-course-roster-detail-header-fields`；commit 後端 `5167267`+`1869cea`、前端 `147c719`。
+- ✅ **抽出共用元件 `components/CourseRegDetailModal.jsx`**（原為 `MembersPage.jsx` 局部定義）：兩處（會員課程學員報表、課程管理報名名單）共用同一份唯讀彈窗（電話/報名時間/費用/付款方式/付款狀態/會員自報金額/店員核對金額/實收金額/匯款末五碼/匯款日期/員工備註/健康備註/如何得知/自訂備註）。
+- ✅ **`GET /courses/:courseId/enrollments` 補齊 paymentStatus/confirmedAmount/receivedAmount/receivedAmountOverride**（join `courseRegistrations` header + `transferRecords`，優先序與 `members.js attachReceivedAmounts` 一致：管理員編修 > 店員核對 > 會員自報 > 應繳費用）。
+- 🐞 **驗證過程抓到並修復一個潛在既有 bug（非本次改動引入）**：打正式 API 拿真實資料核對時發現，週課的 `courseEnrollments` 每堂場次副本欄位（`fee`/`paymentMethod`/`bankLastFive`/`paymentDate`）並非每筆都可靠填寫（實測某會員 20 堂全部 `fee:0`、`paymentMethod:null`，實際應繳/已付 9000 元只存在 `courseRegistrations` header）——這代表這個既有端點（改動前就存在、只是先前沒人拿它顯示過「費用」欄位所以沒發現）在這類資料上原本就會顯示錯誤金額/空白付款方式。改為 **header 優先、場次副本值只作退回 fallback**（比照 `members.js buildCourseMemberList` 同一套權威來源），修復後重打真實資料驗證：該會員 20 筆全部正確顯示 `fee:9000`（原本錯誤顯示 0）。
+- **驗證**：兩 target build 通過；打正式 API 對真實課程/會員資料驗證 `paymentStatus`/`confirmedAmount`/`receivedAmount`/修復後的 `fee` 皆正確（唯讀查詢，無資料異動、免清理）。
+
 ## 待辦
 
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。

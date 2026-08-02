@@ -2184,6 +2184,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **順修 `NOTIF_LINK` 一個打錯的舊 key**：`card_bind_disclosure`（從未對應到任何實際 type）→ 改對正確的三個 `xxx_bind_disclosure`；另補 `course_refund`/`competition_refund_request`/`competition_reg_claimed`/`settlement_difference`/`stocktake_discrepancy` 的預設導向（分別 `/staff/courses`、`/staff/pending-tasks`、`/staff/competitions`、`/staff/settlement`、`/staff/sales`）。
 - **驗證**：寫模擬腳本套用新對照表跑過全部 917 筆現存通知，**0 筆落入非預期 fallback**（僅 `stocktake_discrepancy` 落系統分類，屬刻意設計非遺漏）。build 兩 target 通過。
 - ✅ **續：「卡片」併入「票券」**（commit `6128808`）：使用者確認兩者可合併，chip 改「票券／卡片」（合併後共 441 筆，佔全部通知近半）；三個 `xxx_bind_disclosure` 型別改對到 `ticket`，`card` key 移除。同法重跑模擬腳本驗證 0 筆 fallback。
+- ✅ **續：「轉帳」＋「比賽」併入「報名」，課程移出名單認領**（commit `e12990e`）：使用者問「轉帳跟報名還有比賽是不是可以放在一起？課程實際上是請假補課的資訊？」查證屬實——**轉帳原對應的 4 個型別（`transfer_payment`/`transfer`/`transfer_confirm`/`experience_transfer`）在 notifications 集合裡從未真的出現過任何一筆**（付款確認/收款事件走的是待辦頁最上方「💰待收款」即時任務清單、不會寫進 notifications 持久化，跟通知分類是兩套完全不同的機制）；比賽也只有「報名認領」(`competition_reg_claimed`)有真實資料，`competition_payment`/`competition_refund`同樣 0 筆。三顆併為「報名／認領」（沿用既有 `report` key，regItems 本就 `cat:'report'`）；使用者進一步確認把課程分類裡最大宗的「名單認領」(`course_roster_claimed`，147筆) 也移過去，讓「課程」乾淨只剩純請假/銷假/補課/退費/代班（141筆）。分類 chip 由 11 個收斂為 9 個：全部/排班/票券卡片/報名認領/課程/取消入場/會員/結帳/系統。**重跑模擬腳本驗證**：各分類統計 票券441/課程141/報名認領162/排班119/結帳51/系統3（＝917），0 筆非預期 fallback。
 
 ## 待辦
 

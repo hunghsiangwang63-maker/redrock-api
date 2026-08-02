@@ -761,6 +761,81 @@ router.get('/:courseId/attendance/download',
   }
 );
 
+// ── GET /courses/:courseId/roster/download - 完整報名名單下載（主要供工作坊用；每筆報名一列，
+//    含場次日期時段/狀態/出席/付款/金額/各類備註，非出缺席矩陣。任何課程類型皆可呼叫）───────
+router.get('/:courseId/roster/download',
+  authenticate, checkPermission('courses.manage'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const courseId = req.params.courseId;
+      const courseDoc = await db.collection('courses').doc(courseId).get();
+      if (!courseDoc.exists) return res.status(404).json({ error: 'COURSE_NOT_FOUND', message: '找不到課程' });
+
+      // 全部報名（不篩狀態——含正取/候補/請假/取消，才算「完整資料」），依日期→時段→報名時間排序
+      const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', courseId).get();
+      const enrolls = enrollSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const secOf = ts => ts?._seconds || (ts?.toDate ? Math.floor(ts.toDate().getTime() / 1000) : 0);
+      enrolls.sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || '') || (secOf(a.createdAt) - secOf(b.createdAt)));
+
+      // 會員姓名/電話以 members 集合為權威補齊（訪客 isGuest 直接用 enrollment 快照，不查會員）
+      const memberIds = [...new Set(enrolls.filter(e => !e.isGuest && e.memberId).map(e => e.memberId))];
+      const nameMap = {};
+      if (memberIds.length) {
+        const mdocs = await db.getAll(...memberIds.map(id => db.collection('members').doc(id)));
+        mdocs.forEach(d => { if (d.exists) nameMap[d.id] = { name: d.data().name || '', phone: d.data().phone || '' }; });
+      }
+
+      // 報名 header（courseRegistrations）：staffNote/會員填實際匯款/管理員編修實收金額，用 sourceEnrollmentIds 對回各筆報名
+      const headerByEnrollId = {};
+      const hSnap = await db.collection('courseRegistrations').where('courseId', '==', courseId).get();
+      hSnap.forEach(d => {
+        const h = d.data();
+        (h.sourceEnrollmentIds || []).forEach(eid => { headerByEnrollId[eid] = h; });
+      });
+
+      // 出席紀錄（依場次逐一查，courseAttendance 以 sessionId+memberId 為鍵）
+      const sessionIds = [...new Set(enrolls.map(e => e.sessionId).filter(Boolean))];
+      const attMap = {}; // `${sessionId}_${memberId}` -> status
+      for (const sid of sessionIds) {
+        const aSnap = await db.collection('courseAttendance').where('sessionId', '==', sid).get();
+        aSnap.forEach(d => { const a = d.data(); attMap[`${sid}_${a.memberId}`] = a.status; });
+      }
+
+      const STATUS_LABEL = { confirmed: '正取', waitlist: '候補', leave: '請假', cancelled: '已取消' };
+      const ATT_LABEL = { present: '出席', absent: '缺席', late: '遲到' };
+      const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const header = ['場次日期', '時段', '姓名', '電話', '報名狀態', '出席', '付款方式', '應繳金額', '會員填實際匯款', '確認實收金額',
+        '匯款日期', '匯款末五碼', '性別', '年齡', '健康備註', '自訂備註', '如何得知', '員工備註', '報名時間'];
+      const rows = [header.map(q).join(',')];
+      enrolls.forEach(e => {
+        const h = headerByEnrollId[e.id] || {};
+        const nm = e.isGuest ? { name: e.memberName || '', phone: e.contactPhone || '' } : (nameMap[e.memberId] || { name: e.memberName || '', phone: '' });
+        const att = ATT_LABEL[attMap[`${e.sessionId}_${e.memberId}`]] || '';
+        const enrolledAtSec = secOf(e.createdAt || e.enrolledAt);
+        const enrolledAtStr = enrolledAtSec ? new Date(enrolledAtSec * 1000 + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ') : '';
+        rows.push([
+          e.date || '', `${e.startTime || ''}~${e.endTime || ''}`,
+          nm.name, nm.phone,
+          STATUS_LABEL[e.status] || e.status || '',
+          att,
+          e.paymentMethod || '', e.enrollmentFee ?? '', h.memberPaidAmount ?? '', h.receivedAmountOverride ?? e.enrollmentFee ?? '',
+          e.paymentDate || '', e.bankLastFive || '',
+          e.enrollGender || '', e.enrollAge ?? '',
+          e.healthNote || h.healthNote || '', e.enrollNote || h.enrollNote || '', e.referralSource || h.referralSource || '',
+          h.staffNote || '',
+          enrolledAtStr,
+        ].map(q).join(','));
+      });
+
+      const csvBom = String.fromCharCode(0xFEFF) + rows.join('\n');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="course_roster_${courseId}.csv"`);
+      res.send(csvBom);
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
 // ══════════════════════════════════════════════════════
 // 會員查詢自己的報名紀錄
 // ══════════════════════════════════════════════════════

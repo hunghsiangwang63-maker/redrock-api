@@ -437,15 +437,24 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
     await ref.update(update);
     await recordExperienceRevenue(db, ref, booking, req.staff).catch(e => console.error('[體驗營收]', e.message));
 
+    // 確認收款當下直接逐參加者發放入場券（比照試上；姓名+生日比對，命中→發本人，
+    // 未命中→待指派，由場館電腦當天指定發送或日後註冊自動認領）。冪等，不阻斷主流程。
+    // 「發放入場券」手動鈕仍保留供補發（例如參加者名單事後調整）。
+    let ticketResult = null;
+    try {
+      ticketResult = await syncExperienceTickets(db, booking, req.staff, true);
+    } catch (e) { console.error('[體驗發券]', e.message); }
+
     // 發送確認信
     if (booking.contactEmail) {
       emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking, _gymCc).catch(e => console.error('[Email]', e.message));
     }
+    const scheduleMsg = reassigned ? '已更新教練與排班' : created ? '，並加入課程與教練排班' : '';
+    const ticketMsg = ticketResult?.issued > 0 ? `，已發放 ${ticketResult.issued} 張入場券` : '';
     res.json({
       success: true, coachName, ...(created || {}), ...(reassigned || {}),
-      message: reassigned ? '已更新教練與排班'
-        : created ? '已確認收款，並加入課程與教練排班'
-        : '已確認收款',
+      ticketsIssued: ticketResult?.issued || 0,
+      message: reassigned ? scheduleMsg : `已確認收款${scheduleMsg}${ticketMsg}`,
     });
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
 });

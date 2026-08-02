@@ -2183,6 +2183,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **全站盤點所有實際會建立通知的呼叫點**（`createNotification`/`notifyRoleInGym` 直接呼叫 + `notificationService.js` 內的 wrapper 函式 `notifySingleEntryTicketApproval`/`notifyCardBindDisclosure`），重寫 `NOTIF_CAT` 補齊：課程（補 `course_refund`/`course_substitute`/`course_substitute_cancel`/`course_roster_claimed`）、轉帳（補 `experience_refund`）、票券（補 `single_entry_ticket_approval`/`legacy_pass_claimed`）、比賽（補 `competition_refund_request`/`competition_reg_claimed`）；**新增三個分類 chip**：卡片（`discount_bind_disclosure`/`black_bind_disclosure`/`legacy_discount_bind_disclosure`）、會員（`legacy_vip_claimed`）、結帳（`settlement_difference`）。`stocktake_discrepancy`（庫存盤點差異，僅3筆）明確列為系統分類（非遺漏、是刻意——無更貼切的既有分類）。
 - ✅ **順修 `NOTIF_LINK` 一個打錯的舊 key**：`card_bind_disclosure`（從未對應到任何實際 type）→ 改對正確的三個 `xxx_bind_disclosure`；另補 `course_refund`/`competition_refund_request`/`competition_reg_claimed`/`settlement_difference`/`stocktake_discrepancy` 的預設導向（分別 `/staff/courses`、`/staff/pending-tasks`、`/staff/competitions`、`/staff/settlement`、`/staff/sales`）。
 - **驗證**：寫模擬腳本套用新對照表跑過全部 917 筆現存通知，**0 筆落入非預期 fallback**（僅 `stocktake_discrepancy` 落系統分類，屬刻意設計非遺漏）。build 兩 target 通過。
+- ✅ **續：「卡片」併入「票券」**（commit `6128808`）：使用者確認兩者可合併，chip 改「票券／卡片」（合併後共 441 筆，佔全部通知近半）；三個 `xxx_bind_disclosure` 型別改對到 `ticket`，`card` key 移除。同法重跑模擬腳本驗證 0 筆 fallback。
 
 ## 待辦
 

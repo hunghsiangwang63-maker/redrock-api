@@ -2223,6 +2223,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **回填全站受影響資料（12 筆，橫跨 3 門運動按摩工作坊）**：稽核全部 workshop 課程的所有正取/候補報名，抓出 fee 不等於 `course.price` 也不等於合法 `teamPrice`（`teamPriceApplied:true`）的異常筆——12 筆全數為 `pending`/`transfer_rejected`（**皆未實際收款**，改金額不涉及退補款爭議）：張元賓 0→900、楊雅雯/洪文正/張榕/張祐瑄/林祺堂/劉威辰/丁宣勻 各 0→600、柯景倫/徐薪承×2/張富凱 各 0或150/75→300。逐筆改回 `course.price`，並清空原本錯誤的分期欄位。
 - ✅ **新增 `POST /courses/enrollments/:id/resend-notification`**（super_admin）：讀當下 enrollment 最新金額，重寄「報名收到」通知信——供這次資料修正後補寄正確金額用，之後類似情況也可重複使用。12 筆全數透過正式 API 重新寄出通知信（本機腳本因缺 `RESEND_API_KEY` 寄信被跳過，改走部署後的正式 API 觸發，確認皆成功）。
 
+## 目前進度（2026-08-03 續3）— 修：隊員優惠價（`teamPrice`）通知信/分期計畫金額仍顯示成原價（feeInfo vs enrollment.enrollmentFee）
+> 承續2 全額修正上線後，使用者回報「肢體評估的通知信金額也有問題」；查肢體評估兩筆真實報名（謝旻恩、丁厚獻）DB 裡 `enrollmentFee:0`（隊員、該課 `teamPrice:0`）本就正確，直到使用者提供**實際收到的 email 截圖**證明信件內文寫「應繳金額：NT$400」——才確認是另一個獨立、真實的 bug（非續2那個比例折抵 bug 的殘留）。後端 `/health` `3.205.0-notification-email-team-price-fee`；commit `36310f8`。
+- 🐞 **根因**：`enrollCourse`（`courseService.js`）回傳同時帶 `enrollment`（含正確、已套用 `teamPrice` 覆寫後的 `enrollmentFee`）與 `feeInfo`（`calcEnrollmentFee(course)` 的**原始未覆寫**結果——續2 把 `calcEnrollmentFee` 簡化成直接回傳 `course.price` 後，`feeInfo.fee` 永遠等於課程原價、完全不知道有 `teamPrice` 覆寫這回事。`routes/courses.js` 有 **三處**呼叫端誤讀 `result.feeInfo?.fee`（應讀 `result.enrollment?.enrollmentFee` 才是真正生效的金額）：會員報名收到通知信、訪客報名收到通知信、插班分期計畫建立金額（`buildPeriodsFromConfig` 的總額）——後者若真的被隊員優惠價+分期同時命中，連分期各期金額都會算錯（非僅顯示問題）。
+- ✅ **三處全改讀 `result.enrollment.enrollmentFee`**；全域 grep 確認 `routes/`、`services/` 無其他呼叫端誤讀 `feeInfo`（`competitionService.js` 的 `feeInfo` 是完全獨立、命名巧合的另一個變數，非同一 bug）。
+- ✅ **`scripts/loop-test.js`** 附帶修正一條過時斷言（E13，原測試續2已移除的「插班比例折抵」舊行為，`.remaining` 欄位也已隨 `calcEnrollmentFee` 簡化而不存在）：改驗證「一律收全額 8000」的新行為。⚠️ **此regression harness本身已對多項近期功能（maxLeaves請假上限/補課類型交集/分期等）明顯過時，非本次改動所致**——執行時在更早的 E4/E5/E8 就已失敗/crash，屬既有技術債，本次僅修了 E13 這一條與本次改動直接相關的斷言，未展開修復整份 harness（超出本次範圍）。
+- ✅ **重寄謝旻恩、丁厚獻兩筆肢體評估報名的通知信**（沿用續2新增的 `resend-notification` 端點，此次金額本就正確＝NT$0，修的是「信件產生當下讀哪個欄位」而非資料本身）。
+
 ## 待辦
 
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。

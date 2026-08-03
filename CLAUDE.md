@@ -2205,6 +2205,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🐞 **驗證過程抓到並修復一個潛在既有 bug（非本次改動引入）**：打正式 API 拿真實資料核對時發現，週課的 `courseEnrollments` 每堂場次副本欄位（`fee`/`paymentMethod`/`bankLastFive`/`paymentDate`）並非每筆都可靠填寫（實測某會員 20 堂全部 `fee:0`、`paymentMethod:null`，實際應繳/已付 9000 元只存在 `courseRegistrations` header）——這代表這個既有端點（改動前就存在、只是先前沒人拿它顯示過「費用」欄位所以沒發現）在這類資料上原本就會顯示錯誤金額/空白付款方式。改為 **header 優先、場次副本值只作退回 fallback**（比照 `members.js buildCourseMemberList` 同一套權威來源），修復後重打真實資料驗證：該會員 20 筆全部正確顯示 `fee:9000`（原本錯誤顯示 0）。
 - **驗證**：兩 target build 通過；打正式 API 對真實課程/會員資料驗證 `paymentStatus`/`confirmedAmount`/`receivedAmount`/修復後的 `fee` 皆正確（唯讀查詢，無資料異動、免清理）。
 
+## 目前進度（2026-08-03）— 林妍佳今日請假補登（發燒，已過請假時限）
+> 資料操作，firebase-admin 直改（比照 `courseService.requestLeave` 正常路徑，僅跳過已過期的請假時限檢查）。
+- 「小蜘蛛人寒暑假密集班 第三梯（8/3-7）」今日 2026-08-03 場次（enrollment `c025da0f`）標 `leave`＋`leaveReason:'發燒'`＋`leaveBackdated:true`；場次 `enrolledCount` 5→4；呼叫權威 `courseService.reconcileMakeupEntitlement` 發補課券（cap=1、剩1/共1，效期 2026-09-05，即該梯結束 8/7+30天）。
+
 ## 待辦
 
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。

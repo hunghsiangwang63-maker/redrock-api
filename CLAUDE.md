@@ -2208,6 +2208,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 ## 目前進度（2026-08-03）— 林妍佳今日請假補登（發燒，已過請假時限）
 > 資料操作，firebase-admin 直改（比照 `courseService.requestLeave` 正常路徑，僅跳過已過期的請假時限檢查）。
 - 「小蜘蛛人寒暑假密集班 第三梯（8/3-7）」今日 2026-08-03 場次（enrollment `c025da0f`）標 `leave`＋`leaveReason:'發燒'`＋`leaveBackdated:true`；場次 `enrolledCount` 5→4；呼叫權威 `courseService.reconcileMakeupEntitlement` 發補課券（cap=1、剩1/共1，效期 2026-09-05，即該梯結束 8/7+30天）。
+- ✅ **何宇涵（進階班週六B）、何宇澄（初級班週六A）8/1 各補登請假一次**（同法）：兩人在這期（7-8月）皆已請過 1 次假，這次 8/1 是各自第 2 次（達上限 2），各場次 enrolledCount 皆 −1；reconcile 後各發 1 張新補課券（cap=2、剩1/共2，效期 2026-09-30，與小蜘蛛人本期固定補課到期日一致）。
 
 ## 待辦
 

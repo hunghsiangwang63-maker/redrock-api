@@ -600,19 +600,16 @@ const updateSession = async ({ sessionId, staffId, data }) => {
   return { id: sessionId, ...doc.data(), ...updates, makeupRestored, trialAffected };
 };
 
-// ── 插班費用計算 ──────────────────────────────────────────────────
-const calcEnrollmentFee = (course, completedSessions) => {
-  const total = course.totalSessions || 1;
-  const remaining = Math.max(0, total - completedSessions);
-  const ratio = remaining / total;
-  const midpoint = course.midpointSurcharge || 1.05;
-  const multiplier = ratio >= 0.5 ? 1.0 : midpoint;
-  const fee = Math.round(course.price * ratio * multiplier);
-  // 分期判斷：超過一個月（4堂以上）分兩期
-  const installment = remaining > 4;
-  const firstPayment = installment ? Math.ceil(fee / 2) : fee;
-  const secondPayment = installment ? fee - firstPayment : 0;
-  return { fee, ratio, remaining, total, installment, firstPayment, secondPayment, multiplier };
+// ── 單堂報名費用計算（2026-08-03 修正：一律收全額）──────────────────────
+// 這支只給「單堂報名」路徑用（enrollCourse，即 workshop 的 /sessions/:sessionId/enroll）。
+// 舊版依「這個場次日期是全課程第幾堂／還剩幾堂」按比例打折＋自動分兩期——是給「連續多週課程、
+// 中途插班加入」設計的邏輯，但被誤用在「運動按摩/肢體評估」這類每個時段各自獨立可預約的工作坊上，
+// 造成同一人在同一個月訂越晚的時段、系統自動幫他打越多折（如 NT$300 的時段被算成 150、75）。
+// 使用者拍板：這類單堂報名一律收 course.price 全額，不看場次日期位置；隊員優惠改由下方
+// 獨立的 course.teamPrice 機制處理（見本函式呼叫端），不再套用這裡的比例折扣。
+const calcEnrollmentFee = (course) => {
+  const fee = course.price || 0;
+  return { fee, firstPayment: fee, secondPayment: 0, installment: false };
 };
 
 const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paymentId,
@@ -663,12 +660,7 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
   const gymAccessEnd = dayjs(session.date)
     .add(course.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD');
 
-  // 計算插班費用
-  const completedSessions = await db.collection(SESSION_COLLECTION)
-    .where('courseId', '==', session.courseId)
-    .where('date', '<', session.date)
-    .get().then(s => s.size);
-  const feeInfo = calcEnrollmentFee(course, completedSessions);
+  const feeInfo = calcEnrollmentFee(course);
 
   // 工作坊分階段報名＋隊員分級定價（僅 workshop、且設了 team/general 開放日或隊員價時生效；店員代報 byStaff 不受 gate 限）
   // 訪客沒有會員記錄，一律視為非隊員/非員工（不套用相關優惠，也不受 teamOpenDate 專屬期限制）

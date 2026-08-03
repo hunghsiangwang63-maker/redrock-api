@@ -2216,6 +2216,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🐞 **修：課程/工作坊報名彈窗，0 元費用（如工作坊隊員優惠價 `teamPrice:0`）被誤判成一般價**：回報「課程列表顯示隊員價 0 元，點入報名彈窗卻顯示 400」。根因＝`enrollSession?.fee || selectedCourse?.price` 這個寫法，JS 把合法的 `0` 當 falsy 值處理、誤 fallback 回一般價——影響報名彈窗顯示（`PaymentPlanChoice`/`PaymentSection` 金額）＋**轉帳待收款金額**（`formData.append('amount', enrInfo.fee || ...)`，後者非純顯示、會建出金額錯誤的待收款單）。改用 `??`（只在真的 `null`/`undefined` 才 fallback）修正 3+1 處。**後端本就權威計算實際收費**（`enrollCourse` 用 `!= null` 正確判斷 `teamPrice`），此修正純粹是前端顯示/轉帳單金額的連帶問題。
 - 📌 **附帶排查**：確認會員端隊員狀態顯示是**登入當下快取**（`member.isTeamMember`），剛被加入隊員的會員需**登出重新登入**才會反映最新狀態，非 bug。
 
+## 目前進度（2026-08-03 續2）— 修：工作坊單堂報名（運動按摩/肢體評估）依場次日期誤打折
+> 回報「徐薪承報名運動按摩，通知信金額是75跟150」查出的真 bug，後端 `/health` `3.203.0-workshop-single-session-full-price`＋`3.204.0-resend-enrollment-notification`；commit `54727f7`＋`bf7e5a4`。
+- 🐞 **根因**：`calcEnrollmentFee`（`enrollCourse` 單堂報名路徑，`POST /sessions/:sessionId/enroll`，僅工作坊使用）原本依「這場次是全課程第幾堂／還剩幾堂」按比例打折＋剩餘>4堂自動分兩期——這是給「連續多週課程、中途插班加入」設計的舊邏輯，卻被套用在「運動按摩/肢體評估」這類**每個時段各自獨立可預約**的工作坊上：`completedSessions` 用「課程全部場次中日期早於這場的數量」計算，跟這位會員自己報過幾次完全無關，純粹依這場的**日曆日期落在全月第幾堂**打折——**同一人在同一個月訂越晚的時段，系統自動打越多折**（如 NT$300 半小時時段被算成 150、75，甚至月底時段變 0 元）。
+- ✅ **拍板：一律收全額**（隊員優惠是另外定義的 `teamPrice` 機制，不用這裡的比例折扣再疊加 9 折）。`calcEnrollmentFee` 簡化為直接回傳 `course.price`，移除 `completedSessions`/`ratio`/`midpointSurcharge`/自動分期判斷；隊員價覆寫邏輯（`teamPrice != null` 才套用）維持不動、不受影響。
+- ✅ **回填全站受影響資料（12 筆，橫跨 3 門運動按摩工作坊）**：稽核全部 workshop 課程的所有正取/候補報名，抓出 fee 不等於 `course.price` 也不等於合法 `teamPrice`（`teamPriceApplied:true`）的異常筆——12 筆全數為 `pending`/`transfer_rejected`（**皆未實際收款**，改金額不涉及退補款爭議）：張元賓 0→900、楊雅雯/洪文正/張榕/張祐瑄/林祺堂/劉威辰/丁宣勻 各 0→600、柯景倫/徐薪承×2/張富凱 各 0或150/75→300。逐筆改回 `course.price`，並清空原本錯誤的分期欄位。
+- ✅ **新增 `POST /courses/enrollments/:id/resend-notification`**（super_admin）：讀當下 enrollment 最新金額，重寄「報名收到」通知信——供這次資料修正後補寄正確金額用，之後類似情況也可重複使用。12 筆全數透過正式 API 重新寄出通知信（本機腳本因缺 `RESEND_API_KEY` 寄信被跳過，改走部署後的正式 API 觸發，確認皆成功）。
+
 ## 待辦
 
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。

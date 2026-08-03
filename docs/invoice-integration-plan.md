@@ -123,6 +123,7 @@ InvoicePrinter.status() → { connected, paperOk }
 - adapter：**`localagent`（採用，呼叫本地代理 localhost）** ／ `mock`(dev)。
 - 共用元件 **`InvoiceCheckout`**：四頁收款確認共用，內含「送印 + 記號碼 + 失敗進佇列」。
 - **號碼由後端管**（機器不回報號碼；紙捲號碼預印）：後端 `invoiceState.currentNumber` 為權威；每次列印成功後端計數 +1，代理只負責把資料印到當前紙上。
+- **按下「開立發票」列印成功後，畫面立即記錄並顯示這張發票的號碼**（2026-08-03 提出，本就是此設計的自然結果，非額外功能）：`invoiceState.currentNumber` 一經消耗即寫入 `invoices` 文件的 `number`/`track`，`InvoiceCheckout` 印完當下直接把這組號碼顯示在確認畫面上（供店員肉眼核對跟剛印出的紙本一致）；日後**需要作廢時，這組號碼就是查詢/確認畫面上顯示的同一組**（見 §4.1.2 的二次確認文案「將作廢發票 {號碼}…」），店員不用另外回頭翻紙本或系統去找號碼。
 
 ### 5.2 後端資料模型：新增 `invoices` collection（草案）
 ```

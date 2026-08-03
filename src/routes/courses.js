@@ -840,6 +840,39 @@ router.get('/:courseId/roster/download',
 // 會員查詢自己的報名紀錄
 // ══════════════════════════════════════════════════════
 
+// POST /courses/enrollments/:enrollmentId/resend-notification - 重新寄送「報名收到」通知信
+// （super_admin 專用；用於資料修正後補寄正確金額的通知信，讀取當下 enrollment 的最新 fee）
+router.post('/enrollments/:enrollmentId/resend-notification', authenticate, checkPermission('super_admin'), async (req, res) => {
+  try {
+    const db = getDb();
+    const enrollDoc = await db.collection('courseEnrollments').doc(req.params.enrollmentId).get();
+    if (!enrollDoc.exists) return res.status(404).json({ error: 'ENROLLMENT_NOT_FOUND' });
+    const e = enrollDoc.data();
+    const courseDoc = await db.collection('courses').doc(e.courseId).get();
+    if (!courseDoc.exists) return res.status(404).json({ error: 'COURSE_NOT_FOUND' });
+    const c = courseDoc.data();
+    const mDoc = await db.collection('members').doc(e.memberId).get();
+    const _rn = require('../services/registrationNotify');
+    let sessions = null;
+    if (e.sessionId) {
+      const sDoc = await db.collection('courseSessions').doc(e.sessionId).get();
+      if (sDoc.exists) sessions = [{ date: sDoc.data().date, startTime: sDoc.data().startTime, endTime: sDoc.data().endTime }];
+    }
+    if (!sessions && e.date) sessions = [{ date: e.date, startTime: e.startTime, endTime: e.endTime }];
+    await _rn.notifyRegReceived({
+      memberId: e.memberId,
+      memberName: mDoc.exists ? (mDoc.data().name || '') : (e.memberName || ''),
+      typeLabel: c.type === 'workshop' ? '工作坊' : '課程',
+      itemName: c.name, gymId: c.gymId || e.gymId,
+      fee: e.enrollmentFee ?? e.fee ?? 0,
+      paymentMethod: (c.paymentMethods && c.paymentMethods.length === 1) ? c.paymentMethods[0] : (e.paymentMethod && e.paymentMethod !== 'pending' ? e.paymentMethod : 'transfer'),
+      massage: _rn.isMassage(c.name),
+      sessions,
+    });
+    res.json({ success: true, fee: e.enrollmentFee ?? e.fee ?? 0 });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // GET /courses/member/:memberId/enrollments
 router.get('/member/:memberId/enrollments', authenticateAny, async (req, res) => {
   try {

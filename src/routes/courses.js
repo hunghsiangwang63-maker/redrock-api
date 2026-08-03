@@ -417,14 +417,14 @@ router.post('/sessions/:sessionId/enroll',
       // 以插班實收費用(feeInfo.fee)為總額；第一期簽約當下收、記帳認列課程最後一堂
       let installmentPlan = null;
       try {
-        if (req.body.paymentPlan === 'installment' && !result.isWaitlist && result.feeInfo?.fee > 0) {
+        if (req.body.paymentPlan === 'installment' && !result.isWaitlist && result.enrollment?.enrollmentFee > 0) {
           const db2 = getDb();
           const sDoc = await db2.collection('courseSessions').doc(req.params.sessionId).get();
           const c = sDoc.exists ? (await db2.collection(COLLECTIONS.COURSES || 'courses').doc(sDoc.data().courseId).get()).data() : null;
           if (c?.installment?.enabled) {
             const installmentService = require('../services/installmentService');
             const today = taiwanToday();
-            const periods = installmentService.buildPeriodsFromConfig(c.installment, result.feeInfo.fee, today);
+            const periods = installmentService.buildPeriodsFromConfig(c.installment, result.enrollment.enrollmentFee, today);
             if (periods) {
               const mDoc = await db2.collection(COLLECTIONS.MEMBERS).doc(req.body.memberId).get();
               installmentPlan = await installmentService.createInstallmentPlan({
@@ -457,7 +457,7 @@ router.post('/sessions/:sessionId/enroll',
               memberName: mDoc.exists ? (mDoc.data().name || '') : '',
               typeLabel: c.type === 'workshop' ? '工作坊' : '課程',
               itemName: c.name, gymId: c.gymId || req.staff?.gymId || req.body.gymId,
-              fee: result.feeInfo?.fee || 0, paymentMethod: req.body.paymentMethod || 'transfer',
+              fee: result.enrollment?.enrollmentFee ?? 0, paymentMethod: req.body.paymentMethod || 'transfer',
               massage: _rn.isMassage(c.name),
               sessions: sd ? [{ date: sd.date, startTime: sd.startTime, endTime: sd.endTime }] : null,
             });
@@ -520,7 +520,7 @@ router.post('/public/sessions/:sessionId/enroll', async (req, res) => {
             to: (guestEmail||'').trim(), memberId, memberName: String(guestName).trim(),
             typeLabel: c.type === 'workshop' ? '工作坊' : '課程',
             itemName: c.name, gymId: c.gymId || session.gymId,
-            fee: result.feeInfo?.fee || 0, paymentMethod: 'transfer',
+            fee: result.enrollment?.enrollmentFee ?? 0, paymentMethod: 'transfer',
             massage: _rn.isMassage(c.name),
             sessions: [{ date: session.date, startTime: session.startTime, endTime: session.endTime }],
           });

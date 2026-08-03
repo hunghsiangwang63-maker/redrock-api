@@ -576,16 +576,15 @@ async function seedSession(id, over = {}) {
   }
 
   await reset();
-  section('E13 插班計費：完課過半→照比例計費（ratio=0.5）');
+  section('E13 單場報名（workshop 插班）：一律收全額，不因先前已有場次而打折（2026-08 修正插班誤打折 bug 後行為）');
   {
     await seedCourse('C1', { price: 8000, totalSessions: 8 });
-    // 4 堂已過（date < 目標場次），目標場次在未來
+    // 4 堂已過（date < 目標場次），目標場次在未來——即使先前已有場次辦過，單場報名仍收全額
     for (let i = 0; i < 4; i++) await seedSession(`P${i}`, { courseId: 'C1', date: dstr(dayjs().subtract(20 - i, 'day')) });
     await seedSession('S1', { courseId: 'C1', maxStudents: 5, date: dstr(dayjs().add(10, 'day')) });
     const r = await course.enrollCourse({ memberId: 'A', sessionId: 'S1', gymId: 'gym-hsinchu', staffId: 's' });
-    ok(r.feeInfo.remaining === 4 && r.feeInfo.fee === 4000,
-      '剩 4 堂、費用=8000×0.5=4000', `remaining=${r.feeInfo.remaining} fee=${r.feeInfo.fee}`);
-    ok(r.feeInfo.installment === false, '4 堂不分期');
+    ok(r.feeInfo.fee === 8000, '收全額 8000（非按剩餘堂數比例折抵）', `fee=${r.feeInfo.fee}`);
+    ok(r.feeInfo.installment === false, '不分期');
   }
 
   // ═══════════════ F. 課程分期付款計畫 ═══════════════

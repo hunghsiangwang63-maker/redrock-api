@@ -267,7 +267,7 @@ systemSettings/paymentMethods {
 | `checkin` | ✅ | ⏳ 未接（見 §10，完整設計已定案、前端待實作） | 同上 |
 
 ### 實作方向
-- **後端**：`GET /settings/payment-methods` 回應同時含 `enabled`（不動）與 `onlineFlows`（新，缺值 fallback 全 false）；`PUT` 對應收兩者，任一個省略則沿用資料庫既有值（向下相容既有呼叫端，不會因為這次擴充而讓舊的 `PUT { enabled }` 呼叫把 `onlineFlows` 洗掉）。
-- **前端**：`utils/paymentMethods.js` 的 `useEnabledPayments()`/`fetchEnabledPayments()` 一併回傳 `onlineFlows`；`PaymentFlow.jsx` 移除匯出的 `ONLINE_PAYMENT_ENABLED` 常數，四個既有呼叫點（`MemberCoursesPage`/`MemberExperiencePage`/`MemberCompetitionsPage`/`MemberRentalPage`）改成各自檢查 `onlineFlows.course`/`onlineFlows.experience`/`onlineFlows.competition`/`onlineFlows.rental`。
-- **管理員 UI**：`SettingsPage.jsx` 既有「💳 付款方式」分頁下方新增「各流程線上支付」子區塊，7 個 toggle（入場/課程/體驗/比賽/租借/定期票/分期），對尚未接前端的 3 項（定期票/分期/入場）標註「後端尚未接前端，開啟目前無實際效果」的提示文字，避免管理員誤以為開了就能用。
+- ✅ **後端（2026-08-04 已上線，commit `1616c23`，`/health` `3.207.0-payment-methods-online-flows`）**：`GET /settings/payment-methods` 回應同時含 `enabled`（不動）與 `onlineFlows`（新，缺值 fallback 全 false）；`PUT` 對應收兩者，任一個省略則沿用資料庫既有值（向下相容既有呼叫端，不會因為這次擴充而讓舊的 `PUT { enabled }` 呼叫把 `onlineFlows` 洗掉）。正式 API 已驗證：GET 預設值正確、PUT 只送 `onlineFlows` 不動 `enabled`、PUT 內 `onlineFlows` 為整份覆寫（跟既有 `enabled` 語意一致——省略的 key 視為 false，非合併，前端每次都會送完整物件不受影響）。
+- ✅ **管理員 UI（2026-08-04 已上線，commit `ab01fc1`）**：`SettingsPage.jsx` 既有「💳 付款方式」分頁下方新增「🌐 各流程線上支付」子卡片，7 個 toggle（課程/體驗/比賽/租借/定期票/分期/入場），對尚未接前端的 3 項（定期票/分期/入場）標註「前端尚未接，開啟暫無效果」的琥珀提示，避免管理員誤以為開了就能用；獨立存檔按鈕，與上方「付款方式開關」卡片分開儲存。
+- ⏳ **前端消費端（尚未做）**：`utils/paymentMethods.js` 的 `useEnabledPayments()`/`fetchEnabledPayments()` 一併回傳 `onlineFlows`；`PaymentFlow.jsx` 移除匯出的 `ONLINE_PAYMENT_ENABLED` 常數，四個既有呼叫點（`MemberCoursesPage`/`MemberExperiencePage`/`MemberCompetitionsPage`/`MemberRentalPage`）改成各自檢查 `onlineFlows.course`/`onlineFlows.experience`/`onlineFlows.competition`/`onlineFlows.rental`。**這步做完前，管理員在 SettingsPage 開關的 `onlineFlows` 目前尚未實際影響任何畫面**（四個流程仍看舊的 build-time `ONLINE_PAYMENT_ENABLED`）。
 - **上線提醒**：這組開關只決定「要不要秀出來」，**不代表付款會成功**——沒有金鑰/沒有前端的組合，開了也不會發生任何事（見上表）。之後每接完一個流程的前端，這個開關才真的開始有意義。

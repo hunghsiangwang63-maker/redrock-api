@@ -2244,6 +2244,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 > 使用者回饋：「點下該次歷史盤點日期，要跳出當次盤點差異項目列表」——把上一版的下拉選單改成可點擊的日期列表，點下任一日期彈出獨立 Modal 顯示明細（而非原本選了才在下方展開）。commit 前端 `120a582`，member/staff 已 build+deploy。
 - ✅ **`SalesPage.jsx`**：最近一次盤點時間直接顯示為可點擊列（底線標示可點）；更早的紀錄收進 `<details>` 可展開清單，同樣逐列可點擊（皆顯示日期/經手人/總項數/差異項數）。點下任一列 `setHistoryDetailModal(session)` → 跳出**獨立 Modal**（`盤點差異明細 · 日期時間`），表格列出盤點前/盤點後/差異三欄（僅列有差異的品項，無差異顯示「✓ 本次盤點無差異」），比照既有「盤點完成」結果畫面的呈現風格。移除上一版的 `<select>`。
 
+## 目前進度（2026-08-04 續3）— 庫存盤點品項清單加類別下拉篩選
+> 需求：品項清單依類別下拉選取，方便閱讀核對。純前端 `redrock-web`，commit `2c1adf2`，member/staff 已 build+deploy。
+- ✅ **`SalesPage.jsx`**：盤點清單頂部加類別下拉（沿用商品既有 `category` 欄位、依數量排序，含「全部類別」選項），選定後畫面**只顯示該類別品項**＋顯示「該類別已核對 X/Y」小字。**刻意不讓篩選影響「是否可送出」的判斷**——`uncheckedCount`/`allChecked` 仍以**全部品項**（跨所有類別）計算，避免切到某一類別覺得都勾完了就誤以為可以送出，實際上其他類別還有未核對項目。
+- 🐞 **附帶修正**：品項清單原用陣列索引 `i` 當 React key 並比對更新哪一筆，篩選後可見清單的索引會跟完整清單錯位（勾選/改數量會改到錯誤的品項）→ 改用 `item.variantId`（全域唯一，見 2026-07-12 修復記錄）做 key 與比對依據。
+
 ## 待辦
 
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。

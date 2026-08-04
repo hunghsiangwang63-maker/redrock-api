@@ -271,3 +271,37 @@ systemSettings/paymentMethods {
 - ✅ **管理員 UI（2026-08-04 已上線，commit `ab01fc1`）**：`SettingsPage.jsx` 既有「💳 付款方式」分頁下方新增「🌐 各流程線上支付」子卡片，7 個 toggle（課程/體驗/比賽/租借/定期票/分期/入場），對尚未接前端的 3 項（定期票/分期/入場）標註「前端尚未接，開啟暫無效果」的琥珀提示，避免管理員誤以為開了就能用；獨立存檔按鈕，與上方「付款方式開關」卡片分開儲存。
 - ✅ **前端消費端（2026-08-04 已上線，commit `9c08ade`，已 firebase deploy 並比對 bundle hash 確認線上為此版本）**：`utils/paymentMethods.js` 新增 `useOnlineFlowEnabled(flowKey)`（本機開發 `import.meta.env.DEV` 恆真，維持原本搭配 mock 免額外設定即可測的行為；正式環境改讀 `fetchEnabledPayments()` 快取的 `onlineFlows`）；`PaymentFlow.jsx` 移除匯出的 `ONLINE_PAYMENT_ENABLED` 常數；四個既有呼叫點（`MemberCoursesPage`/`MemberExperiencePage`/`MemberCompetitionsPage`/`MemberRentalPage`）改成 `useOnlineFlowEnabled('course'|'experience'|'competition'|'rental')`。**管理員在 SettingsPage 開關這四項的 `onlineFlows` 現在會直接生效**（`pass`/`installment`/`checkin` 三項仍是後端 rail 已接、前端尚未有消費端，開了目前還不會出現任何畫面，等各自的前端做出來才有作用）。`onlineFlows` 預設全 false，行為與改版前一致（原本 `ONLINE_PAYMENT_ENABLED` 在正式環境未設 `VITE_ONLINE_PAYMENT` 時本就是 false），需管理員手動開啟才會顯示線上支付入口。
 - **上線提醒**：這組開關只決定「要不要秀出來」，**不代表付款會成功**——沒有金鑰/沒有前端的組合，開了也不會發生任何事（見上表）。之後每接完一個流程的前端，這個開關才真的開始有意義。
+
+---
+
+## 12. 分期付款「線上繳費」流程設計（2026-08-04 定案）
+
+> 起因：分期到期提醒信/逾期通知信文案已經寫「請至櫃檯或線上完成繳款」，但**「線上」目前是一句空話**——完全沒有任何路徑能讓會員真的線上繳這一期。本節把這段路接起來的設計定案。
+
+### 現況（今天實際發生的事，逐項對照程式碼）
+1. **到期前提醒**：`installmentService.sendInstallmentReminders`（每日排程）在到期前 3 天呼叫 `emailService.sendInstallmentDueReminder` 寄一封**純文字提醒信**（項目/期數/金額/到期日），內文「請至櫃檯或線上完成繳款」——**信件本身沒有任何連結**。
+2. **逾期通知**：同一支排程，逾期後呼叫 `sendInstallmentOverdueNotice`，同樣**沒有連結**；`runOverdueCheck` 另外標記逾期、擋入場（`checkin/gates.js` `hasOverdueInstallment`）。
+3. **會員實際能繳款的路，今天只有一條**：到櫃檯給店員手動點「標記已繳」——`POST /installments/:planId/pay`（`installments.js`，`checkPermission('installments.manage')`，**僅限員工**）。
+4. **會員讀自己分期計畫的 API 其實已經存在**：`GET /installments/member/:memberId`（`authenticateAny`，已有擁有權檢查「只能查看自己的分期計畫」）——**但目前系統裡沒有任何前端頁面呼叫它**，`redrock-web/src/pages` 底下只有 `staff/InstallmentsPage.jsx`（管理端），沒有 member 對應頁面。資料讀得到、卻無處顯示。
+5. **線上金流 rail 早就接好**：`paymentService.js` 的 `orderResolvers.installment`／`orderHandlers.installment` 已經是完整實作（`orderRef:{planId, seq}` → 權威解析該期金額 → 付款成功呼叫 `markInstallmentPaid`）。這段**不需要改後端**，缺的純粹是前端「怎麼觸發這支 API」。
+6. **`useOnlineFlowEnabled('installment')`**（見 §11）已經做好、管理員也能在後台開關，但**目前沒有任何畫面在讀它**——因為根本沒有「我的分期」這個畫面存在。
+
+### 目標流程
+```
+到期前3天/逾期 → 提醒信（補上深連結）
+  → 會員點連結 → 前往「我的分期」頁（新，帶 planId/seq 定位到那一期）
+  → 該期顯示「線上繳費」按鈕（受 useOnlineFlowEnabled('installment') 控制）
+  → 開 PaymentFlow（orderType:'installment', orderRef:{planId, seq}）→ 選付款方式 → 完成
+  → onPaid callback → 重新整理該筆計畫 → 該期顯示「已繳款」
+```
+
+### 要做的事（後端幾乎不用動，主力在前端）
+1. **會員端新增「我的分期」畫面**：可獨立成頁面（`MemberInstallmentsPage.jsx`），或嵌入既有頁面（例如 `MemberProfilePage` 或票券頁旁邊加一個分頁/區塊——分期計畫的 `relatedType` 是 `course`/`pass`，兩者的會員主要停留頁面不同，獨立頁面比嵌入更不會有「該放哪一頁」的爭議，傾向獨立頁）。呼叫既有 `GET /installments/member/:memberId`（免改後端），逐一列出各 plan：項目名稱、各期狀態（已繳/待繳/逾期）、金額、到期日；待繳/逾期的那期在 `useOnlineFlowEnabled('installment')` 為 true 時顯示「線上繳費」按鈕。
+2. **深連結**：新頁面支援 URL query（如 `?planId=xxx&seq=2`）定位到特定一筆，開啟時自動捲到/展開那一期，比照既有其他頁面深連結的做法（如課程/比賽報名連結，見 CLAUDE.md「課程/比賽報名連結」段落，同一套 pattern）。
+3. **提醒信加連結**：`sendInstallmentDueReminder`／`sendInstallmentOverdueNotice`（`emailService.js`）內文補一顆「前往繳費」按鈕，連到 `${CLIENT_URL}/member/installments?planId=${plan.id}&seq=${i.seq}`。
+4. **付款按鈕接 `PaymentFlow`**：`<PaymentFlow orderType="installment" orderRef={{planId, seq}} amount={i.amount} gymId={plan.gymId} onPaid={...} onCancel={...} />`（沿用既有元件，不用改）；`onPaid` 重新呼叫 `GET /installments/member/:memberId` 刷新畫面。
+5. **未開放線上支付時的 fallback**：`useOnlineFlowEnabled('installment')` 為 false（現況預設）時，該期只顯示「請至櫃檯繳款」文字，不顯示按鈕——跟課程/體驗/比賽/租借四個已接流程的既有行為一致（見 §11 現況盤點表）。
+
+### 範圍/不做的事
+- **不改變分期本身的機制**：每期仍是各自獨立的付款請求，不會因為做了這個頁面就出現「自動扣款/自動收下一期」的功能（見 §11 對 `installment` 的說明）。
+- **不做管理端改動**：員工端 `staff/InstallmentsPage.jsx`（櫃檯手動標記已繳）維持不動，兩條路徑（線上/櫃檯）並存，跟課程/比賽等其他流程的「線上或臨櫃」並存模式一致。

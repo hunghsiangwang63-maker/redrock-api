@@ -11,9 +11,10 @@
  * 新增 gateway：在 adapters 註冊一個實作 createPayment/verifyCallback 的 adapter 即可。
  * 新增收費類型：在 orderHandlers / TYPE_MAP 註冊對應 orderType。
  */
-const { getDb } = require('../config/firebase');
+const { getDb, COLLECTIONS } = require('../config/firebase');
 const { recordTransaction } = require('../utils/revenueLedger');
 const { v4: uuidv4 } = require('uuid');
+const dayjs = require('dayjs');
 
 const adapters = {
   mock: require('./paymentAdapters/mock'),
@@ -99,6 +100,43 @@ const orderHandlers = {
     });
     return { relatedId: id };
   },
+  // 入場（pay-first，見 docs/payment-integration-plan.md §10/§12）：付款當下沒有任何入場紀錄可更新
+  // （跟 checkin orderType 不同——checkin 是更新既有 checkIns 文件，entry 是全新的 pay-first 流程），
+  // 改直接開一張單次入場券（30 天內任一天可用，validDate 不設 → 不受「限當天」限制，見 §12 修正說明）。
+  entry: async (db, payment) => {
+    const { gymId, entryType } = payment.orderRef || {};
+    const memberId = payment.memberId;
+    if (!memberId || !gymId || !entryType) return { ok: false };
+
+    const memberService = require('./memberService');
+    const member = await memberService.getMember(memberId).catch(() => null);
+
+    const ticketId = uuidv4();
+    const { taiwanToday } = require('../utils/taiwanDate');
+    const issuedAt = taiwanToday();
+    const expiresAt = dayjs(issuedAt).add(30, 'day').format('YYYY-MM-DD');
+    const ticket = {
+      id: ticketId,
+      memberId, memberName: member?.name || payment.memberName || '',
+      originalMemberId: memberId,
+      gymId,
+      baseEntryType: entryType,   // 線上預購當下選擇的入館身份（供追蹤用；redeem 時走一般單次券流程，不受此欄位限制）
+      batchId: null, batchTotal: 1,
+      issuedAt, expiresAt,
+      validDate: null,           // 不限單日——30 天效期內任一天皆可用（與 getValidSingleEntryTickets 的「無 validDate 不受限」語意一致）
+      status: 'active',          // 已透過線上金流付款，無需櫃檯審核，直接可用
+      approvalDeadline: null, approvedAt: null, approvedBy: null,
+      cancelledAt: null, cancelledBy: null, cancelReason: null,
+      transferHistory: [],
+      usedAt: null, usedCheckInId: null,
+      amount: payment.amount, paymentMethod: payment.provider, paymentId: payment.id,
+      source: 'linepay-entry',
+      notes: '會員線上付款預購入場',
+      createdAt: new Date(), updatedAt: new Date(),
+    };
+    await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(ticketId).set(ticket);
+    return { relatedId: ticketId };
+  },
   // product ... 後續階段插入
 };
 
@@ -173,6 +211,33 @@ const orderResolvers = {
     if (c.paymentStatus === 'confirmed') throw { code: 'ALREADY_PAID', message: '此入場已完成付款' };
     return { amount: c.amountPaid || 0, gymId: c.gymId || null, memberId: c.memberId || null, memberName: c.memberName || '' };
   },
+  // 入場 pay-first：付款前沒有既有紀錄可查，orderRef 直接帶 { gymId, entryType }（會員自選館別+入館身份）；
+  // memberId 一律信任 createPayment 呼叫端傳入的認證身份（見下方 createPayment 呼叫處第三參數），不信 orderRef。
+  entry: async (db, orderRef, memberId) => {
+    const { gymId, entryType } = orderRef || {};
+    if (!memberId) throw { code: 'INVALID_ORDER', message: '缺少會員身份' };
+    if (!gymId || !entryType) throw { code: 'INVALID_ORDER', message: '缺少場館或入館身份' };
+    // 僅開放「單純付費入館」三種身份——卡/券/免費資格等本就有自己的（免費）入場路徑，不需要線上付款。
+    if (!['single_ticket', 'student_free', 'child_free'].includes(entryType))
+      throw { code: 'INVALID_ENTRY_TYPE', message: '此入館身份不支援線上付款預購' };
+
+    const memberService = require('./memberService');
+    const member = await memberService.getMember(memberId);
+    if (!member) throw { code: 'MEMBER_NOT_FOUND', message: '找不到會員資料' };
+
+    // 入場關卡（同日重複/Waiver/墜測/分期逾期）先擋，避免付了錢卻卡在入場關卡用不了——
+    // 與 checkin/flow.js 的 createPendingCheckIn 共用同一份權威邏輯；redeem 該筆單次券時仍會再次通過此關卡。
+    const { runEntryGates } = require('./checkin/gates');
+    const gate = await runEntryGates(memberId, gymId);
+    if (gate.blocked) throw { code: gate.code, message: gate.message };
+
+    // 後端權威金額（含有效隊員 9 折；不套需現場出示證件的舊卡8折/特約廠商/友館隊員——這些無法線上驗證）
+    const { computePaidEntryAmount } = require('./checkin/pricing');
+    const computed = await computePaidEntryAmount(entryType, member);
+    if (!computed || !(computed.amount > 0)) throw { code: 'INVALID_ENTRY_TYPE', message: '此入館身份無法線上付款' };
+
+    return { amount: computed.amount, gymId, memberId, memberName: member.name || '' };
+  },
 };
 
 // orderType → revenue.js 既有的 transaction type（報表分類用）
@@ -185,6 +250,7 @@ const TYPE_MAP = {
   installment: 'pass',
   rental: 'product',
   checkin: 'checkin',
+  entry: 'checkin',
   // product: 'product',
 };
 
@@ -254,7 +320,9 @@ async function createPayment({ provider = 'mock', orderType, orderRef = {}, gymI
   // 已註冊的 orderType 一律後端權威解析金額/場館/會員（前端不送）；未註冊者（mock）沿用傳入值
   let finalAmount = amount, finalGymId = gymId, finalMemberId = memberId, finalMemberName = memberName;
   if (orderResolvers[orderType]) {
-    const ctx = await orderResolvers[orderType](db, orderRef);
+    // 第三參數 memberId：僅 entry（pay-first）用得到，取當下呼叫端的認證身份（不信 orderRef 內容）；
+    // 其餘既有 resolver 不宣告第三參數，多傳不影響。
+    const ctx = await orderResolvers[orderType](db, orderRef, finalMemberId);
     finalAmount = ctx.amount;
     if (ctx.gymId != null) finalGymId = ctx.gymId;
     if (ctx.memberId != null) finalMemberId = ctx.memberId;

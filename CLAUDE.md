@@ -2281,6 +2281,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端**（`MemberHomePage.jsx`）：已駁回通知卡片右側原本的「›」箭頭改成「知道了」按鈕（`a.kind==='reject' && a.regId` 才顯示），樂觀移除＋API失敗保留原樣可再按；`memberI18n.js` 補「知道了」中/英/日三語對照（`Got it`／`了解`）。
 - **驗證**：兩 target build 通過、firebase deploy 後 bundle hash 比對一致；後端 `node -c` 三檔語法驗證通過、`/health` 版本輪詢確認上線。
 
+## 目前進度（2026-08-04 續9）— 週課「候補→正取」整門課自動遞補（原選做項，已完成）
+> 承續7選做清單第3項。過程中發現並修復一個既有真 bug（單堂請假誤觸候補遞補、造成同一人破碎狀態）。後端 `/health` `3.212.0-course-waitlist-auto-promote`；正式 API E2E（資料層15項+HTTP層9項）全綠。commit 後端 `51f9caa`。
+- 🐞 **修既有 bug：`requestLeave`（單堂請假）誤呼叫 per-session `promoteWaitlist`**：週課候補是「整門課」候補資格（enroll-all 一次為候補會員的每個未來場次各建一筆副本、共用同一個 waitlistPosition），單堂請假釋出的只是「當堂座位」（供安排補課/試上，該會員本身仍是正取學員、只是這一堂缺席）——但原本卻呼叫 per-session `promoteWaitlist(sessionId)`，若課程有候補者會把候補者**拆成「這一堂 confirmed、其餘堂仍 waitlist」的破碎狀態**（一人狀態不一致、未繳費卻部分堂被記為正取）。已移除，單堂請假不再觸發任何候補遞補。
+- ✅ **新增 `promoteWaitlistForCourse(courseId)`**（`courseService.js`）：候補遞補「整門課」為單位——①課程級容量檢查（比照 enroll-all，以不重複常態學員數判定，補課/試上不算）②過去日期的候補文件標記過期釋出 waitlistCount ③依 waitlistPosition 選第一位候補會員，其**全部未來場次**一次轉正（避免破碎狀態）④費用比照插班同一套權威算式（單堂價×剩餘場次數、續報/舊生折扣、隊員9折）⑤**營收認列**（比照 enroll-all，遞補當下即認列、與付款方式無關）⑥雙寫 courseRegistrations header ⑦通知同館管理員。接進 `cancelCourseEnrollments`（整門課退課/退費核准時觸發，原本的 per-session 呼叫一併移除改成迴圈結束後統一呼叫一次）。
+- ✅ **會員端付款方式選擇**：候補遞補後 `paymentMethod:null`／`paymentStatus:'pending'`（無付款期限，比照 2026-07-27 拍板的課程付款政策）；「我的課程」加「🎉 候補已遞補為正取」提醒卡＋「選擇付款方式」按鈕——轉帳沿用既有 `/transfers/upload`（重用「重新上傳轉帳」modal，加 method 切換 tab 與 `mode:'promoted'` 文案）；新增 `POST /courses/enrollments/:id/choose-cash`（比照 enroll-all 現金分支直接建 `transferRecords` 待收款單，供值班/管理員在既有「待收款」流程確認）。已選付款方式待確認時顯示「⏳ 候補已遞補為正取…待工作人員確認」。
+- ✅ **首頁通知**（`/members/my/alerts` 新增 `course_waitlist_promoted`，`paymentConfirmed!==true` 才顯示、確認收款後自動消失）＋員工待辦頁通知連結（`course_waitlist_promoted` 歸類「課程請假/補課」分類、導向 `/staff/courses`）。
+- **E2E（正式 API，24 項全綠）**：①資料層 15 項——單堂請假不誤觸遞補（B 全部堂仍 waitlist、A 請假堂 enrolledCount 正確扣減）→ 銷假還原 → A 整門課退課 → B 全部3堂正確一次轉正（無破碎狀態）、費用僅掛第一堂（500×3=1500）、`paymentStatus:pending`／`paymentMethod:null`、`promotedAt` 皆有、場次 enrolledCount/waitlistCount 正確互換、營收交易正確產生 ②HTTP層 9 項（choose-cash 端點）——查無報名404、成功選現金、`transferRecords` 正確建立(現金/pending/正確金額)、重複選擇擋 `ALREADY_CHOSEN`。fixtures 全清、throwaway 驗證腳本測後依專案慣例刪除不留存。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。
@@ -2288,7 +2296,6 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🖨 **【架構已定，待硬體】發票機串接（WP-560 二聯式）**：完整設計見 `docs/invoice-integration-plan.md`。決策全鎖定（實體二聯/本地代理/後端計數/收款當下開票/選填統編/退費只作廢/驅動錢櫃/退費報表/Windows）。**下一步 P1**：使用者買舊發票機＋RS-232轉USB＋二聯練習紙捲到位後，寫**本地代理骨架**（Node+serialport+express+開機自啟）＋ ESC/POS 列印/開櫃/**定位試印校正**（技術風險點先過）→ 再往上號碼管理→共用元件→四頁接線→結帳自動化→退費報表。
 - ✅ **發票列印時機／方式（2026-08-04 全部拍板，見 `invoice-integration-plan.md` §8）**：**B**＝逐筆開票（入場一張、POS一張）／**C**＝非臨櫃付款（課程/比賽/體驗/入隊/分期）不自動觸發，一律留給店員手動按既有 §9 發票 modal（硬體接上後原地升級成真列印）／**D**＝LinePay入場一律到場掃碼確認入場當下才印（未入場轉券者延後至持券入場時）。純設計定案，實作仍待 P1（發票機硬體：正式財政部紙捲、錢櫃）到位。
 - ❌ **【已決定不做，2026-08-04 拍板】補課期限模式 B「請假日後 N 天」**：使用者確認**一律維持「課程結束後固定天數」（模式 A），跟請假日期無關**——不加模式切換，維持現行 `makeupDeadlineDays`（結束日+N）單一算法（原 2026-07-19 暫緩的方案已明確作廢，非之後再議）。
-- 🔧 **【選做】週課「候補→正取」自動遞補**：目前整門課候補遞補為手動（店員），可比照 per-session `promoteWaitlist` 做整門課版（有人退課/取消時自動遞補第一位候補、通知並轉為待收費）。
 - 🧹 **一A `小蜘蛛人一A(7-8)閎`（`3f35216f`）**：使用者說「之後會刪除」自行處理（朱智萩報名在此門，刪前留意）。
 - ✅（已完成 2026-07-11）**刪除測試會員**：21 筆 fixture 已硬刪、票券一併清、0 孤兒；**王大明與全部真實會員保留**（見上方 2026-07-11 進度）。原 7/14 提醒作廢。
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`

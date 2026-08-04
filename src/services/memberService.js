@@ -297,6 +297,7 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
           gymId: c.gymId || claim.gymId || 'gym-hsinchu', type: 'course_roster_claimed',
           title: '課程名單自動認領', body: `${member.name} 註冊會員，已自動加入課程名單：${c.name}${already ? '（原已在名單）' : ''}。請核對是否為同一人。`,
           referenceId: claim.courseId, referenceType: 'course',
+          link: claim.courseId ? `/staff/courses?course=${claim.courseId}` : null,
         };
         await notifyRoleInGym({ ...payload, role: 'gym_manager' });
         await notifyRoleInGym({ ...payload, role: 'super_admin' });
@@ -534,6 +535,7 @@ const claimLegacyCompetitionReg = async (db, memberId, member) => {
           title: 'BeClass 比賽報名已認領',
           body: `${member.name}（${phone}）註冊會員，已自動掛上「${r.competitionName || ''}」報名（${r.divisionName || ''}）。`,
           referenceId: d.id, referenceType: 'competitionRegistration',
+          link: r.competitionId ? `/staff/competitions?comp=${r.competitionId}` : null,
         };
         await notifyRoleInGym({ ...payload, role: 'gym_manager' });
         await notifyRoleInGym({ ...payload, role: 'super_admin' });

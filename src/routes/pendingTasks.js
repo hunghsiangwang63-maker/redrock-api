@@ -138,7 +138,7 @@ router.get('/', authenticate, async (req, res) => {
           date: r.appliedAt?._seconds ? new Date(r.appliedAt._seconds*1000).toISOString().slice(0,10) : today,
           createdAt: r.appliedAt?._seconds || 0,
           gymId: null, memberName: r.memberName,
-          link: '/staff/team',
+          link: '/staff/vip',
         });
       });
     } catch(e) {}
@@ -340,7 +340,7 @@ router.get('/', authenticate, async (req, res) => {
         if (gymId && h.gymId && h.gymId !== gymId) return;
         // 查看導向：待收款中→待辦頁；已確認/免費（後台處理、名單帶入）→ 課程頁看名單
         const _needsCollect = (h.fee || 0) > 0 && h.paymentStatus !== 'confirmed';
-        registrations.push({ id:`reg_course_${d.id}`, regType:'course', memberName:h.memberName||'', name:h.courseName||'', detail: h.sessionCount ? `共${h.sessionCount}堂` : '', createdAt: secOf(h.createdAt), dateStr: dayOf(h.createdAt), gymId:h.gymId, link: _needsCollect ? '/staff/pending-tasks' : '/staff/courses' });
+        registrations.push({ id:`reg_course_${d.id}`, regType:'course', memberName:h.memberName||'', name:h.courseName||'', detail: h.sessionCount ? `共${h.sessionCount}堂` : '', createdAt: secOf(h.createdAt), dateStr: dayOf(h.createdAt), gymId:h.gymId, link: _needsCollect ? '/staff/pending-tasks' : (h.courseId ? `/staff/courses?course=${h.courseId}` : '/staff/courses') });
       });
     } catch(e) {}
     // 比賽
@@ -349,7 +349,7 @@ router.get('/', authenticate, async (req, res) => {
       snap.docs.forEach(d => {
         const r = d.data();
         if (!['confirmed','waitlist'].includes(r.status)) return;
-        registrations.push({ id:`reg_comp_${d.id}`, regType:'competition', memberName:r.memberName||'', name:r.competitionName||'', detail:r.divisionName||'', createdAt: secOf(r.registeredAt), dateStr: dayOf(r.registeredAt), gymId:null, link:'/staff/competitions' });
+        registrations.push({ id:`reg_comp_${d.id}`, regType:'competition', memberName:r.memberName||'', name:r.competitionName||'', detail:r.divisionName||'', createdAt: secOf(r.registeredAt), dateStr: dayOf(r.registeredAt), gymId:null, link: r.competitionId ? `/staff/competitions?comp=${r.competitionId}` : '/staff/competitions' });
       });
     } catch(e) {}
     // 體驗
@@ -358,7 +358,7 @@ router.get('/', authenticate, async (req, res) => {
       snap.docs.forEach(d => {
         const b = d.data();
         if (gymId && b.gymId && b.gymId !== gymId) return;
-        registrations.push({ id:`reg_exp_${d.id}`, regType:'experience', memberName:b.contactName||'', name:b.courseType||'體驗課程', detail:`${b.bookingDate||''}${b.numParticipants?` · ${b.numParticipants}人`:''}`.trim(), createdAt: secOf(b.createdAt), dateStr: dayOf(b.createdAt), gymId:b.gymId, link:'/staff/experience' });
+        registrations.push({ id:`reg_exp_${d.id}`, regType:'experience', memberName:b.contactName||'', name:b.courseType||'體驗課程', detail:`${b.bookingDate||''}${b.numParticipants?` · ${b.numParticipants}人`:''}`.trim(), createdAt: secOf(b.createdAt), dateStr: dayOf(b.createdAt), gymId:b.gymId, link:`/staff/experience?booking=${d.id}` });
       });
     } catch(e) {}
     registrations.sort((a, b) => b.createdAt - a.createdAt);

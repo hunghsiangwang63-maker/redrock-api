@@ -2325,6 +2325,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（正式 API，7 項全綠）**：①`getValidPasses` 直接驗證——停用期間涵蓋今天的票被排除、已過去的停用期間不影響、無停用期間的一般票正常有效 ②`approvePassRequest` 核准流程正確把停用期間寫進票、`endDate` 正常延長。fixtures 全清、throwaway 腳本測後刪除不留存。
 - 🧹 **回填 1 筆真實案例**：掃描全部已核准展延申請，找到 **陳錦漩**（停用期間 2026-07-20~2026-09-07，今天在範圍內）是修復前核准、缺這兩個欄位——AskUserQuestion 型確認後補上（因會直接影響她接下來一個月的入場收費方式），寫入後驗證 `getValidPasses` 正確排除，她從現在起到 9/7 入館改一般付費。其餘已核准展延申請掃描皆非目前正在進行中，不受影響。
 
+## 目前進度（2026-08-04 續14）— 新增「未開課報名資料總表」（課程學員報表補齊第三類）
+> 需求明確：課程學員報表原本只有「效期內」（`practiceStart<=today<=practiceEnd`）與「已過期」（`practiceEnd<today`）兩類，`practiceStart>today`（尚未開課但已有人報名/收款）完全沒有報表可查——這正是先前查證 `CourseRegDetailModal` 範圍缺口時就發現、當時只在課程管理「報名名單」加了「詳細」按鈕、報表本身沒補的那塊。後端 `/health` `3.216.0-future-course-students-report`；正式 API E2E（11項）全綠，含真實資料確認（11 梯・32 人）。commit 後端 `cead93e`、前端已 deploy。
+- ✅ **`buildFutureCourseStudents(gymId)`**（`members.js`）：與既有 `buildActiveCourseStudents`/`buildHistoricalCourseMeta` 三者互斥、聯集涵蓋全部課程狀態（`ps>today` / `ps<=today<=pe` / `pe<today`）。回傳形狀與「效期內」總表完全一致（分課程列出全部學員＋付款/備註/實收金額），供前端共用同一套 `RowMemberList`／`ReceivedAmountEditor`／「詳細」／「🧾 開立發票」元件。
+- ✅ **新端點** `GET /members/reports/future-course-students`（總表）＋`/download`（XLSX，`requireManager`）——不帶 `courseId`＝全部尚未開課梯次彙整一份，帶則單一梯別。
+- ✅ **順手重構**：抽出共用 `buildCourseStudentRows`（XLSX 列建構）＋`attachInvoicedMap`（已開立發票金額/號碼 join），原本 `active-course-students/download` 內嵌的一份重複邏輯改呼叫共用函式；該端點原本的 active→historical 兩層 fallback 也順帶擴充成三層（含 future），對帶 `courseId` 查詢的任一類梯次皆可正確查到。
+- ✅ **前端**（`MembersPage.jsx` 課程學員 tab）：比照「歷史開課資料」加一個**收合區塊**「📅 尚未開課資料總表」（排在歷史區塊之後、預設收合，展開才拉資料）——但呈現方式仿「效期內」總表**一次顯示全部梯次**（非歷史那種下拉選單一次挑一梯），含下載總表/下載此班別、詳細、開立發票按鈕，皆與現有元件共用。
+- **E2E（正式 API，11 項全綠）**：三門測試課程（尚未開課／效期內／已過期）確認三份報表互斥分類正確、未開課報表學員資料正確、下載總表與單一班別皆成功產出合法 xlsx、既有 active 下載端點對 future 課程 courseId 正確 fallback。fixtures 全清、throwaway 腳本測後刪除不留存。
+- 📊 **實際資料確認**：目前正式環境有 **11 個尚未開課梯次、共 32 位已報名學員**（多為 9-1月小蜘蛛人梯次＋運動按摩工作坊），報表已可直接使用。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

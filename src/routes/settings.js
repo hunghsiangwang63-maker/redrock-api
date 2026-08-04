@@ -187,7 +187,7 @@ const PAYMENT_DEFAULTS = { cash: true, transfer: true, linepay: false, jkopay: f
 // 各流程「是否開放線上支付入口」（見 docs/payment-integration-plan.md §11）；
 // 刻意不含 product(POS)——POS 行動支付走實體收款QR+店員目視確認，不經 paymentService/gateway。
 // installment 獨立一個開關，不隨其來源（pass/course/rental）——見文件說明。
-const ONLINE_FLOW_DEFAULTS = { checkin: false, course: false, experience: false, competition: false, rental: false, pass: false, installment: false };
+const ONLINE_FLOW_DEFAULTS = { entry: false, course: false, experience: false, competition: false, rental: false, pass: false, installment: false };
 router.get('/payment-methods', async (req, res) => {
   try {
     const db = getDb();

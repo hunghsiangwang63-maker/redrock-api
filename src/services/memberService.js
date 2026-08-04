@@ -28,8 +28,8 @@ const getBlockReasons = async (memberId, memberData) => {
   const db = getDb();
   const reasons = [];
 
-  // 1. Email 未驗證（自助註冊）
-  if (memberData.registeredBy === 'self' && !memberData.emailVerified) {
+  // 1. Email 未驗證（自助註冊；子帳號無密碼、不會被登入卡住，此檢查對其無意義，排除）
+  if (memberData.registeredBy === 'self' && !memberData.emailVerified && !memberData.isChildAccount) {
     reasons.push('email_unverified');
   }
 

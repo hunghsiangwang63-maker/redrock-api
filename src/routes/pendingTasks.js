@@ -196,15 +196,19 @@ router.get('/', authenticate, async (req, res) => {
         if (r.bookingDate && r.bookingDate < today) return;        // 過了體驗日不再顯示
         const confirmed = r.status === 'confirmed';
         const ticketsIssued = r.ticketsIssued || 0;
+        // 單一參加者且與聯絡人不同（家長代子女/他人報名）→ 顯示真正參加者名，避免只看到代訂的聯絡人名字
+        const singleParticipant = (r.participants || []).length === 1 ? r.participants[0]?.name : null;
+        const displayName = singleParticipant && singleParticipant !== r.contactName
+          ? `${singleParticipant}（${r.contactName}代訂）` : r.contactName;
         tasks.push({
           id: `exp_${d.id}`, type: 'experience', targetId: d.id,
           title: confirmed
             ? (ticketsIssued > 0 ? '體驗預約（已確認）（已發放入場券）' : '體驗預約（已確認）')
             : '體驗課程預約申請',
-          desc: `${r.contactName} — ${r.bookingDate} ${r.bookingTime || ''} · ${r.numParticipants}人 NT$${r.totalFee}`,
+          desc: `${displayName} — ${r.bookingDate} ${r.bookingTime || ''} · ${r.numParticipants}人 NT$${r.totalFee}`,
           date: r.bookingDate || (r.createdAt?._seconds ? new Date(r.createdAt._seconds*1000).toISOString().slice(0,10) : today),
           createdAt: r.createdAt?._seconds || 0,
-          gymId: r.gymId, memberName: r.contactName,
+          gymId: r.gymId, memberName: displayName,
           confirmed, ticketsIssued,
           link: '/staff/experience',
           record: { id: d.id, ...r },
@@ -358,7 +362,10 @@ router.get('/', authenticate, async (req, res) => {
       snap.docs.forEach(d => {
         const b = d.data();
         if (gymId && b.gymId && b.gymId !== gymId) return;
-        registrations.push({ id:`reg_exp_${d.id}`, regType:'experience', memberName:b.contactName||'', name:b.courseType||'體驗課程', detail:`${b.bookingDate||''}${b.numParticipants?` · ${b.numParticipants}人`:''}`.trim(), createdAt: secOf(b.createdAt), dateStr: dayOf(b.createdAt), gymId:b.gymId, link:`/staff/experience?booking=${d.id}` });
+        const singleParticipant = (b.participants || []).length === 1 ? b.participants[0]?.name : null;
+        const displayName = singleParticipant && singleParticipant !== b.contactName
+          ? `${singleParticipant}（${b.contactName}代訂）` : (b.contactName || '');
+        registrations.push({ id:`reg_exp_${d.id}`, regType:'experience', memberName:displayName, name:b.courseName || b.courseType||'體驗課程', detail:`${b.bookingDate||''}${b.numParticipants?` · ${b.numParticipants}人`:''}`.trim(), createdAt: secOf(b.createdAt), dateStr: dayOf(b.createdAt), gymId:b.gymId, link:`/staff/experience?booking=${d.id}` });
       });
     } catch(e) {}
     registrations.sort((a, b) => b.createdAt - a.createdAt);

@@ -184,28 +184,56 @@ router.put('/discount-card-validity', authenticate, async (req, res) => {
 // ── GET /settings/payment-methods - 付款方式開關（公開；各付款頁讀取）──────
 // 現金/轉帳預設開放；LinePay/街口/台灣Pay 待金流 API 對接後由管理員開啟。
 const PAYMENT_DEFAULTS = { cash: true, transfer: true, linepay: false, jkopay: false, taiwanpay: false };
+// 各流程「是否開放線上支付入口」（見 docs/payment-integration-plan.md §11）；
+// 刻意不含 product(POS)——POS 行動支付走實體收款QR+店員目視確認，不經 paymentService/gateway。
+// installment 獨立一個開關，不隨其來源（pass/course/rental）——見文件說明。
+const ONLINE_FLOW_DEFAULTS = { checkin: false, course: false, experience: false, competition: false, rental: false, pass: false, installment: false };
 router.get('/payment-methods', async (req, res) => {
   try {
     const db = getDb();
     const doc = await db.collection('systemSettings').doc('paymentMethods').get();
-    const enabled = { ...PAYMENT_DEFAULTS, ...(doc.exists ? (doc.data().enabled || {}) : {}) };
-    res.json({ enabled });
+    const data = doc.exists ? doc.data() : {};
+    const enabled = { ...PAYMENT_DEFAULTS, ...(data.enabled || {}) };
+    const onlineFlows = { ...ONLINE_FLOW_DEFAULTS, ...(data.onlineFlows || {}) };
+    res.json({ enabled, onlineFlows });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
 // ── PUT /settings/payment-methods（僅 super_admin）───────────────────────
+// 可只送 enabled、只送 onlineFlows、或兩者都送；省略的那個沿用資料庫既有值（向下相容舊呼叫端）。
 router.put('/payment-methods', authenticate, async (req, res) => {
   if (!['super_admin', 'admin'].includes(req.staff?.role))
     return res.status(403).json({ error: '權限不足' });
   try {
     const db = getDb();
-    const body = req.body.enabled || {};
-    const enabled = {};
-    for (const k of Object.keys(PAYMENT_DEFAULTS)) enabled[k] = body[k] === true;
-    if (!Object.values(enabled).some(Boolean))
-      return res.status(400).json({ error: 'NO_METHOD', message: '至少須開放一種付款方式' });
-    await db.collection('systemSettings').doc('paymentMethods').set({ enabled, updatedAt: new Date() }, { merge: true });
-    res.json({ success: true, enabled });
+    const ref = db.collection('systemSettings').doc('paymentMethods');
+    const cur = await ref.get();
+    const curData = cur.exists ? cur.data() : {};
+    const updates = { updatedAt: new Date() };
+
+    if (req.body.enabled !== undefined) {
+      const body = req.body.enabled || {};
+      const enabled = {};
+      for (const k of Object.keys(PAYMENT_DEFAULTS)) enabled[k] = body[k] === true;
+      if (!Object.values(enabled).some(Boolean))
+        return res.status(400).json({ error: 'NO_METHOD', message: '至少須開放一種付款方式' });
+      updates.enabled = enabled;
+    }
+
+    if (req.body.onlineFlows !== undefined) {
+      const body = req.body.onlineFlows || {};
+      const onlineFlows = {};
+      for (const k of Object.keys(ONLINE_FLOW_DEFAULTS)) onlineFlows[k] = body[k] === true;
+      updates.onlineFlows = onlineFlows;
+    }
+
+    if (updates.enabled === undefined && updates.onlineFlows === undefined)
+      return res.status(400).json({ error: 'NO_UPDATE', message: '未提供任何更新內容' });
+
+    await ref.set(updates, { merge: true });
+    const enabled = { ...PAYMENT_DEFAULTS, ...(updates.enabled || curData.enabled || {}) };
+    const onlineFlows = { ...ONLINE_FLOW_DEFAULTS, ...(updates.onlineFlows || curData.onlineFlows || {}) };
+    res.json({ success: true, enabled, onlineFlows });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

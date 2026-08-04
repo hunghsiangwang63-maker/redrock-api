@@ -212,19 +212,27 @@ refund({ providerTxnId, amount, gymSettings })                     // 之後做
 2. 跳 LinePay 付款 → Confirm 請款成功 → **產生「已付款」入場 QR**。
 3. 櫃檯掃碼 → `confirmCheckIn`（**不再收費**，已付；仍跑既有孤兒防護/墜測遞延/出席等）。
 
-### 「付了款但沒入場」處理 → **A：轉單次入場券、效期 30 天**（拍板）
-- 付款成功但當天未掃碼入場 → 該筆**自動轉為 `singleEntryTickets`**（`ticketType` 依入場身份、`validDate`=購買日、`expiresAt`=購買日 +30 天、`amount`=已付、`paymentMethod:'linepay'`、`source:'linepay-entry-unused'`）。
-- **不做位置限制**（GPS/現場）：在家先付＝線上預購一次入場，允許。
+### 「付了款但沒入場」處理 → **A：轉單次入場券、效期 30 天**（拍板；2026-08-04 實作時修正欄位語意，見下）
+- 付款成功 → **當下直接開一張 `singleEntryTickets`**（採用原文兩選項的「二擇一」中的**開券制**，非「pending+sweep」——理由見下方實作段）。
+- **不做位置限制**（GPS/現場）：在家先付＝線上預購一次入場，允許；30 天內任一天到場都能用同一張券（非僅限購買當天）。
 - 錢不會不見、免退款作業。
-- 實作提示：付款 orderHandler（`checkin`/新 `entry` orderType）標記已付入場；未於效期內 `confirmCheckIn` 者由排程 sweep 轉券（比照現有 pending/單次券機制），或付款當下即開券、掃碼入場時核銷該券（二擇一，實作時定）。
+
+### ✅ 實作（2026-08-04 已上線，commit `447ddfe`，`/health` `3.208.0-entry-linepay-orderhandler`；正式環境以 `provider:'mock'` 直呼 service 層驗證，9 項情境全過，測後 0 殘留）
+- **新 orderType `entry`**（未沿用既有 `checkin` orderType）：`orderResolvers.checkin`/`orderHandlers.checkin` 是「更新一筆已存在的 `checkIns` 文件」，跟 pay-first「付款當下還沒有任何入場紀錄」的前提完全不符，套不進去——這點原文字未明確定案（寫「`checkin`/新 `entry` orderType」二擇一），實作時確認只有新開 `entry` 才可行。
+- **`orderResolvers.entry`**（`paymentService.js`）：`orderRef:{gymId, entryType}`（會員選館+選身份，付款前尚無任何既有紀錄可查）；`entryType` 限 `single_ticket`/`student_free`/`child_free` 三種**純付費**身份（卡/券/免費資格本就有自己的免費入場路徑，不需要線上付款）；**付款前先跑 `runEntryGates`**（同日重複/Waiver/墜測/分期逾期）擋下，避免付了錢卻卡在入場關卡用不了；金額走 `computePaidEntryAmount` 後端權威計算（含符合資格的隊員 9 折，**不含**需現場出示證件的舊卡 8 折/特約廠商/友館隊員——這些線上場景無法驗證）。`createPayment` 呼叫 resolver 處補了第三參數（呼叫端認證的 `memberId`，不信 `orderRef` 內容），僅 `entry` 使用，其餘既有 resolver 不受影響（JS 對未宣告的多餘參數安全忽略）。
+- **`orderHandlers.entry`**：付款成功**直接開券**（`status:'active'`，免櫃檯審核——跟店員發放的贈券/招待券不同，這是真的收了錢，沒有濫用疑慮）。
+  - 🐞 **修正原文的欄位語意錯誤**：原文寫「`validDate`=購買日」，但 `getValidSingleEntryTickets`（`checkin/eligibility.js`）的規則是「**有 `validDate` 的券只能在那一天用**」（此規則是給體驗課程當日券設計的）——若照原文設定，轉出的券只能在「已經過去的購買日」使用，等於**永久不能用、錢真的不見了**，直接牴觸「錢不會不見」的核心訴求。實作改為**`validDate` 留空（null）**、只設 `expiresAt`＝購買日+30 天——這樣券在 30 天效期內任一天都能用（含購買當天），單一機制同時涵蓋「當天用」與「之後 30 天內任一天用」兩種情境，**不需要**原文構想的「pending 入場+排程 sweep 轉券」兩階段狀態機。
+  - 其餘欄位：`amount`/`paymentMethod`（存 `payment.provider`，如 `'linepay'`）/`paymentId` 記錄實際收款；`source:'linepay-entry'`（原文 `linepay-entry-unused` 的「unused」語意已不成立，因為現在是每筆都這樣開，非僅限未使用的補救分支）；`baseEntryType` 記錄線上選購當下的入館身份（供追蹤，兌換時走一般單次券流程、不受此欄位限制）。
+  - `TYPE_MAP.entry='checkin'`（營收報表分類比照一般入場費）。
+- **正式環境驗證（9 項情境，`provider:'mock'` 直呼 service 層＋HTTP 皆測，因 `/payments/mock/pay` 路由本身在 `NODE_ENV==='production'` 會回 404，故完成付款那步改直接呼叫 `paymentService.handleCallback('mock', ...)`）**：single_ticket/student_free/child_free 金額分別 300/250/150 正確；`vip`/`discount_card`（免費/卡券類）與缺欄位皆擋 `400 INVALID_ENTRY_TYPE`/`INVALID_ORDER`；無 waiver 會員擋 `400 WAIVER_REQUIRED`（付款前失敗，未收費）；付款完成後票券 `status:active`／`validDate:null`／`expiresAt`=今日+30天，且**確認可被 `getValidSingleEntryTickets` 判定為可用**（與真實兌換走同一份權威邏輯）；`transactions` 正確記一筆 `type:checkin`/金額相符。
 
 ### 現金/免費/票券 維持原樣
 掃碼 → 櫃檯確認時扣款/扣券（不走 pay-first）。→ 入場流程**依付款方式分兩種節奏**。
 
 ### 待辦（實作順序）
 1. 先跑通 **LinePay sandbox**（見第 0 節待辦，等 Channel ID/Secret）。
-2. 入場 orderType/orderHandler + 「未用轉券」邏輯。
-3. 會員端入場 QR 的 LinePay PaymentFlow（選館→身份→LinePay→付款→已付 QR）。
+2. ✅ **入場 orderType/orderHandler + 「未用轉券」邏輯**（2026-08-04 已完成，見上方實作段）。
+3. **會員端入場 QR 的 LinePay PaymentFlow**（選館→身份→LinePay→付款→已付 QR）——**仍待做**，純前端，本輪範圍限定在後端（`entry` orderType 本身跟金鑰無關，可先做；但畫面要真的被使用，仍需等 §0 待辦 1「LinePay sandbox 金鑰」到位）。
 
 ---
 

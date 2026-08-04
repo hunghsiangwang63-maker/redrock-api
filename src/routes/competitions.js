@@ -772,6 +772,22 @@ router.post('/registrations/:regId/payment-info', authenticateAny, async (req, r
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── POST /competitions/registrations/:regId/dismiss-rejection - 會員手動關閉「已駁回」首頁通知 ──
+// 「知道了」按鈕；獨立於 10 天時間窗自動消失（見 members.js /my/alerts），任一條件成立即消失。
+router.post('/registrations/:regId/dismiss-rejection', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations').doc(req.params.regId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+    const reg = doc.data();
+    const deny = await checkMemberOwnership(req.member, reg.memberId, { onMissing: 403, message: '只能關閉自己或子會員的通知' });
+    if (deny) return res.status(deny.status).json(deny.body);
+    await ref.update({ rejectedAlertDismissed: true, updatedAt: new Date() });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── POST /competitions/registrations/:regId/return-form - 管理員退回報名表給會員修改（保留名額、可修改重送）──
 // reason 必填（會員看得到＋Email）；不釋出名額（會員修正後重送）。與「退回繳費」不同：這是整張報名表資料有誤。
 router.post('/registrations/:regId/return-form',

@@ -444,6 +444,13 @@ const registerForCompetition = async ({
       registration.paymentDeadline = dayjs(now).add(N, 'day').toDate();
     }
     tx.set(regRef, registration);
+    // 重新報名同賽事 → 舊的「已駁回」首頁通知一併消失（沿用上面已取得的 dupTx，含所有狀態，不多查一次）
+    dupTx.docs.forEach(d => {
+      const o = d.data();
+      if (o.status === 'cancelled' && o.formRejected && !o.rejectedAlertDismissed) {
+        tx.update(d.ref, { rejectedAlertDismissed: true });
+      }
+    });
   });
 
   if (isMinor && !guardianSignatureUrl && parentEmail) {

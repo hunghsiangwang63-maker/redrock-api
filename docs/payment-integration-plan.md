@@ -232,7 +232,7 @@ refund({ providerTxnId, amount, gymSettings })                     // 之後做
 ### 待辦（實作順序）
 1. 先跑通 **LinePay sandbox**（見第 0 節待辦，等 Channel ID/Secret）。
 2. ✅ **入場 orderType/orderHandler + 「未用轉券」邏輯**（2026-08-04 已完成，見上方實作段）。
-3. **會員端入場 QR 的 LinePay PaymentFlow**（選館→身份→LinePay→付款→已付 QR）——**仍待做**，純前端，本輪範圍限定在後端（`entry` orderType 本身跟金鑰無關，可先做；但畫面要真的被使用，仍需等 §0 待辦 1「LinePay sandbox 金鑰」到位）。
+3. ✅ **會員端入場 QR 的 LinePay PaymentFlow**（2026-08-04 已上線，commit `8888602`；`docs/payment-integration-plan.md` §11 的 `onlineFlows.entry` 開關即控制此按鈕是否顯示，同步改名對齊）：`MemberQRPage.jsx` 「選擇付款方式」頁，僅單純付費身份（成人/學生/兒童單次購票）在開關開啟時，於既有現金/標籤式選項下方多一顆「🌐 線上支付」按鈕（與友館隊員/特約廠商優惠互斥，兩者需現場核對、線上付款不支援）。**設計簡化**：沒有另外做「已付款 QR」這個新畫面——付款成功（`PaymentFlow` 的 `onPaid`）後直接重新驗票、導回選身分頁，此時後端已開通的單次入場券會出現在「使用單次入場券（免費）」選項，會員照原本既有、已測試過的票券兌換掃碼流程操作即可，避免重複造一套 QR 產生邏輯。**畫面要真的被使用仍需等 §0 待辦 1「LinePay sandbox 金鑰」到位**（金鑰未設定時 `getAvailableMethods` 不會列出 linepay，`select_payment` 這顆按鈕點下去雖然會開 Modal，但 `PaymentFlow` 本身的付款方式清單會是空的）。
 
 ---
 
@@ -272,12 +272,13 @@ systemSettings/paymentMethods {
 | `rental` | ✅ | ✅ 會員端（器材租借） | 立即生效 |
 | `pass` | ✅ | ⏳ 未接 | 開了也不會出現任何 UI（等前端做出來才有作用） |
 | `installment` | ✅ | ⏳ 未接（連提醒信的付款連結都還沒做） | 同上 |
-| `checkin` | ✅ | ⏳ 未接（見 §10，完整設計已定案、前端待實作） | 同上 |
+| `entry`（原 `checkin`，2026-08-04 改名對齊） | ✅ | ✅ 會員端入場 QR（2026-08-04 上線，見 §10 待辦第3項） | 立即生效（惟金鑰未設定前 `PaymentFlow` 內的付款方式清單會是空的） |
 
 ### 實作方向
 - ✅ **後端（2026-08-04 已上線，commit `1616c23`，`/health` `3.207.0-payment-methods-online-flows`）**：`GET /settings/payment-methods` 回應同時含 `enabled`（不動）與 `onlineFlows`（新，缺值 fallback 全 false）；`PUT` 對應收兩者，任一個省略則沿用資料庫既有值（向下相容既有呼叫端，不會因為這次擴充而讓舊的 `PUT { enabled }` 呼叫把 `onlineFlows` 洗掉）。正式 API 已驗證：GET 預設值正確、PUT 只送 `onlineFlows` 不動 `enabled`、PUT 內 `onlineFlows` 為整份覆寫（跟既有 `enabled` 語意一致——省略的 key 視為 false，非合併，前端每次都會送完整物件不受影響）。
 - ✅ **管理員 UI（2026-08-04 已上線，commit `ab01fc1`）**：`SettingsPage.jsx` 既有「💳 付款方式」分頁下方新增「🌐 各流程線上支付」子卡片，7 個 toggle（課程/體驗/比賽/租借/定期票/分期/入場），對尚未接前端的 3 項（定期票/分期/入場）標註「前端尚未接，開啟暫無效果」的琥珀提示，避免管理員誤以為開了就能用；獨立存檔按鈕，與上方「付款方式開關」卡片分開儲存。
 - ✅ **前端消費端（2026-08-04 已上線，commit `9c08ade`，已 firebase deploy 並比對 bundle hash 確認線上為此版本）**：`utils/paymentMethods.js` 新增 `useOnlineFlowEnabled(flowKey)`（本機開發 `import.meta.env.DEV` 恆真，維持原本搭配 mock 免額外設定即可測的行為；正式環境改讀 `fetchEnabledPayments()` 快取的 `onlineFlows`）；`PaymentFlow.jsx` 移除匯出的 `ONLINE_PAYMENT_ENABLED` 常數；四個既有呼叫點（`MemberCoursesPage`/`MemberExperiencePage`/`MemberCompetitionsPage`/`MemberRentalPage`）改成 `useOnlineFlowEnabled('course'|'experience'|'competition'|'rental')`。**管理員在 SettingsPage 開關這四項的 `onlineFlows` 現在會直接生效**（`pass`/`installment`/`checkin` 三項仍是後端 rail 已接、前端尚未有消費端，開了目前還不會出現任何畫面，等各自的前端做出來才有作用）。`onlineFlows` 預設全 false，行為與改版前一致（原本 `ONLINE_PAYMENT_ENABLED` 在正式環境未設 `VITE_ONLINE_PAYMENT` 時本就是 false），需管理員手動開啟才會顯示線上支付入口。
+- ✅ **`entry`（入場）消費端 + 開關改名（2026-08-04 已上線，commit `8888602`/`bfbc2ee`）**：`onlineFlows.checkin` 改名為 `onlineFlows.entry`（正式環境確認改名前無人設定過、安全）；`MemberQRPage.jsx` 接上 `useOnlineFlowEnabled('entry')`，詳見 §10 待辦第3項。
 - **上線提醒**：這組開關只決定「要不要秀出來」，**不代表付款會成功**——沒有金鑰/沒有前端的組合，開了也不會發生任何事（見上表）。之後每接完一個流程的前端，這個開關才真的開始有意義。
 
 ---

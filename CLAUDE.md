@@ -2308,6 +2308,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（正式 API，18 項全綠）**：①資料層 13 項——格式驗證（小寫字軌/位數不足皆擋）、setInvoiceState 正確寫入+lastChange、getInvoiceState 讀回一致、**連續配號 3 次正確遞增不重複**、**併發 10 次配號結果完全不重複**（驗證 transaction 原子性）、未設定館別配號正確擋下、重複號碼觸發 warning 不寫入、`force:true` 正確覆寫 ②HTTP 層 5 項——super_admin 登入、GET/PUT 端點正常運作、格式錯誤回 400。fixtures（`gym-e2e-test`）測後清除、throwaway 腳本測後依專案慣例刪除不留存。
 - 📌 **下一步 P3**：共用元件 `InvoiceCheckout`＋`InvoicePrinter` adapter（`localagent`／`mock`），先接一個流程端到端（設計文件建議先接銷售 POS）；`InvoicePrinter.print()` 內部會呼叫 `allocateInvoiceNumber` 取號碼、組內容送 `local-print-agent` 列印、成功後寫入真正的 `invoices` 文件。**P3 起才會依賴錢櫃到位**（現金列印需同時開櫃）；純軟體部分（P2 本身、P3 的號碼/內容邏輯）皆不受阻。
 
+## 目前進度（2026-08-04 續12）— 資料修正：榮謙宇/榮謙如退款金額 + 修：刪除場次未連動課程總堂數/總價
+> 兩件。後端 `/health` `3.214.0-session-cancel-price-sync`；正式 API E2E（3組15項）全綠。commit `4f3e0f5`。
+- ✅ **資料修正**：兩人「小蜘蛛人進階班 9-1月週六B班」`courseRegistrations.staffNote` 由舊值「待退 500元」改正為「已收10973元（費用正確）、待退577元（家長合併轉帳23100，兩人正確費用合計21946，多收1154，平均每人577）」——AskUserQuestion 確認語意（收款金額正確、多收577待退）與記錄方式（寫進既有 `staffNote` 員工備註欄，純文字供人工核對，不觸發任何金流動作）。
+- 🐞 **修：取消/休館停課場次未連動 `course.totalSessions`/`price`**：由「週課計費模式（單堂價×場次數，見7/30續7）如何算總費用」的問答一路查出——之前只修過「新增場次+1」的連動（3.99.0 附近），「刪除場次」這頭從未補上，屬對稱缺口。
+  - **不影響實際收費**：`computeWeeklyCourseFee`/`handleEnrollAll` 是**即時查詢 `status=='scheduled'` 的場次數**去算費用，不讀這個快取欄位——已報名學員的費用早在報名當下算好存起來、不會回溯；之後新報名的學員，系統即時算出的實收金額本來就正確（自動排除取消掉的場次）。
+  - **只影響顯示**：課程總覽列表頁（`MemberCoursesPage.jsx:1099` 顯示 `c.price`）讀的是這個快取欄位——刪除場次後不會自動變小，列表上顯示的總價會停留在刪除前偏高的數字，直到報名 modal 內用即時 `/quote` 才會顯示正確金額（列表看到的價格跟實際報名收到的金額不一致，會讓人疑惑，但不會多收錢）。
+  - **修法**：新增共用 `syncCourseSessionCount(db, courseId, delta, now)`（`courseService.js`），`updateSession`（一般取消場次，**含反向復原也對稱處理**）與 `closureCancelSession`（休館停課）皆呼叫（`delta=-1`）；連帶把 `createSession` 原本內嵌的同段邏輯（`delta=+1`）改呼叫同一支共用函式，避免兩處各自維護一份。`type==='workshop'` 的課程只調整 `totalSessions`、不重算 `price`（維持店員手填總價）。
+- **E2E（正式 API，直呼 service 函式，3 組 15 項全綠）**：①取消/休館停課連動——初始 4堂×500=2000 → 一般取消第2堂 →3堂/1500 → 對已取消場次呼叫非狀態變更更新不重複扣 → **復原（反向）**回4堂/2000 → 休館停課第3堂 →3堂/1500 → 即時查詢 `scheduled` 場次數與快取值一致 ②`createSession` 迴歸（改呼叫共用函式後行為不變）：2堂→3堂、600→900 ③工作坊迴歸：取消場次 `totalSessions` 正確 -1，`price`（店員手填的888）維持不重算。fixtures 全清、throwaway 腳本測後依專案慣例刪除不留存。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

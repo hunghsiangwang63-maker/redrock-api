@@ -464,6 +464,88 @@ const buildActiveCourseStudents = async (gymId) => {
   return { courses: out, total: out.reduce((s, c) => s + c.count, 0) };
 };
 
+// 尚未開課（practiceStart > today）學員（分課程）共用建構：已報名/已收款但入館效期還沒開始的梯次，
+// 與 buildActiveCourseStudents（效期內）/buildHistoricalCourseMeta（已過期，pe<today）三者互斥、涵蓋全部課程狀態。
+const buildFutureCourseStudents = async (gymId) => {
+  const db = getDb();
+  const today = taiwanToday();
+  const courseSnap = await db.collection('courses').get();
+  let courses = courseSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.status !== 'cancelled');
+  if (gymId) courses = courses.filter(c => c.gymId === gymId);
+  courses = courses.filter(c => {
+    const ps = c.unlimitedPracticeStart || c.startDate;
+    return ps && ps > today;
+  });
+  const out = [];
+  for (const c of courses) {
+    const members = await buildCourseMemberList(db, c);
+    if (members.length) {
+      out.push({
+        courseId: c.id, courseName: c.name, gymId: c.gymId,
+        practiceStart: c.unlimitedPracticeStart || c.startDate || null,
+        practiceEnd: practiceEndOf(c),
+        count: members.length, members,
+      });
+    }
+  }
+  out.sort((a, b) => (a.practiceStart || '').localeCompare(b.practiceStart || '')); // 最快開課的排前面
+  await attachReceivedAmounts(db, out);
+  return { courses: out, total: out.reduce((s, c) => s + c.count, 0) };
+};
+
+// 課程學員名單 → XLSX 列資料（active/future 下載共用；已開立發票金額/號碼另外 join）
+const buildCourseStudentRows = (filtered, invoicedMap, invoiceNoMap) => {
+  const gymLabel = (g) => g === 'gym-hsinchu' ? '新竹館' : g === 'gym-shilin' ? '士林館' : (g || '');
+  const payLabel = (v) => ({ pending: '待確認', confirmed: '已確認', pending_confirm: '待確認', transfer_rejected: '已退回' }[v] || v || '');
+  const rows = [];
+  filtered.forEach(c => {
+    c.members.forEach(m => {
+      rows.push({
+        '場館': gymLabel(c.gymId),
+        '課程名稱': c.courseName || '',
+        '效期起': c.practiceStart || '',
+        '效期迄': c.practiceEnd || '',
+        '姓名': m.memberName || '',
+        '電話': m.memberPhone || '',
+        '費用': m.fee ?? '',
+        '付款方式': m.paymentMethod || '',
+        '付款狀態': payLabel(m.paymentStatus),
+        '會員自報匯款金額': m.memberPaidAmount ?? '',
+        '店員核對收款金額': m.confirmedAmount ?? '',
+        '實收金額（管理員可編修）': m.receivedAmount ?? '',
+        '匯款末五碼': m.bankLastFive || '',
+        '匯款日期': m.paymentDate || '',
+        '員工備註': m.staffNote || '',
+        '健康備註': m.healthNote || '',
+        '如何得知': m.referralSource || '',
+        '自訂備註': m.enrollNote || '',
+        '已開立發票金額': invoicedMap[m.enrollmentId] || '',
+        '已開立發票號碼': invoiceNoMap[m.enrollmentId] || '',
+      });
+    });
+  });
+  if (rows.length === 0) rows.push({ '場館': '無資料', '課程名稱': '', '效期起': '', '效期迄': '', '姓名': '', '電話': '', '費用': '', '付款方式': '', '付款狀態': '', '會員自報匯款金額': '', '店員核對收款金額': '', '實收金額（管理員可編修）': '', '匯款末五碼': '', '匯款日期': '', '員工備註': '', '健康備註': '', '如何得知': '', '自訂備註': '', '已開立發票金額': '', '已開立發票號碼': '' });
+  return rows;
+};
+
+// 已開立發票金額/號碼 join（依 enrollmentId 批次查，active/future 下載共用；只計未作廢的）
+const attachInvoicedMap = async (db, filtered) => {
+  const enrollIds = [...new Set(filtered.flatMap(c => c.members.map(m => m.enrollmentId).filter(Boolean)))];
+  const invoicedMap = {}, invoiceNoMap = {};
+  for (let i = 0; i < enrollIds.length; i += 10) {
+    const chunk = enrollIds.slice(i, i + 10);
+    if (!chunk.length) break;
+    const snap = await db.collection('invoiceRecords').where('refId', 'in', chunk).get();
+    snap.docs.forEach(d => {
+      const v = d.data();
+      if (v.status === 'voided') return;
+      invoicedMap[v.refId] = (invoicedMap[v.refId] || 0) + (Number(v.amount) || 0);
+      if (v.invoiceNo) invoiceNoMap[v.refId] = v.invoiceNo;
+    });
+  }
+  return { invoicedMap, invoiceNoMap };
+};
+
 // 歷史開課（已過期，practiceEnd < today）輕量清單：僅課程資訊＋人數，不含逐位學員明細
 // （供畫面下拉選單使用；點選特定一梯才另打 detail 拉完整資料，避免一次撈全部歷史課程的完整名單）。
 const buildHistoricalCourseMeta = async (gymId) => {
@@ -524,6 +606,41 @@ router.get('/reports/active-course-students', authenticate, async (req, res) => 
   try {
     const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
     res.json(await buildActiveCourseStudents(gymId));
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /members/reports/future-course-students - 尚未開課學員（分課程，總表）──
+router.get('/reports/future-course-students', authenticate, async (req, res) => {
+  try {
+    const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
+    res.json(await buildFutureCourseStudents(gymId));
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /members/reports/future-course-students/download - 尚未開課學員名單下載（XLSX；管理員）──
+// 不帶 courseId＝總表（全部尚未開課梯次彙整一份）；帶 courseId＝單一梯別。
+router.get('/reports/future-course-students/download', authenticate, requireManager, async (req, res) => {
+  try {
+    const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
+    const { courses } = await buildFutureCourseStudents(gymId);
+    const courseId = req.query.courseId || null;
+    const filtered = courseId ? courses.filter(c => c.courseId === courseId) : courses;
+
+    const db = getDb();
+    const { invoicedMap, invoiceNoMap } = await attachInvoicedMap(db, filtered);
+    const rows = buildCourseStudentRows(filtered, invoicedMap, invoiceNoMap);
+
+    const ws = sanitizeSheet(XLSX.utils.json_to_sheet(rows));
+    ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 12, 12, 16, 10, 10, 20, 20, 14, 20, 12, 14].map(w => ({ wch: w }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '未開課學員名單');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const today = taiwanToday();
+    const fname = courseId ? `future_course_students_${courseId}_${today}.xlsx` : `future_course_students_all_${today}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
+    res.send(buf);
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -591,54 +708,14 @@ router.get('/reports/active-course-students/download', authenticate, requireMana
       const hist = await buildHistoricalCourseDetail(gymId, courseId);
       if (hist) filtered = [hist];
     }
-
-    const gymLabel = (g) => g === 'gym-hsinchu' ? '新竹館' : g === 'gym-shilin' ? '士林館' : (g || '');
-    const payLabel = (v) => ({ pending: '待確認', confirmed: '已確認', pending_confirm: '待確認', transfer_rejected: '已退回' }[v] || v || '');
-
-    // 已開立發票金額合計（依 refId=enrollmentId 批次查；只計未作廢的）
-    const enrollIds = [...new Set(filtered.flatMap(c => c.members.map(m => m.enrollmentId).filter(Boolean)))];
-    const invoicedMap = {};
-    const invoiceNoMap = {};
-    for (let i = 0; i < enrollIds.length; i += 10) {
-      const chunk = enrollIds.slice(i, i + 10);
-      if (!chunk.length) break;
-      const snap = await getDb().collection('invoiceRecords').where('refId', 'in', chunk).get();
-      snap.docs.forEach(d => {
-        const v = d.data();
-        if (v.status === 'voided') return;
-        invoicedMap[v.refId] = (invoicedMap[v.refId] || 0) + (Number(v.amount) || 0);
-        if (v.invoiceNo) invoiceNoMap[v.refId] = v.invoiceNo;
-      });
+    if (courseId && filtered.length === 0) {
+      const { courses: futureCourses } = await buildFutureCourseStudents(gymId);
+      filtered = futureCourses.filter(c => c.courseId === courseId);
     }
 
-    const rows = [];
-    filtered.forEach(c => {
-      c.members.forEach(m => {
-        rows.push({
-          '場館': gymLabel(c.gymId),
-          '課程名稱': c.courseName || '',
-          '效期起': c.practiceStart || '',
-          '效期迄': c.practiceEnd || '',
-          '姓名': m.memberName || '',
-          '電話': m.memberPhone || '',
-          '費用': m.fee ?? '',
-          '付款方式': m.paymentMethod || '',
-          '付款狀態': payLabel(m.paymentStatus),
-          '會員自報匯款金額': m.memberPaidAmount ?? '',
-          '店員核對收款金額': m.confirmedAmount ?? '',
-          '實收金額（管理員可編修）': m.receivedAmount ?? '',
-          '匯款末五碼': m.bankLastFive || '',
-          '匯款日期': m.paymentDate || '',
-          '員工備註': m.staffNote || '',
-          '健康備註': m.healthNote || '',
-          '如何得知': m.referralSource || '',
-          '自訂備註': m.enrollNote || '',
-          '已開立發票金額': invoicedMap[m.enrollmentId] || '',
-          '已開立發票號碼': invoiceNoMap[m.enrollmentId] || '',
-        });
-      });
-    });
-    if (rows.length === 0) rows.push({ '場館': '無資料', '課程名稱': '', '效期起': '', '效期迄': '', '姓名': '', '電話': '', '費用': '', '付款方式': '', '付款狀態': '', '會員自報匯款金額': '', '店員核對收款金額': '', '實收金額（管理員可編修）': '', '匯款末五碼': '', '匯款日期': '', '員工備註': '', '健康備註': '', '如何得知': '', '自訂備註': '', '已開立發票金額': '', '已開立發票號碼': '' });
+    const db = getDb();
+    const { invoicedMap, invoiceNoMap } = await attachInvoicedMap(db, filtered);
+    const rows = buildCourseStudentRows(filtered, invoicedMap, invoiceNoMap);
 
     const ws = sanitizeSheet(XLSX.utils.json_to_sheet(rows));
     ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 12, 12, 16, 10, 10, 20, 20, 14, 20, 12, 14].map(w => ({ wch: w }));

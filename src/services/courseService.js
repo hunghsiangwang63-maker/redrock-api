@@ -181,6 +181,23 @@ const createCourse = async ({ gymId, staffId, data }) => {
   return course;
 };
 
+// ── 同步課程總堂數快取（新增/取消場次皆呼叫，delta=+1/-1）──────────────
+// ⚠ course.totalSessions 若不同步：①工作坊插班費用 calcEnrollmentFee 會用到過期堂數算錯
+// ②週課的整期總價快取 price（=pricePerSession×totalSessions）也會跟著過期。
+// 注意：這只影響「顯示」（課程列表價格／管理頁堂數）——真正收費的 computeWeeklyCourseFee
+// 是即時查詢未取消場次數去算，不受此快取影響，故此函式非交易式（低頻管理動作，比照既有慣例）。
+const syncCourseSessionCount = async (db, courseId, delta, now) => {
+  const cDoc = await db.collection(COURSE_COLLECTION).doc(courseId).get();
+  if (!cDoc.exists) return;
+  const course = cDoc.data();
+  const newTotalSessions = Math.max(0, (course.totalSessions || 0) + delta);
+  const updates = { totalSessions: newTotalSessions, updatedAt: now };
+  if (course.type !== 'workshop') {
+    updates.price = Math.round((Number(course.pricePerSession) || 0) * newTotalSessions);
+  }
+  await cDoc.ref.update(updates);
+};
+
 // ── 建立課程場次 ──────────────────────────────────────────────────
 const createSession = async ({ courseId, gymId, staffId, data }) => {
   const db = getDb();
@@ -212,15 +229,8 @@ const createSession = async ({ courseId, gymId, staffId, data }) => {
 
   await db.collection(SESSION_COLLECTION).doc(id).set(session);
 
-  // 同步課程總堂數（此端點也用於「新增場次」單堂加開，含週課與工作坊）：
-  // ⚠ course.totalSessions 若不同步，① 工作坊插班費用 calcEnrollmentFee 會用到過期堂數算錯（甚至算出 fee=0）
-  // ② 週課的整期總價快取 price（=pricePerSession×totalSessions）也會跟著過期。兩者這裡一併修正。
-  const newTotalSessions = (course.totalSessions || 0) + 1;
-  const courseUpdates = { totalSessions: newTotalSessions, updatedAt: now };
-  if (course.type !== 'workshop') {
-    courseUpdates.price = Math.round((Number(course.pricePerSession) || 0) * newTotalSessions);
-  }
-  await db.collection(COURSE_COLLECTION).doc(courseId).update(courseUpdates);
+  // 同步課程總堂數（此端點也用於「新增場次」單堂加開，含週課與工作坊）
+  await syncCourseSessionCount(db, courseId, 1, now);
 
   // 帶入學員（新增場次時可個別勾選）：為選定會員建立此場次報名
   // 費用 0＋已確認（學員整期費用已繳，加開場次不另計費）；gymAccess 沿用課程無限練習期
@@ -547,10 +557,18 @@ const updateSession = async ({ sessionId, staffId, data }) => {
 
   await ref.update(updates);
 
+  // 場次取消/復原 → 同步課程總堂數快取（與新增場次對稱；真正收費不受影響，見 syncCourseSessionCount 註解）
+  const prevStatus = doc.data().status;
+  if (data.status === 'cancelled' && prevStatus !== 'cancelled') {
+    await syncCourseSessionCount(db, doc.data().courseId, -1, new Date());
+  } else if (data.status && data.status !== 'cancelled' && prevStatus === 'cancelled') {
+    await syncCourseSessionCount(db, doc.data().courseId, 1, new Date());
+  }
+
   // 場次取消 → 補課學員退回補課券（比照 cancelMakeup / closureCancelSession；
   // 一般取消不發正取豁免券，那是「休館停課」的專屬行為）
   let makeupRestored = 0, trialAffected = 0;
-  if (data.status === 'cancelled' && doc.data().status !== 'cancelled') {
+  if (data.status === 'cancelled' && prevStatus !== 'cancelled') {
     const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId).get();
     const now = new Date();
     for (const d of enSnap.docs) {
@@ -1129,6 +1147,8 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
     status: 'cancelled', cancelReason: reason || '休館停課', closureCancelledBy: staffName || staffId || null,
     cancelledAt: now, updatedAt: now,
   });
+  // 同步課程總堂數快取（與新增場次對稱；真正收費不受影響，見 syncCourseSessionCount 註解）
+  await syncCourseSessionCount(db, session.courseId, -1, now);
   // 請假者配額重算（該堂請假因場次取消而失效 → 額度收斂）
   const leaveMembers = [...new Set(enSnap.docs.map(d => d.data()).filter(e => e.status === 'leave').map(e => e.memberId))];
   for (const mid of leaveMembers) {

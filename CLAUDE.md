@@ -2230,6 +2230,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **`scripts/loop-test.js`** 附帶修正一條過時斷言（E13，原測試續2已移除的「插班比例折抵」舊行為，`.remaining` 欄位也已隨 `calcEnrollmentFee` 簡化而不存在）：改驗證「一律收全額 8000」的新行為。⚠️ **此regression harness本身已對多項近期功能（maxLeaves請假上限/補課類型交集/分期等）明顯過時，非本次改動所致**——執行時在更早的 E4/E5/E8 就已失敗/crash，屬既有技術債，本次僅修了 E13 這一條與本次改動直接相關的斷言，未展開修復整份 harness（超出本次範圍）。
 - ✅ **重寄謝旻恩、丁厚獻兩筆肢體評估報名的通知信**（沿用續2新增的 `resend-notification` 端點，此次金額本就正確＝NT$0，修的是「信件產生當下讀哪個欄位」而非資料本身）。
 
+## 目前進度（2026-08-04）— 庫存盤點加逐項核對勾選（純前端）
+> 需求：員工端「庫存盤點」彈窗每個單項多加一個 check 勾選，逼員工逐一與實體對照後才勾，全部勾完才能按「確認盤點」。純前端 `redrock-web`，commit `b6476b7`，member/staff 皆已 build+deploy。
+- ✅ **`SalesPage.jsx` 庫存盤點 Modal**：每列品項新增勾選框（`item.checked`，開啟盤點時預設全未勾）；頂部提示文字顯示「尚有 N 項未核對」；「確認盤點」鈕在有任一項未勾選時**禁用**（灰底＋文字改「請先核對全部項目（尚有 N 項）」），全部勾完才變回可點的「確認盤點」。**刻意不加「全選」捷徑**——加了會讓員工一鍵跳過逐項核對，違背需求本意（強制真的看過每一項才勾）。
+- 附帶：已勾選且數量與帳面一致的列給淡綠底提示「已核對且相符」，與既有「數量不符→琥珀底」的既有提示並存不衝突。
+
 ## 待辦
 
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。

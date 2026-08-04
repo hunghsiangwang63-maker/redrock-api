@@ -17,7 +17,7 @@
   - `loadGymPaymentSettings(db, gymId)`：載入**該館** `gyms/{gymId}.paymentSettings` 傳給 adapter（各館金鑰不同）。
   - `handleCallback`：`extractOrderId` → 載入 payment → 取該館 gymSettings → `verifyCallback`（LinePay 在此 Confirm 請款）。
 - **路由**：`src/routes/payments.js` — `POST /payments`、`GET /payments/:id`、`POST /payments/:provider/callback`、`POST /payments/mock/pay`（mock 測試用）。
-- **前端元件**：`src/components/PaymentFlow.jsx`（redrock-web）— 接 `client` prop，會員/員工通用；匯出 `ONLINE_PAYMENT_ENABLED`。**mock 僅 `import.meta.env.DEV` 啟用**（正式環境關閉，避免零元確認）。
+- **前端元件**：`src/components/PaymentFlow.jsx`（redrock-web）— 接 `client` prop，會員/員工通用；匯出 `ONLINE_PAYMENT_ENABLED`。**mock 僅 `import.meta.env.DEV` 啟用**（正式環境關閉，避免零元確認）。**⚠️ `ONLINE_PAYMENT_ENABLED` 這個單一 build-time 常數將被 §11 的「各流程獨立開關」取代**（現況是 course/experience/rental/competition 四處共用同一個開關、管理員無法在後台個別調整——見 §11 定案設計）。
 - **adapters**（`src/services/paymentAdapters/`）— 介面一致 `createPayment / extractOrderId / verifyCallback`：
   | adapter | 狀態 | 金鑰（gymSettings） |
   |---|---|---|
@@ -225,3 +225,49 @@ refund({ providerTxnId, amount, gymSettings })                     // 之後做
 1. 先跑通 **LinePay sandbox**（見第 0 節待辦，等 Channel ID/Secret）。
 2. 入場 orderType/orderHandler + 「未用轉券」邏輯。
 3. 會員端入場 QR 的 LinePay PaymentFlow（選館→身份→LinePay→付款→已付 QR）。
+
+---
+
+## 11. 「各流程是否開放線上支付」管理員開關（2026-08-04 定案，取代 `ONLINE_PAYMENT_ENABLED`）
+
+> 起因：管理員要在哪裡設定入場/課程/比賽報名是否開放線上支付？現況 `ONLINE_PAYMENT_ENABLED` 是**寫死在前端 build 時的環境變數**（`import.meta.env.VITE_ONLINE_PAYMENT`），course/experience/rental/competition 四處共用同一個常數，**管理員完全無法在後台調整、也無法讓不同流程各自不同**。本節把它改成後台可調、每個流程各自獨立的開關。
+
+### 現況：一筆線上付款實際會經過幾層 gate（釐清，供理解本節改動位置）
+一個付款方式要在某館某流程真的能被選到，目前已有三層（本節新增第四層）：
+1. **`PAYMENT_PROVIDERS` 環境變數**（Railway，部署層級的 provider allowlist）。
+2. **`systemSettings/paymentMethods.enabled.{cash,transfer,linepay,jkopay,taiwanpay}`**（既有，`GET/PUT /settings/payment-methods`，員工端「系統設定→付款方式」）——**site-wide**，這個 provider 在全站是否存在。
+3. **該館 `gyms/{gymId}.paymentSettings` 是否已填該 provider 的商戶金鑰**（`PROVIDER_META.credKeys`，缺金鑰的館即使開關開了也不會出現）。
+4. **（本節新增）`systemSettings/paymentMethods.onlineFlows.<flow>`**——這個「流程」是否要顯示線上支付入口。
+
+第 1~3 層決定「這個 provider 存不存在」；第 4 層決定「這個流程要不要秀出來讓會員選」。兩者是不同軸，**都要通過才會出現線上支付選項**。
+
+### 新增：per-flow 開關 `onlineFlows`
+```
+systemSettings/paymentMethods {
+  enabled: { cash, transfer, linepay, jkopay, taiwanpay },   // 既有，不動
+  onlineFlows: {                                              // 新增，預設全部 false
+    checkin: false, course: false, experience: false,
+    competition: false, rental: false, pass: false, installment: false,
+  }
+}
+```
+- **7 個 flow key，對齊 `paymentService.js` 的 `orderType`**（checkin/course/experience/competition/rental/pass/installment）。
+- **刻意不含 `product`（POS）**——POS 的行動支付選項走「實體收款 QR＋店員目視確認」（見 `docs/invoice-integration-plan.md` §4 2026-08-04 定案），從頭到尾不呼叫 `paymentService`/gateway API，跟這個開關機制無關；POS 的行動支付顯示與否仍只受第 2 層（`enabled`）控制，不受本節影響。
+- **`installment` 獨立一個開關，不跟隨其來源（pass/course/rental）**：分期計畫可能因購買/續約定期票、課程插班、或器材租借而建立，但對 `paymentService` 而言都是同一種 `orderType:'installment'`（`orderRef:{planId, seq}`），機制完全一致。**每一期是各自獨立的一筆付款請求，不會自動扣下一期**——付完第 N 期只標記該期 `paid`，第 N+1 期到期時需要**另一次獨立觸發**（例如既有的到期提醒 email/站內通知，未來加一個連結導去「付這一期」的畫面）才會產生新的付款請求。因此開放與否跟「這筆分期原本是哪個流程建立的」無關，用單一開關統一控管。
+
+### 現況盤點：哪些流程今天真的有前端能吃到這個開關
+| flow key | 後端 rail | 前端是否已有 PaymentFlow 入口 | 開了 `onlineFlows` 今天會發生什麼 |
+|---|---|---|---|
+| `course` | ✅ | ✅ 會員端（課程報名/插班） | 立即生效 |
+| `experience` | ✅ | ✅ 會員端（體驗預約/試上） | 立即生效 |
+| `competition` | ✅ | ✅ 會員端（比賽報名） | 立即生效 |
+| `rental` | ✅ | ✅ 會員端（器材租借） | 立即生效 |
+| `pass` | ✅ | ⏳ 未接 | 開了也不會出現任何 UI（等前端做出來才有作用） |
+| `installment` | ✅ | ⏳ 未接（連提醒信的付款連結都還沒做） | 同上 |
+| `checkin` | ✅ | ⏳ 未接（見 §10，完整設計已定案、前端待實作） | 同上 |
+
+### 實作方向
+- **後端**：`GET /settings/payment-methods` 回應同時含 `enabled`（不動）與 `onlineFlows`（新，缺值 fallback 全 false）；`PUT` 對應收兩者，任一個省略則沿用資料庫既有值（向下相容既有呼叫端，不會因為這次擴充而讓舊的 `PUT { enabled }` 呼叫把 `onlineFlows` 洗掉）。
+- **前端**：`utils/paymentMethods.js` 的 `useEnabledPayments()`/`fetchEnabledPayments()` 一併回傳 `onlineFlows`；`PaymentFlow.jsx` 移除匯出的 `ONLINE_PAYMENT_ENABLED` 常數，四個既有呼叫點（`MemberCoursesPage`/`MemberExperiencePage`/`MemberCompetitionsPage`/`MemberRentalPage`）改成各自檢查 `onlineFlows.course`/`onlineFlows.experience`/`onlineFlows.competition`/`onlineFlows.rental`。
+- **管理員 UI**：`SettingsPage.jsx` 既有「💳 付款方式」分頁下方新增「各流程線上支付」子區塊，7 個 toggle（入場/課程/體驗/比賽/租借/定期票/分期），對尚未接前端的 3 項（定期票/分期/入場）標註「後端尚未接前端，開啟目前無實際效果」的提示文字，避免管理員誤以為開了就能用。
+- **上線提醒**：這組開關只決定「要不要秀出來」，**不代表付款會成功**——沒有金鑰/沒有前端的組合，開了也不會發生任何事（見上表）。之後每接完一個流程的前端，這個開關才真的開始有意義。

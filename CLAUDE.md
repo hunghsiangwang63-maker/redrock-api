@@ -2273,8 +2273,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ 對應補課券（`courseMakeupRights` `2eb4b3cb...`，原屬他自己「小蜘蛛人進階班 週三B班」的請假）還原 `status:available`（`usedSessionId/usedAt` 清空），效期不變（至 9/30），可再約其他堂次。
 - ✅ 依系統既有規則同步發送 `course_makeup_cancel` 通知給新竹館 `gym_manager`/`super_admin`（複製 `notifyCourseManagers` 的呼叫方式）。
 
+## 目前進度（2026-08-04 續8）— 比賽「已駁回」首頁通知加「知道了」關閉鍵 + 縮短時窗14→10天 + 重新報名自動消失
+> 承續13的待辦：三個消失條件（任一成立即消失，非疊加）。後端 `/health` `3.211.0-competition-reject-alert-dismiss`；commit 後端 `808a242`、前端 `808a242`（同批，另 memberI18n 補「知道了」中英日三語 commit `c034194`）。
+- ✅ **新端點 `POST /competitions/registrations/:regId/dismiss-rejection`**（`authenticateAny`＋`checkMemberOwnership`，本人/子女可關）：標 `rejectedAlertDismissed:true`。
+- ✅ **`/members/my/alerts` 的 `competition_rejected` 區塊**：時窗 14→**10 天**；加 `!o.rejectedAlertDismissed` 過濾；payload 補 `regId` 供前端呼叫關閉端點。
+- ✅ **重新報名同賽事自動清除舊駁回旗標**（`registerForCompetition`）：沿用交易內已取得的去重查詢 `dupTx`（含所有狀態），一併把該會員此賽事舊的「已駁回未關閉」報名標記清除，不多查一次。
+- ✅ **前端**（`MemberHomePage.jsx`）：已駁回通知卡片右側原本的「›」箭頭改成「知道了」按鈕（`a.kind==='reject' && a.regId` 才顯示），樂觀移除＋API失敗保留原樣可再按；`memberI18n.js` 補「知道了」中/英/日三語對照（`Got it`／`了解`）。
+- **驗證**：兩 target build 通過、firebase deploy 後 bundle hash 比對一致；後端 `node -c` 三檔語法驗證通過、`/health` 版本輪詢確認上線。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
-- ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。
 

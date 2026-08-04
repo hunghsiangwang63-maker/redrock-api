@@ -623,6 +623,40 @@ router.post('/enrollments/:enrollmentId/cancel-makeup',
   }
 );
 
+// POST /courses/enrollments/:enrollmentId/choose-cash - 候補遞補為正取後選擇現金付款（走既有待收款流程）
+// 轉帳付款走既有 /transfers/upload（不用此端點）；此端點僅供「候補遞補、尚未選擇付款方式」時
+// 選現金——比照 enroll-all 現金分支，直接建 transferRecords 待收款單，供值班/管理員在櫃檯確認收款。
+router.post('/enrollments/:enrollmentId/choose-cash', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    let memberId = req.body.memberId || req.member?.id;
+    const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 'allow' });
+    if (deny) return res.status(deny.status).json(deny.body);
+
+    const ref = db.collection('courseEnrollments').doc(req.params.enrollmentId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+    const e = doc.data();
+    if (e.memberId !== memberId) return res.status(403).json({ error: 'FORBIDDEN' });
+    if (e.status !== 'confirmed') return res.status(400).json({ error: 'INVALID_STATUS', message: '此報名狀態無法選擇付款方式' });
+    if (e.paymentMethod) return res.status(400).json({ error: 'ALREADY_CHOSEN', message: '已選擇付款方式' });
+    const fee = Number(e.enrollmentFee) || 0;
+    if (fee <= 0) return res.status(400).json({ error: 'NO_FEE', message: '此報名無需付款' });
+
+    const now = new Date();
+    const trId = uuidv4();
+    await db.collection('transferRecords').doc(trId).set({
+      id: trId, orderType: 'course', refId: req.params.enrollmentId,
+      memberId, memberName: e.memberName || '',
+      gymId: e.gymId, courseId: e.courseId, courseName: e.courseName, orderName: e.courseName,
+      amount: fee, paymentMethod: 'cash', status: 'pending',
+      submittedAt: now, createdAt: now, updatedAt: now,
+    });
+    await ref.update({ paymentMethod: 'cash', updatedAt: now });
+    res.json({ success: true, message: '已選擇現金付款，請至櫃檯繳費，工作人員將為您確認' });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ══════════════════════════════════════════════════════
 // 補課
 // ══════════════════════════════════════════════════════

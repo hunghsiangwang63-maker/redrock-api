@@ -203,6 +203,29 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
         });
       });
     }
+    // 週課候補自動遞補為正取（未完成付款 → 提醒；付款確認後自動消失，同課程只顯示一次）
+    // 單一等值查詢＋記憶體過濾（避免 !=/複合索引，比照全站慣例）
+    for (const id of ids) {
+      const snap = await db.collection('courseEnrollments')
+        .where('memberId', '==', id).where('status', '==', 'confirmed').get();
+      const seenCourse = new Set();
+      snap.docs.forEach(d => {
+        const o = d.data();
+        if (!o.promotedAt || o.paymentConfirmed === true) return;
+        if (!((o.enrollmentFee || 0) > 0)) return;
+        if (seenCourse.has(o.courseId)) return;
+        seenCourse.add(o.courseId);
+        alerts.push({
+          type: 'course_waitlist_promoted', kind: 'action',
+          label: '課程候補', link: '/member/courses?tab=my',
+          name: o.courseName || '課程',
+          reason: o.paymentMethod
+            ? `候補已遞補為正取，應繳 NT$${o.enrollmentFee}，付款已提交、待工作人員確認`
+            : `候補已遞補為正取，應繳 NT$${o.enrollmentFee}，請至課程頁選擇付款方式完成報名`,
+          memberName: id === req.member.id ? null : (kids.docs.find(k => k.id === id)?.data()?.name || null),
+        });
+      });
+    }
 
     res.json({ alerts });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }

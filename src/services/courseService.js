@@ -883,8 +883,10 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
   // 補課額度重算（不變量：available+used = min(cap, 有效請假數)；取代原事件式發券，政策 2026-07-17）
   const rec = await reconcileMakeupEntitlement(db, memberId, enrollment.courseId, rules, { ...enrollment, id: enrollmentId });
 
-  // 自動遞補候補者（遞補失敗不中斷請假）
-  try { await promoteWaitlist(enrollment.sessionId); } catch (err) { console.error('promoteWaitlist 失敗', err.message); }
+  // ⚠ 刻意不呼叫候補遞補：單堂請假釋出的是「當堂座位」供安排補課/試上（見上方通知文案），
+  // 該會員仍是本課程正取學員、只是這一堂缺席——不是整門課退課，不該把候補者遞補進「僅這一堂」
+  // 而在其餘場次仍卡在候補（會造成同一人某些堂 confirmed、某些堂 waitlist 的破碎狀態）。
+  // 整門課級的候補遞補只在「整門課退課/取消」時觸發，見 cancelCourseEnrollments → promoteWaitlistForCourse。
 
   // 通知同館管理員：釋出名額（過渡期補課由櫃檯以舊表單安排，需知道哪堂空出位子）
   await notifyCourseManagers({
@@ -1210,6 +1212,115 @@ const promoteWaitlist = async (sessionId) => {
   return promoted;
 };
 
+// ── 週課「候補→正取」整門課自動遞補 ─────────────────────────────
+// 與 promoteWaitlist（per-session，供試上單堂用）不同：週課候補是「整門課」候補資格
+// （enroll-all 一次為候補會員的每個未來場次各建一筆副本、共用同一個 waitlistPosition）。
+// 一位候補會員代表對整門課的候補，遞補須讓其「所有未來場次」一次轉正，而非只轉正單一場次
+// （否則會出現同一人某些堂 confirmed、某些堂仍 waitlist 的破碎狀態）。
+// 觸發時機：有人「整門課退課/取消」釋出名額（見 cancelCourseEnrollments）；
+// 單堂請假（requestLeave）釋出的是「當堂座位」供安排補課，不觸發此整門課遞補（見上該處說明）。
+const promoteWaitlistForCourse = async (courseId) => {
+  const db = getDb();
+  const today = taiwanToday();
+  const now = new Date();
+
+  const courseDoc = await db.collection(COURSE_COLLECTION).doc(courseId).get();
+  if (!courseDoc.exists) return null;
+  const course = courseDoc.data();
+  const maxStudents = course.maxStudents || Infinity;
+
+  // 課程級容量：以「不重複常態學員數」計（比照 enroll-all 判定準則，補課/試上單堂佔位不算）
+  const allSnap = await db.collection(ENROLLMENT_COLLECTION)
+    .where('courseId', '==', courseId).where('status', 'in', ['confirmed', 'waitlist']).get();
+  const confirmedMembers = new Set();
+  allSnap.forEach(d => {
+    const e = d.data();
+    if (e.isMakeup || e.isTrial) return;
+    if (e.status === 'confirmed') confirmedMembers.add(e.memberId);
+  });
+  if (confirmedMembers.size >= maxStudents) return null; // 沒有空位，不遞補
+
+  // 候補文件依日期分過去/未來；過去場次的候補文件視為過期候補（未來已無機會補上），
+  // 標記過期並釋出 waitlistCount，避免永久殘留污染日後的候補人數判斷。
+  const waitDocs = allSnap.docs.filter(d => d.data().status === 'waitlist').map(d => ({ ref: d.ref, id: d.id, ...d.data() }));
+  const future = waitDocs.filter(e => e.date >= today);
+  const past = waitDocs.filter(e => e.date < today);
+  for (const e of past) {
+    await e.ref.update({ status: 'cancelled', cancelReason: 'waitlist_expired', cancelledAt: now, updatedAt: now });
+    const sDoc = await db.collection(SESSION_COLLECTION).doc(e.sessionId).get();
+    if (sDoc.exists) await sDoc.ref.update({ waitlistCount: Math.max(0, (sDoc.data().waitlistCount || 0) - 1), updatedAt: now });
+  }
+  if (!future.length) return null;
+
+  // 依 waitlistPosition 選出第一位候補會員（同一人各堂副本理論上位次相同，取最小值防呆）
+  const byMember = new Map();
+  future.forEach(e => {
+    const pos = e.waitlistPosition ?? Infinity;
+    if (!byMember.has(e.memberId) || pos < byMember.get(e.memberId)) byMember.set(e.memberId, pos);
+  });
+  const winnerMemberId = [...byMember.entries()].sort((a, b) => a[1] - b[1])[0][0];
+  const winnerDocs = future.filter(e => e.memberId === winnerMemberId).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+  // 費用：比照插班同一套權威算式（單堂價×剩餘場次數；續報/舊生比率折扣＋隊員9折）
+  const allSessSnap = await db.collection(SESSION_COLLECTION).where('courseId', '==', courseId).where('status', '==', 'scheduled').get();
+  const allSess = allSessSnap.docs.map(d => d.data());
+  const completedCount = allSess.filter(s => s.date < today).length;
+  const totalCount = allSess.length;
+  const alumni = await computeAlumniStatus(db, course, courseId, winnerMemberId);
+  const { isActiveTeamMember } = require('./teamMemberService');
+  const { getMember } = require('./memberService');
+  let isTeam = false;
+  try { isTeam = isActiveTeamMember(await getMember(winnerMemberId)); } catch (e) { /* 查無會員視為非隊員 */ }
+  const { fee } = computeWeeklyCourseFee(course, { completedCount, totalCount, alumni, isTeam });
+
+  const { FieldValue } = require('firebase-admin').firestore;
+  let firstDoc = null;
+  for (const [i, d] of winnerDocs.entries()) {
+    if (i === 0) firstDoc = d;
+    await d.ref.update({
+      status: 'confirmed', waitlistPosition: null, promotedAt: now, updatedAt: now,
+      enrollmentFee: i === 0 ? fee : 0,
+      paymentMethod: null,
+      paymentStatus: i === 0 ? (fee > 0 ? 'pending' : null) : 'na',
+    });
+    const sDoc = await db.collection(SESSION_COLLECTION).doc(d.sessionId).get();
+    if (sDoc.exists) {
+      await sDoc.ref.update({ enrolledCount: FieldValue.increment(1), waitlistCount: FieldValue.increment(-1), updatedAt: now });
+    }
+  }
+
+  // 營收認列（比照 enroll-all：候補轉正等同一筆新的確定報名，收入在遞補當下認列，與付款方式無關）
+  if (fee > 0) {
+    try {
+      const { recordTransaction } = require('../utils/revenueLedger');
+      await recordTransaction(db, {
+        gymId: firstDoc.gymId, type: 'course', totalAmount: fee, paymentMethod: null,
+        memberId: winnerMemberId, memberName: firstDoc.memberName || '',
+        relatedId: courseId,
+        notes: `課程候補遞補為正取：${course.name}（整堂課，共${winnerDocs.length}場）`,
+        recognitionDate: course.endDate || course.unlimitedPracticeEnd || winnerDocs[winnerDocs.length - 1]?.date || null,
+      });
+    } catch (e) { console.error('候補遞補營收記帳失敗（不影響遞補）:', e.message); }
+  }
+
+  // 雙寫 header（courseRegistrations）
+  try {
+    const { updateRegistrationStatusByCourseMember } = require('./courseRegistrationService');
+    await updateRegistrationStatusByCourseMember(db, winnerMemberId, courseId, { status: 'confirmed', promotedAt: now });
+  } catch (e) { console.error('[雙寫] header 遞補狀態更新失敗:', e.message); }
+
+  // 通知同館管理員（會員本人透過 /members/my/alerts 讀 promotedAt 顯示首頁提醒，見 members.js）
+  await notifyCourseManagers({
+    gymId: firstDoc.gymId, type: 'course_waitlist_promoted',
+    title: '候補轉正',
+    body: `${firstDoc.memberName || '學員'} 候補已自動遞補為正取：${course.name}，應繳 NT$${fee}（待收款）`,
+    referenceId: firstDoc.id,
+  });
+
+  console.log(`✅ 整門課候補遞補：${firstDoc.memberName} → confirmed（${course.name}，NT$${fee}）`);
+  return { memberId: winnerMemberId, fee, sessionsPromoted: winnerDocs.length };
+};
+
 // ── 退費：取消某會員某課程所有有效報名並釋放名額 ──────────────────
 const cancelCourseEnrollments = async ({ courseId, memberId, reason }) => {
   const db = getDb();
@@ -1221,6 +1332,7 @@ const cancelCourseEnrollments = async ({ courseId, memberId, reason }) => {
     .where('status', 'in', ['confirmed', 'leave', 'waitlist'])
     .get();
   let cancelled = 0;
+  let freedAnyFutureSeat = false;
   for (const d of snap.docs) {
     const e = d.data();
     const prevStatus = e.status;
@@ -1229,9 +1341,9 @@ const cancelCourseEnrollments = async ({ courseId, memberId, reason }) => {
     if (sDoc.exists) {
       const sd = sDoc.data();
       if (prevStatus === 'confirmed') {
-        // confirmed 占名額 → 釋放並遞補候補
+        // confirmed 占名額 → 釋放（整門課候補遞補於迴圈結束後統一處理一次，見下）
         await sDoc.ref.update({ enrolledCount: Math.max(0, (sd.enrolledCount || 0) - 1), updatedAt: now });
-        if ((sd.date || '') >= today) { try { await promoteWaitlist(e.sessionId); } catch (err) { console.error('promoteWaitlist 失敗', err.message); } }
+        if ((sd.date || '') >= today) freedAnyFutureSeat = true;
       } else if (prevStatus === 'waitlist') {
         await sDoc.ref.update({ waitlistCount: Math.max(0, (sd.waitlistCount || 0) - 1), updatedAt: now });
       }
@@ -1244,6 +1356,11 @@ const cancelCourseEnrollments = async ({ courseId, memberId, reason }) => {
     const { updateRegistrationStatusByCourseMember } = require('./courseRegistrationService');
     await updateRegistrationStatusByCourseMember(db, memberId, courseId, { status: 'cancelled', cancelledAt: now, cancelReason: reason || '退費取消' });
   } catch (e) { console.error('[雙寫] header 取消狀態更新失敗（不影響取消）:', e.message); }
+  // 整門課退課釋出名額 → 候補遞補第一位（一次處理全部未來場次，避免同一人分堂被拆成破碎狀態；
+  // 內部會再次確認課程級容量，freedAnyFutureSeat 只是快速判斷是否值得呼叫，非必要條件）
+  if (freedAnyFutureSeat) {
+    try { await promoteWaitlistForCourse(courseId); } catch (err) { console.error('promoteWaitlistForCourse 失敗', err.message); }
+  }
   return cancelled;
 };
 
@@ -2202,6 +2319,7 @@ module.exports = {
   closureCancelSession,
   reconcileMakeupEntitlement,
   promoteWaitlist,
+  promoteWaitlistForCourse,
   trialPaymentDeadline,
   sweepExpiredTrialPayments,
   cancelCourseEnrollments,

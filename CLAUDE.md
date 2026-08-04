@@ -2289,11 +2289,21 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **首頁通知**（`/members/my/alerts` 新增 `course_waitlist_promoted`，`paymentConfirmed!==true` 才顯示、確認收款後自動消失）＋員工待辦頁通知連結（`course_waitlist_promoted` 歸類「課程請假/補課」分類、導向 `/staff/courses`）。
 - **E2E（正式 API，24 項全綠）**：①資料層 15 項——單堂請假不誤觸遞補（B 全部堂仍 waitlist、A 請假堂 enrolledCount 正確扣減）→ 銷假還原 → A 整門課退課 → B 全部3堂正確一次轉正（無破碎狀態）、費用僅掛第一堂（500×3=1500）、`paymentStatus:pending`／`paymentMethod:null`、`promotedAt` 皆有、場次 enrolledCount/waitlistCount 正確互換、營收交易正確產生 ②HTTP層 9 項（choose-cash 端點）——查無報名404、成功選現金、`transferRecords` 正確建立(現金/pending/正確金額)、重複選擇擋 `ALREADY_CHOSEN`。fixtures 全清、throwaway 驗證腳本測後依專案慣例刪除不留存。
 
+## 目前進度（2026-08-04 續10）— 發票機本地列印代理正式版上線（P1，取代 scratchpad 原型）
+> 使用者回報「發票機有了，是差錢櫃」（硬體到位僅缺錢櫃）。查 7/31 PoC 已把通訊協定/中文列印/自動對位裁切等技術風險點全部驗證通過（見 `invoice-integration-plan.md` §5.5），只是還停在 `scratchpad/printer-test/` 的 throwaway 驗證腳本階段，尚未整理成正式服務——本輪把它升級成真正可部署的本地代理。commit `8e43e75`（純新增資料夾，不影響已部署後端，未動 `/health` 版本）。
+- ✅ **新增 `local-print-agent/`**（獨立子專案，Node+Express+serialport）：整理自驗證過的通訊協定（`ESC @` 初始化／Big5 編碼中文／不支援 `ESC G`/`ESC E`/`FS &`/`FS .`／每張結尾送 `0x0C` 自動對位+裁切）與已試印過的版面排版（24字寬、置中抬頭統編地址、品項合計、選填買受人統編、「以下空白」收尾），三端點：
+  - `GET /status`（連線狀態）／`POST /print`（`{gymId,items,total?,date?,buyerTaxId?,openDrawer?}`，號碼由 RedRock 後端管理、代理純列印不做金額/號碼邏輯）／`POST /open-drawer`（`ESC p` 脈衝，**尚未實機測試**，見下）。
+  - CORS + Private Network Access header（`Access-Control-Allow-Private-Network: true`，供 HTTPS 的 `staff.redrocktaiwan.com` 呼叫 `http://localhost` 通過瀏覽器 preflight）；內建測試頁（`GET /`）供裝機當下手動驗證，不經過 RedRock 系統。
+  - 本機驗證（無實體印表機連接，僅驗 HTTP 服務層）：伺服器正確啟動／`/status`／`/print`／`/open-drawer` 在印表機未接時皆**優雅回錯誤訊息、不崩潰**／CORS 允許名單來源放行、非名單來源正確擋下（初版誤用 `cb(new Error())` 導致 500，已修正為 `cb(null,false)` 回乾淨的 CORS 拒絕）。
+  - `README.md` 含 Windows 安裝步驟（裝 Node.js/查 COM 埠/`npm install`+`npm start`）、硬體確認事項（DIP2#3 撥 OFF、面板紅燈為正常狀態）、**錢櫃到位後的驗證步驟**（先核對 RJ12/ESC-POS 相容規格、用內建測試頁按鈕測試、脈衝參數卡住時的調整方向）。
+  - 清掉 `scratchpad/printer-test/`（7/31 throwaway 驗證腳本，findings 已完整整理進正式代理，比照專案慣例不留存）。
+- ⏳ **未做（下一步）**：實際 Windows 部署測試（目前僅在 Mac 驗證 HTTP 服務層，序列埠通訊靠 7/31 PoC 佐證、本次未重測，因印表機未接在手邊）；Windows 服務化/開機自啟（README 已留 TODO，待正式裝機時做）；錢櫃到位後測試 `/open-drawer`；接上 RedRock 前端（P3/P4，尚未開始，代理目前是完全獨立、未串接系統的獨立工具）。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。
 
-- 🖨 **【架構已定，待硬體】發票機串接（WP-560 二聯式）**：完整設計見 `docs/invoice-integration-plan.md`。決策全鎖定（實體二聯/本地代理/後端計數/收款當下開票/選填統編/退費只作廢/驅動錢櫃/退費報表/Windows）。**下一步 P1**：使用者買舊發票機＋RS-232轉USB＋二聯練習紙捲到位後，寫**本地代理骨架**（Node+serialport+express+開機自啟）＋ ESC/POS 列印/開櫃/**定位試印校正**（技術風險點先過）→ 再往上號碼管理→共用元件→四頁接線→結帳自動化→退費報表。
+- 🖨 **【P1 完成，待錢櫃】發票機串接（WP-560 二聯式）**：完整設計見 `docs/invoice-integration-plan.md`。決策全鎖定；**P1（本地代理+列印PoC）已完成**（`local-print-agent/`，見 2026-08-04 續10 進度）——通訊/中文列印/版面/對位裁切皆已驗證，代理已可獨立運作。**卡點：使用者只差錢櫃**（要買標準 RJ12/ESC-POS 相容款，勿用 TP-3688 相容或 ACCUPOS 附贈款，詳見設計文件 §4／代理 README）。**下一步 P2**：`invoices` 集合 + 每館 `invoiceState`（號碼計數/換捲/校正）→ P3 共用元件 `InvoiceCheckout`+`InvoicePrinter` adapter（先接一個流程）→ P4 四流程接線 → P5 結帳自動化 → P6 作廢/退費連動 → P7 退費報表。
 - ✅ **發票列印時機／方式（2026-08-04 全部拍板，見 `invoice-integration-plan.md` §8）**：**B**＝逐筆開票（入場一張、POS一張）／**C**＝非臨櫃付款（課程/比賽/體驗/入隊/分期）不自動觸發，一律留給店員手動按既有 §9 發票 modal（硬體接上後原地升級成真列印）／**D**＝LinePay入場一律到場掃碼確認入場當下才印（未入場轉券者延後至持券入場時）。純設計定案，實作仍待 P1（發票機硬體：正式財政部紙捲、錢櫃）到位。
 - ❌ **【已決定不做，2026-08-04 拍板】補課期限模式 B「請假日後 N 天」**：使用者確認**一律維持「課程結束後固定天數」（模式 A），跟請假日期無關**——不加模式切換，維持現行 `makeupDeadlineDays`（結束日+N）單一算法（原 2026-07-19 暫緩的方案已明確作廢，非之後再議）。
 - ✅（查證後撤銷，2026-08-04）**「小蜘蛛人一A(7-8)閎」`3f35216f` 已不存在**：查證正式資料庫，該課程已在 7/13 課程樹狀架構大改造時當重複梯次一併刪除（連 9 場次）；朱智萩目前有效報名為「技巧班 5-7月週五A班」，與此無關、無資料遺失。原提醒作廢。

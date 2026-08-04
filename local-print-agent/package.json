@@ -1,0 +1,18 @@
+{
+  "name": "redrock-print-agent",
+  "version": "1.0.0",
+  "description": "紅石攀岩館 WinPOS WP-560 發票機本地列印代理（跑在櫃檯電腦，供員工端網頁透過 localhost 呼叫）",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^5.2.1",
+    "iconv-lite": "^0.7.3",
+    "serialport": "^13.0.0"
+  }
+}

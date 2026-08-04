@@ -2235,6 +2235,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **`SalesPage.jsx` 庫存盤點 Modal**：每列品項新增勾選框（`item.checked`，開啟盤點時預設全未勾）；頂部提示文字顯示「尚有 N 項未核對」；「確認盤點」鈕在有任一項未勾選時**禁用**（灰底＋文字改「請先核對全部項目（尚有 N 項）」），全部勾完才變回可點的「確認盤點」。**刻意不加「全選」捷徑**——加了會讓員工一鍵跳過逐項核對，違背需求本意（強制真的看過每一項才勾）。
 - 附帶：已勾選且數量與帳面一致的列給淡綠底提示「已核對且相符」，與既有「數量不符→琥珀底」的既有提示並存不衝突。
 
+## 目前進度（2026-08-04 續）— 庫存盤點彈窗加「上次盤點時間」+ 歷史紀錄下拉
+> 承上：使用者要求彈窗頂部再加一條「歷史盤點時間」資訊，後續補充定調「顯示最近一筆，歷史資料以下拉呈現」。後端 `/health` `3.206.0-stocktake-history`；commit 後端 `c270e1a`、前端 `fec674c`；正式 API 驗證真實資料（新竹館 2026-07-29 陳品翰 229 項）。
+- ✅ **新增 `GET /products/stocktake/history?gymId=`**（`products.js`，`products.manage`）：`stockLogs`（`type=='stocktake'`）**單一等值查詢＋記憶體過濾/分組/排序**（本專案慣例，避複合索引）——同一次盤點所有品項共用同一個 `now` 時戳（`POST /stocktake` 寫入時的既有行為），依此時戳分組還原「一次盤點」的逐項明細，補員工姓名，取最近 30 次。
+- ✅ **前端**（`SalesPage.jsx` 庫存盤點 Modal 頂部）：顯示「上次盤點時間：YYYY-MM-DD HH:mm（經手人）」（無紀錄顯示「尚無盤點紀錄」）；更早的紀錄收進 `<select>` 下拉（選項含時間/經手人/總項數/差異項數），選取後在下方展開該次**有差異**的品項明細（無差異顯示「本次盤點無差異」，比照既有「盤點完成」畫面只列差異項的呈現方式）。
+
 ## 待辦
 
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。

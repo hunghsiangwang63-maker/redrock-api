@@ -35,9 +35,11 @@
   | 定期票 | `pass` / `{passId}` | ✅（POST /passes 加 deferPayment） | ⏳ 員工 QR |
   | 分期 | `installment` / `{planId, seq}` | ✅ | ⏳ 員工 QR |
   | 入場 | `checkin` / `{checkInId}` | ✅（/phone 加 deferPayment） | ⏳ 員工 QR |
-  | 商品 POS | — | 不做（依決定） | — |
+  | 商品 POS | — | **永久不做（2026-08-04 再確認）** | — |
 
   > 「會員自助」前端均受 `ONLINE_PAYMENT_ENABLED` 控管：正式環境在真實 gateway 上線前**不出現付款入口**，fallback 既有匯款流程。
+
+  > **商品 POS 為何不接（2026-08-04 定案，非暫緩）**：POS 是全系統唯一「店員發起付款、會員自己付款」的場景（其餘收費點都是會員自助、發起與完成付款是同一支手機，才需要上面這套 Request→導轉→輪詢的 adapter 機制）。**現場已有各行動支付商家的實體收款 QR**（固定貼在櫃檯，非系統動態產生）→ 會員自己掃碼、在自己的付款 App 內完成付款（全程在 RedRock 之外）→ 店員目視確認會員手機的付款成功畫面後，直接按下（未來的）「列印發票」鍵——**這個動作本身就是收款確認，不需要另外接 API 去驗證這筆錢真的進來了**。行動支付在 POS 這裡因此永遠只是店員手動選的付款方式標籤，跟現金/轉帳同一層級，差別只在列印發票時**依錢櫃規則不開櫃**。詳見 `docs/invoice-integration-plan.md` §4。
 
 ### 待辦（多需先取得外部資源）
 1. **各館**申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`。

@@ -2255,6 +2255,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **改前查證**：無重複衝突（施書琪原無此課程報名，另有「小蜘蛛人寒暑假密集班第一梯」4堂＋「小蜘蛛人初級班 7-8月週三A班」1堂，皆不同梯次）；今日(8/4)首堂尚未簽到、無 checkIns 紀錄，無需連動修正入場/出席資料。
 - 📌 附帶觀察（未處理，僅供留意）：施書琪已有「初級班 週三A班」報名，這次改記的是「週二A班」（不同時段），兩者並存，非合併——依使用者字面指示執行，未自行判斷是否要合併。
 
+## 目前進度（2026-08-04 續5）— 入場 LinePay pay-first 後端（entry orderType）+ 通知連結修正
+> 承 `docs/payment-integration-plan.md` §10/§12 設計討論——先做不動前端的後端部分。詳細設計/修正說明已寫入該文件，此處僅摘要。後端 `/health` `3.208.0`→`3.209.0`；commit `447ddfe`＋`51c6743`（後端）、`1969d14`（前端）。
+- ✅ **入場 LinePay pay-first 後端**（`paymentService.js` 新 `entry` orderType）：付款前跑 `runEntryGates` 擋下（避免付了錢卻卡在入場關卡）、金額走 `computePaidEntryAmount` 後端權威計算；付款成功直接開一張 30 天效期單次入場券（`status:active` 免審核、`validDate:null` 修正原設計文件會讓券恆過期的欄位語意錯誤，見文件詳述）。正式環境以 `provider:'mock'` 繞過 HTTP 層的 `NODE_ENV` 保護直呼 service 層驗證 9 項情境（金額/擋卡/擋錯身份/開票/可兌換/記帳）全過，測後 0 殘留。**會員端入場 QR 的 LinePay 畫面尚未做**（純前端，且要等 LinePay sandbox 金鑰到位才有意義）。
+- ✅ **通知/待辦「查看」按鍵指向修正**（回報「都有問題」查出兩類）：①**真 404**——`pendingTasks.js` 入隊申請通知 `link:'/staff/team'`（無此路由，隊員管理實際在 `/staff/vip`）、`PendingTasksPage.jsx` 的 `NOTIF_LINK.experience_refund:'/staff/experience-bookings'`（無此路由，實際 `/staff/experience`）②**能點但沒用**——課程/比賽名單認領通知、以及待辦頁「近7天報名」動態，全部只導向通用列表頁，沒辦法從畫面找到通知講的是哪一筆（`CoursesPage`/`CompetitionsPage` 完全沒有深連結機制）。修：`CoursesPage`/`CompetitionsPage`/`ExperienceBookingsPage` 三頁比照會員端既有模式加 `?course=`/`?comp=`/`?booking=` 深連結（`useRef` guard 只觸發一次）；`memberService.js` 兩處認領通知建立時直接帶上具體 `link`；`pendingTasks.js` 的 registrations 動態同樣補上 id。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
@@ -2268,7 +2273,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅（已完成 2026-07-11）**刪除測試會員**：21 筆 fixture 已硬刪、票券一併清、0 孤兒；**王大明與全部真實會員保留**（見上方 2026-07-11 進度）。原 7/14 提醒作廢。
 - 各館申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`
 - LinePay sandbox 端到端測試 → 啟用線上付款 + 員工端 QR 前端。**adapter 已完整**（v3/HMAC/Confirm、confirmUrl fallback `api.redrocktaiwan.com`、`LINEPAY_ENV` 未設＝sandbox）；**只差使用者到 LINE Pay 沙箱申請 Channel ID/Secret** → 填 `gyms/{gymId}.paymentSettings` + 開 `paymentMethods.enabled.linepay` + 建測試訂單跑 Request→Confirm。
-- 📌 **入場 LinePay 設計決策（2026-07-25 拍板，見 `docs/payment-integration-plan.md` 第10節）**：線上款 pay-first（選館帶該館帳號→付款→產「已付」入場QR→櫃檯掃碼確認不再收費）；**未入場→自動轉單次入場券、效期 30 天**（`source:'linepay-entry-unused'`）；**不做位置限制**（在家先付＝線上預購一次入場，允許）。現金/免費/票券維持掃碼→確認時扣款。
+- 📌 **入場 LinePay 設計（2026-07-25 拍板，見 `docs/payment-integration-plan.md` §10）**：線上款 pay-first（選館帶該館帳號→付款→產「已付」入場QR→櫃檯掃碼確認不再收費）；**未入場→自動轉單次入場券、效期 30 天**。現金/免費/票券維持掃碼→確認時扣款。**後端已上線**（2026-08-04，見上方進度，`source` 實際是 `'linepay-entry'`、`validDate` 不設）；**尚缺會員端入場 QR 的 LinePay 畫面**（純前端）。
 - 補街口 / 台灣Pay adapter 的 API TODO（依整合手冊 / 收單銀行）
 - 資料移轉（Climbio 18,000+ 筆）——**墜測對照已完成**（2026-07-13：`legacyFallTests` 17,335 筆＋隊員名單 41 筆，新註冊自動認領）；會員基本資料不預先匯入（採「註冊時認領」模式，會員自行註冊＋重簽文件）
 - ✅（已完成 2026-07-04 六）站台隊員 9 折端到端實測 → 見上方進度；**真站台帳號實機亦可直接做**（館別電腦帳號經 `/stations/login` 實測有效，見上方修正），後端邏輯已由 super_admin 打 `/checkin/phone` 等價驗證通過

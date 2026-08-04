@@ -505,6 +505,45 @@ router.get('/export', authenticate, requireManager, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /products/stocktake/history - 歷史盤點紀錄（按館別，依時間分組每次盤點的逐項明細）──
+// ⚠ 單一等值查詢（type=='stocktake'）+ 記憶體過濾/分組/排序，避免複合索引（本專案慣例）
+router.get('/stocktake/history', authenticate, checkPermission('products.manage'), async (req, res) => {
+  try {
+    const db = getDb();
+    const gymId = req.query.gymId || req.staff?.gymId;
+    const snap = await db.collection('stockLogs').where('type', '==', 'stocktake').get();
+    const rows = snap.docs.map(d => d.data()).filter(r => r.gymId === gymId && r.createdAt);
+
+    // 依「同一次盤點寫入的完全相同時戳」分組（POST /stocktake 對整批品項共用同一個 now）
+    const groups = {};
+    rows.forEach(r => {
+      const key = String(r.createdAt.toMillis ? r.createdAt.toMillis() : r.createdAt);
+      if (!groups[key]) groups[key] = { at: r.createdAt, staffId: r.staffId, items: [] };
+      groups[key].items.push({
+        productName: r.productName, size: r.size || null, color: r.color || null,
+        previousStock: r.previousStock ?? null, quantity: r.quantity, diff: r.diff ?? null,
+      });
+    });
+    let sessions = Object.values(groups).sort((a, b) => b.at.toMillis() - a.at.toMillis()).slice(0, 30);
+
+    // 批次補員工姓名
+    const staffIds = [...new Set(sessions.map(s => s.staffId).filter(Boolean))];
+    const staffDocs = staffIds.length ? await db.getAll(...staffIds.map(id => db.collection('staff').doc(id))) : [];
+    const staffNameMap = {};
+    staffDocs.forEach(d => { if (d.exists) staffNameMap[d.id] = d.data().name || ''; });
+
+    sessions = sessions.map(s => ({
+      at: s.at.toDate().toISOString(),
+      staffName: staffNameMap[s.staffId] || '（未知）',
+      itemCount: s.items.length,
+      discrepancyCount: s.items.filter(it => (it.diff ?? 0) !== 0).length,
+      items: s.items,
+    }));
+
+    res.json({ sessions });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── POST /products/stocktake - 庫存盤點（按館別）────────────────
 router.post('/stocktake', authenticate, checkPermission('products.manage'), async (req, res) => {
   try {

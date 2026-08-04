@@ -200,7 +200,14 @@ const approvePassRequest = async ({ requestId, operatorId, operatorName, extensi
       newEndDate = dayjs(pass.endDate).add(months, 'month').format('YYYY-MM-DD');
       afterMeta = { endDate: newEndDate, months };
     }
-    await passRef.update({ endDate: newEndDate, requestUsed: true, updatedAt: now });
+    // 停用期間內視為非定期票有效期（入館改一般成人/學生付費，見 checkin/eligibility.js getValidPasses）；
+    // 只有新制（會員自填停用期間）的申請才有 suspendStart/suspendEnd，舊制月數申請無停用期間可記。
+    const passUpdate = { endDate: newEndDate, requestUsed: true, updatedAt: now };
+    if (request.suspendStart && request.suspendEnd) {
+      passUpdate.suspendStart = request.suspendStart;
+      passUpdate.suspendEnd = request.suspendEnd;
+    }
+    await passRef.update(passUpdate);
     await logAdjustment({
       passId: pass.id, type: 'extension',
       beforeData: { endDate: pass.endDate }, afterData: afterMeta,

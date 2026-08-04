@@ -22,7 +22,10 @@ const getValidPasses = async (memberId, gymId) => {
     .filter(p => (p.effectiveEndDate || p.endDate) >= today)
     .filter(p => !p.startDate || p.startDate <= today) // 起始日到了才算有效（未來票不提前生效）
     .filter(p => p.scope === 'shared' || p.targetGymId === gymId)
-    .filter(p => p.credits === null || p.credits > 0);
+    .filter(p => p.credits === null || p.credits > 0)
+    // 展延申請核准時會員自填的「停用期間」內視為非定期票有效期（入館改一般成人/學生付費）；
+    // suspendStart/suspendEnd 只在核准展延時寫入，見 passAdjustmentService.approvePassRequest。
+    .filter(p => !(p.suspendStart && p.suspendEnd && today >= p.suspendStart && today <= p.suspendEnd));
 };
 
 // ── 入場可購買的定期票種（該館適用：雙館 shared 或該館單館票種）─────

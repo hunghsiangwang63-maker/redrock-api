@@ -2266,6 +2266,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **`MemberQRPage.jsx` 接上 `useOnlineFlowEnabled('entry')`**：「選擇付款方式」頁（僅單純付費身份：成人/學生/兒童單次購票）開關開啟時，於既有現金/標籤式付款選項下方多一顆「🌐 線上支付」按鈕（與友館隊員/特約廠商優惠互斥，那兩項需現場核對、線上付款不支援）；沿用已驗證過的共用元件 `PaymentFlow`（create→導轉 LinePay→輪詢）。**設計簡化**：付款成功後不另外做「已付款 QR」新畫面，而是重新驗票、導回選身分頁——此時已開通的單次入場券會出現在「使用單次入場券（免費）」選項，會員照原本既有、已測試過的票券兌換掃碼流程操作，不重造一套 QR 產生邏輯。
 - ⏳ **要真的能用仍差 LinePay sandbox 金鑰**（`docs/payment-integration-plan.md` §0 待辦1）：金鑰未設定時 `getAvailableMethods` 不會列出 linepay，按鈕點下去 Modal 會開但付款方式清單是空的；金鑰到位後這條路徑即可直接動。
 
+## 目前進度（2026-08-04 續7）— 資料操作：取消王登第今日下午補課申請
+> 回報：取消王登第今天（2026-08-04）下午 16:30-18:00「小蜘蛛人初級班 7-8月週二B班」的補課。因當天為上課日、一般會員自助取消補課有「須提前一天」限制（`cancelMakeup` 的 `CANCEL_DEADLINE` 擋同日取消），走不了自助 API，改由 firebase-admin 直接以後台身份複製 `courseService.cancelMakeup` 的完整效果（4 步）：
+- ✅ 該堂 `courseEnrollments`（`b521eb52...`，`isMakeup:true`）標記 `status:cancelled`／`cancelReason:makeup_cancelled`。
+- ✅ 場次（`7bc8d6f7...`）`enrolledCount` 6→5，釋出 1 個名額。
+- ✅ 對應補課券（`courseMakeupRights` `2eb4b3cb...`，原屬他自己「小蜘蛛人進階班 週三B班」的請假）還原 `status:available`（`usedSessionId/usedAt` 清空），效期不變（至 9/30），可再約其他堂次。
+- ✅ 依系統既有規則同步發送 `course_makeup_cancel` 通知給新竹館 `gym_manager`/`super_admin`（複製 `notifyCourseManagers` 的呼叫方式）。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - ⏰ **【待使用者確認】比賽「已駁回」首頁通知消失機制**：目前設「駁回後 14 天自動消失」（時間窗、無已讀鈕，見續13）。使用者說先維持、**之後要主動提醒他確認**是否調整（可選：改天數／加「知道了」關閉鈕需存已讀旗標／重新報名同賽事後消失）。下次談比賽通知時提出。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。

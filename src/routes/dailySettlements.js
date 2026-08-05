@@ -22,7 +22,9 @@ const entryCategory = (data) => {
   const coupon = data.legacyDiscount === true || data.entryType === 'discount_card';
   if (team && coupon) return '隊員＋優惠券';
   if (team) return '隊員折扣';
-  if (coupon) return data.entryType === 'student_free' ? '學生使用優惠券' : '成人使用優惠券'; // 優惠券依基礎身分拆（舊折扣卡8折/優惠折扣券入場）
+  // 優惠券依基礎身分拆（舊折扣卡8折看 entryType 本身即為 student_free；優惠折扣券入場 entryType
+  // 固定是 discount_card、真正身分存在 baseEntryType，兩者都要檢查才不會把學生誤歸成人）
+  if (coupon) return (data.entryType === 'student_free' || data.baseEntryType === 'student_free') ? '學生使用優惠券' : '成人使用優惠券';
 
   return ENTRY_LABEL[data.entryType] || data.entryType || '其他入場';
 };

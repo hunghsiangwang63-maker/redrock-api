@@ -515,6 +515,9 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     memberName: pending.memberName,
     gymId: pending.gymId,
     entryType: pending.entryType,
+    // 使用優惠折扣券(discount_card)時的實際身分（成人/學生原價 8 折基準）——
+    // 供結帳/月銷售 entryCategory 拆分「成人使用優惠券／學生使用優惠券」；pending 本就存此欄位，之前漏帶到最終 checkIn。
+    baseEntryType: pending.baseEntryType || null,
     qrToken,
     passId: pending.passId,
     discountCardId: pending.discountCardId,

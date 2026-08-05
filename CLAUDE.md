@@ -2368,6 +2368,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **月銷售 Excel 免另外處理**：該報表本就是逐日即時讀 `checkIns` 現算（非讀凍結快照），`checkIns` 修好後自動連帶正確，不需要額外補丁。
 - ✅ **回報「今日結帳部分修改了嗎」→ 追查發現新竹館今天其實已經「正式結帳」（非暫存）**：查此前只顧著補歷史（07-21~08-03）與「今天的資料」，沒注意到新竹館**今天當下就已完成正式結帳**，且結帳時間點早於本次修復，快照仍凍結著舊的錯誤數字（成人使用優惠券 4280／學生使用優惠券 400）。比照歷史那 8 天同法重算並覆寫（4280→**4080**、400→**600**，其餘分類與總額不變）。**士林館今天仍是暫存檔狀態、未受影響**（暫存檔本就即時抓資料，且掃描確認士林今天無此類受影響紀錄）。至此**全部已知受影響的紀錄與快照（18 筆入場紀錄＋9 天結帳快照，含今天）皆已修正完畢**。
 
+## 目前進度（2026-08-06）— 黑卡/優惠卡點數移轉 + 單次入場券批次移轉：新增可設定單次上限
+> 需求：黑卡/優惠卡/單次入場券的會員間移轉，新增「一次最多移轉幾點/幾張」的設定，可調整（原本無上限）。後端 `/health` `3.220.0-card-ticket-transfer-limit`；正式 API E2E（打 Railway，真實會員 token）**11/11**。commit 後端 `a67c96e`、前端 `5aac4c4`。
+- 🔍 **查證現況**：黑卡/優惠卡的「次數分割移轉」（`cardTransferService.initiateTransfer`，兩段式：暫扣→對方 App 接收）原本**完全沒有單次移轉點數上限**（只擋 `<1` 與「不可超過卡片剩餘次數」）——黑卡最多可持有 12 點、優惠卡 10 點，理論上可一次全部轉光。單次入場券走另一套完全不同的機制（`ticketTransfers.js`，整張券移轉），**原本一次只能轉一張、無點數概念**。
+- ✅ **新增共用設定** `systemSettings/cardTransferLimit.maxCredits`（預設 10，範圍 1~100）：`GET/PUT /settings/card-transfer-limit`（PUT 限 super_admin/admin）。`cardTransferService` 匯出 `getCardTransferLimit()` 供兩處共用讀取（避免各自複製一份查詢邏輯）。
+- ✅ **黑卡/優惠卡套用上限**：`initiateTransfer` 新增 `credits > maxCredits` 檢查，超過拋 `TRANSFER_LIMIT_EXCEEDED`。
+- ✅ **單次入場券新增「批次移轉」能力**（AskUserQuestion 確認要做）：`POST /ticket-transfers/request` 新增 `ticketIds`（陣列，僅 `single_entry` 支援，與黑卡/優惠卡共用同一上限設定）——驗證張數 1~上限、逐張核對擁有權，建立**一筆**移轉單（`ticketId`=第一張供舊版相容顯示、`ticketIds`+`ticketCount` 供批次判斷）；`/accept` 改為對 `ticketIds`（無則退回單張 `ticketId`）逐張套用既有移轉規則各自計算新到期日，整批視為同一動作（不接受部分接受/部分拒絕）；`/reject` 不需改（無論單張批次都只是標狀態、不動票券）。
+- ✅ **前端**：員工「系統設定 → 入場規則」加「🔢 卡券移轉上限」分頁（super_admin 可調）；會員「我的票券 → 單日券」分頁（≥2 張本人有效票券時）加「📤 批次移轉給同一人」勾選模式——勾選多張後底部浮動「移轉已選 N 張」按鈕，開啟批次版 `TransferModal`（原本只吃單一 `ticket` prop，改吃 `tickets` 陣列、`tickets.length===1` 時行為與原本完全一致，未新增 prop 的既有呼叫點不受影響）。家人（非本人）票券在批次模式下不可勾選（唯讀，沿用既有 `_isSelf` 判斷）。
+- **E2E（打 Railway，真實會員 token 走自助流程，11/11）**：GET 預設值／PUT 設 3／PUT 0 超範圍擋 400／優惠卡轉 5 點(上限3)擋 `TRANSFER_LIMIT_EXCEEDED`／轉 3 點(=上限)成功／單次券批次轉 4 張(上限3)擋 `TRANSFER_LIMIT_EXCEEDED`／批次轉 3 張(=上限)成功建立＋`ticketIds`/`ticketCount` 正確／B 用自己的會員 token 接收成功／3 張券 `memberId` 皆正確改為 B／第 4 張(不在批次內)仍屬於 A。fixtures（2 位測試會員+1張優惠卡+4張單次券+相關移轉單）測後全清、throwaway 腳本依慣例刪除不留存。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

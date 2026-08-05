@@ -16,6 +16,16 @@ const ownerField = (type) => (type === 'black' ? 'memberId' : 'ownerMemberId');
 
 const toDate = (v) => (v?.toDate ? v.toDate() : (v?._seconds ? new Date(v._seconds * 1000) : (v ? new Date(v) : null)));
 
+// 單次移轉點數上限（可設定，預設 10；讀取失敗安全預設 10）——與單次入場券批次移轉共用同一設定
+const getCardTransferLimit = async () => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('systemSettings').doc('cardTransferLimit').get();
+    const n = doc.exists ? Number(doc.data().maxCredits) : NaN;
+    return Number.isFinite(n) && n >= 1 ? n : 10;
+  } catch { return 10; }
+};
+
 // ── 發起移轉（暫扣來源、建 pending）─────────────────────────────────
 const initiateTransfer = async ({ cardType, fromCardId, toMemberId, credits, initiatedBy, initiatedByType, expectedOwnerId }) => {
   const db = getDb();
@@ -23,6 +33,8 @@ const initiateTransfer = async ({ cardType, fromCardId, toMemberId, credits, ini
   if (!['discount', 'black'].includes(cardType)) throw { code: 'BAD_TYPE', message: '卡別錯誤' };
   credits = parseInt(credits) || 0;
   if (credits < 1) throw { code: 'BAD_CREDITS', message: '移轉次數需至少 1' };
+  const maxCredits = await getCardTransferLimit();
+  if (credits > maxCredits) throw { code: 'TRANSFER_LIMIT_EXCEEDED', message: `單次移轉最多 ${maxCredits} 次` };
 
   const ref = db.collection(cardColl(cardType)).doc(fromCardId);
   const doc = await ref.get();
@@ -193,4 +205,4 @@ const getCardTransferHistory = async (cardId, memberId) => {
   return recs.sort((a, b) => ms(b.at) - ms(a.at));
 };
 
-module.exports = { initiateTransfer, acceptTransfer, cancelTransfer, revertExpired, getIncoming, getPendingByFromMember, getCardTransferHistory };
+module.exports = { initiateTransfer, acceptTransfer, cancelTransfer, revertExpired, getIncoming, getPendingByFromMember, getCardTransferHistory, getCardTransferLimit };

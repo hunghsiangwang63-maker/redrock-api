@@ -181,6 +181,30 @@ router.put('/discount-card-validity', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /settings/card-transfer-limit - 會員自助卡券移轉單次上限（黑卡/優惠卡點數＋單次入場券批次張數共用）──
+router.get('/card-transfer-limit', async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('systemSettings').doc('cardTransferLimit').get();
+    const n = doc.exists ? Number(doc.data().maxCredits) : NaN;
+    res.json({ maxCredits: Number.isFinite(n) && n >= 1 ? n : 10 }); // 預設 10
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── PUT /settings/card-transfer-limit（僅 super_admin/admin）；1~100 ──
+router.put('/card-transfer-limit', authenticate, async (req, res) => {
+  if (!['super_admin', 'admin'].includes(req.staff?.role))
+    return res.status(403).json({ error: '權限不足' });
+  try {
+    const db = getDb();
+    const n = Math.round(Number(req.body.maxCredits));
+    if (!Number.isFinite(n) || n < 1 || n > 100)
+      return res.status(400).json({ error: 'INVALID_LIMIT', message: '請填 1~100 之間的數字' });
+    await db.collection('systemSettings').doc('cardTransferLimit').set({ maxCredits: n, updatedAt: new Date() }, { merge: true });
+    res.json({ success: true, maxCredits: n });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /settings/payment-methods - 付款方式開關（公開；各付款頁讀取）──────
 // 現金/轉帳預設開放；LinePay/街口/台灣Pay 待金流 API 對接後由管理員開啟。
 const PAYMENT_DEFAULTS = { cash: true, transfer: true, linepay: false, jkopay: false, taiwanpay: false };

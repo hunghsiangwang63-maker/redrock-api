@@ -44,14 +44,20 @@ async function actorCanActFor(db, req, toMemberId) {
 }
 
 // ── POST /ticket-transfers/request ──────────────────────────────
+// 單張：帶 ticketId（原行為不變）。批次（僅 single_entry）：帶 ticketIds 陣列，一次最多
+// systemSettings/cardTransferLimit.maxCredits 張（與黑卡/優惠卡點數移轉共用同一上限設定），
+// 一次申請、一次接收/拒絕（整批視為同一單移轉，不接受部分接受）。
 router.post('/request', authenticateAny, async (req, res) => {
   try {
     const db = getDb();
-    const { ticketType, ticketId, targetPhone } = req.body;
+    const { ticketType, ticketId, ticketIds, targetPhone } = req.body;
     const requesterId = req.member?.id || req.staff?.id;
+    const isBatch = Array.isArray(ticketIds) && ticketIds.length > 0;
 
-    if (!ticketType || !ticketId || !targetPhone)
+    if (!ticketType || (!ticketId && !isBatch) || !targetPhone)
       return res.status(400).json({ error: 'MISSING_FIELDS', message: '請填寫票券類型、票券ID和對方手機' });
+    if (isBatch && ticketType !== 'single_entry')
+      return res.status(400).json({ error: 'BATCH_NOT_SUPPORTED', message: '批次移轉僅支援單次入場券' });
 
     // 決定收件人：
     //  - 有帶 toMemberId（前端從家庭成員清單挑選，可指定子女）→ 驗證該會員電話 == targetPhone（同一家共用電話）
@@ -82,20 +88,36 @@ router.post('/request', authenticateAny, async (req, res) => {
     const colName = collectionMap[ticketType];
     if (!colName) return res.status(400).json({ error: 'INVALID_TICKET_TYPE' });
 
-    const ticketDoc = await db.collection(colName).doc(ticketId).get();
-    if (!ticketDoc.exists) return res.status(404).json({ error: 'TICKET_NOT_FOUND' });
-    const ticket = ticketDoc.data();
     // 紅利用 ownerMemberId，其餘票券用 memberId（bonus 存於 discountBonuses、欄位不同）
     const ownerField = ticketType === 'bonus' ? 'ownerMemberId' : 'memberId';
-    if (ticket[ownerField] !== requesterId)
-      return res.status(403).json({ error: 'NOT_OWNER', message: '此票券不屬於你' });
 
-    // 建立移轉申請
+    let finalTicketIds;
+    if (isBatch) {
+      const maxCredits = await require('../services/cardTransferService').getCardTransferLimit();
+      const uniqueIds = [...new Set(ticketIds.map(String))];
+      if (uniqueIds.length < 1 || uniqueIds.length > maxCredits)
+        return res.status(400).json({ error: 'TRANSFER_LIMIT_EXCEEDED', message: `一次最多移轉 ${maxCredits} 張` });
+      const docs = await Promise.all(uniqueIds.map(id => db.collection(colName).doc(id).get()));
+      for (let i = 0; i < docs.length; i++) {
+        if (!docs[i].exists) return res.status(404).json({ error: 'TICKET_NOT_FOUND', message: `票券不存在（${uniqueIds[i]}）` });
+        if (docs[i].data()[ownerField] !== requesterId) return res.status(403).json({ error: 'NOT_OWNER', message: '此票券不屬於你' });
+      }
+      finalTicketIds = uniqueIds;
+    } else {
+      const ticketDoc = await db.collection(colName).doc(ticketId).get();
+      if (!ticketDoc.exists) return res.status(404).json({ error: 'TICKET_NOT_FOUND' });
+      if (ticketDoc.data()[ownerField] !== requesterId)
+        return res.status(403).json({ error: 'NOT_OWNER', message: '此票券不屬於你' });
+      finalTicketIds = [ticketId];
+    }
+
+    // 建立移轉申請（單張沿用既有 ticketId 欄位相容顯示；批次額外存 ticketIds 陣列＋張數）
     const transferId = uuidv4();
     const transfer = {
       id: transferId,
       ticketType,
-      ticketId,
+      ticketId: finalTicketIds[0],
+      ...(isBatch ? { ticketIds: finalTicketIds, ticketCount: finalTicketIds.length } : {}),
       fromMemberId: requesterId,
       toMemberId: target.id,
       toMemberName: target.name,
@@ -110,7 +132,7 @@ router.post('/request', authenticateAny, async (req, res) => {
     await db.collection('notifications').add({
       type: 'ticket_transfer_request',
       title: '票券移轉邀請',
-      message: `${req.member?.name || req.staff?.name} 想將票券移轉給你`,
+      message: `${req.member?.name || req.staff?.name} 想將${isBatch ? ` ${finalTicketIds.length} 張` : ''}票券移轉給你`,
       targetMemberId: target.id,
       data: { transferId, ticketType },
       isRead: false,
@@ -139,20 +161,20 @@ router.post('/:id/accept', authenticateAny, async (req, res) => {
       single_entry: 'singleEntryTickets',
     };
     const colName = collectionMap[transfer.ticketType];
-    const ticketRef = db.collection(colName).doc(transfer.ticketId);
-    const ticket = (await ticketRef.get()).data();
-
-    // 計算新到期日
+    // 批次（ticketIds 陣列）→ 逐張套用同一條規則各自計算新到期日；單張沿用原行為
+    const idsToMove = Array.isArray(transfer.ticketIds) && transfer.ticketIds.length ? transfer.ticketIds : [transfer.ticketId];
     const rule = TRANSFER_RULES[transfer.ticketType];
-    const newFields = rule ? rule(ticket) : {};
-
-    // 更新票券持有人（紅利用 ownerMemberId，其餘用 memberId）
     const ownerField = transfer.ticketType === 'bonus' ? 'ownerMemberId' : 'memberId';
-    await ticketRef.update({
-      [ownerField]: transfer.toMemberId,
-      ...newFields,
-      updatedAt: new Date(),
-    });
+    for (const tid of idsToMove) {
+      const ticketRef = db.collection(colName).doc(tid);
+      const ticket = (await ticketRef.get()).data();
+      const newFields = rule ? rule(ticket) : {};
+      await ticketRef.update({
+        [ownerField]: transfer.toMemberId,
+        ...newFields,
+        updatedAt: new Date(),
+      });
+    }
 
     // 更新移轉狀態
     await db.collection('ticketTransfers').doc(req.params.id).update({

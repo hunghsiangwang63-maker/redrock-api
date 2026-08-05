@@ -2356,6 +2356,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **修**：`MembersPage.jsx` 的 `MemberRecords` 元件加第 9 個分頁「📜 票券異動」，讀既有端點 `GET /pass-adjustments/requests/member/:id`（本就存在、staff token 呼叫不受會員自查限制，免改後端）；卡片樣式比照待辦頁「定期票相關」（展延顯示新到期日+停用期間、退費顯示淨額/毛額/手續費、轉讓顯示新持有人、拒絕顯示原因）。瀏覽器實機搜尋陳錦漩→點「紀錄查詢」→「票券異動 (1)」→正確顯示「90日定期票・展延｜已核准｜原因：因傷害、疾病或身體不適致不宜運動｜新到期日：2026-10-21（停用期間 2026-07-20~2026-09-07）」。
 - 💡 **教訓**：查「XX 功能還是看不到」時，先實機打開對應頁面直接驗證程式碼是否運作正常，**不要預設是程式壞了**——先前功能經 API 驗證正確、瀏覽器也証實正常運作，真正缺口是「同一份資料該放在哪個入口」的產品設計判斷，不是 bug。
 
+## 目前進度（2026-08-05 續）— 修：使用優惠折扣券入場的學生身分漏記，結帳誤把學生歸類成人
+> 回報「今日新竹成人優惠券為何是4280，不是240的倍數」。後端 `/health` `3.219.0-settlement-discountcard-student-category`。
+- 🔍 **排查**：直接撈今日新竹館「成人使用優惠券」分類明細（18 筆、合計 4280）逐筆核對——17 筆皆 240（成人 300×0.8，乾淨），唯獨 1 筆（吳建志，`entryType:'discount_card'`）entryFee=200，對照 `entryTypes` 設定「學生單次入場」價格 250、250×0.8=200 完全吻合，確認他是用優惠折扣券以**學生身分**入場、卻被計進「成人」。
+- 🐞 **真 bug**：使用優惠折扣券（`entryType:'discount_card'`）入場時，價格計算本就依 `baseEntryType`（成人/學生）分別以 300 或 250 為基準算 8 折（`flow.js:108-127`），這個 `baseEntryType` 也確實存在 `pendingCheckIns` 文件上——但 `confirmCheckIn` 建立最終 `checkIns` 文件時（`flow.js:511-552`）**漏帶這個欄位**，只複製了 `entryType`（恆為 `'discount_card'`，不會是 `'student_free'`）。結帳/月銷售的 `entryCategory()`（`dailySettlements.js`）判斷學生 vs 成人只認 `entryType==='student_free'`，對 `discount_card` 入場完全沒有辨識依據 → 全數（含歷史全庫至少 19 筆、entryFee 恰為 200 的）被誤歸「成人使用優惠券」。**舊折扣卡 8 折**（`legacyDiscount` 旗標）不受影響——那條路徑 `entryType` 本身就會是 `single_ticket`/`student_free`，天生正確。
+- ✅ **修**：①`confirmCheckIn` 補存 `baseEntryType: pending.baseEntryType || null` 到最終 `checkIns` 文件 ②`entryCategory()` 判斷式加 `|| data.baseEntryType === 'student_free'`。**回填今日這 1 筆**（`baseEntryType:'student_free'`，附稽核備註）→ 重算後「成人使用優惠券」4280→**4080**（17×240，乾淨倍數）、「學生使用優惠券」+200。**未回填其餘歷史筆數**（全庫掃描另有 18 筆同型受影響、跨過去多個已結帳日期，本次僅修正程式碼＋今日即時受影響的 1 筆；過去已結帳日期的分類數字维持原樣未動，如需要可比照此法個別回填）。
+- 💡 **教訓**：這是本次 session 第二次遇到「pending 階段有的欄位，寫入最終文件時漏複製」型 bug（同型於稍早體驗預約備註欄位的處理模式）——`confirmCheckIn`/`checkInData` 這類「從暫存物件組出最終落地文件」的函式，新增計價相關欄位時容易漏掉某個「只在特定分支用得到、平常看不出差異」的欄位，數字本身沒錯（客人確實收對錢）、只有報表分類跟著錯，不容易從功能面發現，得從「總數不是預期倍數」這種数學矛盾回推才找得到。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

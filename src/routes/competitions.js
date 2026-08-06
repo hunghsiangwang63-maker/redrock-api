@@ -1165,7 +1165,7 @@ router.post('/checkin/scan', authenticate, requireManagerOrStation, async (req, 
       registrationId: reg.id, memberId: reg.memberId, memberName: reg.memberName,
       competitionId: reg.competitionId, competitionName: reg.competitionName || comp.name, divisionName: reg.divisionName,
       eventDate: comp.eventDate, gymId: comp.gymId || null, status: reg.status, isComplete: reg.isComplete,
-      paymentStatus: reg.paymentStatus, registrationFee: reg.registrationFee, insuranceFee: reg.insuranceFee ?? null,
+      paymentStatus: reg.paymentStatus, paymentMethod: reg.paymentMethod || null, registrationFee: reg.registrationFee, insuranceFee: reg.insuranceFee ?? null,
       // 實收金額（供開立發票 modal 使用）：管理員編修 > 匯款確認金額-保費 > 會員自報金額-保費 > 應繳費用-保費
       receivedAmount: competitionService.computeNetReceivedAmount(reg),
       checkedInAt: reg.checkedInAt || null,

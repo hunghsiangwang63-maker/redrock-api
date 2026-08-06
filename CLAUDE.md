@@ -2429,6 +2429,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📋 **範圍**：僅 `type==='weekly'`（週課）與試上；工作坊（`enrollCourse`/`POST /sessions/:sessionId/enroll`）未受影響（該類型後端從未加此防呆，前端也未動——運動按摩/肢體評估等工作坊不會落在 youth 分類）。
 - 🐞 **附帶清理**：`git add -A` 時誤把先前調查用的 throwaway 查詢腳本 `scratchpad/check-cancelled-checkins-count.cjs` 一併 commit，發現後立即補一個 commit 刪除（依專案慣例 scratchpad 腳本用完即刪、不留存版控）。
 
+## 目前進度（2026-08-06 續8）— 定期票列表加「暫停期間」註明（申請時間＋起訖）
+> 需求：員工端會員的定期票列表（`MembersPage` 頂層「定期票」分頁），若該票有暫停期間（展延核准時寫入的 `suspendStart`/`suspendEnd`，見 2026-08-04續13），該會員下方多一行顯示申請時間與暫停期間。後端 `/health` `3.225.0-pass-list-suspend-period-note`；commit `b538903`；正式 API 驗證。
+- ✅ **`GET /members/reports/active-passes`**（`members.js`）：每筆持有人物件補 `suspendStart`/`suspendEnd`/`suspendRequestedAt`（皆取自 `memberPasses` 原始文件，原本只回傳 `startDate/endDate`）。
+- ✅ **`passAdjustmentService.approvePassRequest`**：展延核准當下（原本只寫 `suspendStart`/`suspendEnd` 到 `memberPasses`）一併寫入 **`suspendRequestedAt: request.createdAt`**（申請當下的時間，供列表顯示，免另外 join `passRequests` 查詢）。
+- ✅ **前端 `RowMemberList`**（`MembersPage.jsx`，「定期票」／「課程學員」兩分頁共用元件）：每筆會員列改成上下兩行——原本的姓名/效期列不變，`m.suspendStart` 存在時下方新增一行「⏸ 申請時間 X｜暫停期間 Y~Z」（琥珀色）；`suspendRequestedAt` 為 Firestore Timestamp，新增 `fmtTs` helper（`_seconds`/`seconds` 皆相容）解析。課程學員分頁的資料本無此欄位，不受影響。
+- ✅ **回填唯一真實案例（陳錦漩，7/20~9/7 展延，2026-07-24 核准）**：核准當時此欄位尚不存在，補查其對應的 `passRequests` 核准紀錄 `createdAt`（2026-07-19T15:28:26Z）寫回 `memberPasses.suspendRequestedAt`；全庫掃描確認目前僅此 1 筆定期票帶有暫停期間。正式 API 驗證 `/members/reports/active-passes` 正確回傳三個新欄位。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

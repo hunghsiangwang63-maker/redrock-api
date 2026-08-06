@@ -2379,6 +2379,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🐞 **修：E2E 測試殘留清理失敗、正式環境設定值被卡在測試值**（回報「清除測試資料」後追查發現）：上面 11 項斷言雖然全過，但腳本結尾的清理段落**沒有真的執行完**——重新掃描發現 2 位測試會員、1張優惠卡、4張單次券、1筆卡片移轉單都還留著，且最關鍵的是 **正式環境 `systemSettings/cardTransferLimit.maxCredits` 被測試中途設的 `3` 卡住、沒有跑到最後復原成 10**（等同全站「單次移轉上限」被我的測試意外調低超過 3 天沒人發現的風險）。已手動補資料清乾淨＋設定值改回 10，重新驗證全部歸零。**未查出腳本本身在哪一步失敗**（清理腳本已依慣例刪除、不留存無法回頭除錯）。
 - 💡 **教訓**：E2E 腳本結尾的清理段落**必須跟前面的斷言分開驗證**——「所有 check() 都印✅」只代表功能邏輯正確，**不代表清理真的做完**；尤其這次清理動作**同時包含「刪測試資料」與「復原正式環境設定值」兩件事混在一起**，後者一旦沒執行完，影響的是全站真實使用者、不是測試資料。之後遇到「E2E 過程會暫時改動正式環境全域設定」的情境，收尾後應**額外**打一次 GET 確認設定值已還原，而不是只信賴清理程式碼有寫、有跑到那一行。
 
+## 目前進度（2026-08-06 續）— 每日結帳加「獨立開錢箱」按鈕（P3 準備工作，錢櫃即將到位）
+> 使用者告知錢櫃當天會到位，先把軟體端準備好。純前端 commit `bb02501`（無 `/health` 版本異動，未動後端）。
+- ✅ **釐清「今日結帳」實際權限**（回報詢問，查證程式碼）：**不是**單純「場館電腦跟管理員」——精確分兩層：①**今日結帳（查看/存暫存/送出）**＝`requireStationAuth`＝**值班中的員工（任何職級皆可，非限管理員）或 super_admin（可遠端、不需值班）**；沒值班又非 super_admin 的管理員本人反而做不了 ②**結帳歷史清單／月銷售 Excel／發票明細 Excel**＝`requireManager`＝**只有管理員（super_admin/gym_manager），連值班員工都不行**。關鍵是「有沒有打卡值班」而非設備本身。
+- ✅ **新增獨立開錢箱按鈕**（`DailySettlementPage.jsx`，比照 `invoice-integration-plan.md` §4 定案位置）：不夾帶列印，直接呼叫本機發票代理 `http://localhost:3399/open-drawer`（`local-print-agent/server.js` 既有端點，P1 已完成，非本次新增）——純機器內部直連，不經過 RedRock 後端。放在「今日結帳」頁籤上方，僅值班 operator 或 super_admin 可見（與該頁其餘結帳權限一致）；代理未啟動或本機沒接印表機時顯示「無法連線到發票機」，不會誤動作。
+- ⏳ **仍待現場完成（今日進行中）**：①`local-print-agent` 實際部署到櫃檯 Windows 電腦（README 已有安裝步驟：裝 Node.js、查 COM 埠、`npm install`+`npm start`）②錢櫃實體接上（RJ11 插頭、確認為 ESC/POS(Epson) 相容、**絕不可誤接 TP-3688 相容款**）③**`ESC p` 開櫃指令首次實機測試**（代理程式碼本身尚未在真實錢櫃上測過，見 `local-print-agent` 檔頭警語）④確認後才算 P3 的「開錢箱」子項真正完成；P3 其餘（`InvoiceCheckout`+`InvoicePrinter` adapter 銜接四流程實際列印）仍未開始。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

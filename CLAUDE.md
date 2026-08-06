@@ -2412,6 +2412,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🐞 **測試清理踩雷（本次抓到、已修正）**：②③兩個「應該成功」的斷言確實成功建立了報名，走的是**真實的**週課 enroll-all 交易（用了一個真實存在、有 22 個未來場次的正式課程做測試，而非另建假課程）——刪除測試用的 `courseEnrollments` 文件後，該課程 **22 個場次的 `enrolledCount` 殘留 +2（стored 2、實際 confirmed 0）**，另有 1 筆 `courseRegistrations` header、1 筆 `transactions`（NT$12,100 認列在最後一堂）、1 筆 `transferRecords` 一併殘留未清——全部逐一找出並刪除/修正，最終橫跨 8 個 collection 全庫掃描確認 0 殘留。
 - 💡 **教訓（延續前次同類教訓，這次是「借用真實實體做測試」版本）**：借用一個**真實存在的正式課程/場次**跑會產生實際報名的 E2E（而非全程使用新建的假課程），清理必須涵蓋該實體所有可能被觸碰的**衍生欄位與旁支集合**（`enrolledCount` 計數器、`courseRegistrations` header、`transactions` 認列、`transferRecords` 待收款單），不是只刪主要的 `courseEnrollments` 文件就結束——凡是「E2E 過程中用了真實/正式資料做操作對象」的情況，收尾都必須比「全新建立的假資料」多一輪「這個真實實體本身有沒有被留下痕跡」的检查。
 
+## 目前進度（2026-08-06 續5）— 查證：翁晨恩「舊生續報期間報不進去」＝家長沒切換報名對象，非系統 bug（無程式異動）
+> 回報翁晨恩（小蜘蛛人初級班 7-8月週二B班學員）在舊生開放期間（7/29~8/4）報名下一期「9-1月週二B班」時，畫面顯示「不是舊生」而報不進去。純查證，無程式修改。
+- 🔍 **直接呼叫後端權威判斷函式 `computeAlumniStatus` 比對**：**翁晨恩（子女，真正該報名的人）**→`isAlumni:true, isFullTermRenewal:true`（正確，他 7/19 就已是 7-8月週二B班整期確認學員，早於 7/29 舊生窗口開啟）；**翁啟文（家長本人）**→`isAlumni:false, isFullTermRenewal:false`（家長本人沒有任何報名紀錄）。
+- ✅ **結論：系統邏輯正確，`sameAlumniScope`/`legacyAlumniCategoryIds`/真實報名紀錄三層判定皆無誤**（已逐一讀原始碼＋現場對照排除：無同名/近似名重複會員帳號、course.categoryId 精確相符、無需靠 alumniGroup 或 legacy 名單 fallback 就直接成立）。**最可能原因＝家長在報名畫面「報名對象」欄位停留在自己身上、沒切換成翁晨恩**——前端 `alumniWindowOk` 讀的正是 `quote?.alumni?.isAlumni`（後端權威 `/courses/:courseId/quote`，與 `handleEnrollAll` 同一套判定），畫面顯示的「非本班別舊生」精準對應「查詢對象＝家長本人」時的真實結果。
+- 📋 **與蔡佩姍案例（2026-08-06 續3/續4）同一種家長操作失誤**（忘記切換報名對象成子女、用自己身分報名）——差別只在撞到哪一種擋（蔡佩姍撞到年齡＝現已被新加的 youth-course 年齡防呆擋下並引導「請確認報名對象是否正確選擇子女」；翁晨恩這次撞到的是舊生判斷，年齡防呆對他家長這種情境**同樣會擋下**（家長是成年人），間接補上這個誤觸情境、不需要另外再做舊生專屬防呆。
+- ⚠️ **此次事件發生時間早於年齡防呆上線**（防呆是同一天稍晚才部署的 `42ac42f`），故翁晨恩這次卡在舊生檢查、非年齡檢查——之後同類「家長忘記切換報名對象」的誤觸，會被年齡防呆先攔下並給出正確引導。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

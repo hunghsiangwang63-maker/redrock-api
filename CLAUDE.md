@@ -2392,6 +2392,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（打正式 API，5/6，第6項判斷失誤非程式問題）**：取消入場 API 成功／checkIn 正確標記取消／新增 `checkin_cancelled` 通知／通知內容含正確會員名／`gymId` 正確帶入新竹館／❌「通知涵蓋 gym_manager 與 super_admin 兩角色」——**此斷言本身有誤**：全系統目前**沒有任何 `gym_manager` 角色的員工**（先前盤點已記錄「gym_manager 目前 0 位」），故該角色收到 0 則通知是正確行為、非 bug；`super_admin` 確實正確收到。fixtures 測後全清、throwaway 腳本依慣例刪除不留存。
 - 💡 **教訓**：查「某功能的通知看起來不對」時，**先看實際資料量**（本例 0 筆）比先讀程式碼邏輯更快定位問題——0 筆代表「這條路徑從沒被觸發過」，通常意味著**通知邏輯掛在錯的執行路徑上**（本例：掛在死碼路由，而非真正被使用的路由），而非「觸發了但內容寫錯」。
 
+## 目前進度（2026-08-06 續3）— 試上報名機制釐清 + 蔡佩姍/陳羿齊該筆試上完整收尾
+> 承 8/4~8/5 蔡佩姍代子女陳羿齊試上改記的後續：回答兩個查證問題，並依指示完成收款確認、票券指派、入館補登。純資料操作＋查證，無程式異動。
+- 📋 **查證①：試上報名名單寫父會員還是子會員，取決於報名當下有沒有選子女**：`experienceBookings.js handleTrialBooking`——家長在表單選「報名對象＝子女」（帶 `childMemberId`）時，`trialMemberId` 改成該子女 id，`experienceBookings.memberId` 與對應 `courseEnrollments.memberId/memberName` **都會正確記子女**；若家長沒選、直接用自己身分報名，則記家長本人。蔡佩姍 8/4 那筆屬後者（報名當下沒選子女），這也是先前需要手動改記給陳羿齊的原因。
+- 📋 **查證②：試上匯款帳號依「課程所屬館別」帶出，非會員個人綁定館別**：`MemberCoursesPage.jsx` 試上 Modal `bankKey = trialModal.gymId==='gym-hsinchu' ? 'hsinchu' : 'shilin'`，對照 `systemSettings/experienceCourses.bankInfo`。蔡佩姍那筆課程（小蜘蛛人初級班 7-8月週二B班）`gymId=gym-hsinchu`，故正確帶出**新竹館帳號**（台新銀行812·關東橋分行·21000100211430），非士林帳號；她填的末五碼79080與此吻合。
+- ✅ **該筆試上確認收款**：走正式端點 `POST /experience-bookings/:id/confirm`（非手動改資料庫）——`courseEnrollments.paymentStatus→paid`、booking `status→confirmed`、**營收記帳 NT$605**、自動發 1 張當日入場券（8/4 有效）。
+- 🔍 **發現：自動發券留在待指派狀態**——`syncExperienceTickets` 用「姓名＋生日」比對會員身分自動指派，但該筆 `participants` 只填了姓名沒填生日，比對不到、故留 `memberId:null` 待指派（不是 bug，是報名資料本身缺生日欄位所致）。
+- ✅ **依指示補完整**：①`POST /experience-bookings/:id/assign-ticket`（super_admin 例外可跨當天操作）指派給陳羿齊 ②firebase-admin 建 8/4 入館紀錄（新竹館、`entryType:single_entry_ticket`、`amountPaid:0`，mirror `flow.js confirmCheckIn` schema）並將票券標記 `used`。整筆試上生命週期至此完整：報名(陳羿齊)→確認收款(NT$605已記帳)→發券→指派→8/4入館使用。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

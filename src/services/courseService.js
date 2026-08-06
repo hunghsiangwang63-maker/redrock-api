@@ -1291,7 +1291,8 @@ const promoteWaitlistForCourse = async (courseId) => {
   const { getMember } = require('./memberService');
   let isTeam = false;
   try { isTeam = isActiveTeamMember(await getMember(winnerMemberId)); } catch (e) { /* 查無會員視為非隊員 */ }
-  const { fee } = computeWeeklyCourseFee(course, { completedCount, totalCount, alumni, isTeam });
+  const promoteCategory = await getCategoryOf(db, course.categoryId);
+  const { fee } = computeWeeklyCourseFee(course, { completedCount, totalCount, alumni, isTeam, categoryGroup: promoteCategory?.group });
 
   const { FieldValue } = require('firebase-admin').firestore;
   let firstDoc = null;
@@ -1793,9 +1794,12 @@ const computeAlumniStatus = async (db, course, courseId, memberId) => {
 
 // ── 週課單一報名對象的費用計算（純函式）─────────────────────────────
 // 插班直接按剩餘場次計、無加成；續報/舊生為乘法折扣（各自開關+比率，續報優先、不疊加）；最後套隊員9折。
+// 專班課程（categoryGroup==='special'，如個人化的「XX專班」）政策一律不適用隊員9折與續報/舊生優惠，
+// 後端強制關閉、不管單一課程 fullTermRenewalDiscountEnabled/alumniDiscountEnabled 設定為何。
 // ⚠ 全系統唯一算式，quote 端點與 courses.js handleEnrollAll 皆呼叫此函式，勿在別處重寫。
-const computeWeeklyCourseFee = (course, { completedCount, totalCount, alumni, isTeam }) => {
+const computeWeeklyCourseFee = (course, { completedCount, totalCount, alumni, isTeam, categoryGroup }) => {
   const { applyTeamDiscount } = require('./teamMemberService');
+  const isSpecial = categoryGroup === 'special';
   const today = taiwanToday();
   const pricePerSession = Number(course.pricePerSession) || 0;
   const isLateJoin = completedCount > 0;
@@ -1804,15 +1808,15 @@ const computeWeeklyCourseFee = (course, { completedCount, totalCount, alumni, is
 
   const renewalOpen = !course.renewalDeadline || today <= course.renewalDeadline;
   let renewalDiscountType = null, renewalRate = null;
-  if (renewalOpen && alumni.isFullTermRenewal && course.fullTermRenewalDiscountEnabled) {
+  if (!isSpecial && renewalOpen && alumni.isFullTermRenewal && course.fullTermRenewalDiscountEnabled) {
     renewalRate = course.fullTermRenewalDiscountRate ?? 0.9; renewalDiscountType = 'full_term_renewal';
-  } else if (renewalOpen && alumni.isAlumni && course.alumniDiscountEnabled) {
+  } else if (!isSpecial && renewalOpen && alumni.isAlumni && course.alumniDiscountEnabled) {
     renewalRate = course.alumniDiscountRate ?? 0.95; renewalDiscountType = 'alumni';
   }
   const feeAfterRenewal = renewalRate != null ? Math.round(baseFee * renewalRate) : baseFee;
   const renewalDiscount = baseFee - feeAfterRenewal;
 
-  const teamRes = applyTeamDiscount(feeAfterRenewal, isTeam);
+  const teamRes = applyTeamDiscount(feeAfterRenewal, isTeam && !isSpecial);
   const fee = teamRes.discounted;
   const teamDiscount = feeAfterRenewal - fee;
 
@@ -1859,7 +1863,8 @@ const computeCourseFeeForMember = async (db, { courseId, memberId, byStaff = fal
   let isTeam = false;
   try { const m = await require('./memberService').getMember(memberId); isTeam = isActiveTeamMember(m); } catch (e) {}
 
-  const result = computeWeeklyCourseFee(course, { completedCount, totalCount, alumni, isTeam });
+  const quoteCategory = await getCategoryOf(db, course.categoryId);
+  const result = computeWeeklyCourseFee(course, { completedCount, totalCount, alumni, isTeam, categoryGroup: quoteCategory?.group });
 
   return { ...result, price: course.price || 0, alumni, courseType: course.type };
 };

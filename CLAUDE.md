@@ -2469,6 +2469,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🐞 **附帶發現並補救：兩次前端 commit 遺漏**（`redrock-web` 為獨立 git repo）——①稍早「青少年課程年齡防呆提前提醒」（續6）的 `MemberCoursesPage.jsx` 改動當時只 build+deploy、未 commit；②本次候補名單的 `CoursesPage.jsx`/`MembersPage.jsx` 改動同樣只 build+deploy 未 commit。皆於本輪 `git status` 順手發現並補 commit+push。**教訓**：本 session 頻繁在 `redrock-api`／`redrock-web` 兩個獨立 git repo 間切換，bash 指令預設 cwd 常被重置回 `redrock-api`，容易在改完 `redrock-web` 檔案後漏做該 repo 自己的 `git add/commit/push`（`firebase deploy` 不會提醒、也不需要 git 乾淨即可部署）——**每次 `redrock-web` 檔案異動後，務必明確在該 repo 目錄下額外跑一次 `git status`／`git commit` 確認落地**，不能只靠 deploy 成功來判斷完成。
 - 💡 **另記：兩次 firebase deploy 才生效的 hash 不一致**：第一次 deploy 完後 `curl` 比對本機/線上 bundle hash 仍不同（等了 20 秒仍未變、`x-cache: MISS` 排除純瀏覽器快取問題），重新整批 `firebase deploy` 一次即解決——不確定是 Firebase 端偶發的 release 傳播延遲還是巧合，之後遇到 deploy 後 hash 對不上，**先重新完整跑一次 `firebase deploy`（而非一直重試 curl 等待）**，比較節省時間。
 
+## 目前進度（2026-08-06 續13）— 資料回填：7-8月課程學員「費用」欄位補上實收金額（純資料，無程式異動）
+> 需求：7-8月課程已把實收金額（`receivedAmountOverride`）都填好，要把這個值回寫進「詳細」modal 顯示的「費用」（`fee`）欄位。純 Firestore 資料操作，未涉及程式碼/部署。
+- 🔍 **查證範圍**：全庫 20 門「7-8月」課程共 89 筆 `courseRegistrations` header，其中 62 筆有填 `receivedAmountOverride` 且與 `fee` 不同——**61 筆皆為典型「roster-import 費用欄位停留在 0」模式**（`fee:0` → `override:實際金額`，如 Raissa 入門班週一A班 `0→7200`），符合使用者描述的情境，已直接 `fee = receivedAmountOverride` 批次寫入。
+- ⚠️ **跳過 1 筆異常，需人工確認**：**林映杉**（小蜘蛛人進階班 7-8月週六B班）`fee` 原本**不是 0**、而是系統依插班比例正確算出的 **NT$3,143**（7/30 續當日已用 `/quote` 端點驗證過此人此案例，見 2026-07-30「查證：小蜘蛛人插班加成」段），但 `receivedAmountOverride` 填的是較低的 **NT$2,613**（差 530 元）——不符合「原本是0」的模式，故**未動她的 `fee` 欄位**，已回報使用者確認 530 元差額是折扣還是登記誤差，待回覆後再處理。
+- **驗證**：打正式 API `GET /courses/:courseId/enrollments`（Raissa／入門班週一A班）確認 `fee:7200` 已正確回寫、與 `receivedAmount`/`receivedAmountOverride` 一致，「詳細」modal 會顯示正確費用。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

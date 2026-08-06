@@ -2482,6 +2482,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **驗證（打正式 API）**：Raissa 四欄位（`fee/memberPaidAmount/confirmedAmount/receivedAmount`）全數一致＝7200；林映杉 `fee/memberPaidAmount/receivedAmount`＝2613 一致、`confirmedAmount`＝4400（真實轉帳金額，符合預期不對齊）。
 - ✅ **補：林映杉「詳細」畫面加員工備註說明差額緣由**（使用者追加）：`courseRegistrations` header 的 `staffNote`（原為空）寫入：實際轉帳 4,400、此課程插班比例費用原為 3,143、因 9-1月課程已扣抵 530 元差額故本課程認列調整為 2,613——供之後任何人點開「詳細」查看時，不必再回頭追查即可理解「店員核對金額」為何與「費用」不一致。已用正式 API 驗證顯示正確。
 
+## 目前進度（2026-08-06 續14）— 資料回填：尚未開課課程學員「費用」欄位比照 7-8月同法補上實收金額
+> 承續13：使用者要求把同一套「費用/會員自報金額/店員核對金額對齊實收金額」的回填，擴及**尚未開課**（`practiceStart>今天`，`buildFutureCourseStudents` 定義的範圍）的課程學員。純 Firestore 資料操作，未涉及程式碼/部署。
+- 🔍 **範圍**：8 筆有填 `receivedAmountOverride` 且與 `fee` 不同的記錄，逐筆查證後分兩類處理：
+  - **5 筆典型 roster-import 模式**（`fee:0/接近0` 直接對齊，或已核對過確屬正確金額）→ 三欄位（`fee`／`memberPaidAmount`／`confirmedAmount`）全對齊 `receivedAmountOverride`：陳威宇(9900)、林橙葉(3905)、曾郁淇(10395)、陳以喬(10395，`staffNote` 早有「原匯9923+linepay 472元」說明未動)、陳莉涵(0，使用者確認為免費個案非欄位遺漏)。**曾郁淇、陳莉涵原無 `transferRecords`**，比照續13手法補建（`status:'confirmed', confirmedBy:'backfill'`）。
+  - **3 筆有真實未結案轉帳記錄，中途發現後暫停處理、追問使用者釐清範圍**（陳宣妙/林莘沺/陳羿齊，皆「小蜘蛛人初級班 9-1月」不同梯次）——各自已有**真實**、未被本次回填動過的 `transferRecords`：陳宣妙/林莘沺為 `status:'pending'`（待審核）、陳羿齊為 `status:'rejected'`（已退回）。使用者最終指示**只改 `fee` 欄位（改成11495，對齊override）、不動轉帳/店員核對金額**；`memberPaidAmount` 先前批次寫入時已誤被一併改成11495，依指示還原回原始值——還原依據為這3人各自真實 `transferRecords.amount`（10890／11600／11600，與各自改前的原始 `fee` 完全一致，可靠推得原值）。
+- **驗證（打正式 API／直查 Firestore）**：5 筆全對齊記錄的 `fee/memberPaidAmount/confirmedAmount/receivedAmount` 四欄一致；3 筆特例記錄 `fee:11495`、`memberPaidAmount` 已還原（10890/11600/11600）、轉帳記錄與 `confirmedAmount` 全程未被觸碰，維持真實 pending/rejected 狀態。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

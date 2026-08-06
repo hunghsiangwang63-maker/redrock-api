@@ -372,9 +372,13 @@ const buildCourseMemberList = async (db, c) => {
   const seen = new Map();
   enrollSnap.docs.forEach(d => {
     const e = d.data();
-    if (e.status !== 'confirmed' || e.pauseStatus === 'paused') return;
+    if (!['confirmed', 'waitlist'].includes(e.status)) return;
+    if (e.status === 'confirmed' && e.pauseStatus === 'paused') return;
     if (e.isMakeup || e.isTrial) return; // 補課/試上＝單日行為（入場資格僅當天），不列為該班「課程學員」
-    if (!seen.has(e.memberId)) seen.set(e.memberId, { memberId: e.memberId, memberName: e.memberName || '' });
+    if (!seen.has(e.memberId)) seen.set(e.memberId, {
+      memberId: e.memberId, memberName: e.memberName || '',
+      isWaitlist: e.status === 'waitlist', waitlistPosition: e.waitlistPosition ?? null,
+    });
   });
   const memberIds = [...seen.keys()];
   const payMap = {};
@@ -412,7 +416,12 @@ const buildCourseMemberList = async (db, c) => {
     mdocs.forEach(d => { if (d.exists) phoneMap[d.id] = d.data().phone || ''; });
     members = members.map(m => ({ ...m, memberPhone: phoneMap[m.memberId] || '' }));
   }
-  return members.sort((a, b) => (a.memberName || '').localeCompare(b.memberName || ''));
+  // 正取排前、候補排後（候補內依候補順位）
+  return members.sort((a, b) => {
+    if (!!a.isWaitlist !== !!b.isWaitlist) return a.isWaitlist ? 1 : -1;
+    if (a.isWaitlist) return (a.waitlistPosition ?? 999) - (b.waitlistPosition ?? 999);
+    return (a.memberName || '').localeCompare(b.memberName || '');
+  });
 };
 
 // 跨課程一次性 join「實收金額」（transferRecords.confirmedAmount 店員核對 + 管理員直接編修覆蓋），
@@ -510,6 +519,7 @@ const buildCourseStudentRows = (filtered, invoicedMap, invoiceNoMap) => {
         '課程名稱': c.courseName || '',
         '效期起': c.practiceStart || '',
         '效期迄': c.practiceEnd || '',
+        '狀態': m.isWaitlist ? `候補・第${m.waitlistPosition ?? '?'}位` : '正取',
         '姓名': m.memberName || '',
         '電話': m.memberPhone || '',
         '費用': m.fee ?? '',
@@ -529,7 +539,7 @@ const buildCourseStudentRows = (filtered, invoicedMap, invoiceNoMap) => {
       });
     });
   });
-  if (rows.length === 0) rows.push({ '場館': '無資料', '課程名稱': '', '效期起': '', '效期迄': '', '姓名': '', '電話': '', '費用': '', '付款方式': '', '付款狀態': '', '會員自報匯款金額': '', '店員核對收款金額': '', '實收金額（管理員可編修）': '', '匯款末五碼': '', '匯款日期': '', '員工備註': '', '健康備註': '', '如何得知': '', '自訂備註': '', '已開立發票金額': '', '已開立發票號碼': '' });
+  if (rows.length === 0) rows.push({ '場館': '無資料', '課程名稱': '', '效期起': '', '效期迄': '', '狀態': '', '姓名': '', '電話': '', '費用': '', '付款方式': '', '付款狀態': '', '會員自報匯款金額': '', '店員核對收款金額': '', '實收金額（管理員可編修）': '', '匯款末五碼': '', '匯款日期': '', '員工備註': '', '健康備註': '', '如何得知': '', '自訂備註': '', '已開立發票金額': '', '已開立發票號碼': '' });
   return rows;
 };
 

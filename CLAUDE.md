@@ -2443,11 +2443,18 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端提示**（`CoursesPage.jsx` 開新梯次表單「覆寫班別規則」）：選定班別為專班課程時，在續報/舊生優惠設定上方顯示紅底提示「此為專班課程，隊員9折與續報/舊生優惠一律不適用（後端強制關閉，以下設定無效果）」——避免店員誤以為調整這兩個開關會有效果。
 - **驗證（打正式 API，真實隊員 林祺堂）**：修正前「詠弈 專班」7200→6480(隊員折)、「宇弘專班」9100→8190(隊員折)；修正後兩門課 `fee` 皆回到 `baseFee` 原價、`teamApplied:false`、`teamDiscount:0`、`renewalDiscountType:null`。
 
+## 目前進度（2026-08-06 續10）— 發票機 RJ11 錢櫃實機測試通過（P1 硬體面全數結案）
+> 使用者告知已將 RJ11 錢櫃接上 WP-560 發票機。實機測試：啟動 `local-print-agent`（開發者 Mac，沿用 P1 PoC 同一台 USB-RS232 裝置 `/dev/cu.usbserial-DU0ERYQM`）→ `GET /status` 確認序列埠連線正常 → `POST /open-drawer`（`ESC p`）→ **第一次測試即成功彈開錢箱**。
+- ✅ **先前唯一懸而未決的「軟性風險」已排除**：RJ11（4線）錢櫃少接 RJ12 標準的 2 條線（微動開關偵測＋備用），原本設計文件標記「或基本開櫃也失敗，實測便知」——實測結果**完全不影響開櫃**，本案本就只需要觸發彈開、不需微動開關偵測回報。
+- ✅ **P1 至此硬體面完全結案**：通訊協定（DIP2#3/Big5中文/`0x0C`自動對位裁切，2026-07-31 驗證）＋列印版面草稿＋**錢櫃驅動**（本次）三項全數在真實硬體上跑過，無殘留風險項目。
+- 📄 `docs/invoice-integration-plan.md` 已更新：頂部狀態列、§4 錢櫃決策段落補上實測結果，§7 待辦標記解除「卡點：只差錢櫃」。
+- 📌 **下一步 P3**：共用元件 `InvoiceCheckout`+`InvoicePrinter` adapter，先接一個流程端到端（建議銷售POS）。P3 起才需要接系統/UI 整合工作；硬體/通訊層已無阻塞。`local-print-agent` 目前跑在開發者 Mac 上驗證，尚未打包成 Windows 服務部署到櫃檯正式電腦（`docs/invoice-integration-plan.md` §7 待辦第3項，仍待做）。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。
 
-- 🖨 **【P1+P2 完成，P3 起待錢櫃】發票機串接（WP-560 二聯式）**：完整設計見 `docs/invoice-integration-plan.md`。決策全鎖定；**P1（本地代理+列印PoC）已完成**（`local-print-agent/`，見 2026-08-04 續10）、**P2（發票號碼管理）已完成**（`invoiceNumberService.js`+`/invoices/state`，見 2026-08-04 續11）——通訊/中文列印/版面/對位裁切/號碼配發皆已驗證。**卡點：使用者只差錢櫃**（要買標準 RJ12/ESC-POS 相容款，勿用 TP-3688 相容或 ACCUPOS 附贈款，詳見設計文件 §4／代理 README）。**下一步 P3**：共用元件 `InvoiceCheckout`+`InvoicePrinter` adapter（先接一個流程，建議銷售POS）→ P4 四流程接線 → P5 結帳自動化 → P6 作廢/退費連動 → P7 退費報表。**P3 開始才依賴錢櫃**（現金列印需同時開櫃）。
+- 🖨 **【P1+P2 硬體/軟體全數驗證完成，可開始 P3】發票機串接（WP-560 二聯式）**：完整設計見 `docs/invoice-integration-plan.md`。決策全鎖定；**P1（本地代理+列印+錢櫃）已完成並實機驗證**（`local-print-agent/`，見 2026-08-04 續10＋2026-08-06 續10 錢櫃測試）、**P2（發票號碼管理）已完成**（`invoiceNumberService.js`+`/invoices/state`，見 2026-08-04 續11）——通訊/中文列印/版面/對位裁切/號碼配發/開錢櫃皆已驗證，**無殘留硬體風險**。**下一步 P3**：共用元件 `InvoiceCheckout`+`InvoicePrinter` adapter（先接一個流程，建議銷售POS）→ P4 四流程接線 → P5 結帳自動化 → P6 作廢/退費連動 → P7 退費報表。另待做：`local-print-agent` 打包成 Windows 服務部署到櫃檯正式電腦（目前僅在開發者 Mac 驗證）。
 - ✅ **發票列印時機／方式（2026-08-04 全部拍板，見 `invoice-integration-plan.md` §8）**：**B**＝逐筆開票（入場一張、POS一張）／**C**＝非臨櫃付款（課程/比賽/體驗/入隊/分期）不自動觸發，一律留給店員手動按既有 §9 發票 modal（硬體接上後原地升級成真列印）／**D**＝LinePay入場一律到場掃碼確認入場當下才印（未入場轉券者延後至持券入場時）。純設計定案，實作仍待 P1（發票機硬體：正式財政部紙捲、錢櫃）到位。
 - ❌ **【已決定不做，2026-08-04 拍板】補課期限模式 B「請假日後 N 天」**：使用者確認**一律維持「課程結束後固定天數」（模式 A），跟請假日期無關**——不加模式切換，維持現行 `makeupDeadlineDays`（結束日+N）單一算法（原 2026-07-19 暫緩的方案已明確作廢，非之後再議）。
 - ✅（查證後撤銷，2026-08-04）**「小蜘蛛人一A(7-8)閎」`3f35216f` 已不存在**：查證正式資料庫，該課程已在 7/13 課程樹狀架構大改造時當重複梯次一併刪除（連 9 場次）；朱智萩目前有效報名為「技巧班 5-7月週五A班」，與此無關、無資料遺失。原提醒作廢。

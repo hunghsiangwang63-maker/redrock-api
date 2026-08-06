@@ -1576,18 +1576,28 @@ router.get('/:courseId/enrollments',
           });
         }
       }
-      // 店員核對收款金額（transferRecords.confirmedAmount，比照 members.js attachReceivedAmounts 同一套邏輯）
+      // 店員核對收款金額（transferRecords.confirmedAmount）＋匯款證明（末五碼/銀行/日期，比照 members.js
+      // attachReceivedAmounts 同一套邏輯）——header 的 bankLastFive/paymentDate 只在 enroll-all 報名當下
+      // 直接填寫轉帳資訊時才有值，會員走 /transfers/upload 提交（含退回重補）從未同步回 header，
+      // 故一律改從 transferRecords 撈「最新一筆」（不限 confirmed）蓋過 header/場次副本的值。
       const payEnrollmentIds = [...new Set(Object.values(headerMap).map(h => h.payEnrollmentId).filter(Boolean))];
       const confirmedMap = {};
+      const proofMap = {}; // payEnrollmentId -> {bankLastFive, bankName, paymentDate, at}
       for (let i = 0; i < payEnrollmentIds.length; i += 30) {
         const chunk = payEnrollmentIds.slice(i, i + 30);
         const tSnap = await db.collection('transferRecords').where('refId', 'in', chunk).get();
         tSnap.docs.forEach(td => {
           const t = td.data();
-          if (t.status !== 'confirmed' || t.confirmedAmount == null) return;
-          const at = t.confirmedAt?._seconds || t.confirmedAt?.seconds || 0;
-          const prev = confirmedMap[t.refId];
-          if (!prev || at >= prev.at) confirmedMap[t.refId] = { amount: Number(t.confirmedAmount), at };
+          if (t.status === 'confirmed' && t.confirmedAmount != null) {
+            const at = t.confirmedAt?._seconds || t.confirmedAt?.seconds || 0;
+            const prev = confirmedMap[t.refId];
+            if (!prev || at >= prev.at) confirmedMap[t.refId] = { amount: Number(t.confirmedAmount), at };
+          }
+          if (t.bankLastFive || t.paymentDate) {
+            const at2 = t.submittedAt?._seconds || t.submittedAt?.seconds || t.createdAt?._seconds || t.createdAt?.seconds || 0;
+            const prev2 = proofMap[t.refId];
+            if (!prev2 || at2 >= prev2.at) proofMap[t.refId] = { bankLastFive: t.bankLastFive || '', bankName: t.bankName || '', paymentDate: t.paymentDate || '', at: at2 };
+          }
         });
       }
       const enrollments = rosterDocs.map(d => {
@@ -1596,9 +1606,11 @@ router.get('/:courseId/enrollments',
         const header = headerMap[e.memberId] || {};
         const confirmedAmount = header.payEnrollmentId && confirmedMap[header.payEnrollmentId] != null
           ? confirmedMap[header.payEnrollmentId].amount : null;
+        const proof = header.payEnrollmentId ? proofMap[header.payEnrollmentId] : null;
         const paymentMethod = header.paymentMethod || e.paymentMethod || '';
-        const bankLastFive = header.bankLastFive || e.bankLastFive || '';
-        const paymentDate = header.paymentDate || e.paymentDate || '';
+        const bankLastFive = proof?.bankLastFive || header.bankLastFive || e.bankLastFive || '';
+        const bankName = proof?.bankName || '';
+        const paymentDate = proof?.paymentDate || header.paymentDate || e.paymentDate || '';
         const memberPaidAmount = header.memberPaidAmount ?? e.memberPaidAmount ?? null;
         const fee = header.fee ?? e.fee ?? 0;
         // 「實收金額」最終採用值：管理員直接編修 > 店員核對 > 會員自報 > 報名應繳費用（與 members.js attachReceivedAmounts 同一套優先序）
@@ -1618,6 +1630,7 @@ router.get('/:courseId/enrollments',
           receivedAmountOverride: header.receivedAmountOverride ?? null,
           receivedAmount,
           bankLastFive,
+          bankName,
           paymentDate,
           enrolledAt: header.enrolledAt || e.enrolledAt || e.createdAt || null,
           date: e.date || '',

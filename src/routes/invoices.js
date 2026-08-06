@@ -9,9 +9,11 @@
  */
 const express = require('express');
 const router = express.Router();
+const { v4: uuidv4 } = require('uuid');
 const { authenticate, requireManagerOrStation } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const invoiceNumberService = require('../services/invoiceNumberService');
+const { isValidTaiwanTaxId } = require('../utils/taiwanTaxId');
 
 // GET /invoices/state?gymId= - 查詢目前發票號碼狀態（唯讀，任何已登入員工可看，供結帳/櫃檯核對）
 router.get('/state', authenticate, async (req, res) => {
@@ -78,6 +80,43 @@ router.put('/printing-status', authenticate, async (req, res) => {
     }, { merge: true });
     res.json({ success: true, enabled: !!enabled, changedAt: now, changedBy });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// POST /invoices/print-record - 真實列印後的「配號＋建立正式紀錄」（P3 起步；供五流程真列印共用）
+// ⚠️ 呼叫順序（前端負責）：一定要先呼叫 local-print-agent 的 /print、確認實際印出成功之後，
+// 才呼叫這個端點——印表機失敗時不應消耗真實號碼、也不該留下「印了但沒對應紀錄」的假象。
+// 本端點只做「印成功之後」那一半：atomically 配號 + 寫入正式 invoices 集合（與 §9 手動記帳版的
+// invoiceRecords 是不同集合，此為第 1-8 節「真實印表機」計畫專用，供日後 P5 結帳自動化讀取）。
+router.post('/print-record', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const { gymId, sourceType, refId, memberId, memberName, itemName, amount, taxId, note, issuedAt } = req.body;
+    if (!gymId) return res.status(400).json({ error: 'MISSING_GYM', message: '請指定館別' });
+    const amt = Number(amount);
+    if (!(amt > 0)) return res.status(400).json({ error: 'INVALID_AMOUNT', message: '發票金額需大於 0' });
+    const taxIdVal = taxId ? String(taxId).trim() : '';
+    if (taxIdVal && !isValidTaiwanTaxId(taxIdVal)) {
+      return res.status(400).json({ error: 'INVALID_TAX_ID', message: '統一編號檢查碼錯誤，請確認號碼是否正確' });
+    }
+    const allocated = await invoiceNumberService.allocateInvoiceNumber(gymId); // {track, number}
+    const db = getDb();
+    const id = uuidv4();
+    const now = new Date();
+    const record = {
+      id, sourceType: sourceType || null, refId: refId || null, status: 'issued',
+      gymId, memberId: memberId || null, memberName: memberName || '',
+      itemName: itemName || '費用', amount: amt,
+      track: allocated.track, number: allocated.number, invoiceNo: `${allocated.track}${allocated.number}`,
+      taxId: taxIdVal, note: note ? String(note).trim() : '',
+      issuedAt: issuedAt ? new Date(issuedAt) : now,
+      staffId: req.staff.id, staffName: req.staff.name || '',
+      createdAt: now, updatedAt: now,
+    };
+    await db.collection('invoices').doc(id).set(record);
+    res.json({ success: true, invoice: record });
+  } catch (err) {
+    if (err.code === 'INVOICE_STATE_NOT_CONFIGURED') return res.status(400).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
 });
 
 module.exports = router;

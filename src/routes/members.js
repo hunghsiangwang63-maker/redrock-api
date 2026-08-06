@@ -346,7 +346,12 @@ router.get('/reports/active-passes', authenticate, async (req, res) => {
     passes.forEach(p => {
       const key = p.passTypeId || p.passTypeName || 'other';
       if (!groups[key]) groups[key] = { passTypeId: p.passTypeId || null, passTypeName: p.passTypeName || '定期票', members: [] };
-      groups[key].members.push({ memberId: p.memberId, memberName: nameMap[p.memberId] || p.memberName || '(已刪除會員)', startDate: p.startDate || null, endDate: p.effectiveEndDate || p.endDate || null });
+      groups[key].members.push({
+        memberId: p.memberId, memberName: nameMap[p.memberId] || p.memberName || '(已刪除會員)',
+        startDate: p.startDate || null, endDate: p.effectiveEndDate || p.endDate || null,
+        // 展延核准時寫入（passAdjustmentService.approvePassRequest）；停用期間內票視為非有效期，供列表下方註明
+        suspendStart: p.suspendStart || null, suspendEnd: p.suspendEnd || null, suspendRequestedAt: p.suspendRequestedAt || null,
+      });
     });
     const passTypes = Object.values(groups)
       .map(g => ({ ...g, count: g.members.length, members: g.members.sort((a, b) => (a.endDate || '') < (b.endDate || '') ? -1 : 1) }))

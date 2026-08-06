@@ -206,6 +206,7 @@ const approvePassRequest = async ({ requestId, operatorId, operatorName, extensi
     if (request.suspendStart && request.suspendEnd) {
       passUpdate.suspendStart = request.suspendStart;
       passUpdate.suspendEnd = request.suspendEnd;
+      passUpdate.suspendRequestedAt = request.createdAt || now; // 申請時間，供員工端定期票列表顯示，免另外 join 查詢
     }
     await passRef.update(passUpdate);
     await logAdjustment({

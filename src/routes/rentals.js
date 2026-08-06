@@ -224,6 +224,55 @@ router.post('/:id/return', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── 器材租借開立發票（預先建立，待日後發票機串接；手動記帳版，比照課程/比賽/入場同一套）──
+// 底層共用 invoiceService（sourceType:'rental'，refId=rentalId）。金額只算租金、不含押金（見 §8）。
+router.get('/:id/invoices', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('invoiceRecords')
+      .where('sourceType', '==', 'rental').where('refId', '==', req.params.id).get();
+    const invoices = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.issuedAt?._seconds || 0) - (a.issuedAt?._seconds || 0));
+    res.json({ invoices });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+router.post('/:id/invoices', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const rentalDoc = await db.collection('equipmentRentals').doc(req.params.id).get();
+    if (!rentalDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到租借紀錄' });
+    const r = rentalDoc.data();
+    const { itemName, amount, taxId, note, issuedAt, track, number } = req.body;
+    const invoiceService = require('../services/invoiceService');
+    const record = await invoiceService.createInvoice(db, {
+      sourceType: 'rental', refId: req.params.id,
+      memberId: r.memberId, memberName: r.memberName || '',
+      itemName: itemName || '器材租借費', amount: amount ?? r.totalRentalFee, taxId, note, gymId: r.gymId, issuedAt, track, number,
+      staffId: req.staff.id, staffName: req.staff.name || '',
+      meta: { rentalId: req.params.id },
+    });
+    res.json({ success: true, invoice: record });
+  } catch (err) {
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400, INVALID_TAX_ID: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+router.post('/invoices/:id/void', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const invoiceService = require('../services/invoiceService');
+    await invoiceService.voidInvoice(db, req.params.id, req.staff.id, req.staff.name, req.body.voidReason);
+    res.json({ success: true });
+  } catch (err) {
+    const map = { NOT_FOUND: 404, ALREADY_VOIDED: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 // ── 共用：依設定重算品項費用（金額後端權威，供 apply/修改共用） ──
 function computeRentalItems(settings, items, rentalType) {
   let totalRentalFee = 0, totalDeposit = 0;

@@ -2450,6 +2450,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📄 `docs/invoice-integration-plan.md` 已更新：頂部狀態列、§4 錢櫃決策段落補上實測結果，§7 待辦標記解除「卡點：只差錢櫃」。
 - 📌 **下一步 P3**：共用元件 `InvoiceCheckout`+`InvoicePrinter` adapter，先接一個流程端到端（建議銷售POS）。P3 起才需要接系統/UI 整合工作；硬體/通訊層已無阻塞。`local-print-agent` 目前跑在開發者 Mac 上驗證，尚未打包成 Windows 服務部署到櫃檯正式電腦（`docs/invoice-integration-plan.md` §7 待辦第3項，仍待做）。
 
+## 目前進度（2026-08-06 續11）— 現金付款「列印發票同時開櫃」+ 員工端「獨立開錢箱」按鈕，皆實機驗證通過
+> 承續10：`/print` 端點的 `openDrawer` 參數其實 P1 就寫好了（只是先前沒錢櫃可測），本次直接用一張現金付款測試發票驗證組合動作；另用瀏覽器登入員工端「今日結帳」頁面實測既有的「獨立開錢箱」按鈕（該按鈕 2026-08-06 續就已建置上線，但只測過 API 層，UI 點擊路徑一直沒真的測過）。純測試/文件維護，無程式邏輯變更。
+- ✅ **「一般現金付款列印發票後開錢箱」端到端驗證**：`POST /print`（`{gymId:'hsinchu', items:[{name:'入場費',price:300,qty:1}], openDrawer:true}`）→ 使用者確認**發票內容/版面正確、錢箱同時彈開**——這正是設計文件 §4/§8 定案的「現金付款＝列印發票同時開櫃」政策動作，第一次在真實硬體上完整跑過。
+- ✅ **員工端「今日結帳」頁「獨立開錢箱」按鈕 UI 層驗證**：瀏覽器登入 staff.redrocktaiwan.com（super_admin）→ 今日結帳頁 → 點擊按鈕 → 網路請求確認 `POST http://localhost:3399/open-drawer` 回 200、畫面顯示「✅ 已送出開櫃指令」。
+- 🔍 **中途一次「假性失敗」排查**：第一輪測試按鈕點擊後回報「沒開」，一度懷疑瀏覽器跨網域打 localhost 有問題（Private Network Access 權限提示卡住等）；透過 `read_network_requests`/`read_console_messages` 逐步排除，確認**每次點擊的請求都確實送達且回應成功**——真正原因是**錢箱在測試過程中已處於開啟/沒閂緊狀態**（前面 curl 測試已開過），對「已經開著」的錢箱再送一次開櫃脈衝**沒有東西可彈**、看起來像沒反應，但指令其實正確執行。請使用者把錢箱確實關緊閂好後重新測試，**同一顆按鈕、同一段程式碼、這次成功彈開**——證實從頭到尾沒有程式或硬體問題，純粹是測試當下的錢箱起始狀態誤導了判讀。
+- 💡 **教訓**：驗證「開櫃」這類「從關到開才看得出效果」的物理動作時，**測試前務必先確認硬體處於明確的關閉/起始狀態**，否則指令執行成功但無視覺變化會被誤判為失敗，浪費時間排查不存在的 bug。
+- 📌 至此，發票機串接的 P1 全部三個動作（列印、單獨開櫃、列印+開櫃組合）皆已在真實硬體＋實際 UI 路徑上驗證完畢。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

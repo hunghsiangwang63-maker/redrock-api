@@ -2400,6 +2400,18 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🔍 **發現：自動發券留在待指派狀態**——`syncExperienceTickets` 用「姓名＋生日」比對會員身分自動指派，但該筆 `participants` 只填了姓名沒填生日，比對不到、故留 `memberId:null` 待指派（不是 bug，是報名資料本身缺生日欄位所致）。
 - ✅ **依指示補完整**：①`POST /experience-bookings/:id/assign-ticket`（super_admin 例外可跨當天操作）指派給陳羿齊 ②firebase-admin 建 8/4 入館紀錄（新竹館、`entryType:single_entry_ticket`、`amountPaid:0`，mirror `flow.js confirmCheckIn` schema）並將票券標記 `used`。整筆試上生命週期至此完整：報名(陳羿齊)→確認收款(NT$605已記帳)→發券→指派→8/4入館使用。
 
+## 目前進度（2026-08-06 續4）— 小蜘蛛人/青少年課程年齡防呆 + 轉帳確認彈窗補會員備註
+> 承蔡佩姍案例，要求「以後防呆處理，報名小蜘蛛人以及青少年課程年齡要小於18歲，避免父會員沒有正確選子會員」；另一併處理「管理員轉帳確認的彈窗，把會員自己寫的備註內容也帶進來」。後端 `/health` `3.222.0-youth-course-age-guard`→`3.223.0-transfer-confirm-member-note`；正式 API E2E 7/7。commit `42ac42f`、`d0ed88c`。
+- ✅ **年齡防呆（週課+試上）**：判斷依據＝班別大類 `group==='youth'`（查證這正是全部小蜘蛛人＋青少年類別的集合，含寒暑假密集班，共 8 個班別，未來新增同大類的班別也自動涵蓋）。後端權威擋 `age>=18`（沿用既有 `utils/age.js isMinor`，birthday 未知則不擋，語意與既有 `AGE_UNDER_5` 系列一致）。
+  - `courses.js handleEnrollAll`（週課，會員自助＋訪客公開報名共用同一份邏輯，改一處兩邊生效）。
+  - `experienceBookings.js handleTrialBooking`（試上，會員＋訪客兩分支各自加）。
+  - **僅擋會員自助與訪客，店員代辦不受限**（`!req.staff` 判斷，比照既有報名開放日 gate 的寫法）——店員清楚知道在幫誰報名，不受此防呆限制。
+  - 錯誤訊息：「此課程限未滿 18 歲學員報名，請確認報名對象是否正確選擇子女／生日是否填寫正確」。
+- ✅ **轉帳確認彈窗補會員備註**：`TransferConfirmModal.jsx` 本就有渲染 `record.notes` 的黃底提示區，但待辦頁組 `record` 時只 spread `transferRecords` 本身（該集合從無 `notes` 欄位），從未真正帶入訂單文件上「會員自己寫的備註」。依 `orderType` 解析對應欄位：course→`enrollNote`/`healthNote`/`referralSource`（合併顯示）、experience→`notes`、competition→`memberNote`；rental/team_member 目前無會員自填備註欄位、維持空。
+- **E2E（打正式 API，真實會員+店員 token，7/7）**：①成人自助報名 youth 課程擋 `YOUTH_COURSE_AGE_LIMIT` ②未成年自助報名不被年齡擋 ③店員代成人報名不受限 ④成人自助試上被擋 ⑤未成年自助試上不被擋 ⑥待辦清單正確抓到轉帳確認任務 ⑦`record.notes` 正確合併三項會員備註。
+- 🐞 **測試清理踩雷（本次抓到、已修正）**：②③兩個「應該成功」的斷言確實成功建立了報名，走的是**真實的**週課 enroll-all 交易（用了一個真實存在、有 22 個未來場次的正式課程做測試，而非另建假課程）——刪除測試用的 `courseEnrollments` 文件後，該課程 **22 個場次的 `enrolledCount` 殘留 +2（стored 2、實際 confirmed 0）**，另有 1 筆 `courseRegistrations` header、1 筆 `transactions`（NT$12,100 認列在最後一堂）、1 筆 `transferRecords` 一併殘留未清——全部逐一找出並刪除/修正，最終橫跨 8 個 collection 全庫掃描確認 0 殘留。
+- 💡 **教訓（延續前次同類教訓，這次是「借用真實實體做測試」版本）**：借用一個**真實存在的正式課程/場次**跑會產生實際報名的 E2E（而非全程使用新建的假課程），清理必須涵蓋該實體所有可能被觸碰的**衍生欄位與旁支集合**（`enrolledCount` 計數器、`courseRegistrations` header、`transactions` 認列、`transferRecords` 待收款單），不是只刪主要的 `courseEnrollments` 文件就結束——凡是「E2E 過程中用了真實/正式資料做操作對象」的情況，收尾都必須比「全新建立的假資料」多一輪「這個真實實體本身有沒有被留下痕跡」的检查。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

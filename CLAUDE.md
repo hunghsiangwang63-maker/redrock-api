@@ -2458,6 +2458,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 💡 **教訓**：驗證「開櫃」這類「從關到開才看得出效果」的物理動作時，**測試前務必先確認硬體處於明確的關閉/起始狀態**，否則指令執行成功但無視覺變化會被誤判為失敗，浪費時間排查不存在的 bug。
 - 📌 至此，發票機串接的 P1 全部三個動作（列印、單獨開櫃、列印+開櫃組合）皆已在真實硬體＋實際 UI 路徑上驗證完畢。
 
+## 目前進度（2026-08-06 續12）— 課程名單（課程管理＋會員課程學員報表）加入候補名單
+> 需求：「課程裡面的名單」（`CoursesPage.jsx` 報名名單 modal）與「會員的課程名單」（`MembersPage.jsx` 課程學員報表）原本都只顯示正取（confirmed/leave），候補（waitlist）完全看不到。後端 `/health` `3.227.0-course-roster-waitlist`；正式 API 驗證（真實候補 陳子霓）通過。commit `52ba426`。
+- ✅ **`GET /courses/:courseId/enrollments`**（`courses.js`，課程管理「報名名單」來源）：filter 加入 `waitlist` 狀態；回應補 `waitlistPosition` 欄位（`status` 本就有回傳）。
+- ✅ **`buildCourseMemberList`**（`members.js`，「會員→課程學員」報表＋對應 CSV 下載共用）：filter 從只收 `confirmed` 改收 `confirmed`＋`waitlist`（`pauseStatus` 檢查僅套用於 confirmed），member 物件補 `isWaitlist`/`waitlistPosition`；排序改「正取按姓名、候補按順位」且候補一律排最後。CSV（`buildCourseStudentRows`）加「狀態」欄（`候補・第N位` / `正取`）。
+- ✅ **前端 `CoursesPage.jsx`**：報名名單 modal 拆成兩段——原本的正取表格（無正取時不顯示空表格）＋新增「🕐 候補名單（N人）」琥珀色表格（候補順位／學員／電話，依順位排序）；標頭人數改「共 N 人・候補 M 人」分開顯示。
+- ✅ **前端 `MembersPage.jsx`**：`RowMemberList` 共用元件（課程學員／定期票兩分頁共用）——候補會員姓名旁加琥珀徽章「🕐 候補・第N位」；候補列隱藏「實收金額/詳細/開立發票」等付款相關按鈕（無意義，尚未收費）；群組標頭人數改「N 人・候補 M 人」（`isWaitlist` 對定期票分頁恆為 undefined，不影響原顯示）。
+- **驗證（打正式 API，真實候補 陳子霓／小蜘蛛人進階班 9-1月週六B班）**：課程報名名單端點回傳候補 21 筆場次副本（1 位唯一會員，`status:waitlist, waitlistPosition:1`）；未開課報名總表（該課程尚未開課、非 active）7 位學員中正確標記陳子霓 `isWaitlist:true, waitlistPosition:1` 且排在 6 位正取之後。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

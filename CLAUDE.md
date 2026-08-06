@@ -2489,6 +2489,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **3 筆有真實未結案轉帳記錄，中途發現後暫停處理、追問使用者釐清範圍**（陳宣妙/林莘沺/陳羿齊，皆「小蜘蛛人初級班 9-1月」不同梯次）——各自已有**真實**、未被本次回填動過的 `transferRecords`：陳宣妙/林莘沺為 `status:'pending'`（待審核）、陳羿齊為 `status:'rejected'`（已退回）。使用者最終指示**只改 `fee` 欄位（改成11495，對齊override）、不動轉帳/店員核對金額**；`memberPaidAmount` 先前批次寫入時已誤被一併改成11495，依指示還原回原始值——還原依據為這3人各自真實 `transferRecords.amount`（10890／11600／11600，與各自改前的原始 `fee` 完全一致，可靠推得原值）。
 - **驗證（打正式 API／直查 Firestore）**：5 筆全對齊記錄的 `fee/memberPaidAmount/confirmedAmount/receivedAmount` 四欄一致；3 筆特例記錄 `fee:11495`、`memberPaidAmount` 已還原（10890/11600/11600）、轉帳記錄與 `confirmedAmount` 全程未被觸碰，維持真實 pending/rejected 狀態。
 
+## 目前進度（2026-08-06 續15）— 插班報名加警語（可請假次數依報名堂數調整）
+> 純前端 `MemberCoursesPage.jsx`，commit `c221743`，member 已 deploy。
+- 📋 **背景查證**：插班補課次數（`maxLeaves`）原本**沒有自動比例換算**——預設一律跟全期學員同值（班別/梯次整期設定，預設2次），唯一會不同的情形是店員在「課程→報名名單」手動個別覆寫（`maxLeavesAllowed`，設過會標橘色「插班」徽章），且這個覆寫**對會員本人完全不可見**（會員端「課程規則」說明只顯示課程整期預設值，不反映個別覆寫）。
+- ✅ **加警語**：課程詳情頁「計費明細」框（`isLateJoin` 時顯示的插班費用明細）下方，新增琥珀色提示（僅 `feeReady && isLateJoin && !alreadyEnrolled` 時顯示）：「⚠️ 插班報名可請假次數會依據報名堂數調整，以館方計算結果為準。」——純告知性質，措辭與現況一致（店員視情況個別調整、非自動計算）；不影響任何計費/請假邏輯。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

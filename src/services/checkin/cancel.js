@@ -36,8 +36,21 @@ const revertRenewal = async (db, checkIn, now) => {
   }
 };
 
+// ── 取消入場通知（同館 gym_manager＋super_admin；失敗不阻斷主流程）─────────
+// 直接取消（此函式）過去完全不通知管理員，只有極少用到的「申請取消（cancelCheckin.js）」
+// 審核流程才會通知——但那套流程實際上從未被用過，等同「取消入場」通知分類永遠是空的。
+const notifyCancelCheckin = async ({ gymId, memberName, staffName, force }) => {
+  const { notifyRoleInGym } = require('../notificationService');
+  const body = `${staffName || '員工'} 取消了 ${memberName || '會員'} 的入場記錄${force ? '（強制取消，已超過10分鐘時限）' : ''}`;
+  for (const role of ['gym_manager', 'super_admin']) {
+    try {
+      await notifyRoleInGym({ gymId, role, type: 'checkin_cancelled', title: '入場已取消', body });
+    } catch (e) { console.error('notifyCancelCheckin 失敗', e.message); }
+  }
+};
+
 // ── 取消入場（10分鐘內）────────────────────────────────────────
-const cancelCheckIn = async (checkInId, staffId, force = false) => {
+const cancelCheckIn = async (checkInId, staffId, force = false, staffName = null) => {
   const db = getDb();
 
   // 防護：Firestore 文件 id 限制（保留字 __x__、空值、含 "/"、"."、".." 會丟底層錯誤）
@@ -173,6 +186,9 @@ const cancelCheckIn = async (checkInId, staffId, force = false) => {
       cancelledBy: staffId,
     });
   }
+
+  // 通知同館管理員（不阻斷取消本身）
+  await notifyCancelCheckin({ gymId: checkIn.gymId, memberName: checkIn.memberName, staffName, force }).catch(() => {});
 
   return { message: '入場已取消，票券已退回', checkInId };
 };

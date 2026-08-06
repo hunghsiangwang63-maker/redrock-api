@@ -202,7 +202,7 @@ router.post('/cancel',
   async (req, res) => {
     try {
       const force = req.body.force === true && req.staff.role === 'super_admin';
-      const result = await checkinService.cancelCheckIn(req.body.checkInId, req.staff.id, force);
+      const result = await checkinService.cancelCheckIn(req.body.checkInId, req.staff.id, force, req.staff.name);
       res.json(result);
     } catch (err) {
       if (err.code) return res.status(400).json(err);

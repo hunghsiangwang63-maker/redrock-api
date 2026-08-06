@@ -2419,6 +2419,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📋 **與蔡佩姍案例（2026-08-06 續3/續4）同一種家長操作失誤**（忘記切換報名對象成子女、用自己身分報名）——差別只在撞到哪一種擋（蔡佩姍撞到年齡＝現已被新加的 youth-course 年齡防呆擋下並引導「請確認報名對象是否正確選擇子女」；翁晨恩這次撞到的是舊生判斷，年齡防呆對他家長這種情境**同樣會擋下**（家長是成年人），間接補上這個誤觸情境、不需要另外再做舊生專屬防呆。
 - ⚠️ **此次事件發生時間早於年齡防呆上線**（防呆是同一天稍晚才部署的 `42ac42f`），故翁晨恩這次卡在舊生檢查、非年齡檢查——之後同類「家長忘記切換報名對象」的誤觸，會被年齡防呆先攔下並給出正確引導。
 
+## 目前進度（2026-08-06 續6）— 青少年課程年齡防呆提前到「選課程/選報名對象」當下就提醒（原本只有最後送出才擋）
+> 回報「這會在一開始選課程就提醒嗎？」——查證續4新增的 `YOUTH_COURSE_AGE_LIMIT` 防呆**只有後端 `handleEnrollAll`/`handleTrialBooking` 最後送出時才擋**，前端沒有任何早期提示，家長可能整份報名表（規則確認/簽名/付款方式）填完才在最後一步被退回。比照系統既有「未滿5歲」防呆的早期提醒寫法（`targetUnder5`），補上同一層級的早期警示。後端 `/health` `3.224.0-trial-youth-age-category-group`；commit 後端 `b130551`、前端已 deploy；正式 API 驗證 40/40 試上場次皆帶新欄位。
+- ✅ **新增 `youthAgeBlocked`/`trialYouthAgeBlocked` 兩個前端計算值**（`MemberCoursesPage.jsx`，緊鄰既有 `targetUnder5`/`trialTargetUnder5` 定義）：`selectedCourse.categoryGroup==='youth' && !targetIsMinor`（週課）／`trialModal.categoryGroup==='youth' && !trialTargetIsMinor`（試上）。
+- ✅ **週課提醒提前到課程詳情頁**（比 modal 更早一層）：「為誰報名」選擇器下方立即顯示紅底警示＋自動禁用「報名課程」按鈕（文字改「報名對象不符資格」）；報名 modal 內同樣位置（`targetUnder5` 警示旁）也加一份（防呆有第二入口——modal 內可重新切換報名對象），`_submitDisabled` 一併納入。
+- ✅ **試上提醒**：試上 modal 唯一入口，於同意條款下方（`trialTargetUnder5` 警示旁）加紅底提示，送出鈕禁用；`submitTrial` 函式頭部也補一道前端擋（雙保險，後端仍為權威）。
+- 🐞 **補後端缺口**：試上場次列表 `getTrialSessions`（`courseService.js`）原本**沒有回傳 `categoryGroup`**（只有 `categoryName`）——前端試上端點無從判斷，補上（`trialCourses[c.id]` 物件與最終 `.map()` 回傳各補一處），正式 API 驗證 40 個試上場次全數帶出、值為 `youth`/`adult`，小蜘蛛人梯次正確標 `youth`。
+- 📋 **範圍**：僅 `type==='weekly'`（週課）與試上；工作坊（`enrollCourse`/`POST /sessions/:sessionId/enroll`）未受影響（該類型後端從未加此防呆，前端也未動——運動按摩/肢體評估等工作坊不會落在 youth 分類）。
+- 🐞 **附帶清理**：`git add -A` 時誤把先前調查用的 throwaway 查詢腳本 `scratchpad/check-cancelled-checkins-count.cjs` 一併 commit，發現後立即補一個 commit 刪除（依專案慣例 scratchpad 腳本用完即刪、不留存版控）。
+
 - 🛡 **DDoS 防護現況（2026-07-22 更新）：api 已改灰雲（直連 Railway、快 3 倍），`EDGE_ENFORCE` 保持關**。原 2026-07-20 橘雲+EDGE_ENFORCE 因延遲（每請求+0.5s）與營業中斷回退 → 定調平時走**灰雲+app 層全域限流**（3.68.0）。**遇 DDoS 才恢復邊緣防護**：Cloudflare 把 `api` 點回橘雲 → Security 開 Under Attack Mode（攻擊過再點回灰雲）。⚠️ **`EDGE_ENFORCE=true` 只在 api 橘雲時能開**（靠 Transform Rule 注入 `X-Edge-Auth`）；**api 灰雲時務必保持 `EDGE_ENFORCE=false`**，否則直連無 header 會全站被擋。`EDGE_SECRET` 存 Railway+Cloudflare Transform Rule+Render（三處備妥、Render 端 enforce 保持關）。完整見 `docs/outage-playbook.md` 第六節。
 - 🔧 **【選做】比賽退費申請審核**：真正已繳費的退費申請，管理員可「退回給會員修正退費資訊」（退費帳號錯）/「駁回退費申請」（依政策不退）。本輪確認暫不做（無實際案例）；要做時後端加 `return-refund`/`reject-refund` + 會員端修正退費資訊 UI + `/my/alerts` 通知。
 - 🛡 **Railway 應變**：①②③④ **全部完成**（2026-07-17 ④ Render 冷備上線）。長期：金流上線前評估遷 Cloud Run。

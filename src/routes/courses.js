@@ -1759,6 +1759,19 @@ async function handleEnrollAll(req, res) {
 
       const courseDoc = await db.collection('courses').doc(courseId).get();
       const course = courseDoc.data();
+
+      // 防呆：小蜘蛛人／青少年（班別大類 group==='youth'）限未滿18歲報名——避免家長忘記選子女、
+      // 用自己身分報名這類課程（僅擋會員自助/訪客；店員代辦不受限，見 !req.staff 用法同上方開放日 gate）。
+      if (!req.staff) {
+        const category = await courseService.getCategoryOf(db, course.categoryId);
+        if (category?.group === 'youth') {
+          const birthdayForCheck = isGuestEnroll ? req.body._guestBirthday : _attendee;
+          if (!isMinor(birthdayForCheck)) {
+            return res.status(400).json({ code: 'YOUTH_COURSE_AGE_LIMIT', message: '此課程限未滿 18 歲學員報名，請確認報名對象是否正確選擇子女／生日是否填寫正確' });
+          }
+        }
+      }
+
       const { v4: uuidv4 } = require('uuid');
       const { FieldValue } = require('firebase-admin').firestore;
       const now = new Date();

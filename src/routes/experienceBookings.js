@@ -31,8 +31,9 @@ async function handleTrialBooking(req, res, db, memberId) {
   const session = sDoc.data();
   const cDoc = await db.collection('courses').doc(session.courseId).get();
   const course = cDoc.exists ? cDoc.data() : {};
+  const category = await courseService.getCategoryOf(db, course.categoryId);
   // 試上開關/試上費走班別規則繼承（梯次可覆寫）
-  const trialRules = courseService.resolveRules(course, await courseService.getCategoryOf(db, course.categoryId));
+  const trialRules = courseService.resolveRules(course, category);
   if (trialRules.allowTrial !== true) return res.status(400).json({ code:'TRIAL_NOT_ALLOWED', message:'此課程未開放試上' });
 
   let trialMemberId, trialName, trialEmail, trialPhone, isGuestTrial = false;
@@ -46,6 +47,8 @@ async function handleTrialBooking(req, res, db, memberId) {
     if (!guestPhone || !String(guestPhone).trim()) return res.status(400).json({ code:'MISSING_PHONE', message:'請填寫聯絡電話' });
     if (!guestBirthday) return res.status(400).json({ code:'MISSING_BIRTHDAY', message:'請填寫生日' });
     if (isUnder5(guestBirthday)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
+    // 防呆：小蜘蛛人／青少年（班別大類 group==='youth'）限未滿18歲試上
+    if (category?.group === 'youth' && !isMinor(guestBirthday)) return res.status(400).json({ code:'YOUTH_COURSE_AGE_LIMIT', message:'此課程限未滿 18 歲學員報名，請確認生日是否填寫正確' });
     if (!signatureData) return res.status(400).json({ code:'CONSENT_REQUIRED', message:'請先完成簽名' });
     if (isMinor(guestBirthday) && !guardianSignature) return res.status(400).json({ code:'GUARDIAN_SIGNATURE_REQUIRED', message:'未滿 18 歲需法定代理人簽名' });
     if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code:'MISSING_TRANSFER', message:'請填寫匯款帳號末五碼' });
@@ -80,6 +83,10 @@ async function handleTrialBooking(req, res, db, memberId) {
     // 後端權威：未滿 5 歲無法報名試上（實際參加者＝trialMemberId，家長代子時為子會員）
     const _trialMember = await memberService.getMember(trialMemberId).catch(() => null);
     if (isUnder5(_trialMember)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
+    // 防呆：小蜘蛛人／青少年限未滿18歲試上——避免家長忘記選子女、用自己身分報名（同 handleEnrollAll 邏輯）
+    if (category?.group === 'youth' && !isMinor(_trialMember)) {
+      return res.status(400).json({ code:'YOUTH_COURSE_AGE_LIMIT', message:'此課程限未滿 18 歲學員報名，請確認報名對象是否正確選擇子女／生日是否填寫正確' });
+    }
   }
 
   const trialFee = courseService.getEffectiveTrialPrice(course, trialRules);

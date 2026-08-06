@@ -6,10 +6,10 @@
 // 本檔取代 scratchpad/printer-test/ 的 throwaway 原型，正式進版控、供部署到櫃檯電腦長駐執行。
 //
 // ⚠️ 號碼管理不在這裡——本代理是「純列印工具」，發票號碼由 RedRock 後端的 invoiceState 權威管理
-// （P2，尚未實作）；代理只負責「把指定內容印到當前那張紙上」，不做任何金額/號碼邏輯判斷。
+// （P2，已完成，見 invoiceNumberService.js）；代理只負責「把指定內容印到當前那張紙上」，不做任何金額/號碼邏輯判斷。
 //
-// ⚠️ 開錢櫃（/open-drawer）尚未實機測試——本機沒有錢櫃可供測試，指令依 ESC/POS 公開標準撰寫
-// （ESC p，見下方 openDrawer()），錢櫃到位後第一件事就是測試這個端點。
+// ✅ 開錢櫃（/open-drawer、/print 的 openDrawer 參數）已於 2026-08-06 實機測試通過：
+// RJ11 錢櫃接上 WP-560 後，單獨開櫃與「現金付款列印發票同時開櫃」皆一次測試成功。
 
 require('dotenv').config();
 const express = require('express');
@@ -35,7 +35,7 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://staff.redrockta
 const ESC_INIT = Buffer.from([0x1B, 0x40]);
 const FORM_FEED = Buffer.from([0x0C]);
 // ESC p m t1 t2：開錢櫃脈衝訊號（m=接腳編號 0，t1/t2=通電/斷電時間，單位約 2ms）。
-// 標準值 m=0, t1=25(=50ms), t2=250(=500ms) 為業界常見的可靠開櫃脈衝長度。⚠️ 未實機測試，見檔頭警語。
+// 標準值 m=0, t1=25(=50ms), t2=250(=500ms) 為業界常見的可靠開櫃脈衝長度。✅ 已實機測試通過，見檔頭。
 const ESC_OPEN_DRAWER = Buffer.from([0x1B, 0x70, 0x00, 25, 250]);
 
 const big5 = (s) => iconv.encode(s, 'big5');
@@ -213,9 +213,9 @@ app.get('/', (req, res) => {
   <label>品項名稱 <input id="itemName" value="入場費"></label>
   <label>金額 <input id="itemPrice" type="number" value="300"></label>
   <label>買受人統編（選填） <input id="buyerTaxId" placeholder="留空不印該行"></label>
-  <label><input type="checkbox" id="openDrawer" style="width:auto;display:inline-block"> 同時開錢櫃（尚未實測，僅現金情境使用）</label>
+  <label><input type="checkbox" id="openDrawer" style="width:auto;display:inline-block"> 同時開錢櫃（僅現金情境使用）</label>
   <button onclick="doPrint()">🖨️ 測試列印</button>
-  <button class="secondary" onclick="doOpenDrawer()">💰 單獨開錢櫃（尚未實測）</button>
+  <button class="secondary" onclick="doOpenDrawer()">💰 單獨開錢櫃</button>
   <button class="secondary" onclick="doStatus()">🔌 檢查連線狀態</button>
   <div id="status"></div>
 <script>

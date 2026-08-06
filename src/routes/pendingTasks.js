@@ -246,6 +246,23 @@ router.get('/', authenticate, async (req, res) => {
         // 比賽報名有申請友館優惠 → 直接帶出選了哪個友館，待辦列表/確認彈窗都能一眼看到，不用另外點進報名詳情
         const partnerGym = (t.orderType === 'competition' && orderDoc?.isPartnerGymDiscount) ? (orderDoc.partnerGym || '友館') : null;
         const partnerGymPending = partnerGym ? !!orderDoc.partnerGymPending : false;
+        // 會員自己填寫的備註——各訂單型別欄位名不同，非 transferRecords 本身的欄位，須從 orderDoc 取：
+        // course→enrollNote/healthNote/referralSource（合併顯示）、experience→notes、competition→memberNote、
+        // rental/team_member 目前無會員自填備註欄位。
+        let memberWrittenNote = null;
+        if (orderDoc) {
+          if (t.orderType === 'course') {
+            memberWrittenNote = [
+              orderDoc.enrollNote ? `備註：${orderDoc.enrollNote}` : null,
+              orderDoc.healthNote ? `健康備註：${orderDoc.healthNote}` : null,
+              orderDoc.referralSource ? `如何得知：${orderDoc.referralSource}` : null,
+            ].filter(Boolean).join('｜') || null;
+          } else if (t.orderType === 'experience') {
+            memberWrittenNote = orderDoc.notes || null;
+          } else if (t.orderType === 'competition') {
+            memberWrittenNote = orderDoc.memberNote || null;
+          }
+        }
         tasks.push({
           id: `transfer_${d.id}`, type: 'transfer_confirm', targetId: d.id,
           title: isCash ? '現金待收款' : '轉帳待確認收款',
@@ -256,7 +273,7 @@ router.get('/', authenticate, async (req, res) => {
           gymId: t.gymId, memberName: displayMemberName, amount: t.amount,
           partnerGym, partnerGymPending,
           link: '/staff/pending-tasks',
-          record: { id: d.id, ...t, memberName: displayMemberName, payerName: t.memberName, partnerGym, partnerGymPending },
+          record: { id: d.id, ...t, memberName: displayMemberName, payerName: t.memberName, partnerGym, partnerGymPending, notes: memberWrittenNote },
         });
       }
     } catch(e) { console.error('transfer_confirm tasks error:', e.message); }

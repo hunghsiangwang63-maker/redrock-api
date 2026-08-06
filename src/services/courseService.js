@@ -2233,7 +2233,7 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
   candidates.forEach(c => {
     if (!isTargetOpen(c.trialTarget, regularByCourse[c.id]?.size || 0, c.type)) return; // 週課一律列出；非週課仍走開關
     const rules = resolveRules(c, cats[c.categoryId]);
-    trialCourses[c.id] = { trialPrice: getEffectiveTrialPrice(c, rules), courseName: c.name, instructor: c.instructor || '', maxWaitlist: (c.maxWaitlist ?? null), categoryName: cats[c.categoryId]?.name || '其他', cohortName: c.cohortName || '' };
+    trialCourses[c.id] = { trialPrice: getEffectiveTrialPrice(c, rules), courseName: c.name, instructor: c.instructor || '', maxWaitlist: (c.maxWaitlist ?? null), categoryName: cats[c.categoryId]?.name || '其他', categoryGroup: cats[c.categoryId]?.group || null, cohortName: c.cohortName || '' };
   });
   if (Object.keys(trialCourses).length === 0) return [];
 
@@ -2256,6 +2256,7 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
       ...s,
       trialPrice: trialCourses[s.courseId].trialPrice,
       categoryName: trialCourses[s.courseId].categoryName,
+      categoryGroup: trialCourses[s.courseId].categoryGroup,
       cohortName: trialCourses[s.courseId].cohortName,
       remaining: Math.max(0, (s.maxStudents || 0) - (s.enrolledCount || 0)),
       isFull: (s.enrolledCount || 0) >= (s.maxStudents || 0),

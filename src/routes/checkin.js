@@ -435,8 +435,17 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
       .where('date', '==', today)
       .where('status', '==', 'scheduled')
       .get();
-    const sessions = sessionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    let sessions = sessionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     if (sessions.length === 0) return res.json({ students: [] });
+
+    // 排除工作坊課程（單堂性質活動，非常態上課學員，不列入快速入場名單）
+    const courseIds = [...new Set(sessions.map(s => s.courseId).filter(Boolean))];
+    if (courseIds.length) {
+      const courseDocs = await db.getAll(...courseIds.map(id => db.collection('courses').doc(id)));
+      const workshopIds = new Set(courseDocs.filter(d => d.exists && d.data().type === 'workshop').map(d => d.id));
+      if (workshopIds.size) sessions = sessions.filter(s => !workshopIds.has(s.courseId));
+      if (sessions.length === 0) return res.json({ students: [] });
+    }
 
     // 各場次報名者（正取）+ 今日已入場 + 跨期補課 → 平行查詢（原序列多次往返造成慢）
     const sessionIds = sessions.map(s => s.id);

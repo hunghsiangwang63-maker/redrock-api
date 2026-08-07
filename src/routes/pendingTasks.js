@@ -359,9 +359,9 @@ router.get('/', authenticate, async (req, res) => {
         const h = d.data();
         if (!['confirmed','waitlist'].includes(h.status)) return;
         if (gymId && h.gymId && h.gymId !== gymId) return;
-        // 查看導向：待收款中→待辦頁；已確認/免費（後台處理、名單帶入）→ 課程頁看名單
-        const _needsCollect = (h.fee || 0) > 0 && h.paymentStatus !== 'confirmed';
-        registrations.push({ id:`reg_course_${d.id}`, regType:'course', memberName:h.memberName||'', name:h.courseName||'', detail: h.sessionCount ? `共${h.sessionCount}堂` : '', createdAt: secOf(h.createdAt), dateStr: dayOf(h.createdAt), gymId:h.gymId, link: _needsCollect ? '/staff/pending-tasks?view=payment' : (h.courseId ? `/staff/courses?course=${h.courseId}` : '/staff/courses') });
+        // 查看導向：一律看課程上課名單（點「XXX 報名 YYY」自然是想看名單，不論是否已收款）；
+        // 待收款動作本就在同一個待辦頁的「💰 待收款」分段常駐顯示，不需要靠這裡導過去。
+        registrations.push({ id:`reg_course_${d.id}`, regType:'course', memberName:h.memberName||'', name:h.courseName||'', detail: h.sessionCount ? `共${h.sessionCount}堂` : '', createdAt: secOf(h.createdAt), dateStr: dayOf(h.createdAt), gymId:h.gymId, link: h.courseId ? `/staff/courses?course=${h.courseId}` : '/staff/courses' });
       });
     } catch(e) {}
     // 比賽

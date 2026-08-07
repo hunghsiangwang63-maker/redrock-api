@@ -361,7 +361,7 @@ router.get('/', authenticate, async (req, res) => {
         if (gymId && h.gymId && h.gymId !== gymId) return;
         // 查看導向：待收款中→待辦頁；已確認/免費（後台處理、名單帶入）→ 課程頁看名單
         const _needsCollect = (h.fee || 0) > 0 && h.paymentStatus !== 'confirmed';
-        registrations.push({ id:`reg_course_${d.id}`, regType:'course', memberName:h.memberName||'', name:h.courseName||'', detail: h.sessionCount ? `共${h.sessionCount}堂` : '', createdAt: secOf(h.createdAt), dateStr: dayOf(h.createdAt), gymId:h.gymId, link: _needsCollect ? '/staff/pending-tasks' : (h.courseId ? `/staff/courses?course=${h.courseId}` : '/staff/courses') });
+        registrations.push({ id:`reg_course_${d.id}`, regType:'course', memberName:h.memberName||'', name:h.courseName||'', detail: h.sessionCount ? `共${h.sessionCount}堂` : '', createdAt: secOf(h.createdAt), dateStr: dayOf(h.createdAt), gymId:h.gymId, link: _needsCollect ? '/staff/pending-tasks?view=payment' : (h.courseId ? `/staff/courses?course=${h.courseId}` : '/staff/courses') });
       });
     } catch(e) {}
     // 比賽

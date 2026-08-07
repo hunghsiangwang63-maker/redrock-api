@@ -33,6 +33,29 @@ const entryOrderSort = (a, b) => {
   return ((ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)) || String(a).localeCompare(String(b));
 };
 
+// ── 轉換期手動輸入「發票總金額」計算（與前端 DailySettlementPage.jsx 的同名函式逐字對齊，
+//    勿只改一邊——這是「現金」推算的權威來源，後端獨立算一次、不信任前端傳來的手動現金值）──
+const ENTRY_CATS = ['成人', '學生', '兒童', '成人使用優惠券', '學生使用優惠券', '隊員折扣', '隊員＋優惠券'];
+const sysEntryVal = (income, cat) => (income?.entryItems || []).find(x => x.label === cat)?.value || 0;
+const entryCatList = (income) => {
+  const extra = (income?.entryItems || []).map(x => x.label).filter(l => l && !ENTRY_CATS.includes(l));
+  return [...ENTRY_CATS, ...extra];
+};
+const manEntryVal = (im, cat) => im?.entryItems?.[cat];
+const entryManualTotal = (income, im) => {
+  if (im?.entryItems && typeof im.entryItems === 'object') {
+    return entryCatList(income).reduce((s, cat) => {
+      const m = manEntryVal(im, cat);
+      return s + ((m !== '' && m != null) ? (Number(m) || 0) : sysEntryVal(income, cat));
+    }, 0);
+  }
+  return (im?.entry !== '' && im?.entry != null) ? (Number(im.entry) || 0) : (income?.entry || 0);
+};
+const manualIncomeTotal = (income, im) => im
+  ? entryManualTotal(income, im) + ['shoeRental', 'equipmentRental', 'product', 'course', 'pass']
+      .reduce((s, k) => s + ((im[k] !== '' && im[k] != null) ? (Number(im[k]) || 0) : (income?.[k] || 0)), 0)
+  : null;
+
 // ── GET /daily-settlements/today ─────────────────────────────────
 router.get('/today', authenticate, requireStationAuth, async (req, res) => {
   try {
@@ -291,10 +314,18 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
 
     // 計算加減項淨額：sign '+' 加入抽屜（預期上升）、'-' 取出（預期下降）；舊資料無 sign 視為 '-'（減）
     const netAdjust = (deductions || []).reduce((sum, d) => sum + ((d.sign === '+' ? 1 : -1) * (Number(d.amount) || 0)), 0);
-    // 手動輸入模式：現金以手動值為準（轉換期系統交易不完整），否則用系統算的
-    const manualCash = paymentManual && paymentManual.cash !== undefined && paymentManual.cash !== '' && paymentManual.cash !== null
-      ? Number(paymentManual.cash) || 0 : null;
-    const effectiveCash = manualCash != null ? manualCash : (payment?.cash || 0);
+    // 轉換期手動輸入模式（incomeManual 有帶才算，比照前端只在 settlementManualInput 開啟時才送這欄位）：
+    // 現金＝手動發票總金額（依 income/incomeManual 逐項算）－線上支付合計（LinePay/街口/台灣Pay/轉帳，
+    // 缺手動值回退系統）——現金不再靠店員另外獨立填一次，改由發票總金額扣除線上支付自動算出。
+    // 待正式發票列印上線、關閉手動輸入後，incomeManual 不會再被送出，自動回退系統 payment.cash。
+    const isManualMode = incomeManual != null;
+    const effectiveCash = isManualMode
+      ? (manualIncomeTotal(income, incomeManual) || 0) - ['linePay', 'jko', 'taiwanPay', 'transfer'].reduce((sum, k) => {
+          const v = paymentManual?.[k];
+          const has = v !== undefined && v !== '' && v !== null;
+          return sum + (has ? (Number(v) || 0) : (payment?.[k] || 0));
+        }, 0)
+      : (payment?.cash || 0);
     const expectedCash = prevBalance + effectiveCash + netAdjust;
     const difference = actualCash - expectedCash;
 

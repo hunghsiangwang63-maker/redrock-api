@@ -2526,6 +2526,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🐞 **過程踩雷**：中途忘記 push 剛寫好的 `POST /invoices/print-record` 後端端點，導致真機測試「列印成功但配號失敗（404）」——這正好驗證了「印表機優先、失敗不消耗號碼」的設計有按預期運作（沒有留下假紀錄），補推後重試即完全成功。**教訓**：連續建置多個檔案（新 component + 新 util + 新後端端點）時，容易漏掉某一個檔案的 commit/push，尤其是最後才加的那個——收尾時要對照「這次改了哪些檔案」逐一確認 git 狀態，不能只看主要那幾個。
 - 📌 **下一步**：`local-print-agent` 正式部署到新竹櫃檯電腦（打包 Windows 服務+開機自啟）、正式財政部發票號碼設定、再開新竹館開關才算真正上線；士林館維持關閉、待新竹穩定運作幾天後跟進（見 §6.1 分批節奏）。
 
+## 目前進度（2026-08-07 續3）— 修：通知裡課程相關的「查看」都導向通用列表，改成深連結到關聯課程名單
+> 回報通知面板點課程通知的「查看」只跳課程總列表、找不到是哪一筆。查證 8 個課程相關通知型別，`course_waitlist_promoted`／`course_roster_claimed` 先前已修過帶 `link`，其餘 6 個原本都沒帶。後端 `/health` `3.233.0-course-notif-links`；commit `0c605f6`。
+- ✅ **補齊 6 處 `link: /staff/courses?course=<courseId>`**（`courseService.js`）：`course_leave`（用 `enrollment.courseId`）／`course_leave_cancel`（同）／`course_makeup_cancel`（`enrollment.courseId`——補課報名的 `courseId` 即目標場次所屬課程，非原班別）／`course_makeup_booked`（`session.courseId`）／`course_substitute`／`course_substitute_cancel`（後兩者原本直接呼叫 `createNotification`/`notifyRoleInGym`、繞過共用 wrapper，`session.courseId` 皆在 scope）。
+- 📋 **查證 `course_refund` 非遺漏**：全站搜尋確認這個字串只出現在 `transactions` 集合的交易類型（`recordTransaction` 記帳用，`courseAdjustments.js`/`courseService.js` 各一處），從未被用來建立過任何通知——前端 `NOTIF_LINK`/`NOTIF_CAT` 裡的對應項目是死條目（不會被觸發），不需要修。
+- ✅ **`course_practice_deferral` 查證排除**：`courses.js`/`passAdjustments.js` 兩處都是 `passAdjustmentRequests` 集合的記錄類型（分期/票券遞延），與「通知」無關，不在此次範圍。
+
 - ✅ **發票列印時機／方式（2026-08-04 全部拍板，見 `invoice-integration-plan.md` §8）**：**B**＝逐筆開票（入場一張、POS一張）／**C**＝非臨櫃付款（課程/比賽/體驗/入隊/分期）不自動觸發，一律留給店員手動按既有 §9 發票 modal（硬體接上後原地升級成真列印）／**D**＝LinePay入場一律到場掃碼確認入場當下才印（未入場轉券者延後至持券入場時）。純設計定案，實作仍待 P1（發票機硬體：正式財政部紙捲、錢櫃）到位。
 - ❌ **【已決定不做，2026-08-04 拍板】補課期限模式 B「請假日後 N 天」**：使用者確認**一律維持「課程結束後固定天數」（模式 A），跟請假日期無關**——不加模式切換，維持現行 `makeupDeadlineDays`（結束日+N）單一算法（原 2026-07-19 暫緩的方案已明確作廢，非之後再議）。
 - ✅（查證後撤銷，2026-08-04）**「小蜘蛛人一A(7-8)閎」`3f35216f` 已不存在**：查證正式資料庫，該課程已在 7/13 課程樹狀架構大改造時當重複梯次一併刪除（連 9 場次）；朱智萩目前有效報名為「技巧班 5-7月週五A班」，與此無關、無資料遺失。原提醒作廢。

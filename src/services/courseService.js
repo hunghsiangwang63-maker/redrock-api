@@ -913,6 +913,7 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
     body: `${enrollment.memberName || '學員'} 已請假：${enrollment.courseName || ''} ${enrollment.date} ${enrollment.startTime || ''}` +
       (overLimit ? '（超過上限，不產生補課資格）' : '，釋出 1 個名額（可安排補課）'),
     referenceId: enrollmentId,
+    link: `/staff/courses?course=${enrollment.courseId}`,
   });
 
   return {
@@ -1001,6 +1002,7 @@ const cancelLeave = async ({ enrollmentId, memberId }) => {
     title: '取消請假（銷假）',
     body: `${enrollment.memberName || '學員'} 已取消請假、恢復上課：${enrollment.courseName || ''} ${enrollment.date} ${enrollment.startTime || ''}（名額收回）`,
     referenceId: enrollmentId,
+    link: `/staff/courses?course=${enrollment.courseId}`,
   });
 
   return {
@@ -1187,6 +1189,7 @@ const cancelMakeup = async ({ enrollmentId, memberId }) => {
     title: '取消補課',
     body: `${enrollment.memberName || '學員'} 已取消補課：${enrollment.courseName || ''} ${enrollment.date} ${enrollment.startTime || ''}（釋出 1 個名額）`,
     referenceId: enrollmentId,
+    link: `/staff/courses?course=${enrollment.courseId}`,
   });
 
   return { message: '已取消補課，補課資格已退回，可重新選擇場次' };
@@ -1584,6 +1587,7 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
     title: '補課預約',
     body: `${_mName || '學員'} 已預約補課：${session.courseName || ''} ${session.date} ${session.startTime || ''}（佔 1 個名額）`,
     referenceId: enrollmentId,
+    link: `/staff/courses?course=${session.courseId}`,
   });
 
   return { message: '補課報名成功' };
@@ -2181,10 +2185,11 @@ const setSessionSubstitute = async ({ sessionId, coachId, coachName, reason, sta
   const body = `${session.courseName}（${session.date} ${timeStr}）由 ${coachName} 代班`
     + `${originalInstructor ? `（原教練：${originalInstructor}）` : ''}${reason ? `，原因：${reason}` : ''}`;
   try {
+    const link = `/staff/courses?course=${session.courseId}`;
     if (coachId) {
-      await createNotification({ gymId: session.gymId, targetStaffId: coachId, type: 'course_substitute', title, body, referenceId: sessionId, referenceType: 'courseSession' });
+      await createNotification({ gymId: session.gymId, targetStaffId: coachId, type: 'course_substitute', title, body, referenceId: sessionId, referenceType: 'courseSession', link });
     }
-    await notifyRoleInGym({ gymId: session.gymId, role: 'gym_manager', type: 'course_substitute', title, body, referenceId: sessionId, referenceType: 'courseSession' });
+    await notifyRoleInGym({ gymId: session.gymId, role: 'gym_manager', type: 'course_substitute', title, body, referenceId: sessionId, referenceType: 'courseSession', link });
   } catch (e) { console.error('[代班通知] 失敗（不阻斷）', e.message || e.code); }
 
   return { sessionId, instructor: coachName, originalInstructor };
@@ -2212,7 +2217,7 @@ const clearSessionSubstitute = async ({ sessionId, staff }) => {
   const title = '課程代班取消';
   const body = `${session.courseName}（${session.date} ${timeStr}）代班已取消，恢復原教練${original ? `：${original}` : ''}`;
   try {
-    await notifyRoleInGym({ gymId: session.gymId, role: 'gym_manager', type: 'course_substitute_cancel', title, body, referenceId: sessionId, referenceType: 'courseSession' });
+    await notifyRoleInGym({ gymId: session.gymId, role: 'gym_manager', type: 'course_substitute_cancel', title, body, referenceId: sessionId, referenceType: 'courseSession', link: `/staff/courses?course=${session.courseId}` });
   } catch (e) { console.error('[代班取消通知] 失敗（不阻斷）', e.message || e.code); }
 
   return { sessionId, instructor: original };

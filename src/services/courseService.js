@@ -1909,6 +1909,16 @@ const getCourses = async (gymId) => {
     enrolledByCourse[e.courseId].add(e.memberId);
   });
 
+  // 課程層候補人數（不重複計算同一會員，同一位候補會員在週課每個未來場次各有一筆 waitlist 副本）
+  const waitlistSnap = await db.collection(ENROLLMENT_COLLECTION)
+    .where('status', '==', 'waitlist').get();
+  const waitlistByCourse = {};
+  waitlistSnap.docs.forEach(d => {
+    const e = d.data();
+    if (!waitlistByCourse[e.courseId]) waitlistByCourse[e.courseId] = new Set();
+    waitlistByCourse[e.courseId].add(e.memberId);
+  });
+
   // 工作坊：名額以「場次層」判斷——course 層 enrolledCount 是彙總，不反映各場次；
   // 只要任一「未取消、今日(含)以後」場次未滿 → 視為尚有名額（部分場次額滿不算整體額滿）。
   const workshopIds = courses.filter(c => c.type === 'workshop').map(c => c.id);
@@ -1929,10 +1939,11 @@ const getCourses = async (gymId) => {
   return courses.map(c => {
     const realEnrolled = enrolledByCourse[c.id]?.size || 0;
     const enrolledCount = realEnrolled;
+    const waitlistCount = waitlistByCourse[c.id]?.size || 0;
     const cat = catMap[c.categoryId] || null;
     const _rules = resolveRules(c, cat); // 班別繼承+梯次覆寫解析後的規則（供會員端顯示，勿直接讀 course 欄位）
     return {
-      ...c, enrolledCount, realEnrolled,
+      ...c, enrolledCount, realEnrolled, waitlistCount,
       categoryName: cat?.name || null,
       categoryGroup: cat?.group || null,               // adult | youth | special（大類）
       categoryDescription: cat?.description || null,   // 班別共用課程介紹

@@ -2532,6 +2532,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📋 **查證 `course_refund` 非遺漏**：全站搜尋確認這個字串只出現在 `transactions` 集合的交易類型（`recordTransaction` 記帳用，`courseAdjustments.js`/`courseService.js` 各一處），從未被用來建立過任何通知——前端 `NOTIF_LINK`/`NOTIF_CAT` 裡的對應項目是死條目（不會被觸發），不需要修。
 - ✅ **`course_practice_deferral` 查證排除**：`courses.js`/`passAdjustments.js` 兩處都是 `passAdjustmentRequests` 集合的記錄類型（分期/票券遞延），與「通知」無關，不在此次範圍。
 
+## 目前進度（2026-08-07 續4）— 修：今日課程學員名單排除工作坊課程
+> 需求：工作坊（type='workshop'，如運動按摩／肢體評估／體驗課程）不該混在「今日課程學員」快速入場名單裡。後端 `/health` `3.234.0-today-students-exclude-workshop`；commit `329689d`。
+- ✅ **`GET /checkin/today-course-students`**：`courseSessions` 文件本身不存課程 `type`（只有 `courseId`）→ 取當日場次的 distinct `courseId` 後 `db.getAll(...)` 批次查 `courses`，過濾掉 `type==='workshop'` 的場次，再進行後續報名/入場/跨期補課查詢與組裝。前端 `CheckinPage.jsx` 純消費此單一端點、無需另外改動。
+- **驗證（打正式 API）**：全庫現有 12 門 workshop 課程（運動按摩／肢體評估／各體驗課程）；新竹館今日 15 位課程學員（皆來自小蜘蛛人密集班/週課，正確不含 workshop）、士林館 0 位，端點運作正常。
+
 - ✅ **發票列印時機／方式（2026-08-04 全部拍板，見 `invoice-integration-plan.md` §8）**：**B**＝逐筆開票（入場一張、POS一張）／**C**＝非臨櫃付款（課程/比賽/體驗/入隊/分期）不自動觸發，一律留給店員手動按既有 §9 發票 modal（硬體接上後原地升級成真列印）／**D**＝LinePay入場一律到場掃碼確認入場當下才印（未入場轉券者延後至持券入場時）。純設計定案，實作仍待 P1（發票機硬體：正式財政部紙捲、錢櫃）到位。
 - ❌ **【已決定不做，2026-08-04 拍板】補課期限模式 B「請假日後 N 天」**：使用者確認**一律維持「課程結束後固定天數」（模式 A），跟請假日期無關**——不加模式切換，維持現行 `makeupDeadlineDays`（結束日+N）單一算法（原 2026-07-19 暫緩的方案已明確作廢，非之後再議）。
 - ✅（查證後撤銷，2026-08-04）**「小蜘蛛人一A(7-8)閎」`3f35216f` 已不存在**：查證正式資料庫，該課程已在 7/13 課程樹狀架構大改造時當重複梯次一併刪除（連 9 場次）；朱智萩目前有效報名為「技巧班 5-7月週五A班」，與此無關、無資料遺失。原提醒作廢。

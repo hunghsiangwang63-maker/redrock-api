@@ -927,10 +927,10 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
 // 連動：補課資格作廢；若補課資格已用（已報補課且補課那堂未上）→ 補課報名一併取消並釋放名額；
 //       補課那堂已上過 → 擋（MAKEUP_TAKEN，不可反悔）。
 // ── 課程異動通知（同館 gym_manager＋super_admin；失敗不阻斷主流程）───────
-const notifyCourseManagers = async ({ gymId, type, title, body, referenceId }) => {
+const notifyCourseManagers = async ({ gymId, type, title, body, referenceId, link }) => {
   for (const role of ['gym_manager', 'super_admin']) {
     try {
-      await notifyRoleInGym({ gymId, role, type, title, body, referenceId, referenceType: 'courseEnrollment' });
+      await notifyRoleInGym({ gymId, role, type, title, body, referenceId, referenceType: 'courseEnrollment', link });
     } catch (e) { console.error('notifyCourseManagers 失敗', e.message); }
   }
 };
@@ -1336,6 +1336,7 @@ const promoteWaitlistForCourse = async (courseId) => {
     title: '候補轉正',
     body: `${firstDoc.memberName || '學員'} 候補已自動遞補為正取：${course.name}，應繳 NT$${fee}（待收款）`,
     referenceId: firstDoc.id,
+    link: `/staff/courses?course=${courseId}`,
   });
 
   console.log(`✅ 整門課候補遞補：${firstDoc.memberName} → confirmed（${course.name}，NT$${fee}）`);

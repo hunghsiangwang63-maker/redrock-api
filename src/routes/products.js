@@ -209,7 +209,8 @@ router.put('/:id/variants/:variantId/warehouse-stock', authenticate, checkPermis
 });
 
 // ── POST /products/sell - 銷售（扣指定館庫存）───────────────────
-router.post('/sell', authenticate, auditLog('product.sell'), async (req, res) => {
+// 2026-08-08 補：原本只有 authenticate 無權限檢查（products.sell 權限矩陣早已定義但這條路由沒吃到）
+router.post('/sell', authenticate, checkPermission('products.sell'), auditLog('product.sell'), async (req, res) => {
   try {
     const db = getDb();
     const { items, memberId, memberName, paymentMethod, gymId: bodyGymId } = req.body;
@@ -412,8 +413,9 @@ router.post('/sales/:saleId/return', authenticate, checkPermission('products.sel
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// ── GET /products/sales ───────────────────────────────────────────
-router.get('/sales', authenticate, async (req, res) => {
+// ── GET /products/sales - 銷售紀錄查詢 ─────────────────────────────
+// 2026-08-08 補：原本 authenticate 即可、無權限檢查；與「銷售」同視為 products.sell 權限
+router.get('/sales', authenticate, checkPermission('products.sell'), async (req, res) => {
   try {
     const db = getDb();
     const gymId = req.query.gymId || (req.staff?.role !== 'super_admin' ? req.staff?.gymId : null);

@@ -35,6 +35,8 @@ const DEFAULT_PERMISSIONS = {
   'products.manage':       { super_admin: true, gym_manager: true, full_time: true,  part_time: false }, // 完整商品/庫存（含清點/進貨/CRUD）
   'inventory.manage':      { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
   'products.warehouse':    { super_admin: true, gym_manager: false, full_time: false, part_time: false },
+  // 器材租借管理（查詢名單/確認取件/確認歸還/員工備註）：正職個人不可（見 COUNTER_PERMS，值班才開）
+  'rentals.manage':        { super_admin: true, gym_manager: true, full_time: false, part_time: false },
   // ── 排班檢視（part/full 皆可）──
   'schedule.read':         { super_admin: true, gym_manager: true, full_time: true,  part_time: true  },
   'schedule.manage':       { super_admin: true, gym_manager: true, full_time: false, part_time: false },
@@ -65,7 +67,7 @@ const COUNTER_PERMS = new Set([
   'checkin.create', 'checkin.read',
   'passes.create', 'passes.update', 'installments.manage',
   'courses.attendance', 'products.sell', 'revenue.record', 'competitions.entries',
-  'schedule.events',
+  'schedule.events', 'rentals.manage',
 ]);
 
 // 強制登出：帳號文件設 forceLogoutAfter 後，該時間點之前簽發的 token 一律失效

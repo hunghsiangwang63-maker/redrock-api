@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authenticate, authenticateAny, requireManagerOrStation } = require('../middleware/auth');
+const { authenticate, authenticateAny, requireManagerOrStation, checkPermission } = require('../middleware/auth');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { getDb } = require('../config/firebase');
 const dayjs = require('dayjs');
@@ -97,7 +97,8 @@ router.post('/apply', authenticateAny, async (req, res) => {
 });
 
 // ── GET /rentals - 員工查詢租借列表 ──
-router.get('/', authenticate, async (req, res) => {
+// 2026-08-08 補：原本 authenticate 即可、無權限檢查；正職個人不可（僅開放庫存管理），值班/管理員不受影響
+router.get('/', authenticate, checkPermission('rentals.manage'), async (req, res) => {
   try {
     const db = getDb();
     const { status, from, to } = req.query;
@@ -168,7 +169,7 @@ router.get('/stats', authenticate, async (req, res) => {
 });
 
 // ── POST /rentals/:id/confirm - 確認收款/取件 ──
-router.post('/:id/confirm', authenticate, async (req, res) => {
+router.post('/:id/confirm', authenticate, checkPermission('rentals.manage'), async (req, res) => {
   try {
     const db = getDb();
     const ref = db.collection('equipmentRentals').doc(req.params.id);
@@ -197,7 +198,7 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
 });
 
 // ── POST /rentals/:id/return - 歸還確認（退押金） ──
-router.post('/:id/return', authenticate, async (req, res) => {
+router.post('/:id/return', authenticate, checkPermission('rentals.manage'), async (req, res) => {
   try {
     const db = getDb();
     const ref = db.collection('equipmentRentals').doc(req.params.id);
@@ -405,7 +406,7 @@ router.put('/:id', authenticateAny, async (req, res) => {
 });
 
 // ── POST /rentals/:id/return-deposit - 退回押金（歸還後補退；退畢租借結案進歷史） ──
-router.post('/:id/return-deposit', authenticate, async (req, res) => {
+router.post('/:id/return-deposit', authenticate, checkPermission('rentals.manage'), async (req, res) => {
   try {
     const db = getDb();
     const doc = await db.collection('equipmentRentals').doc(req.params.id).get();
@@ -432,7 +433,7 @@ router.post('/:id/return-deposit', authenticate, async (req, res) => {
 });
 
 // ── PUT /rentals/:id/staff-note - 員工備註（會員看不到；/my 已剔除） ──
-router.put('/:id/staff-note', authenticate, async (req, res) => {
+router.put('/:id/staff-note', authenticate, checkPermission('rentals.manage'), async (req, res) => {
   try {
     const db = getDb();
     await db.collection('equipmentRentals').doc(req.params.id).update({

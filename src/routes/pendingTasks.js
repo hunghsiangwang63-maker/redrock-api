@@ -348,6 +348,29 @@ router.get('/', authenticate, async (req, res) => {
       });
     } catch(e) {}
 
+    // 12. 分期付款待收款（會員自助分期首期原本無人接手、也接不到既有 transferRecords 待收款佇列；
+    //     一併涵蓋各計畫「已到期還沒繳的最早一期」，不限首期，讓分期收款也有一個持續的待辦入口）
+    try {
+      const snap = await db.collection('installmentPlans').where('status', 'in', ['active', 'overdue']).get();
+      snap.forEach(d => {
+        const p = d.data();
+        if (gymId && p.gymId && p.gymId !== gymId) return;
+        const due = (p.installments || []).find(i => i.status !== 'paid' && i.dueDate <= today);
+        if (!due) return;
+        tasks.push({
+          id: `installment_${d.id}`, type: 'installment', targetId: d.id,
+          title: '分期付款待收款',
+          desc: `${p.memberName} — ${p.itemName}（第${due.seq}/${(p.installments||[]).length}期 NT$${(due.amount||0).toLocaleString()}，到期${due.dueDate}）`,
+          date: due.dueDate,
+          createdAt: p.createdAt?._seconds || 0,
+          gymId: p.gymId, memberName: p.memberName,
+          link: `/staff/installments?plan=${d.id}&seq=${due.seq}`,
+          dueSeq: due.seq, dueAmount: due.amount,   // 供前端直接呼叫 markInstallmentPaid，不用重新從 record.installments 找一次
+          record: { id: d.id, ...p },
+        });
+      });
+    } catch(e) {}
+
     // 最終排序（最新在前）
     tasks.sort((a, b) => b.createdAt - a.createdAt);
 

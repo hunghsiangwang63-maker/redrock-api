@@ -191,7 +191,9 @@ const authenticateAny = async (req, res, next) => {
       if (!staffDoc.exists || !staffDoc.data().isActive) {
         return res.status(401).json({ error: 'STAFF_INACTIVE' });
       }
-      req.staff = { id: decoded.staffId, gymId: decoded.gymId, role: decoded.role, ...staffDoc.data() };
+      // 補 type/stationId，比照 authenticate 中介層（authenticateAny 原本漏帶，導致依賴 req.staff.type
+      // 區分「個人登入 vs 值班 operator」的檢查在走此中介層的路由上永遠失效，2026-08-08 補上）
+      req.staff = { id: decoded.staffId, gymId: decoded.gymId, role: decoded.role, ...staffDoc.data(), type: decoded.type || 'staff', stationId: decoded.stationId || null };
     } else {
       return res.status(401).json({ error: 'INVALID_TOKEN' });
     }

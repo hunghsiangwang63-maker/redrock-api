@@ -5,6 +5,12 @@ const { authenticate } = require('../middleware/auth');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
 
+// 兼職個人帳號（未打卡值班）待辦頁權限收斂（2026-08-08 拍板）：只看「今日提醒／預約」+ 我的近7日班表，
+// 墜落測驗待安排／需審核／待收款／近7天報名動態一律不回傳（非僅前端隱藏，後端直接不給資料）。
+// 值班中（operator）不受此限——仍走既有 COUNTER_PERMS 完整權限。
+const REMIND_TYPES = ['rental_pickup', 'rental_return', 'experience'];
+const isRestrictedPartTime = (staff) => staff?.type === 'staff' && staff?.role === 'part_time';
+
 // ── GET /pending-tasks - 彙整所有待處理事項 ──────────────────────────
 router.get('/', authenticate, async (req, res) => {
   try {
@@ -387,7 +393,10 @@ router.get('/', authenticate, async (req, res) => {
     } catch(e) {}
     registrations.sort((a, b) => b.createdAt - a.createdAt);
 
-    res.json({ tasks, total: tasks.length, registrations, registrationCount: registrations.length });
+    const restricted = isRestrictedPartTime(req.staff);
+    const outTasks = restricted ? tasks.filter(t => REMIND_TYPES.includes(t.type)) : tasks;
+    const outRegs = restricted ? [] : registrations;
+    res.json({ tasks: outTasks, total: outTasks.length, registrations: outRegs, registrationCount: outRegs.length });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -396,6 +405,7 @@ router.get('/', authenticate, async (req, res) => {
 // 子狀態：待會員補正(仍 transfer_rejected 或 formReturned) / 已補正待確認(補正後回 pending/pending_confirm)。
 router.get('/returned', authenticate, async (req, res) => {
   try {
+    if (isRestrictedPartTime(req.staff)) return res.json({ items: [], total: 0 });
     const db = getDb();
     const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
     const SRC = [

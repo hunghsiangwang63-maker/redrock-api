@@ -637,8 +637,9 @@ router.get('/history',
 
       // 會員只能查自己或子會員的；員工可查指定館別
       const isMemberToken = !!req.member && !req.staff;
-      // 兼職個人帳號（未打卡值班）權限收斂（2026-08-08 拍板）：不可查歷史入場（對齊前端「歷史入場」分頁已隱藏）
-      if (!isMemberToken && req.staff?.type === 'staff' && req.staff?.role === 'part_time') {
+      // 個人帳號（兼職／正職，未打卡值班）權限收斂（2026-08-08 拍板，同日再擴及正職）：
+      // 不可查歷史入場（對齊前端「歷史入場」分頁已隱藏）
+      if (!isMemberToken && req.staff?.type === 'staff' && ['part_time', 'full_time'].includes(req.staff?.role)) {
         return res.status(403).json({ error: 'MANAGER_OR_STATION_REQUIRED', message: '此功能限值班/管理員使用' });
       }
       let scopedMemberId = isMemberToken ? req.member.id : req.query.memberId;

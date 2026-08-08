@@ -70,6 +70,17 @@ const COUNTER_PERMS = new Set([
   'schedule.events', 'rentals.manage',
 ]);
 
+// 可逐人覆寫的權限鍵白名單（2026-08-08）：目前僅開放「full_time 個人辦公權限」那 5 類，
+// 供管理員在員工帳號表單勾選指定給部分正職員工（見 routes/staff.js、checkPermission 的
+// req.staff.permissionOverrides 讀取）。刻意不開放櫃檯類/管理類權限鍵，避免此機制被拿來
+// 繞過既有「櫃檯動作僅值班/管理員」的分工設計。
+const PER_STAFF_OVERRIDABLE_KEYS = [
+  'courses.manage', 'courses.create', 'courses.update', 'courses.delete', 'courses.notify',
+  'competitions.manage', 'competitions.sync',
+  'products.manage', 'inventory.manage',
+  'schedule.events',
+];
+
 // 強制登出：帳號文件設 forceLogoutAfter 後，該時間點之前簽發的 token 一律失效
 // （供「開始裝置認證管制」等情境，讓既有 token 立即作廢、下次登入走裝置驗證）
 const isTokenRevoked = (docData, decoded) => {
@@ -215,10 +226,18 @@ const checkPermission = (permKey) => {
       const permDef = DEFAULT_PERMISSIONS[permKey];
       if (!permDef) return res.status(403).json({ error: 'UNKNOWN_PERMISSION', permission: permKey });
       let hasPermission = permDef[role] ?? false;
-      const db = getDb();
-      const overrideDoc = await db.collection(COLLECTIONS.PERMISSION_OVERRIDES)
-        .doc(`${gymId}_${role}_${permKey}`).get();
-      if (overrideDoc.exists) hasPermission = overrideDoc.data().allowed;
+      // 逐人覆寫（2026-08-08：管理員指定部分正職員工負責課程/比賽/庫存/排班其中幾類，見
+      // routes/staff.js 的 PER_STAFF_OVERRIDABLE_KEYS）——存在個人帳號文件的 permissionOverrides，
+      // authenticate 中介層每次請求都會重新讀取整份 staff 文件，故 req.staff 上一律是最新值，
+      // 優先序高於下方 gym-role 覆寫；沒設定該 key 才落回原本的 gym-role 覆寫查詢。
+      if (req.staff.permissionOverrides && Object.prototype.hasOwnProperty.call(req.staff.permissionOverrides, permKey)) {
+        hasPermission = !!req.staff.permissionOverrides[permKey];
+      } else {
+        const db = getDb();
+        const overrideDoc = await db.collection(COLLECTIONS.PERMISSION_OVERRIDES)
+          .doc(`${gymId}_${role}_${permKey}`).get();
+        if (overrideDoc.exists) hasPermission = overrideDoc.data().allowed;
+      }
       if (!hasPermission) {
         return res.status(403).json({ error: 'FORBIDDEN', message: '您沒有執行此操作的權限', permission: permKey, role });
       }
@@ -289,4 +308,5 @@ const requireManager = (req, res, next) => {
 module.exports = {
   authenticate, authenticateMember, authenticateAny,
   checkPermission, requireSameGym, auditLog, requireStationAuth, authenticateStation, requireManagerOrStation, requireManager, DEFAULT_PERMISSIONS,
+  PER_STAFF_OVERRIDABLE_KEYS,
 };

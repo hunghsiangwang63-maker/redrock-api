@@ -5,8 +5,16 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const { body, validationResult } = require('express-validator');
-const { authenticate, checkPermission } = require('../middleware/auth');
+const { authenticate, checkPermission, PER_STAFF_OVERRIDABLE_KEYS } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
+
+// 只留白名單內的 key、且值一律轉成明確布林（其餘丟棄，防止此欄位被拿來塞入未授權的權限鍵）
+const sanitizePermissionOverrides = (input) => {
+  if (!input || typeof input !== 'object') return undefined;
+  const out = {};
+  PER_STAFF_OVERRIDABLE_KEYS.forEach(k => { if (k in input) out[k] = !!input[k]; });
+  return out;
+};
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -64,6 +72,7 @@ router.post('/',
       const passwordHash = await bcrypt.hash(req.body.password, 10);
       const now = new Date();
       const ref = db.collection('staff').doc();
+      const permissionOverrides = sanitizePermissionOverrides(req.body.permissionOverrides);
       const staffDoc = {
         id: ref.id, name, email, phone: phone || '',
         role, gymId: role === 'super_admin' ? null : gymId,
@@ -71,6 +80,7 @@ router.post('/',
         passwordHash,
         isActive: true,
         createdAt: now, updatedAt: now,
+        ...(permissionOverrides ? { permissionOverrides } : {}),
       };
       await ref.set(staffDoc);
       delete staffDoc.passwordHash;
@@ -105,6 +115,9 @@ router.put('/:id',
       const allowed = ['name', 'email', 'phone', 'role', 'gymId', 'notificationEmail'];
       const updates = { updatedAt: new Date() };
       allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+      if (req.body.permissionOverrides !== undefined) {
+        updates.permissionOverrides = sanitizePermissionOverrides(req.body.permissionOverrides) || {};
+      }
       if (updates.role === 'super_admin') updates.gymId = null;
       // 降為非總管理員時必須有所屬館別，否則限館過濾會失效
       if (updates.role && updates.role !== 'super_admin') {

@@ -248,7 +248,8 @@ router.post('/black/:id/transfer',
 router.get('/transfers/lookup', authenticateMember, async (req, res) => {
   try {
     const phone = String(req.query.phone || '').trim();
-    if (!phone || phone.length < 10) return res.json({ found: false });
+    // 支援國際格式（+開頭）；門檻設 7 避免誤觸 getMemberByPhone 的「輸入4碼＝末四碼模糊比對」分支
+    if (!phone || phone.length < 7) return res.json({ found: false });
     let m;
     try { m = await require('../services/memberService').getMemberByPhone(phone); }
     catch { return res.json({ found: false }); }

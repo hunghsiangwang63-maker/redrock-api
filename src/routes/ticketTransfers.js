@@ -260,7 +260,8 @@ router.get('/recipients', authenticateAny, async (req, res) => {
   try {
     const db = getDb();
     const phone = String(req.query.phone || '').trim();
-    if (!phone || phone.length < 10) return res.json({ recipients: [] });
+    // 支援國際格式（+開頭）；門檻設 7 避免誤觸「輸入4碼＝末四碼模糊比對」情境
+    if (!phone || phone.length < 7) return res.json({ recipients: [] });
     const snap = await db.collection('members').where('phone', '==', phone).get();
     const requesterId = req.member?.id || req.staff?.id;
     const { isChild } = require('../utils/age');

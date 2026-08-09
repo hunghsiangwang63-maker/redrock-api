@@ -184,9 +184,10 @@ const markInstallmentPaid = async ({ planId, seq, paymentMethod, staffId, staffN
     i.status !== 'paid' && (i.status === 'overdue' || i.dueDate < today)
   );
 
+  const newStatus = allPaid ? 'completed' : (stillOverdue ? 'overdue' : 'active');
   await ref.update({
     installments: updatedInstallments,
-    status: allPaid ? 'completed' : (stillOverdue ? 'overdue' : 'active'),
+    status: newStatus,
     updatedAt: now,
   });
 
@@ -196,7 +197,9 @@ const markInstallmentPaid = async ({ planId, seq, paymentMethod, staffId, staffN
     await recordInstallmentRevenue(db, { ...plan, installments: updatedInstallments }, paidPeriod, paymentMethod, staffId, staffName);
   } catch (e) { console.error('[分期] 繳款記帳失敗', e.message); }
 
-  return { allPaid, plan: { ...plan, installments: updatedInstallments } };
+  // ⚠ 回傳的 plan.status 務必用剛算好的 newStatus，不能沿用更新前讀出的舊 plan.status
+  // （2026-08-09 修：先前回傳一律是舊值，資料庫本身寫得對，只有回傳給呼叫端的這份資料是舊的）
+  return { allPaid, plan: { ...plan, installments: updatedInstallments, status: newStatus } };
 };
 
 // ── 每日批次：將已過到期日但未繳款的期數標記為逾期 ─────────────────

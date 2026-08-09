@@ -579,6 +579,7 @@ router.post('/stocktake', authenticate, checkPermission('products.manage'), asyn
       await db.collection('stockLogs').add({
         productId: item.productId, productName: product.name,
         variantId: item.variantId, gymId,
+        size: variant.size || null, color: variant.color || null,
         type: 'stocktake', quantity: item.actualStock,
         previousStock: systemStock, diff,
         staffId: req.staff.id, createdAt: now,

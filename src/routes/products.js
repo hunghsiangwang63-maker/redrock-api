@@ -522,6 +522,7 @@ router.get('/stocktake/history', authenticate, checkPermission('products.manage'
       const key = String(r.createdAt.toMillis ? r.createdAt.toMillis() : r.createdAt);
       if (!groups[key]) groups[key] = { at: r.createdAt, staffId: r.staffId, items: [] };
       groups[key].items.push({
+        variantId: r.variantId || null,
         productName: r.productName, size: r.size || null, color: r.color || null,
         previousStock: r.previousStock ?? null, quantity: r.quantity, diff: r.diff ?? null,
       });

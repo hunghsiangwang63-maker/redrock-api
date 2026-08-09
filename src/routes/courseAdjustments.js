@@ -77,6 +77,21 @@ router.post('/enrollments/:enrollmentId/refund-request',
         const h = hSnap.docs.map(d => d.data()).find(x => x.status !== 'cancelled');
         paidAmount = h ? (h.fee || 0) : all.reduce((s, e) => s + (e.enrollmentFee || 0), 0);
       } catch (e) { paidAmount = all.reduce((s, e) => s + (e.enrollmentFee || 0), 0); }
+
+      // 實際已收金額（2026-08-09 修）：若此會員此課程有分期計畫，退款上限只能是「分期實際已收」，
+      // 不可用 paidAmount（課程總費用，僅供下面每堂單價計算用）——避免分期還沒繳完就退費時，
+      // 退得比實收金額還多。無分期計畫（一次付清）時 actuallyPaid 就等於 paidAmount，行為不變。
+      let actuallyPaid = paidAmount;
+      let installmentPlanId = null;
+      try {
+        const planSnap = await db.collection('installmentPlans')
+          .where('relatedType', '==', 'course').where('relatedId', '==', courseId).where('memberId', '==', memberId).get();
+        const plan = planSnap.docs.map(d => ({ id: d.id, ...d.data() })).find(p => p.status !== 'cancelled');
+        if (plan) {
+          installmentPlanId = plan.id;
+          actuallyPaid = (plan.installments || []).filter(i => i.status === 'paid').reduce((s, i) => s + (i.amount || 0), 0);
+        }
+      } catch (e) {}
       const today = taiwanToday(); // 台灣日期
       const courseStartDate = course?.startDate || null;
       // 退費規則走班別繼承（梯次可覆寫）：每堂扣除/手續費率
@@ -99,8 +114,12 @@ router.post('/enrollments/:enrollmentId/refund-request',
       const preStart = courseStartDate ? (today < courseStartDate) : (heldSessions === 0); // 開課前判定（無起始日以已開課堂數推）
       const feeRate = preStart ? (_refundRules.preStartFeeRate ?? 0.05) : (handlingFeeRate ?? 0.2); // 開課前預設 5%／開課後預設 20%，皆班別/梯次可調
       const fee = Math.round(remainingValue * feeRate);
-      const suggestedRefund = Math.max(0, remainingValue - fee);
-      const refundNote = `剩餘 ${remainingSessions}/${totalSessions} 堂 × 每堂 NT$${Math.round(perSession)} ＝ 剩餘價金 NT$${remainingValue}；手續費 ${Math.round(feeRate * 100)}%（${preStart ? '開課前' : '開課後'}）＝NT$${fee}`;
+      const rawSuggestedRefund = Math.max(0, remainingValue - fee);
+      // 退款上限＝實際已收金額（分期未繳完時），避免退得比實收的錢還多；一次付清情境 actuallyPaid===paidAmount，不受影響
+      const suggestedRefund = Math.min(rawSuggestedRefund, actuallyPaid);
+      const cappedByInstallment = installmentPlanId && suggestedRefund < rawSuggestedRefund;
+      const refundNote = `剩餘 ${remainingSessions}/${totalSessions} 堂 × 每堂 NT$${Math.round(perSession)} ＝ 剩餘價金 NT$${remainingValue}；手續費 ${Math.round(feeRate * 100)}%（${preStart ? '開課前' : '開課後'}）＝NT$${fee}`
+        + (cappedByInstallment ? `；因分期尚未繳完，退款上限為實收金額 NT$${actuallyPaid}` : '');
 
       const reqId = `crefund_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
       await db.collection('courseAdjustmentRequests').doc(reqId).set({
@@ -113,6 +132,7 @@ router.post('/enrollments/:enrollmentId/refund-request',
         memberId,
         memberName: rep.memberName || '',
         paidAmount,
+        actuallyPaid, installmentPlanId, // 2026-08-09：分期退款上限依據，approve 時作廢分期計畫用
         suggestedRefund,
         refundNote,
         totalSessions, heldSessions, remainingSessions, remainingValue, feeRate, fee, // 政府公式明細
@@ -220,9 +240,11 @@ router.post('/requests/:id/approve',
 
       if (request.type === 'refund') {
         let finalRefund = req.body.finalRefund !== undefined ? Number(req.body.finalRefund) : request.suggestedRefund;
-        // 退款金額 clamp：不可為負、不可超過已付金額（避免竄改／誤操作造成超額退款）
+        // 退款金額 clamp：不可為負、不可超過「實際已收金額」（有分期計畫時用 actuallyPaid，避免店員把
+        // finalRefund 改高繞過申請當下算好的分期上限；無分期計畫時 actuallyPaid 缺省回退 paidAmount，行為不變）
         if (!Number.isFinite(finalRefund)) return res.status(400).json({ error: 'INVALID_REFUND', message: '退款金額無效' });
-        finalRefund = Math.max(0, Math.min(finalRefund, Number(request.paidAmount) || 0));
+        const refundCap = request.actuallyPaid != null ? Number(request.actuallyPaid) : (Number(request.paidAmount) || 0);
+        finalRefund = Math.max(0, Math.min(finalRefund, refundCap));
         // 防重複退款：核准當下該會員此課程須仍有有效報名（若已被另一筆申請核准退費/取消 → 擋）
         const activeSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
           .where('courseId', '==', request.courseId).where('memberId', '==', request.memberId).get();
@@ -239,6 +261,14 @@ router.post('/requests/:id/approve',
         // 課程退費 → 還原定期票「此課程」重疊補償延長（政策 2026-07-17；不阻斷）
         try { await require('../services/passOverlapService').revertCourseOverlapExtension({ memberId: request.memberId, courseId: request.courseId }); }
         catch (e) { console.error('重疊補償還原失敗（退費已核准）:', e.message); }
+        // 分期計畫整筆作廢（2026-08-09；若有）：已繳期數各自沖銷一筆負向 refund 交易、未繳期數直接作廢，
+        // 避免會員退掉課程後仍背負分期債務（不論 finalRefund 是否為 0 都要作廢，課程本身都已取消）
+        if (request.installmentPlanId) {
+          // skipPaidReversal:true——已繳期數的退款已經算在下面的 course_refund 交易裡，這裡只作廢未繳期數，
+          // 避免跟 cancelInstallmentPlan 預設的「已繳期數也沖銷」重複退款
+          try { await require('../services/installmentService').cancelInstallmentPlan(db, request.installmentPlanId, { reason: '課程退費核准', skipPaidReversal: true }); }
+          catch (e) { console.error('分期計畫作廢失敗（退費已核准）:', e.message); }
+        }
         // 記負向交易（退款），記帳失敗不阻擋核准。認列日＝該課程最後一堂課（與報名費同時結算）
         if (finalRefund > 0) {
           try {

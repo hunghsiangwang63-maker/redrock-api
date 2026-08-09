@@ -131,7 +131,10 @@ const createInstallmentPlan = async ({ memberId, memberName, gymId, relatedType,
 // 供入場取消（buy_pass 分期 / 續約分期）共用：作廢計畫，並把「已 paid 各期」認列過的營收
 // 逐期記負向 refund 沖銷（否則已取消的分期入場仍留 completed 交易 → 營收報表多算）。
 // 冪等：已 cancelled 的計畫直接返回、不重複沖銷。
-const cancelInstallmentPlan = async (db, planId, { reason = '取消' } = {}) => {
+// skipPaidReversal：課程退費專用（2026-08-09）——課程退費有自己一套更精細的退款計算
+// （剩餘堂數×手續費率，且退款上限＝實收金額），已繳期數的沖銷由那筆 course_refund 交易處理，
+// 這裡只需要把「還沒繳的期數」作廢即可，不能再重複沖銷一次已繳期數，否則會雙重退款。
+const cancelInstallmentPlan = async (db, planId, { reason = '取消', skipPaidReversal = false } = {}) => {
   if (!planId) return { reversed: 0, periods: 0 };
   const ref = db.collection(COLLECTIONS.INSTALLMENT_PLANS).doc(planId);
   const doc = await ref.get();
@@ -142,7 +145,7 @@ const cancelInstallmentPlan = async (db, planId, { reason = '取消' } = {}) => 
   const { recordTransaction } = require('../utils/revenueLedger');
   let reversed = 0, periods = 0;
   for (const p of (plan.installments || [])) {
-    if (p.status === 'paid' && plan.gymId && p.amount > 0) {
+    if (!skipPaidReversal && p.status === 'paid' && plan.gymId && p.amount > 0) {
       await recordTransaction(db, {
         gymId: plan.gymId, type: 'refund', totalAmount: -Math.abs(p.amount),
         paymentMethod: p.paymentMethod || 'cash',

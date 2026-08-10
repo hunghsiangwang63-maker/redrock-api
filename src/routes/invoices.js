@@ -121,8 +121,15 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
 
 // ── 作廢真實發票（P6 起步；§4.1 退貨＝作廢＋全額退款一律綁在一起）──────
 // 供①本檔的手動作廢端點 ②各流程的取消/退貨動作自動連動（見 voidRealInvoiceIfIssued）共用。
-// 作廢不影響已配發的號碼（號碼永遠不重複使用，符合「跳號」原則）；沖銷記進當日結帳加減項
-// （沿用 §9 invoiceService.js 已在用的「-發票作廢」對稱機制，不另外設計新機制）。
+// 作廢不影響已配發的號碼（號碼永遠不重複使用，符合「跳號」原則）。
+//
+// ⚠️ 刻意不寫「-發票作廢」結帳加減項（與 §9 invoiceService.js 的 voidInvoice 不同！）：
+// §9 手動記帳版的「+發票開立/-發票作廢」加減項機制，是為了補「原本沒有 accrual 記帳」的情境設計的
+// （課程/比賽/入場某些流程過去沒有為這筆動作記過帳，靠開發票模擬記一筆）。P3 真實列印版對應的來源
+// （POS §7「當下收款當下開票」、以及日後接上的入場/課程/比賽/租借）本身**已經**有各自完整的收款/退款
+// accrual 記帳（如 POS 的 recordTransaction type:'product'／退貨時的 type:'product_refund'，這些會
+// 自然反映在營收報表與每日結帳「裝備銷售」等欄位裡）——真實發票只是多印一張紙+配號，不是記帳依據。
+// 若在此再疊加「-發票作廢」加減項，會與流程本身的退款記帳重複扣款（已用商品退貨 E2E 驗證抓到此問題）。
 async function voidRealInvoice(db, id, staffId, staffName, voidReason) {
   const ref = db.collection('invoices').doc(id);
   const doc = await ref.get();
@@ -134,12 +141,6 @@ async function voidRealInvoice(db, id, staffId, staffName, voidReason) {
     status: 'void', voidedAt: now, voidedBy: staffId || null, voidedByName: staffName || '',
     voidReason: voidReason ? String(voidReason).trim() : '', updatedAt: now,
   });
-  try {
-    await require('../services/settlementService').addCashAdjustment({
-      gymId: inv.gymId || null, amount: inv.amount, sign: '-', type: '發票作廢',
-      note: `發票作廢：${inv.invoiceNo || ''}・${inv.memberName || ''}・${inv.itemName || '費用'}（原發票 NT$${inv.amount}）`,
-    });
-  } catch (e) { console.error('[真實發票作廢加減項]', e.message); }
   return { ...inv, status: 'void' };
 }
 

@@ -478,9 +478,13 @@ const buildActiveCourseStudents = async (gymId) => {
     const pe = practiceEndOf(c);
     return ps && pe && ps <= today && today <= pe;
   });
+  // ⚠️ 效能：課程數量隨系統累積越來越多（逐一 await 會把每門課的網路往返延遲相加，N 門課＝N 倍
+  // 等待時間）；改 Promise.all 平行查詢，總耗時趨近「最慢那一門課」而非「全部加總」，且各課程
+  // 資料互不依賴、後面本就 .sort() 重排，平行處理不影響結果。
+  const memberLists = await Promise.all(courses.map(c => buildCourseMemberList(db, c)));
   const out = [];
-  for (const c of courses) {
-    const members = await buildCourseMemberList(db, c);
+  courses.forEach((c, i) => {
+    const members = memberLists[i];
     if (members.length) {
       out.push({
         courseId: c.id, courseName: c.name, gymId: c.gymId,
@@ -489,7 +493,7 @@ const buildActiveCourseStudents = async (gymId) => {
         count: members.length, members,
       });
     }
-  }
+  });
   out.sort((a, b) => b.count - a.count);
   await attachReceivedAmounts(db, out);
   return { courses: out, total: out.reduce((s, c) => s + c.count, 0) };
@@ -507,9 +511,11 @@ const buildFutureCourseStudents = async (gymId) => {
     const ps = c.unlimitedPracticeStart || c.startDate;
     return ps && ps > today;
   });
+  // ⚠️ 效能：同 buildActiveCourseStudents，改 Promise.all 平行查詢。
+  const memberLists = await Promise.all(courses.map(c => buildCourseMemberList(db, c)));
   const out = [];
-  for (const c of courses) {
-    const members = await buildCourseMemberList(db, c);
+  courses.forEach((c, i) => {
+    const members = memberLists[i];
     if (members.length) {
       out.push({
         courseId: c.id, courseName: c.name, gymId: c.gymId,
@@ -518,7 +524,7 @@ const buildFutureCourseStudents = async (gymId) => {
         count: members.length, members,
       });
     }
-  }
+  });
   out.sort((a, b) => (a.practiceStart || '').localeCompare(b.practiceStart || '')); // 最快開課的排前面
   await attachReceivedAmounts(db, out);
   return { courses: out, total: out.reduce((s, c) => s + c.count, 0) };
@@ -591,11 +597,12 @@ const buildHistoricalCourseMeta = async (gymId) => {
     const pe = practiceEndOf(c);
     return pe && pe < today; // 已過期（practiceEnd 早於今天）
   });
+  // ⚠️ 效能：同 buildActiveCourseStudents，改 Promise.all 平行查詢。
+  const enrollSnaps = await Promise.all(courses.map(c => db.collection('courseEnrollments').where('courseId', '==', c.id).get()));
   const out = [];
-  for (const c of courses) {
-    const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', c.id).get();
+  courses.forEach((c, i) => {
     const seen = new Set();
-    enrollSnap.docs.forEach(d => {
+    enrollSnaps[i].docs.forEach(d => {
       const e = d.data();
       if (e.status !== 'confirmed' || e.pauseStatus === 'paused') return;
       if (e.isMakeup || e.isTrial) return;
@@ -609,7 +616,7 @@ const buildHistoricalCourseMeta = async (gymId) => {
         count: seen.size,
       });
     }
-  }
+  });
   out.sort((a, b) => (b.practiceEnd || '').localeCompare(a.practiceEnd || '')); // 最近結束的排前面
   return out;
 };

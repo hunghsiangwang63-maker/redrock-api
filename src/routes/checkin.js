@@ -567,11 +567,14 @@ router.get('/today',
       });
 
       // 今日全部紀錄（依館分組排列；當日量級小、全量回傳讓清單與統計數一致）
+      // ⚠ amountPaid/rentShoes/rentChalk 原本漏在此投影（前端「今日入場紀錄」一律顯示空白金額/無岩鞋粉袋標籤，非僅線上支付才如此）
       const recent = targetGyms.flatMap(gym =>
         records.filter(r => r.gymId === gym.id).map(r => ({
           id: r.id, memberName: r.memberName, gymId: r.gymId,
           entryType: r.entryType || r.passType, checkedInAt: r.checkedInAt,
           legacyDiscount: r.legacyDiscount === true,
+          amountPaid: r.amountPaid || 0,
+          rentShoes: r.rentShoes === true, rentChalk: r.rentChalk === true,
         }))
       );
 

@@ -50,6 +50,35 @@ async function checkInvoiceIssuanceTiming(db, sourceType, refId) {
   }
 }
 
+// ── 列印當下對應交易是否仍有效（2026-08-10 定案）──────────────────────────
+// 真列印是「先印紙本、印成功才呼叫本端點配號+建紀錄」兩步驟，中間有真實網路延遲——若這個空檔
+// 對應的交易被別的動作取消（如另一分頁按了取消入場），紙本已經印出去、號碼也真的消耗掉了。
+// 原則（使用者拍板）：紙本已印出＝號碼已消耗，就一定要有紀錄——不能因為交易失效就默默不建紀錄
+// （那樣號碼會憑空消失、稽核對不上）。做法：仍建立紀錄，但直接標記為已作廢（status:'void'）並
+// 記下原因，讓「已消耗的號碼」永遠查得到對應紀錄，同時清楚標示這筆背後的交易其實已經失效。
+async function checkStillValidForInvoice(db, sourceType, refId) {
+  if (!sourceType || !refId) return { valid: true };
+  try {
+    if (sourceType === 'checkin') {
+      const doc = await db.collection('checkIns').doc(refId).get();
+      if (doc.exists && doc.data().isCancelled) return { valid: false, reason: '入場已取消' };
+    } else if (sourceType === 'product') {
+      const doc = await db.collection('productSales').doc(refId).get();
+      if (doc.exists && doc.data().returned) return { valid: false, reason: '銷售已退貨' };
+    } else if (sourceType === 'rental') {
+      const doc = await db.collection('equipmentRentals').doc(refId).get();
+      if (doc.exists && doc.data().status === 'cancelled') return { valid: false, reason: '租借已取消' };
+    } else if (sourceType === 'course') {
+      const doc = await db.collection('courseEnrollments').doc(refId).get();
+      if (doc.exists && doc.data().status === 'cancelled') return { valid: false, reason: '課程報名已取消' };
+    } else if (sourceType === 'competition') {
+      const doc = await db.collection('competitionRegistrations').doc(refId).get();
+      if (doc.exists && doc.data().status === 'cancelled') return { valid: false, reason: '比賽報名已取消' };
+    }
+  } catch (e) { console.error('[checkStillValidForInvoice]', sourceType, refId, e.message); }
+  return { valid: true };
+}
+
 // GET /invoices/state?gymId= - 查詢目前發票號碼狀態（唯讀，任何已登入員工可看，供結帳/櫃檯核對）
 router.get('/state', authenticate, async (req, res) => {
   try {
@@ -137,8 +166,13 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
     const allocated = await invoiceNumberService.allocateInvoiceNumber(gymId); // {track, number}
     const id = uuidv4();
     const now = new Date();
+    // 紙本已於前一步（呼叫端 local-print-agent）印出、號碼已在上一行消耗——不論對應交易此刻是否仍有效，
+    // 都要建立紀錄（號碼絕不能憑空消失）；若交易已在印製空檔失效，直接標記作廢並記下原因（見上方
+    // checkStillValidForInvoice 說明），而不是默默不建紀錄。
+    const validity = await checkStillValidForInvoice(db, sourceType, refId);
     const record = {
-      id, sourceType: sourceType || null, refId: refId || null, status: 'issued',
+      id, sourceType: sourceType || null, refId: refId || null,
+      status: validity.valid ? 'issued' : 'void',
       gymId, memberId: memberId || null, memberName: memberName || '',
       itemName: itemName || '費用', amount: amt,
       track: allocated.track, number: allocated.number, invoiceNo: `${allocated.track}${allocated.number}`,
@@ -146,9 +180,13 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
       issuedAt: issuedAt ? new Date(issuedAt) : now,
       staffId: req.staff.id, staffName: req.staff.name || '',
       createdAt: now, updatedAt: now,
+      ...(validity.valid ? {} : {
+        voidedAt: now, voidedBy: null, voidedByName: '系統自動判定',
+        voidReason: `列印當下對應交易已失效（${validity.reason}），號碼已消耗故仍記錄並直接標記作廢`,
+      }),
     };
     await db.collection('invoices').doc(id).set(record);
-    res.json({ success: true, invoice: record });
+    res.json({ success: true, invoice: record, autoVoided: !validity.valid, invalidReason: validity.valid ? null : validity.reason });
   } catch (err) {
     if (['INVOICE_STATE_NOT_CONFIGURED', 'INVOICE_TOO_EARLY'].includes(err.code)) return res.status(400).json({ error: err.code, message: err.message });
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

@@ -190,7 +190,23 @@ const cancelCheckIn = async (checkInId, staffId, force = false, staffName = null
   // 通知同館管理員（不阻斷取消本身）
   await notifyCancelCheckin({ gymId: checkIn.gymId, memberName: checkIn.memberName, staffName, force }).catch(() => {});
 
-  return { message: '入場已取消，票券已退回', checkInId };
+  // 取消自動連動作廢發票（§4.1.3，先從商品銷售、再擴及入場；比照 products.js 的 return 端點）：
+  // §9 手動記帳版（invoiceRecords，sourceType:'checkin'）＋ P3 真實列印版（invoices）各查一次，
+  // 有已開立的就作廢。入場費本身已由上面的 refund 交易沖銷（見 §4.1 討論），voidRealInvoice 已修正
+  // 不再疊加結帳加減項，故這裡不會重複扣款。查無/已作廢皆冪等略過，不阻斷取消本身。
+  let invoiceVoided = false;
+  try {
+    const invoiceService = require('../invoiceService');
+    const legacyInv = await invoiceService.getActiveInvoice(db, 'checkin', checkInId);
+    if (legacyInv) { await invoiceService.voidInvoice(db, legacyInv.id, staffId, staffName, '入場取消自動作廢'); invoiceVoided = true; }
+  } catch (e) { console.error('[入場取消連動作廢-手動記帳發票]', e.message); }
+  try {
+    const { voidRealInvoiceIfIssued } = require('../../routes/invoices');
+    const realInv = await voidRealInvoiceIfIssued(db, { sourceType: 'checkin', refId: checkInId }, staffId, staffName, '入場取消自動作廢');
+    if (realInv) invoiceVoided = true;
+  } catch (e) { console.error('[入場取消連動作廢-真實發票]', e.message); }
+
+  return { message: `入場已取消，票券已退回${invoiceVoided ? '，發票已自動作廢' : ''}`, checkInId, invoiceVoided };
 };
 
 // ── 今日統計 ────────────────────────────────────────────────────

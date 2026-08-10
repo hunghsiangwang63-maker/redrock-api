@@ -80,23 +80,25 @@ async function checkStillValidForInvoice(db, sourceType, refId) {
 }
 
 // GET /invoices/state?gymId= - 查詢目前發票號碼狀態（唯讀，任何已登入員工可看，供結帳/櫃檯核對）
+// ⚠️ 限當館：非 super_admin 一律用自己登入/值班的館別，不接受前端傳入的 gymId 覆寫
+// （比照 dailySettlements.js 既有慣例）——避免士林值班/櫃檯電腦動到新竹的發票號碼。
 router.get('/state', authenticate, async (req, res) => {
   try {
-    const gymId = req.query.gymId || req.staff?.gymId;
+    const gymId = req.staff?.role === 'super_admin' ? (req.query.gymId || req.staff?.gymId) : req.staff?.gymId;
     if (!gymId) return res.status(400).json({ error: 'MISSING_GYM', message: '請指定館別' });
     const state = await invoiceNumberService.getInvoiceState(gymId);
     res.json({ invoiceState: state });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// PUT /invoices/state - 換捲重設／中途校正（值班 operator 或管理員；見 §5.2.1 三段式權限）
+// PUT /invoices/state - 換捲重設／中途校正（值班 operator/站台或管理員；見 §5.2.1 三段式權限；限當館）
 router.put('/state', authenticate, requireManagerOrStation, async (req, res) => {
   try {
-    const gymId = req.body.gymId || req.staff?.gymId;
+    const gymId = req.staff?.role === 'super_admin' ? (req.body.gymId || req.staff?.gymId) : req.staff?.gymId;
     if (!gymId) return res.status(400).json({ error: 'MISSING_GYM', message: '請指定館別' });
-    const { track, startNumber, reason, force } = req.body;
+    const { track, startNumber, reason, force, rollSize } = req.body;
     const result = await invoiceNumberService.setInvoiceState(
-      gymId, { track, startNumber, reason, force: !!force },
+      gymId, { track, startNumber, reason, force: !!force, rollSize },
       { staffId: req.staff?.id, staffName: req.staff?.name }
     );
     if (result.warning) return res.status(409).json(result);
@@ -153,7 +155,10 @@ router.put('/printing-status', authenticate, async (req, res) => {
 // invoiceRecords 是不同集合，此為第 1-8 節「真實印表機」計畫專用，供日後 P5 結帳自動化讀取）。
 router.post('/print-record', authenticate, requireManagerOrStation, async (req, res) => {
   try {
-    const { gymId, sourceType, refId, memberId, memberName, itemName, amount, taxId, note, issuedAt } = req.body;
+    const { sourceType, refId, memberId, memberName, itemName, amount, taxId, note, issuedAt } = req.body;
+    // 限當館：非 super_admin 一律用自己登入/值班的館別（五流程既有呼叫本就是自己館，這裡是保險；
+    // 「手動開立無來源發票」尤其需要這道權威擋，避免士林操作直接消耗新竹的號碼）
+    const gymId = req.staff?.role === 'super_admin' ? (req.body.gymId || req.staff?.gymId) : req.staff?.gymId;
     if (!gymId) return res.status(400).json({ error: 'MISSING_GYM', message: '請指定館別' });
     const amt = Number(amount);
     if (!(amt > 0)) return res.status(400).json({ error: 'INVALID_AMOUNT', message: '發票金額需大於 0' });
@@ -186,21 +191,32 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
       }),
     };
     await db.collection('invoices').doc(id).set(record);
-    res.json({ success: true, invoice: record, autoVoided: !validity.valid, invalidReason: validity.valid ? null : validity.reason });
+    // 配號後的紙捲剩餘狀態（僅該館設過紙捲張數時才有意義）——供前端在列印成功畫面同步跳出
+    // 「即將用完」醒目警語，不用等下次開設定頁才看到。
+    res.json({
+      success: true, invoice: record, autoVoided: !validity.valid, invalidReason: validity.valid ? null : validity.reason,
+      rollStatus: { remaining: allocated.remaining ?? null, rollLow: !!allocated.rollLow, rollDepleted: !!allocated.rollDepleted },
+    });
   } catch (err) {
-    if (['INVOICE_STATE_NOT_CONFIGURED', 'INVOICE_TOO_EARLY'].includes(err.code)) return res.status(400).json({ error: err.code, message: err.message });
+    if (['INVOICE_STATE_NOT_CONFIGURED', 'INVOICE_TOO_EARLY', 'ROLL_DEPLETED'].includes(err.code)) return res.status(400).json({ error: err.code, message: err.message });
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }
 });
 
 // GET /invoices/lookup?invoiceNo= - 依紙本印出的號碼查詢單張真實發票（供手動作廢 UI 用；值班或管理員）
+// ⚠️ 限當館：非 super_admin 查到他館發票一律回 404（非 403）——避免透露「這個號碼存在、只是不是你的館」
+// 這種跨館存在性資訊。
 router.get('/lookup', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const invoiceNo = String(req.query.invoiceNo || '').trim().toUpperCase();
     if (!invoiceNo) return res.status(400).json({ error: 'MISSING_INVOICE_NO', message: '請輸入發票號碼' });
     const snap = await getDb().collection('invoices').where('invoiceNo', '==', invoiceNo).limit(1).get();
     if (snap.empty) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此發票號碼' });
-    res.json({ invoice: { id: snap.docs[0].id, ...snap.docs[0].data() } });
+    const invoice = { id: snap.docs[0].id, ...snap.docs[0].data() };
+    if (req.staff?.role !== 'super_admin' && invoice.gymId !== req.staff?.gymId) {
+      return res.status(404).json({ error: 'NOT_FOUND', message: '查無此發票號碼' });
+    }
+    res.json({ invoice });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -255,9 +271,17 @@ async function voidRealInvoiceIfIssued(db, { sourceType, refId }, staffId, staff
 }
 
 // POST /invoices/:id/void - 手動作廢（值班或管理員；主要供例外/補救情境，日常走各流程自動連動）
+// ⚠️ 限當館：非 super_admin 只能作廢自己館別的發票（先查文件比對 gymId 才執行作廢動作）。
 router.post('/:id/void', authenticate, requireManagerOrStation, async (req, res) => {
   try {
-    const inv = await voidRealInvoice(getDb(), req.params.id, req.staff.id, req.staff.name, req.body.voidReason);
+    const db = getDb();
+    if (req.staff?.role !== 'super_admin') {
+      const doc = await db.collection('invoices').doc(req.params.id).get();
+      if (doc.exists && doc.data().gymId !== req.staff?.gymId) {
+        return res.status(403).json({ error: 'CROSS_GYM_FORBIDDEN', message: '僅能作廢本館發票' });
+      }
+    }
+    const inv = await voidRealInvoice(db, req.params.id, req.staff.id, req.staff.name, req.body.voidReason);
     res.json({ success: true, invoice: inv });
   } catch (err) {
     const map = { NOT_FOUND: 404, ALREADY_VOID: 400 };

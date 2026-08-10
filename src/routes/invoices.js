@@ -119,4 +119,56 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
   }
 });
 
+// ── 作廢真實發票（P6 起步；§4.1 退貨＝作廢＋全額退款一律綁在一起）──────
+// 供①本檔的手動作廢端點 ②各流程的取消/退貨動作自動連動（見 voidRealInvoiceIfIssued）共用。
+// 作廢不影響已配發的號碼（號碼永遠不重複使用，符合「跳號」原則）；沖銷記進當日結帳加減項
+// （沿用 §9 invoiceService.js 已在用的「-發票作廢」對稱機制，不另外設計新機制）。
+async function voidRealInvoice(db, id, staffId, staffName, voidReason) {
+  const ref = db.collection('invoices').doc(id);
+  const doc = await ref.get();
+  if (!doc.exists) { const e = new Error('找不到此發票紀錄'); e.code = 'NOT_FOUND'; throw e; }
+  const inv = doc.data();
+  if (inv.status === 'void') { const e = new Error('此發票已作廢'); e.code = 'ALREADY_VOID'; throw e; }
+  const now = new Date();
+  await ref.update({
+    status: 'void', voidedAt: now, voidedBy: staffId || null, voidedByName: staffName || '',
+    voidReason: voidReason ? String(voidReason).trim() : '', updatedAt: now,
+  });
+  try {
+    await require('../services/settlementService').addCashAdjustment({
+      gymId: inv.gymId || null, amount: inv.amount, sign: '-', type: '發票作廢',
+      note: `發票作廢：${inv.invoiceNo || ''}・${inv.memberName || ''}・${inv.itemName || '費用'}（原發票 NT$${inv.amount}）`,
+    });
+  } catch (e) { console.error('[真實發票作廢加減項]', e.message); }
+  return { ...inv, status: 'void' };
+}
+
+// 供各流程取消/退貨動作自動連動作廢（§4.1.3）：查有無對應「已開立」的真實發票，有才作廢；
+// 查無或已作廢皆視為冪等成功（不拋錯），不阻斷原本的取消/退貨主流程。
+async function voidRealInvoiceIfIssued(db, { sourceType, refId }, staffId, staffName, voidReason) {
+  if (!sourceType || !refId) return null;
+  const snap = await db.collection('invoices')
+    .where('sourceType', '==', sourceType).where('refId', '==', refId).where('status', '==', 'issued').limit(1).get();
+  if (snap.empty) return null;
+  try {
+    return await voidRealInvoice(db, snap.docs[0].id, staffId, staffName, voidReason);
+  } catch (e) {
+    console.error('[自動連動作廢真實發票失敗]', sourceType, refId, e.message);
+    return null;
+  }
+}
+
+// POST /invoices/:id/void - 手動作廢（值班或管理員；主要供例外/補救情境，日常走各流程自動連動）
+router.post('/:id/void', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const inv = await voidRealInvoice(getDb(), req.params.id, req.staff.id, req.staff.name, req.body.voidReason);
+    res.json({ success: true, invoice: inv });
+  } catch (err) {
+    const map = { NOT_FOUND: 404, ALREADY_VOID: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 module.exports = router;
+module.exports.voidRealInvoiceIfIssued = voidRealInvoiceIfIssued;

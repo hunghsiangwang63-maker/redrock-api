@@ -409,7 +409,26 @@ router.post('/sales/:saleId/return', authenticate, checkPermission('products.sel
     }
 
     await saleRef.update({ returned: true, returnedAt: now, returnedBy: req.staff.id, returnRefId: refundId, returnReason: req.body.reason || '', updatedAt: now });
-    res.json({ message: `已退貨，退款 NT$${sale.totalAmount || 0}（庫存已還原）`, refundId });
+
+    // 退貨自動連動作廢發票（§4.1.3，先從商品銷售開始）：查有無已開立發票（§9 手動記帳版＋P3 真列印版
+    // 兩套各自查一次），有則自動作廢＋沖銷結帳加減項，不用店員另外去發票畫面按一次作廢。查無/已作廢皆
+    // 冪等略過，不阻斷退貨主流程（本身已成功，作廢連動失敗只記 log）。
+    let invoiceVoided = false;
+    try {
+      const invoiceService = require('../services/invoiceService');
+      const legacyInv = await invoiceService.getActiveInvoice(db, 'product', req.params.saleId);
+      if (legacyInv) { await invoiceService.voidInvoice(db, legacyInv.id, req.staff.id, req.staff.name, '商品退貨自動作廢'); invoiceVoided = true; }
+    } catch (e) { console.error('[退貨連動作廢-手動記帳發票]', e.message); }
+    try {
+      const { voidRealInvoiceIfIssued } = require('./invoices');
+      const realInv = await voidRealInvoiceIfIssued(db, { sourceType: 'product', refId: req.params.saleId }, req.staff.id, req.staff.name, '商品退貨自動作廢');
+      if (realInv) invoiceVoided = true;
+    } catch (e) { console.error('[退貨連動作廢-真實發票]', e.message); }
+
+    res.json({
+      message: `已退貨，退款 NT$${sale.totalAmount || 0}（庫存已還原${invoiceVoided ? '，發票已自動作廢' : ''}）`,
+      refundId, invoiceVoided,
+    });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

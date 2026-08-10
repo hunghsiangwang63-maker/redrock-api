@@ -1214,6 +1214,7 @@ router.post('/registrations/:regId/invoices', authenticate, requireManager, asyn
     const compDoc = await db.collection(COLLECTIONS.COMPETITIONS).doc(reg.competitionId).get();
     const comp = compDoc.exists ? compDoc.data() : {};
     const { itemName, amount, taxId, note, issuedAt, track, number } = req.body;
+    await require('./invoices').checkInvoiceIssuanceTiming(db, 'competition', req.params.regId); // 須賽事前3天起才能開票
     const invoiceService = require('../services/invoiceService');
     const record = await invoiceService.createInvoice(db, {
       sourceType: 'competition', refId: req.params.regId,
@@ -1225,7 +1226,7 @@ router.post('/registrations/:regId/invoices', authenticate, requireManager, asyn
     });
     res.json({ success: true, invoice: record });
   } catch (err) {
-    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400, INVALID_TAX_ID: 400 };
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400, INVALID_TAX_ID: 400, INVOICE_TOO_EARLY: 400 };
     if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }

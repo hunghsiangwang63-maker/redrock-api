@@ -790,6 +790,7 @@ router.post('/course-invoices', authenticate, requireManager, async (req, res) =
     const db = getDb();
     const { enrollmentId, memberId, memberName, courseId, courseName, gymId, itemName, amount, taxId, note, issuedAt, track, number } = req.body;
     if (!memberId || !courseId || !enrollmentId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '缺少會員或課程資訊' });
+    await require('./invoices').checkInvoiceIssuanceTiming(db, 'course', enrollmentId); // 須等課程最後一堂才能開票
     const invoiceService = require('../services/invoiceService');
     const record = await invoiceService.createInvoice(db, {
       sourceType: 'course', refId: enrollmentId, memberId, memberName,
@@ -799,7 +800,7 @@ router.post('/course-invoices', authenticate, requireManager, async (req, res) =
     });
     res.json({ success: true, invoice: record });
   } catch (err) {
-    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400, INVALID_TAX_ID: 400 };
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400, INVALID_TAX_ID: 400, INVOICE_TOO_EARLY: 400 };
     if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }

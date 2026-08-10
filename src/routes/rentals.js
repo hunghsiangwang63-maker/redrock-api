@@ -354,7 +354,27 @@ router.post('/:id/cancel', authenticateAny, async (req, res) => {
         .forEach(d => batch.update(d.ref, { status: 'void', voidReason: 'rental_cancelled', updatedAt: new Date() }));
       await batch.commit();
     } catch (e) {}
-    res.json({ success: true, message: '租借申請已取消' });
+
+    // 取消自動連動作廢發票（§4.1.3，承商品銷售/入場擴及租借；比照同一套模式）：租借發票在「確認歸還」
+    // 才開立（此時器材尚未取件，時間順序上絕不可能已有發票），此處查詢天生 no-op，接上純為完整性/未來
+    // 業務規則若調整時的保險；同樣依 invoicePrintingEnabled 把關、與其餘流程一致。
+    let invoiceVoided = false;
+    const { isInvoicePrintingEnabled, voidRealInvoiceIfIssued } = require('./invoices');
+    if (await isInvoicePrintingEnabled(db, r.gymId)) {
+      const actorId = isStaff ? req.staff.id : null;
+      const actorName = isStaff ? req.staff.name : (r.memberName || '會員自助取消');
+      try {
+        const invoiceService = require('../services/invoiceService');
+        const legacyInv = await invoiceService.getActiveInvoice(db, 'rental', req.params.id);
+        if (legacyInv) { await invoiceService.voidInvoice(db, legacyInv.id, actorId, actorName, '租借取消自動作廢'); invoiceVoided = true; }
+      } catch (e) { console.error('[租借取消連動作廢-手動記帳發票]', e.message); }
+      try {
+        const realInv = await voidRealInvoiceIfIssued(db, { sourceType: 'rental', refId: req.params.id }, actorId, actorName, '租借取消自動作廢');
+        if (realInv) invoiceVoided = true;
+      } catch (e) { console.error('[租借取消連動作廢-真實發票]', e.message); }
+    }
+
+    res.json({ success: true, message: `租借申請已取消${invoiceVoided ? '（發票已自動作廢）' : ''}`, invoiceVoided });
   } catch (err) {
     if (err.code) return res.status(400).json(err);
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

@@ -14,6 +14,41 @@ const { authenticate, requireManagerOrStation } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const invoiceNumberService = require('../services/invoiceNumberService');
 const { isValidTaiwanTaxId } = require('../utils/taiwanTaxId');
+const { taiwanToday } = require('../utils/taiwanDate');
+const dayjs = require('dayjs');
+
+// ── 課程/比賽發票「延後開立」時機驗證（2026-08-10 定案，§5.3.3 簡化版）─────────
+// 課程/比賽的退費多為部分金額（課程依政府公式算剩餘堂數；比賽依日期分段扣手續費），與 §4.1
+// 「作廢＝全額退款」互相衝突——與其做完整的「延後開票」重新設計，先用時機把關降低衝突機率：
+// 課程等到「最後一堂」（course.endDate）當天才能開票；比賽提前到「賽事當天前 3 天」開放
+// （多數報名的退費時窗此時已過）。仍可能有極少數更晚才發生的退費，那種情況維持人工判斷是否
+// 需要作廢（既有的手動作廢按鈕不受此限制），不做自動連動作廢——避免把「部分退費」誤判成
+// 「作廢＝全額退」。§9 手動記帳版與 P3 真列印版共用同一份判斷，兩邊都擋。
+async function checkInvoiceIssuanceTiming(db, sourceType, refId) {
+  const today = taiwanToday();
+  if (sourceType === 'course') {
+    const enrollDoc = await db.collection('courseEnrollments').doc(refId).get();
+    if (!enrollDoc.exists) return; // 查無報名，交由呼叫端的 NOT_FOUND 處理，此處不擋
+    const courseDoc = await db.collection('courses').doc(enrollDoc.data().courseId).get();
+    const endDate = courseDoc.exists ? courseDoc.data().endDate : null;
+    if (endDate && today < endDate) {
+      const e = new Error(`此課程最後一堂為 ${endDate}，須等課程結束當天才能開立發票`);
+      e.code = 'INVOICE_TOO_EARLY'; throw e;
+    }
+  } else if (sourceType === 'competition') {
+    const regDoc = await db.collection('competitionRegistrations').doc(refId).get();
+    if (!regDoc.exists) return;
+    const compDoc = await db.collection('competitions').doc(regDoc.data().competitionId).get();
+    const eventDate = compDoc.exists ? compDoc.data().eventDate : null;
+    if (eventDate) {
+      const openFrom = dayjs(eventDate).subtract(3, 'day').format('YYYY-MM-DD');
+      if (today < openFrom) {
+        const e = new Error(`此賽事為 ${eventDate}，須賽事前 3 天（${openFrom}）起才能開立發票`);
+        e.code = 'INVOICE_TOO_EARLY'; throw e;
+      }
+    }
+  }
+}
 
 // GET /invoices/state?gymId= - 查詢目前發票號碼狀態（唯讀，任何已登入員工可看，供結帳/櫃檯核對）
 router.get('/state', authenticate, async (req, res) => {
@@ -97,8 +132,9 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
     if (taxIdVal && !isValidTaiwanTaxId(taxIdVal)) {
       return res.status(400).json({ error: 'INVALID_TAX_ID', message: '統一編號檢查碼錯誤，請確認號碼是否正確' });
     }
-    const allocated = await invoiceNumberService.allocateInvoiceNumber(gymId); // {track, number}
     const db = getDb();
+    await checkInvoiceIssuanceTiming(db, sourceType, refId); // 課程/比賽延後開立時機把關（其餘 sourceType 不受影響）
+    const allocated = await invoiceNumberService.allocateInvoiceNumber(gymId); // {track, number}
     const id = uuidv4();
     const now = new Date();
     const record = {
@@ -114,7 +150,7 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
     await db.collection('invoices').doc(id).set(record);
     res.json({ success: true, invoice: record });
   } catch (err) {
-    if (err.code === 'INVOICE_STATE_NOT_CONFIGURED') return res.status(400).json({ error: err.code, message: err.message });
+    if (['INVOICE_STATE_NOT_CONFIGURED', 'INVOICE_TOO_EARLY'].includes(err.code)) return res.status(400).json({ error: err.code, message: err.message });
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }
 });
@@ -184,3 +220,4 @@ router.post('/:id/void', authenticate, requireManagerOrStation, async (req, res)
 module.exports = router;
 module.exports.voidRealInvoiceIfIssued = voidRealInvoiceIfIssued;
 module.exports.isInvoicePrintingEnabled = isInvoicePrintingEnabled;
+module.exports.checkInvoiceIssuanceTiming = checkInvoiceIssuanceTiming;

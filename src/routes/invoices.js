@@ -119,6 +119,16 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
   }
 });
 
+// 該館是否已開啟「五流程真列印」總開關（供各流程的取消/退貨自動作廢連動判斷用；GET /printing-status
+// 同源）。2026-08-10 定案：作廢自動連動這件事本身也要等該館「實際有列印發票」（此開關開啟）才正式開始
+// ——開關關閉時，即使碰巧存在已開立的發票（如尚未正式上線前，店員自行用 §9 手動記帳版開過），取消/退貨
+// 也完全不去動它，維持此功能上線前的原本行為。
+async function isInvoicePrintingEnabled(db, gymId) {
+  if (!gymId) return false;
+  const doc = await db.collection('gyms').doc(gymId).get();
+  return !!(doc.exists && doc.data().invoicePrintingEnabled === true);
+}
+
 // ── 作廢真實發票（P6 起步；§4.1 退貨＝作廢＋全額退款一律綁在一起）──────
 // 供①本檔的手動作廢端點 ②各流程的取消/退貨動作自動連動（見 voidRealInvoiceIfIssued）共用。
 // 作廢不影響已配發的號碼（號碼永遠不重複使用，符合「跳號」原則）。
@@ -173,3 +183,4 @@ router.post('/:id/void', authenticate, requireManagerOrStation, async (req, res)
 
 module.exports = router;
 module.exports.voidRealInvoiceIfIssued = voidRealInvoiceIfIssued;
+module.exports.isInvoicePrintingEnabled = isInvoicePrintingEnabled;

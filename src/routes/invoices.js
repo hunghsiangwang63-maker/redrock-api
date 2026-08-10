@@ -193,6 +193,17 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
   }
 });
 
+// GET /invoices/lookup?invoiceNo= - 依紙本印出的號碼查詢單張真實發票（供手動作廢 UI 用；值班或管理員）
+router.get('/lookup', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const invoiceNo = String(req.query.invoiceNo || '').trim().toUpperCase();
+    if (!invoiceNo) return res.status(400).json({ error: 'MISSING_INVOICE_NO', message: '請輸入發票號碼' });
+    const snap = await getDb().collection('invoices').where('invoiceNo', '==', invoiceNo).limit(1).get();
+    if (snap.empty) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此發票號碼' });
+    res.json({ invoice: { id: snap.docs[0].id, ...snap.docs[0].data() } });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // 該館是否已開啟「五流程真列印」總開關（供各流程的取消/退貨自動作廢連動判斷用；GET /printing-status
 // 同源）。2026-08-10 定案：作廢自動連動這件事本身也要等該館「實際有列印發票」（此開關開啟）才正式開始
 // ——開關關閉時，即使碰巧存在已開立的發票（如尚未正式上線前，店員自行用 §9 手動記帳版開過），取消/退貨

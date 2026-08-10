@@ -573,7 +573,7 @@ router.get('/today',
           id: r.id, memberName: r.memberName, gymId: r.gymId,
           entryType: r.entryType || r.passType, checkedInAt: r.checkedInAt,
           legacyDiscount: r.legacyDiscount === true,
-          amountPaid: r.amountPaid || 0,
+          amountPaid: r.amountPaid || 0, paymentMethod: r.paymentMethod || null,
           rentShoes: r.rentShoes === true, rentChalk: r.rentChalk === true,
         }))
       );

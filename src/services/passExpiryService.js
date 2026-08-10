@@ -51,7 +51,13 @@ function gymStatusLocal(gym, announcements, dateStr) {
 }
 
 // 該日對此票是否「可補償」（臨時休館才算，公休不算）
+// 落在「停用期間」（展延申請時填的 suspendStart~suspendEnd）內一律不補——
+// 那段期間本就是會員自己申請不使用場館（已透過展延天數延長到期日），
+// 遇到臨時休館不算「損失」，不應再疊加補償（2026-08-10 確認需求）。
 function isCompensableDay(pass, ctx, dateStr) {
+  if (pass.suspendStart && pass.suspendEnd && dateStr >= pass.suspendStart && dateStr <= pass.suspendEnd) {
+    return false;
+  }
   const isShared = pass.scope === 'shared' || pass.scope === 'all';
   if (!isShared) {
     const gymId = pass.targetGymId || pass.gymId;

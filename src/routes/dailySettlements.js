@@ -56,6 +56,30 @@ const manualIncomeTotal = (income, im) => im
       .reduce((s, k) => s + ((im[k] !== '' && im[k] != null) ? (Number(im[k]) || 0) : (income?.[k] || 0)), 0)
   : null;
 
+// ── 系統自動記錄的加減項不可人工刪除/修改（2026-08-10 拍板）────────────────────
+// 現金補入/發票開立/發票作廢等（settlementService.addCashAdjustment 寫入的 auto:true 項目）代表一筆
+// 真實已發生的金流事件——一旦被結帳頁編輯改掉或刪除，那筆事件在帳上就憑空消失，稽核對不上。
+// 後端權威把關：儲存前比對既有 doc 的 auto:true 項目，須「原封不動」仍存在於這次提交的陣列中
+// （有 id 精確比對 id；舊資料無 id 則退回比對 sign/type/amount/note 內容）。有錯誤只能用另一筆
+// 手動加減項沖銷，不能直接改掉/刪掉原始紀錄。
+const AUTO_DEDUCTION_LOCKED_MESSAGE = (d) =>
+  `系統自動記錄的加減項（${d.type} ${d.sign === '+' ? '+' : '-'}NT$${d.amount}）不可被刪除或修改，如有錯誤請新增另一筆手動加減項沖銷`;
+function findRemovedOrAlteredAutoDeductions(existingDeductions, submittedDeductions) {
+  const existingAuto = (existingDeductions || []).filter(x => x.auto === true);
+  if (!existingAuto.length) return null;
+  const submitted = submittedDeductions || [];
+  for (const ex of existingAuto) {
+    const stillPresent = submitted.some(sub => (
+      sub.auto === true &&
+      sub.sign === ex.sign && sub.type === ex.type &&
+      Number(sub.amount) === Number(ex.amount) && (sub.note || '') === (ex.note || '') &&
+      (ex.id ? sub.id === ex.id : true)
+    ));
+    if (!stillPresent) return AUTO_DEDUCTION_LOCKED_MESSAGE(ex);
+  }
+  return null;
+}
+
 // ── GET /daily-settlements/today ─────────────────────────────────
 router.get('/today', authenticate, requireStationAuth, async (req, res) => {
   try {
@@ -251,6 +275,9 @@ router.put('/draft', authenticate, requireStationAuth, async (req, res) => {
     if (existDoc && existDoc.data().status === 'settled')
       return res.json({ alreadySettled: true, message: '今日已結帳，暫存未儲存（請用「當日再次結帳」）' });
 
+    const lockErr = findRemovedOrAlteredAutoDeductions(existDoc?.data()?.deductions, req.body.deductions);
+    if (lockErr) return res.status(400).json({ error: 'AUTO_DEDUCTION_LOCKED', message: lockErr });
+
     const id = existDoc ? existDoc.id : uuidv4();
     const b = req.body;
     const draft = {
@@ -289,6 +316,9 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
     const { income, payment, deductions, denominations, invoiceLastNumber, notes,
       invoiceStartNumber, invoiceVoidNumbers, checkinCount,
       incomeManual, paymentManual, invoiceSegments, resettleReason } = req.body;  // 轉換期手動輸入並列（系統值與手動值都存）
+
+    const lockErr = findRemovedOrAlteredAutoDeductions(existDoc?.data()?.deductions, deductions);
+    if (lockErr) return res.status(400).json({ error: 'AUTO_DEDUCTION_LOCKED', message: lockErr });
 
     // 發票多段：優先 invoiceSegments 陣列；否則回退舊單段欄位。相容性：仍寫 invoiceStartNumber=首段.start、invoiceLastNumber=末段.last
     // track＝字軌（如 AB），跟著發票捲可能換；舊資料無此欄位一律回退空字串。

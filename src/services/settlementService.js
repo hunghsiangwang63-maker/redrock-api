@@ -6,6 +6,7 @@
  */
 const dayjs = require('dayjs');
 const { getDb } = require('../config/firebase');
+const { v4: uuidv4 } = require('uuid');
 
 const sweepStaleSettlementDrafts = async () => {
   const db = getDb();
@@ -34,11 +35,12 @@ const addCashAdjustment = async ({ gymId, amount, note, sign = '+', type = '現�
   if (!gymId || !(Number(amount) > 0)) return { skipped: true };
   const db = getDb();
   const today = dayjs().format('YYYY-MM-DD');
-  const item = { sign: sign === '-' ? '-' : '+', type: type || '現金補入', amount: Number(amount), note: String(note || '').trim(), auto: true };
+  // id：供結帳頁「系統自動加減項不可人工刪除/修改」的後端比對用（見 routes/dailySettlements.js
+  // findRemovedOrAlteredAutoDeductions）——每筆自動記錄都要有穩定識別碼，儲存時才能精確核對是否被動過。
+  const item = { id: uuidv4(), sign: sign === '-' ? '-' : '+', type: type || '現金補入', amount: Number(amount), note: String(note || '').trim(), auto: true };
   const snap = await db.collection('dailySettlements')
     .where('gymId', '==', gymId).where('date', '==', today).limit(1).get();
   if (snap.empty) {
-    const { v4: uuidv4 } = require('uuid');
     const id = uuidv4();
     await db.collection('dailySettlements').doc(id).set({
       id, gymId, date: today, status: 'draft', deductions: [item],

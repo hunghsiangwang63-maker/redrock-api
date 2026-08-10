@@ -6,6 +6,7 @@ const { authenticate, authenticateAny, checkPermission, requireManagerOrStation,
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
 const courseService = require('../services/courseService');
+const courseRegistrationService = require('../services/courseRegistrationService');
 const { recordTransaction } = require('../utils/revenueLedger');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 
@@ -314,6 +315,11 @@ router.post('/requests/:id/approve',
           await d.ref.update({ pauseStatus: 'paused', pausedAt: now, pauseRequestId: req.params.id, updatedAt: now });
           paused++;
         }
+        // 同步 header（供 members.js buildCourseMemberList 改讀 header 後仍正確排除暫停中會員）
+        if (paused > 0) {
+          try { await courseRegistrationService.updateHeaderPauseStatus(db, request.memberId, request.courseId, 'paused'); }
+          catch (e) { console.error('header pauseStatus 同步失敗（暫停）', e.message); }
+        }
         await db.collection('courseAdjustmentRequests').doc(req.params.id).update({
           status: 'approved', pausedCount: paused,
           approvedBy: req.staff.id, approvedByName: req.staff.name, approvedAt: new Date(), updatedAt: new Date(),
@@ -390,6 +396,21 @@ router.post('/enrollments/:enrollmentId/restore',
         batch.update(d.ref, { status: 'confirmed', updatedAt: new Date() });
       });
       await batch.commit();
+      // 同步 header：此 API 只恢復單一 enrollmentId（暫停時可能一次暫停多堂未來場次），
+      // 要先確認該會員此課程「已無其他仍暫停中的場次」才把 header 的 pauseStatus 清掉，
+      // 否則只恢復其中一堂時會誤把 header 標成「已恢復」。
+      try {
+        // 單一等值查詢＋記憶體過濾（避免 courseId+memberId+pauseStatus 三欄複合索引，本專案慣例）
+        const remainSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+          .where('memberId', '==', enrollment.memberId).get();
+        const stillPaused = remainSnap.docs.some(d => {
+          const x = d.data();
+          return x.courseId === enrollment.courseId && x.pauseStatus === 'paused';
+        });
+        if (!stillPaused) {
+          await courseRegistrationService.updateHeaderPauseStatus(db, enrollment.memberId, enrollment.courseId, null);
+        }
+      } catch (e) { console.error('header pauseStatus 同步失敗（恢復）', e.message); }
       res.json({ success: true, message: '課程已恢復，學員已重新加回場次名單' });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }

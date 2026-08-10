@@ -28,6 +28,7 @@ const createRegistrationHeader = async (db, data) => {
     courseName: data.courseName || '',
     gymId: data.gymId || null,
     status: data.status || 'confirmed', // confirmed | waitlist | cancelled
+    pauseStatus: data.pauseStatus || null, // null | 'paused'（與 courseEnrollments 對應欄位同步，見 updateHeaderPauseStatus）
     paymentMethod: data.paymentMethod || null,
     paymentStatus: data.paymentStatus || null,
     fee: data.fee != null ? data.fee : 0,
@@ -87,8 +88,28 @@ const updateRegistrationStatusByCourseMember = async (db, memberId, courseId, up
   return snap.size;
 };
 
+/**
+ * 同步暫停狀態到 header（courseAdjustments.js 的暫停核准／恢復兩處呼叫）。
+ * 找該 memberId+courseId 目前有效（confirmed/waitlist）的 header，寫入 pauseStatus。
+ * 冪等、查無 header 不視為錯誤（雙寫期舊資料尚無 header 屬正常）。
+ */
+const updateHeaderPauseStatus = async (db, memberId, courseId, pauseStatus) => {
+  const snap = await db.collection(REGISTRATION_COLLECTION)
+    .where('memberId', '==', memberId)
+    .where('courseId', '==', courseId)
+    .where('status', 'in', ['confirmed', 'waitlist'])
+    .get();
+  if (snap.empty) return 0;
+  const now = new Date();
+  const batch = db.batch();
+  snap.docs.forEach(d => batch.update(d.ref, { pauseStatus: pauseStatus || null, updatedAt: now }));
+  await batch.commit();
+  return snap.size;
+};
+
 module.exports = {
   REGISTRATION_COLLECTION,
   createRegistrationHeader,
   updateRegistrationStatusByCourseMember,
+  updateHeaderPauseStatus,
 };

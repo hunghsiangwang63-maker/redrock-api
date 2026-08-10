@@ -367,47 +367,42 @@ const practiceEndOf = (c) => c.unlimitedPracticeEnd
 
 // 單一課程完整學員名單（Phase 3：改讀 courseRegistrations header——一次報名一筆，不用再逐筆掃
 // slot 猜哪筆是「主報名列」。header 缺的 gymAccessStart 等場次層資訊本就不需要，這裡只要報名層資料）。
+// ⚠️ 效能（2026-08 改版）：原本讀 courseEnrollments（每場次一筆，週課單一梯次可能累積數百筆）
+// 逐一 await 每門課會把讀取量與網路往返都放大；改讀 courseRegistrations header（一次報名一筆）
+// 一次查詢就同時取得「誰是學員」與「付款/備註」兩份資料。header 只在 enroll-all/enrollCourse/
+// claimPendingCourseEnrollment 建立（見 courseRegistrationService.js），補課/試上（原本用 isMakeup/
+// isTrial 過濾）從不建立 header，故不需要額外過濾這兩個旗標。pauseStatus 由 courseAdjustments.js
+// 暫停核准/恢復兩處同步寫入 header（updateHeaderPauseStatus），維持與舊版相同的排除語意。
 const buildCourseMemberList = async (db, c) => {
-  const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', c.id).get();
+  const hSnap = await db.collection('courseRegistrations').where('courseId', '==', c.id).get();
   const seen = new Map();
-  enrollSnap.docs.forEach(d => {
-    const e = d.data();
-    if (!['confirmed', 'waitlist'].includes(e.status)) return;
-    if (e.status === 'confirmed' && e.pauseStatus === 'paused') return;
-    if (e.isMakeup || e.isTrial) return; // 補課/試上＝單日行為（入場資格僅當天），不列為該班「課程學員」
-    if (!seen.has(e.memberId)) seen.set(e.memberId, {
-      memberId: e.memberId, memberName: e.memberName || '',
-      isWaitlist: e.status === 'waitlist', waitlistPosition: e.waitlistPosition ?? null,
-    });
-  });
-  const memberIds = [...seen.keys()];
   const payMap = {};
-  for (let i = 0; i < memberIds.length; i += 30) {
-    const batch = memberIds.slice(i, i + 30);
-    if (!batch.length) break;
-    const hSnap = await db.collection('courseRegistrations')
-      .where('courseId', '==', c.id).where('memberId', 'in', batch).get();
-    hSnap.forEach(d => {
-      const h = d.data();
-      if (h.status === 'cancelled') return; // 該生此課程已整筆取消的 header 不採用（罕見：舊資料重複組殘留）
-      payMap[h.memberId] = {
-        enrollmentId: h.payEnrollmentId,
-        fee: h.fee ?? 0,
-        paymentMethod: h.paymentMethod || '',
-        paymentStatus: h.paymentStatus || '',
-        paymentConfirmed: h.paymentConfirmed !== false,
-        memberPaidAmount: h.memberPaidAmount ?? null,
-        receivedAmountOverride: h.receivedAmountOverride ?? null,
-        bankLastFive: h.bankLastFive || '',
-        paymentDate: h.paymentDate || '',
-        enrolledAt: h.enrolledAt || null,
-        enrollNote: h.enrollNote || '',
-        healthNote: h.healthNote || '',
-        referralSource: h.referralSource || '',
-        staffNote: h.staffNote || '',
-      };
+  hSnap.docs.forEach(d => {
+    const h = d.data();
+    if (!['confirmed', 'waitlist'].includes(h.status)) return;
+    if (h.status === 'confirmed' && h.pauseStatus === 'paused') return;
+    if (seen.has(h.memberId)) return; // 罕見重複 header（見 [[course-enrollment-duplicate-groups]]）：採第一筆
+    seen.set(h.memberId, {
+      memberId: h.memberId, memberName: h.memberName || '',
+      isWaitlist: h.status === 'waitlist', waitlistPosition: h.waitlistPosition ?? null,
     });
-  }
+    payMap[h.memberId] = {
+      enrollmentId: h.payEnrollmentId,
+      fee: h.fee ?? 0,
+      paymentMethod: h.paymentMethod || '',
+      paymentStatus: h.paymentStatus || '',
+      paymentConfirmed: h.paymentConfirmed !== false,
+      memberPaidAmount: h.memberPaidAmount ?? null,
+      receivedAmountOverride: h.receivedAmountOverride ?? null,
+      bankLastFive: h.bankLastFive || '',
+      paymentDate: h.paymentDate || '',
+      enrolledAt: h.enrolledAt || null,
+      enrollNote: h.enrollNote || '',
+      healthNote: h.healthNote || '',
+      referralSource: h.referralSource || '',
+      staffNote: h.staffNote || '',
+    };
+  });
   let members = [...seen.values()].map(m => ({ ...m, ...(payMap[m.memberId] || {}) }));
   // 電話以 members 集合權威補齊
   if (members.length) {
@@ -597,16 +592,15 @@ const buildHistoricalCourseMeta = async (gymId) => {
     const pe = practiceEndOf(c);
     return pe && pe < today; // 已過期（practiceEnd 早於今天）
   });
-  // ⚠️ 效能：同 buildActiveCourseStudents，改 Promise.all 平行查詢。
-  const enrollSnaps = await Promise.all(courses.map(c => db.collection('courseEnrollments').where('courseId', '==', c.id).get()));
+  // ⚠️ 效能：改讀 courseRegistrations header（同 buildCourseMemberList 理由），並 Promise.all 平行查詢。
+  const headerSnaps = await Promise.all(courses.map(c => db.collection('courseRegistrations').where('courseId', '==', c.id).get()));
   const out = [];
   courses.forEach((c, i) => {
     const seen = new Set();
-    enrollSnaps[i].docs.forEach(d => {
-      const e = d.data();
-      if (e.status !== 'confirmed' || e.pauseStatus === 'paused') return;
-      if (e.isMakeup || e.isTrial) return;
-      seen.add(e.memberId);
+    headerSnaps[i].docs.forEach(d => {
+      const h = d.data();
+      if (h.status !== 'confirmed' || h.pauseStatus === 'paused') return;
+      seen.add(h.memberId);
     });
     if (seen.size) {
       out.push({

@@ -99,6 +99,7 @@ router.post('/enrollments/:enrollmentId/refund-request',
       // 週課／工作坊退費計算式完全不同：週課看「剩餘堂數價金」，工作坊整筆退課、看「距開課天數」比例。
       let suggestedRefund, refundNote;
       let totalSessions = null, heldSessions = null, remainingSessions = null, remainingValue = null, feeRate = null, fee = null, perSessionDeduction = null, handlingFeeRate = null;
+      let depositAmount = 0, suggestedDepositRefund = 0; // 保證金：提前取消套用同一套時間分級比例（僅工作坊）
 
       if (course?.type === 'workshop') {
         // 工作坊：整筆退課，依距開課天數分級比例退費（梯次可個別設定 course.refundTiers；見 computeWorkshopRefund）
@@ -107,6 +108,12 @@ router.post('/enrollments/:enrollmentId/refund-request',
         const wr = courseService.computeWorkshopRefund(course, { paidAmount, actuallyPaid, startDate: workshopStart, today });
         suggestedRefund = wr.suggestedRefund;
         refundNote = wr.refundNote;
+        // 保證金比照同一比例部分退還（只在保證金已收款確認、尚未處理過時才適用；未收款/已處理過的一律 0）
+        if (Number(rep.depositAmount) > 0 && rep.depositCollectedAdjDone && !rep.depositResolved) {
+          depositAmount = Number(rep.depositAmount);
+          suggestedDepositRefund = Math.round(depositAmount * wr.rate);
+          refundNote += `；保證金 NT$${depositAmount} 依同一比例退還 NT$${suggestedDepositRefund}（其餘沒收）`;
+        }
       } else {
         // 週課退費（2026-07-18 改版）：退費＝剩餘堂數價金 − 手續費（剩餘價金 × 費率）
         // 每堂單價＝已繳金額 ÷ 總堂數；剩餘堂數＝總堂數 − 已開課堂數（日期已過，不論出席/請假）。
@@ -151,6 +158,7 @@ router.post('/enrollments/:enrollmentId/refund-request',
         suggestedRefund,
         suggestedPercentage,
         refundNote,
+        depositAmount, suggestedDepositRefund, // 保證金（僅工作坊；depositAmount=0 代表無保證金或已處理過）
         courseType: course?.type || 'weekly', // 供審核端知道套用哪套公式（週課/工作坊），供稽核
         totalSessions, heldSessions, remainingSessions, remainingValue, feeRate, fee, // 政府公式明細（週課專用，工作坊為 null）
         perSessionDeduction,
@@ -278,6 +286,31 @@ router.post('/requests/:id/approve',
         // 課程退費 → 還原定期票「此課程」重疊補償延長（政策 2026-07-17；不阻斷）
         try { await require('../services/passOverlapService').revertCourseOverlapExtension({ memberId: request.memberId, courseId: request.courseId }); }
         catch (e) { console.error('重疊補償還原失敗（退費已核准）:', e.message); }
+        // 工作坊保證金：提前取消比照同一套時間分級比例部分退還（其餘視同沒收，不另記帳——理由同
+        // forfeit-deposit：錢已在收款確認當下記過「+保證金收取」，未退還的部分留在抽屜即等於沒收）
+        let finalDepositRefund = 0;
+        if (Number(request.depositAmount) > 0) {
+          const depositDoc = activeSnap.docs.find(d => d.id === request.enrollmentId) || activeSnap.docs[0];
+          const dep = depositDoc?.data();
+          if (dep && Number(dep.depositAmount) > 0 && dep.depositCollectedAdjDone && !dep.depositResolved) {
+            finalDepositRefund = req.body.finalDepositRefund !== undefined ? Number(req.body.finalDepositRefund) : Number(request.suggestedDepositRefund) || 0;
+            finalDepositRefund = Math.max(0, Math.min(finalDepositRefund, Number(dep.depositAmount)));
+            try {
+              if (finalDepositRefund > 0) {
+                await require('../services/settlementService').addCashAdjustment({
+                  gymId: dep.gymId, sign: '-', type: '保證金退還', amount: finalDepositRefund,
+                  note: `${dep.memberName || ''}（${dep.courseName || ''}・提前取消）`,
+                });
+              }
+              await depositDoc.ref.update({
+                depositResolved: true,
+                depositResolution: finalDepositRefund >= Number(dep.depositAmount) ? 'refunded' : (finalDepositRefund <= 0 ? 'forfeited' : 'cancel_partial'),
+                depositRefundedAmount: finalDepositRefund,
+                depositResolvedBy: req.staff.name || req.staff.id, depositResolvedAt: new Date(), updatedAt: new Date(),
+              });
+            } catch (e) { console.error('保證金取消退還處理失敗（退費已核准）:', e.message); }
+          }
+        }
         // 分期計畫整筆作廢（2026-08-09；若有）：已繳期數各自沖銷一筆負向 refund 交易、未繳期數直接作廢，
         // 避免會員退掉課程後仍背負分期債務（不論 finalRefund 是否為 0 都要作廢，課程本身都已取消）
         if (request.installmentPlanId) {
@@ -310,10 +343,13 @@ router.post('/requests/:id/approve',
           } catch (e) { console.error('退費記帳失敗', e.message); }
         }
         await db.collection('courseAdjustmentRequests').doc(req.params.id).update({
-          status: 'approved', finalRefund, cancelledCount: cancelled,
+          status: 'approved', finalRefund, finalDepositRefund, cancelledCount: cancelled,
           approvedBy: req.staff.id, approvedByName: req.staff.name, approvedAt: new Date(), updatedAt: new Date(),
         });
-        return res.json({ success: true, message: `退費申請已核准，退款 NT$${finalRefund}（已取消 ${cancelled} 堂報名）` });
+        return res.json({
+          success: true,
+          message: `退費申請已核准，退款 NT$${finalRefund}${finalDepositRefund > 0 ? `＋保證金 NT$${finalDepositRefund}` : ''}（已取消 ${cancelled} 堂報名）`,
+        });
       }
 
       if (request.type === 'pause') {

@@ -217,6 +217,16 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
                 ...(noteUpdate.staffNote !== undefined ? { staffNote: noteUpdate.staffNote } : {}),
               });
             } catch (e2) { console.error('[雙寫] header 付款確認更新失敗（不影響收款確認）:', e2.message); }
+            // 工作坊保證金：收款確認當下才記入抽屜（比照器材租借押金收取時機，非報名當下）；冪等
+            if (Number(en.depositAmount) > 0 && !en.depositCollectedAdjDone) {
+              try {
+                await require('../services/settlementService').addCashAdjustment({
+                  gymId: en.gymId, sign: '+', type: '保證金收取', amount: en.depositAmount,
+                  note: `${en.memberName || ''}（${en.courseName || ''}）`,
+                });
+                await db.collection('courseEnrollments').doc(t.refId).update({ depositCollectedAdjDone: true, updatedAt: now });
+              } catch (e3) { console.error('保證金收取記帳失敗（收款已確認）:', e3.message); }
+            }
           }
         } catch (e) { console.error('課程重疊補償失敗（收款已確認）:', e.message); }
         // 課程/工作坊確認收款通知信（運動按摩附注意事項；附場次清單）

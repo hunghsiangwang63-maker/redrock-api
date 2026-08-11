@@ -125,6 +125,9 @@ const createCourse = async ({ gymId, staffId, data }) => {
     refundTiers: Array.isArray(data.refundTiers) && data.refundTiers.length
       ? data.refundTiers.map(t => ({ daysBefore: Number(t.daysBefore) || 0, rate: Number(t.rate) || 0 }))
       : null,
+    // 工作坊保證金（僅 workshop 用；0/null＝不收保證金。免費工作坊仍可收保證金，報到後由店員退還/沒收；
+    // 提前取消時比照 refundTiers 同一套時間分級比例部分退還，見 computeWorkshopRefund 呼叫端）
+    depositAmount: data.depositAmount != null && data.depositAmount !== '' ? Number(data.depositAmount) || 0 : 0,
     // 續報/舊生優惠（比率折扣，各自開關；週課專用）：續報＝前一期整期報名（插班不算）；舊生＝曾報名過或插班生
     fullTermRenewalDiscountEnabled: data.fullTermRenewalDiscountEnabled === true,
     fullTermRenewalDiscountRate: data.fullTermRenewalDiscountRate != null ? Number(data.fullTermRenewalDiscountRate) : 0.9,
@@ -718,6 +721,13 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     teamPriceApplied: _teamPriceApplied,   // 工作坊隊員優惠價
     isTeamMemberEnroll: _isTeam,
     paymentStatus: 'pending',
+    // 保證金（快照自 course.depositAmount；免費工作坊也可收）。實際收取（settlement 加減項）在收款確認當下才記，
+    // 見 transfers.js course 分支；退還/沒收為店員獨立動作，見 refund-deposit/forfeit-deposit 端點。
+    depositAmount: course.depositAmount || 0,
+    depositCollectedAdjDone: false,
+    depositResolved: false,
+    depositResolution: null,   // 'refunded' | 'forfeited' | 'cancel_partial'（提前取消依分級比例部分退還）
+    depositRefundedAmount: 0,
     gymAccessStart,
     gymAccessEnd,
     enrolledBy: staffId || memberId,

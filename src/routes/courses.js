@@ -657,6 +657,62 @@ router.post('/enrollments/:enrollmentId/choose-cash', authenticateAny, async (re
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── 工作坊保證金：退還／沒收（店員獨立動作，與出席標記無關）───────────
+// 兩者互斥、皆冪等（depositResolved 只能被其中一個消耗一次）；提前取消走 course-adjustments
+// 退費申請的分級比例（見該路由 workshop 分支），不透過這兩個端點。
+router.post('/enrollments/:enrollmentId/refund-deposit',
+  authenticate, checkPermission('courses.manage'), auditLog('course.refund_deposit'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const ref = db.collection('courseEnrollments').doc(req.params.enrollmentId);
+      const doc = await ref.get();
+      if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+      const e = doc.data();
+      if (!(Number(e.depositAmount) > 0)) return res.status(400).json({ error: 'NO_DEPOSIT', message: '此報名無保證金' });
+      if (!e.depositCollectedAdjDone) return res.status(400).json({ error: 'DEPOSIT_NOT_COLLECTED', message: '保證金尚未收款確認，無法退還' });
+      if (e.depositResolved) return res.status(400).json({ error: 'ALREADY_RESOLVED', message: '此保證金已處理過（退還或沒收）' });
+
+      const now = new Date();
+      await require('../services/settlementService').addCashAdjustment({
+        gymId: e.gymId, sign: '-', type: '保證金退還', amount: e.depositAmount,
+        note: `${e.memberName || ''}（${e.courseName || ''}）`,
+      });
+      await ref.update({
+        depositResolved: true, depositResolution: 'refunded', depositRefundedAmount: e.depositAmount,
+        depositResolvedBy: req.staff.name || req.staff.id, depositResolvedAt: now, updatedAt: now,
+      });
+      res.json({ success: true, message: `保證金 NT$${e.depositAmount} 已退還` });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
+router.post('/enrollments/:enrollmentId/forfeit-deposit',
+  authenticate, checkPermission('courses.manage'), auditLog('course.forfeit_deposit'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const ref = db.collection('courseEnrollments').doc(req.params.enrollmentId);
+      const doc = await ref.get();
+      if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+      const e = doc.data();
+      if (!(Number(e.depositAmount) > 0)) return res.status(400).json({ error: 'NO_DEPOSIT', message: '此報名無保證金' });
+      if (!e.depositCollectedAdjDone) return res.status(400).json({ error: 'DEPOSIT_NOT_COLLECTED', message: '保證金尚未收款確認，無法沒收' });
+      if (e.depositResolved) return res.status(400).json({ error: 'ALREADY_RESOLVED', message: '此保證金已處理過（退還或沒收）' });
+
+      const now = new Date();
+      // 沒收不需另記帳——金額已在收款確認當下記過「+保證金收取」，錢留在抽屜即等於已沒收；
+      // 且該筆從未進過教學費營收（保證金本就不是 recordTransaction 的一部分），符合「不算收入」。
+      await ref.update({
+        depositResolved: true, depositResolution: 'forfeited', depositRefundedAmount: 0,
+        depositResolvedBy: req.staff.name || req.staff.id, depositResolvedAt: now, updatedAt: now,
+        depositResolveReason: req.body.reason || null,
+      });
+      res.json({ success: true, message: `保證金 NT$${e.depositAmount} 已沒收（會員未出席）` });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
 // ══════════════════════════════════════════════════════
 // 補課
 // ══════════════════════════════════════════════════════
@@ -1207,7 +1263,7 @@ router.put('/:courseId',
         'enrollOpenDate', 'alumniOpenDate', 'fullTermRenewalDiscount', 'alumniDiscount', 'renewalDeadline',
         'fullTermRenewalDiscountEnabled', 'fullTermRenewalDiscountRate', 'alumniDiscountEnabled', 'alumniDiscountRate',
         'teamOpenDate', 'generalOpenDate', 'teamPrice',
-        'skipSignature', 'collectGenderAge', 'enrollNoteLabel', 'enrollNoteRequired', 'refundTiers',
+        'skipSignature', 'collectGenderAge', 'enrollNoteLabel', 'enrollNoteRequired', 'refundTiers', 'depositAmount',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',
         'unlimitedPracticeStart', 'unlimitedPracticeEnd',
         'allowTrial', 'trialPrice', 'trialTarget', 'makeupTarget', 'isActive', 'paymentMethods', // isActive：停用/啟用（會員課程總覽隱藏，不通知、不動報名）
@@ -1241,6 +1297,9 @@ router.put('/:courseId',
         updates.refundTiers = Array.isArray(req.body.refundTiers) && req.body.refundTiers.length
           ? req.body.refundTiers.map(t => ({ daysBefore: Number(t.daysBefore) || 0, rate: Number(t.rate) || 0 }))
           : null;
+      }
+      if (req.body.depositAmount !== undefined) {
+        updates.depositAmount = req.body.depositAmount !== '' ? (Number(req.body.depositAmount) || 0) : 0;
       }
       // 分期規則
       if (req.body.installment !== undefined) {
@@ -1610,12 +1669,21 @@ router.get('/:courseId/enrollments',
           memberId: e.memberId, memberName: e.memberName || '',
           count: 0, leaveUsed: 0, isWaitlist: false, waitlistPosition: null, maxLeavesAllowed: null,
           fallbackEnrolledAt: null,
+          // 保證金（僅工作坊有意義；工作坊一人一筆 enrollment，第一筆即唯一一筆，first-wins 天然正確）
+          enrollmentId: null, depositAmount: 0, depositCollectedAdjDone: false, depositResolved: false, depositResolution: null,
         };
         m.count++;
         if (e.status === 'waitlist') { m.isWaitlist = true; if (e.waitlistPosition != null) m.waitlistPosition = e.waitlistPosition; }
         if (e.status === 'leave') m.leaveUsed++;
         if (e.maxLeavesAllowed != null) m.maxLeavesAllowed = e.maxLeavesAllowed;
         if (!m.fallbackEnrolledAt && (e.enrolledAt || e.createdAt)) m.fallbackEnrolledAt = e.enrolledAt || e.createdAt;
+        if (!m.enrollmentId) {
+          m.enrollmentId = d.id;
+          m.depositAmount = Number(e.depositAmount) || 0;
+          m.depositCollectedAdjDone = !!e.depositCollectedAdjDone;
+          m.depositResolved = !!e.depositResolved;
+          m.depositResolution = e.depositResolution || null;
+        }
         byMember.set(e.memberId, m);
       });
 
@@ -1658,6 +1726,10 @@ router.get('/:courseId/enrollments',
           healthNote: header.healthNote || null,
           referralSource: header.referralSource || null,
           staffNote: header.staffNote || null,   // 管理員收款確認時填的備註
+          // 工作坊保證金（週課恆為 0/false，前端只在 course.type==='workshop' 時顯示）
+          enrollmentId: m.enrollmentId,
+          depositAmount: m.depositAmount, depositCollectedAdjDone: m.depositCollectedAdjDone,
+          depositResolved: m.depositResolved, depositResolution: m.depositResolution,
         };
       });
       // Sort by enrolledAt desc

@@ -718,6 +718,7 @@ router.put('/:id/finance', authenticate, requireManager, async (req, res) => {
         await require('../services/settlementService').addCashAdjustment({
           gymId: b.gymId, sign: '-', type: '教練費', amount: coachFee,
           note: `${b.contactName || ''} 體驗教練費`.trim(),
+          targetDate: b.bookingDate, // 記在活動當天，而非管理員填寫教練費金額的當下（2026-08-11 案例）
         });
         await ref.update({ coachFeeAdjDone: true });
       } catch (e) { console.error('體驗教練費寫入結帳加減項失敗', e.message); }

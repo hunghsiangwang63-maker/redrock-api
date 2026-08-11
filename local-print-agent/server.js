@@ -79,8 +79,6 @@ function buildInvoiceLines({ gymId, items, total, date, buyerTaxId }) {
     const pad2 = (n) => String(n).padStart(2, '0');
     return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
   })();
-  const sep = '------------------------';
-
   const itemList = Array.isArray(items) && items.length ? items : [];
   const itemLines = itemList.map((it) => {
     const name = String(it.name || '');
@@ -99,18 +97,48 @@ function buildInvoiceLines({ gymId, items, total, date, buyerTaxId }) {
     center(`統編：${g.taxId}`),
     center(g.addr1),
     center(g.addr2),
-    sep,
     dateStr,
-    sep,
     ...itemLines,
-    sep,
     `合計：      ${money(totalAmount)}`,
   ];
   if (buyerTaxId) {
-    lines.push(sep, `買受人統編：${buyerTaxId}`);
+    lines.push(`買受人統編：${buyerTaxId}`);
   }
-  lines.push(sep, center('以下空白'));
+  lines.push(center('以下空白'));
   return lines;
+}
+
+// ── 即時狀態查詢（2026-08-11 新增）──────────────────────────────
+// ⚠️ 尚未在實體 WP-560 上實測過，見 README「已知風險／待驗證事項」——與已驗證過的
+// 「初始化/中文列印/0x0C 對位裁切/ESC p 開錢櫃」不同，這條在裝機後第一次使用前務必先驗證。
+//
+// 原本 /status 只檢查「COM 埠開不開得起來」——USB 轉接線本身即使印表機沒開電，COM 埠通常照樣
+// 開得起來（那只是作業系統層級的裝置代表，不代表對面真的有東西在回應），無法真正分辨「印表機
+// 沒開電」這個情境。改用 DLE EOT 1（0x10 0x04 0x01）——ESC/POS 家族裡最基礎、相容度最高的
+// 「即時狀態回傳」指令（比本代理已知不支援的 ESC G/E、FS &/. 這類進階格式指令更底層、更可能
+// 被這台機器支援）：送出查詢後，短時間內若真的收到印表機回傳的任何位元組，代表印表機確實開電
+// 且正在回應；逾時沒收到任何回應，才視為「未連線/未開電」。
+const STATUS_QUERY = Buffer.from([0x10, 0x04, 0x01]);
+const STATUS_TIMEOUT_MS = 800;
+function queryPrinterStatus() {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let port;
+    const timer = setTimeout(() => finish({ responded: false }), STATUS_TIMEOUT_MS);
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (port) port.close(() => {});
+      resolve(result);
+    };
+    port = new SerialPort({ path: SERIAL_PORT, baudRate: BAUD, dataBits: 8, parity: 'none', stopBits: 1 }, (err) => {
+      if (err) { clearTimeout(timer); reject(err); }
+    });
+    port.on('data', (buf) => finish({ responded: true, statusByte: buf[0] }));
+    port.on('error', (e) => { if (!settled) { settled = true; clearTimeout(timer); reject(e); } });
+    port.on('open', () => port.write(STATUS_QUERY));
+  });
 }
 
 // ── 序列埠操作（每次開關，不維持長連線——量小、印一張開一次埠即可，避免長連線佔用埠導致其他程式衝突）──
@@ -161,9 +189,16 @@ app.use((req, res, next) => {
 
 app.get('/status', async (req, res) => {
   try {
-    await withSerialPort(() => Promise.resolve()); // 開得起來就當作連線正常（無法直接讀缺紙感應器，見下方註記）
-    res.json({ connected: true, port: SERIAL_PORT, baud: BAUD, paperOk: null /* 未實作缺紙偵測，見 README */ });
+    const result = await queryPrinterStatus();
+    // connected＝印表機真的有回應（見上方 queryPrinterStatus 說明），不再只是「COM 埠開得起來」
+    // ——這是員工端「開立發票」按鈕是否可按的判斷依據，未開電/斷線時前端會直接鎖住列印按鈕。
+    res.json({
+      connected: result.responded, port: SERIAL_PORT, baud: BAUD,
+      statusByte: result.responded ? result.statusByte : null,
+      paperOk: null /* 未實作缺紙位元解析，見 README「已知風險／待驗證事項」 */,
+    });
   } catch (e) {
+    // 連 COM 埠本身都開不起來（USB 轉接線沒插上/驅動未裝等）——比「印表機沒回應」更基礎的連線問題
     res.json({ connected: false, port: SERIAL_PORT, error: e.message });
   }
 });

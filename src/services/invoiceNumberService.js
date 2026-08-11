@@ -43,7 +43,17 @@ const getInvoiceState = async (gymId) => {
 // force=true 時跳過重複號碼警訊直接寫入；否則若該字軌+號碼已出現在 invoices 集合中，回傳 warning 不寫入。
 // rollSize（選填）：這捲共幾張——填了才會算出 rollEndNumber，之後配號才會出現「即將用完/已用完」警語；
 // 不填則沿用舊行為（無邊界、不警示，供中途校正/未量測張數時使用）。
-const setInvoiceState = async (gymId, { track, startNumber, reason, force, rollSize }, { staffId, staffName }) => {
+// isRollChange＋confirmedAlignment（2026-08-11 追加）：換捲重設與中途校正雖共用同一動作，但只有前者
+// 真的動到實體紙張——換捲後印表機的存根聯/收執聯有沒有正確定位，是純物理/視覺的事，機器沒有可靠的
+// 感測器狀態可讓軟體代為確認（見 local-print-agent README）。故改為權威擋在後端：isRollChange:true
+// （前端「換新捲」情境）時，一定要同時帶 confirmedAlignment:true（代表操作人已實際試印一張、目視確認
+// 存根聯與收執聯皆正確對位）才允許送出；isRollChange:false（「僅校正號碼」，同一捲、沒動到紙）則不要求
+// ——避免把單純數字校正也綁上一定要重新試印確認定位的多餘流程。
+const setInvoiceState = async (gymId, { track, startNumber, reason, force, rollSize, isRollChange, confirmedAlignment }, { staffId, staffName }) => {
+  if (isRollChange && !confirmedAlignment) {
+    const e = new Error('換新捲須先試印一張測試發票、確認存根聯與收執聯皆正確定位後才能完成設定');
+    e.code = 'ALIGNMENT_NOT_CONFIRMED'; throw e;
+  }
   const db = getDb();
   const t = String(track || '').toUpperCase();
   const n = String(startNumber || '').padStart(8, '0');
@@ -74,6 +84,7 @@ const setInvoiceState = async (gymId, { track, startNumber, reason, force, rollS
       by: staffId || null, byName: staffName || '', at: now, reason: reason || '',
       from: prevState ? { track: prevState.track, number: prevState.currentNumber } : null,
       to: { track: t, number: n },
+      isRollChange: !!isRollChange, alignmentConfirmed: !!isRollChange && !!confirmedAlignment,
     },
   };
   await gymRef.set({ invoiceState }, { merge: true });

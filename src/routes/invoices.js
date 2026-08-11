@@ -96,15 +96,15 @@ router.put('/state', authenticate, requireManagerOrStation, async (req, res) => 
   try {
     const gymId = req.staff?.role === 'super_admin' ? (req.body.gymId || req.staff?.gymId) : req.staff?.gymId;
     if (!gymId) return res.status(400).json({ error: 'MISSING_GYM', message: '請指定館別' });
-    const { track, startNumber, reason, force, rollSize } = req.body;
+    const { track, startNumber, reason, force, rollSize, isRollChange, confirmedAlignment } = req.body;
     const result = await invoiceNumberService.setInvoiceState(
-      gymId, { track, startNumber, reason, force: !!force, rollSize },
+      gymId, { track, startNumber, reason, force: !!force, rollSize, isRollChange: !!isRollChange, confirmedAlignment: !!confirmedAlignment },
       { staffId: req.staff?.id, staffName: req.staff?.name }
     );
     if (result.warning) return res.status(409).json(result);
     res.json(result);
   } catch (err) {
-    if (err.code) return res.status(400).json(err);
+    if (err.code) return res.status(400).json({ error: err.code, message: err.message });
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }
 });

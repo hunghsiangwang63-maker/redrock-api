@@ -15,6 +15,10 @@
 - ⏳ **正式上線還差兩件事**：①本代理正式部署到櫃檯電腦（也就是這份文件在教的事）②到「發票號碼管理」設定正式財政部發票起始號碼。兩者備齊、系統設定裡把對應場館的「發票列印」開關打開，才會真正開始用真列印。
 - ✅ 已附上 `install.bat`／`start.bat` 兩個一鍵腳本，搭配免安裝版 Node.js，**大部分安裝步驟值班人員可自行完成、不需要 admin 權限**，見下方詳細步驟。
 - ✅ **2026-08-11 新增**：有 admin 權限時可用 `npm run install-service` 把代理裝成 Windows 背景服務（`install-service.js`／`uninstall-service.js`，用 `node-windows`）——開機不需登入就自動在背景執行、沒有黑色視窗、被關掉/當機會自動重開，比「傳送到啟動資料夾」那個不需要 admin 的做法更穩。見下方第四步「做法 B」。
+- ✅ **2026-08-12 更新（三項印前防呆）**：
+  1. **發票版面拿掉了分隔線**（原本各段之間的 `------` 虛線，依需求移除，版面更精簡）。
+  2. **`/status` 的 `connected` 改為真正查詢印表機是否有回應**（見下方「已知風險／待驗證事項」，⚠️ 尚未在實體機測試）——原本只檢查「COM 埠開得起來」，即使印表機沒開電、USB 轉接線也照樣能開埠，無法真正分辨「沒開電」。員工端「開立發票」按鈕會依此鎖住，未開電/斷線時無法列印。
+  3. **發票紙捲用完會擋下列印**（此為 RedRock 後端 `invoiceNumberService.js` 既有機制，非本代理職責，這裡僅說明關聯）：換捲重設在系統設定頁需先勾選「已試印確認存根聯/收執聯定位正確」才能送出——建議直接用本代理內建測試頁（`http://localhost:3399`）印一張測試發票來完成這個確認動作。
 
 ## 安裝（Windows 櫃檯電腦，值班人員可獨立完成）
 
@@ -84,9 +88,23 @@ npm run uninstall-service
 - 若之後換一台不同型號的錢櫃、開櫃沒反應：檢查 `server.js` 裡 `ESC_OPEN_DRAWER` 的脈衝參數，
   部分錢櫃需要不同的 `t1`/`t2` 時間值或不同的 `m` 接腳編號。
 
+## ⚠️ 已知風險／待驗證事項（2026-08-12 新增，`/status` 真實連線偵測）
+
+`server.js` 的 `queryPrinterStatus()` 送 `DLE EOT 1`（`0x10 0x04 0x01`，ESC/POS 家族最基礎的即時狀態查詢指令）並等回應，
+用來判斷印表機是否**真的開電並回應**（取代原本只檢查「COM 埠開得起來」——USB 轉接線即使印表機沒開電也照樣能開埠）。
+
+**這條指令與已驗證過的「初始化/中文列印/`0x0C` 對位裁切/`ESC p` 開錢櫃」不同，尚未在實體 WP-560 上測試過**——本機出廠協定已知不支援部分「進階」指令（`ESC G`/`ESC E`/`FS &`/`FS .`），雖然 `DLE EOT` 屬最底層基本指令、相容機率理論上較高，但無法保證。
+
+**裝機後第一次使用前務必驗證**：
+1. 印表機**開電**時打 `http://localhost:3399/status`（或按測試頁「🔌 檢查連線狀態」）→ 應看到 `connected:true`。
+2. 印表機**關電**（或拔線）時再查一次 → 應看到 `connected:false`。
+3. 若步驟 1 反而出現 `connected:false`（印表機明明開電、也能正常列印，但狀態一直顯示斷線）→ 代表這台機器不支援 `DLE EOT`，**請回報**，需要改用其他偵測方式（如序列埠硬體訊號 DSR/CTS，或退回單純的 COM 埠連線檢查）。
+
+`/status` 回應多了 `statusByte`（收到回應時，印表機回傳的第一個位元組原始值，未解析成任何意義，供未來需要時分析）。
+
 ## API
 
-- `GET /status` → `{ connected, port, baud, paperOk }`（`paperOk` 目前恆為 `null`，缺紙偵測未實作）
+- `GET /status` → `{ connected, port, baud, statusByte, paperOk }`（`connected` 見上方「已知風險」；`statusByte` 為印表機回應的原始位元組，未解析；`paperOk` 恆為 `null`，缺紙位元判讀未實作）
 - `POST /print` → body `{ gymId, items:[{name,qty,price}], total?, date?, buyerTaxId?, openDrawer? }`
   → `{ ok: true }` 或 `{ ok: false, error }`
 - `POST /open-drawer`（獨立開櫃，不夾帶列印）→ `{ ok: true }` 或 `{ ok: false, error }`

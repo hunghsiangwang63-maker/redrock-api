@@ -671,6 +671,11 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
   const gymAccessEnd = dayjs(session.date)
     .add(course.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD');
 
+  // gymId 權威 fallback：呼叫端（含 super_admin 個人帳號 staff.gymId=null）未明確帶入時，
+  // 用場次自身的 gymId（場次建立時已定，比照 enrollTrial/createSession 的既有 fallback 慣例）——
+  // 避免建出 gymId 缺失的報名，讓收款確認當下的保證金記帳（settlement 加減項）靜默失敗。
+  const resolvedGymId = gymId || session.gymId || null;
+
   const feeInfo = calcEnrollmentFee(course);
 
   // 工作坊分階段報名＋隊員分級定價（僅 workshop、且設了 team/general 開放日或隊員價時生效；店員代報 byStaff 不受 gate 限）
@@ -704,7 +709,7 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     sessionId,
     courseId: session.courseId,
     courseName: session.courseName,
-    gymId,
+    gymId: resolvedGymId,
     date: session.date,
     startTime: session.startTime,
     endTime: session.endTime,
@@ -764,7 +769,7 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     const { createRegistrationHeader } = require('./courseRegistrationService');
     await createRegistrationHeader(db, {
       memberId, memberName: member.name,
-      courseId: session.courseId, courseName: session.courseName, gymId,
+      courseId: session.courseId, courseName: session.courseName, gymId: enrollment.gymId,
       status: enrollment.status,
       paymentMethod: enrollment.paymentMethod, paymentStatus: enrollment.paymentStatus,
       fee: _fee, originalFee: course.price,

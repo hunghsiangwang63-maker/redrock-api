@@ -255,6 +255,7 @@ async function syncExperienceTickets(db, booking, staff, allowInitialIssue) {
   const now = new Date();
   const todayTW = taiwanToday();
   let issued = 0, voided = 0;
+  const ctLabel = await courseTypeLabel(db, booking.courseType); // 券備註用課程類型中文標籤，避免顯示原始 id
 
   // 逐參加者發券（姓名+生日比對認領；比對不到→待指派 pendingAssign，由場館電腦當天指定發送 或 日後註冊自動認領）。
   // 只對「之後發的」生效：有 participants 且（尚未發過 或 既有券已是新版含 participantName）才走逐人路徑；
@@ -282,7 +283,7 @@ async function syncExperienceTickets(db, booking, staff, allowInitialIssue) {
         cancelledAt: null, cancelledBy: null, cancelReason: null,
         transferHistory: [], usedAt: null, usedCheckInId: null,
         soldByStaffId: staff?.id || null, soldByStaffName: staff?.name || '',
-        notes: `體驗入場券：${booking.courseType || ''} ${booking.bookingDate || ''}（${pname}）`,
+        notes: `體驗入場券：${ctLabel} ${booking.bookingDate || ''}（${pname}）`,
         createdAt: now, updatedAt: now,
       });
       haveNames.add(pname); issued++;
@@ -308,7 +309,7 @@ async function syncExperienceTickets(db, booking, staff, allowInitialIssue) {
         cancelledAt: null, cancelledBy: null, cancelReason: null,
         transferHistory: [], usedAt: null, usedCheckInId: null,
         soldByStaffId: staff?.id || null, soldByStaffName: staff?.name || '',
-        notes: `體驗入場券：${booking.courseType || ''} ${booking.bookingDate || ''}`,
+        notes: `體驗入場券：${ctLabel} ${booking.bookingDate || ''}`,
         createdAt: now, updatedAt: now,
       });
       issued++;

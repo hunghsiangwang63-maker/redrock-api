@@ -788,6 +788,14 @@ router.get('/download', authenticate, requireManager, async (req, res) => {
     if (to)   bookings = bookings.filter(b=>b.bookingDate<=to);
     bookings.sort((a,b)=>a.bookingDate.localeCompare(b.bookingDate));
 
+    // 課程類型標籤對照（一次查詢，避免匯出欄位直接印出原始 id，如 'general'）
+    let ctLabelMap = {};
+    try {
+      const ctDoc = await db.collection('systemSettings').doc('experienceCourses').get();
+      const ctList = (ctDoc.exists ? ctDoc.data().courseTypes : null) || defaultSettings().courseTypes;
+      ctLabelMap = Object.fromEntries((ctList || []).map(c => [c.id, c.label]));
+    } catch (e) {}
+
     // 展開每位參加者
     const rows = [];
     bookings.forEach(b => {
@@ -798,7 +806,7 @@ router.get('/download', authenticate, requireManager, async (req, res) => {
           '場館': gymLabel,
           '預約日期': b.bookingDate,
           '預約時間': b.bookingTime||'',
-          '課程類型': b.courseType||'',
+          '課程類型': ctLabelMap[b.courseType] || b.courseType || '',
           '總人數': b.numParticipants,
           '狀態': statusLabel,
           '聯絡人': b.contactName,

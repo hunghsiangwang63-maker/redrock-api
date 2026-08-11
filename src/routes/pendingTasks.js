@@ -20,6 +20,15 @@ router.get('/', authenticate, async (req, res) => {
 
     const tasks = [];
 
+    // 體驗課程類型標籤對照（一次查詢，供下方通知/待辦顯示用；避免原本 record.courseType/b.courseType
+    // 直接顯示原始 id（如 'general'）——courseType 目前只剩 general，但保留通用查表寫法。
+    let ctLabelMap = {};
+    try {
+      const ctDoc = await db.collection('systemSettings').doc('experienceCourses').get();
+      const ctList = (ctDoc.exists ? ctDoc.data().courseTypes : null) || require('../services/experienceService').defaultSettings().courseTypes;
+      ctLabelMap = Object.fromEntries((ctList || []).map(c => [c.id, c.label]));
+    } catch (e) {}
+
     // 轉帳確認單一來源：凡有「待確認 transferRecords」的訂單，一律由轉帳確認段處理，
     // 其各自待辦任務(租借/比賽/體驗…)以 refId 排除，避免雙列。
     const transferRefIds = new Set();
@@ -217,7 +226,7 @@ router.get('/', authenticate, async (req, res) => {
           gymId: r.gymId, memberName: displayName,
           confirmed, ticketsIssued,
           link: '/staff/experience',
-          record: { id: d.id, ...r },
+          record: { id: d.id, ...r, courseTypeName: ctLabelMap[r.courseType] || '體驗課程' },
         });
       });
     } catch(e) {}
@@ -411,7 +420,7 @@ router.get('/', authenticate, async (req, res) => {
         const singleParticipant = (b.participants || []).length === 1 ? b.participants[0]?.name : null;
         const displayName = singleParticipant && singleParticipant !== b.contactName
           ? `${singleParticipant}（${b.contactName}代訂）` : (b.contactName || '');
-        registrations.push({ id:`reg_exp_${d.id}`, regType:'experience', memberName:displayName, name:b.courseName || b.courseType||'體驗課程', detail:`${b.bookingDate||''}${b.numParticipants?` · ${b.numParticipants}人`:''}`.trim(), createdAt: secOf(b.createdAt), dateStr: dayOf(b.createdAt), gymId:b.gymId, link:`/staff/experience?booking=${d.id}` });
+        registrations.push({ id:`reg_exp_${d.id}`, regType:'experience', memberName:displayName, name:b.courseName || ctLabelMap[b.courseType] || '體驗課程', detail:`${b.bookingDate||''}${b.numParticipants?` · ${b.numParticipants}人`:''}`.trim(), createdAt: secOf(b.createdAt), dateStr: dayOf(b.createdAt), gymId:b.gymId, link:`/staff/experience?booking=${d.id}` });
       });
     } catch(e) {}
     registrations.sort((a, b) => b.createdAt - a.createdAt);
@@ -431,9 +440,16 @@ router.get('/returned', authenticate, async (req, res) => {
     if (isRestrictedPersonalStaff(req.staff)) return res.json({ items: [], total: 0 });
     const db = getDb();
     const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
+    // 體驗課程類型標籤對照（同 GET / 用法，避免 o.courseType 直接顯示原始 id）
+    let ctLabelMap = {};
+    try {
+      const ctDoc = await db.collection('systemSettings').doc('experienceCourses').get();
+      const ctList = (ctDoc.exists ? ctDoc.data().courseTypes : null) || require('../services/experienceService').defaultSettings().courseTypes;
+      ctLabelMap = Object.fromEntries((ctList || []).map(c => [c.id, c.label]));
+    } catch (e) {}
     const SRC = [
       { coll: 'courseEnrollments',        type: 'course',      label: '課程報名',   name: o => o.courseName },
-      { coll: 'experienceBookings',       type: 'experience',  label: '體驗預約',   name: o => o.courseName || o.courseType },
+      { coll: 'experienceBookings',       type: 'experience',  label: '體驗預約',   name: o => o.courseName || ctLabelMap[o.courseType] || '體驗課程' },
       { coll: 'competitionRegistrations', type: 'competition', label: '比賽報名',   name: o => o.competitionName },
       { coll: 'equipmentRentals',         type: 'rental',      label: '裝備租借',   name: o => o.itemName || o.equipmentName },
       { coll: 'teamApplications',         type: 'team_member', label: '入隊申請',   name: o => `${o.year || ''} 年度攀岩隊` },

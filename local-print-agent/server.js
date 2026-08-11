@@ -109,18 +109,19 @@ function buildInvoiceLines({ gymId, items, total, date, buyerTaxId }) {
 }
 
 // ── 即時狀態查詢（2026-08-11 新增）──────────────────────────────
-// ⚠️ 尚未在實體 WP-560 上實測過，見 README「已知風險／待驗證事項」——與已驗證過的
-// 「初始化/中文列印/0x0C 對位裁切/ESC p 開錢櫃」不同，這條在裝機後第一次使用前務必先驗證。
-//
-// 原本 /status 只檢查「COM 埠開不開得起來」——USB 轉接線本身即使印表機沒開電，COM 埠通常照樣
-// 開得起來（那只是作業系統層級的裝置代表，不代表對面真的有東西在回應），無法真正分辨「印表機
-// 沒開電」這個情境。改用 DLE EOT 1（0x10 0x04 0x01）——ESC/POS 家族裡最基礎、相容度最高的
-// 「即時狀態回傳」指令（比本代理已知不支援的 ESC G/E、FS &/. 這類進階格式指令更底層、更可能
-// 被這台機器支援）：送出查詢後，短時間內若真的收到印表機回傳的任何位元組，代表印表機確實開電
-// 且正在回應；逾時沒收到任何回應，才視為「未連線/未開電」。
-const STATUS_QUERY = Buffer.from([0x10, 0x04, 0x01]);
+// DLE EOT n（0x10 0x04 n）＝ESC/POS 家族的「即時狀態回傳」指令。文件依據：同廠牌同系列機型
+// WP-520 的操作手冊（附錄 B-2，DIP2-3 撥 EPSON/Esc-pos 相容模式時適用；本代理已確認 WP-560
+// 走同一套通訊協定，見檔頭中文列印/0x0C 對位裁切/ESC p 開錢櫃皆已實測通過），完整定義：
+//   n=1 印表機基本狀態（連線/離線）
+//   n=4 紙張感應器狀態，其中：
+//     bit5＝存根聯黑點感應（0=偵測到定位標記/定位正常，1=未偵測到/定位異常）
+//     bit6＝收執聯黑點感應（0=偵測到定位標記/定位正常，1=未偵測到/定位異常）
+// ⚠️ WP-520 手冊已明確記載這組位元定義，但尚未在實體 WP-560 上實測驗證（與已驗證過的
+// 「初始化/中文列印/0x0C 對位裁切/ESC p 開錢櫃」不同）——同系列機型理論上相容，但裝機後
+// 第一次使用前務必照 README「已知風險」驗證：正常裝妥紙張時應回應 positionOk:true，
+// 刻意抽掉/歪斜其中一聯的紙張時應回應 positionOk:false。
 const STATUS_TIMEOUT_MS = 800;
-function queryPrinterStatus() {
+function queryStatus(n) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let port;
@@ -137,8 +138,28 @@ function queryPrinterStatus() {
     });
     port.on('data', (buf) => finish({ responded: true, statusByte: buf[0] }));
     port.on('error', (e) => { if (!settled) { settled = true; clearTimeout(timer); reject(e); } });
-    port.on('open', () => port.write(STATUS_QUERY));
+    port.on('open', () => port.write(Buffer.from([0x10, 0x04, n])));
   });
+}
+
+// 解析 DLE EOT 4 回應位元組（見上方說明），回傳存根聯/收執聯各自定位是否正常＋兩者皆正常的總判斷。
+function parsePaperSensorByte(byte) {
+  const journalMarkOk = ((byte >> 5) & 1) === 0; // 存根聯
+  const receiptMarkOk = ((byte >> 6) & 1) === 0; // 收執聯
+  return { journalMarkOk, receiptMarkOk, positionOk: journalMarkOk && receiptMarkOk };
+}
+
+// 查詢「是否定位正常」——查無回應（可能這台印表機不支援此查詢，或本來就斷線/沒開電）一律回
+// positionOk:null（未知，不擋列印，交由 connected 那道檢查把關），只有真的收到「未偵測到黑點」
+// 的回應才回 false。
+async function checkPositionOk() {
+  try {
+    const r = await queryStatus(4);
+    if (!r.responded) return { positionOk: null, journalMarkOk: null, receiptMarkOk: null };
+    return parsePaperSensorByte(r.statusByte);
+  } catch (e) {
+    return { positionOk: null, journalMarkOk: null, receiptMarkOk: null };
+  }
 }
 
 // ── 序列埠操作（每次開關，不維持長連線——量小、印一張開一次埠即可，避免長連線佔用埠導致其他程式衝突）──
@@ -189,22 +210,31 @@ app.use((req, res, next) => {
 
 app.get('/status', async (req, res) => {
   try {
-    const result = await queryPrinterStatus();
-    // connected＝印表機真的有回應（見上方 queryPrinterStatus 說明），不再只是「COM 埠開得起來」
-    // ——這是員工端「開立發票」按鈕是否可按的判斷依據，未開電/斷線時前端會直接鎖住列印按鈕。
-    res.json({
-      connected: result.responded, port: SERIAL_PORT, baud: BAUD,
-      statusByte: result.responded ? result.statusByte : null,
-      paperOk: null /* 未實作缺紙位元解析，見 README「已知風險／待驗證事項」 */,
-    });
+    const basic = await queryStatus(1);
+    // connected＝印表機真的有回應（DLE EOT 1，見上方說明），不再只是「COM 埠開得起來」——USB 轉接線
+    // 即使印表機沒開電通常也照樣開得起來，這道檢查才是員工端「開立發票」按鈕是否可按的判斷依據。
+    if (!basic.responded) {
+      return res.json({ connected: false, positionOk: null, journalMarkOk: null, receiptMarkOk: null, port: SERIAL_PORT, baud: BAUD });
+    }
+    // 有回應才進一步查紙張定位狀態（DLE EOT 4）——查詢本身失敗/不支援也不影響「有沒有開電連線」這個
+    // 已確定的判斷，positionOk 維持 null（未知，不擋列印）。
+    const pos = await checkPositionOk();
+    res.json({ connected: true, positionOk: pos.positionOk, journalMarkOk: pos.journalMarkOk, receiptMarkOk: pos.receiptMarkOk, port: SERIAL_PORT, baud: BAUD });
   } catch (e) {
     // 連 COM 埠本身都開不起來（USB 轉接線沒插上/驅動未裝等）——比「印表機沒回應」更基礎的連線問題
-    res.json({ connected: false, port: SERIAL_PORT, error: e.message });
+    res.json({ connected: false, positionOk: null, port: SERIAL_PORT, error: e.message });
   }
 });
 
 app.post('/print', async (req, res) => {
   try {
+    // 列印前先查紙張定位狀態——真的偵測到「未定位」（黑點感應器讀不到，見上方 parsePaperSensorByte）
+    // 才擋下；查詢無回應（可能不支援此指令，或本來就斷線）一律放行，交由印表機自己走既有的 0x0C
+    // 自動對位流程，避免因診斷指令本身不受支援就讓整個列印功能失效。
+    const pos = await checkPositionOk();
+    if (pos.positionOk === false) {
+      return res.json({ ok: false, error: '發票紙未正確定位（存根聯/收執聯黑點感應異常），請確認紙張是否裝妥後再試一次' });
+    }
     const { gymId, items, total, date, buyerTaxId, openDrawer } = req.body || {};
     const lines = buildInvoiceLines({ gymId, items, total, date, buyerTaxId });
     await printInvoice(lines);

@@ -10,6 +10,11 @@ const TRACK_RE = /^[A-Z]{2}$/;
 const NUMBER_RE = /^\d{8}$/;
 // 剩餘張數低於此值 → 視為「即將用完」（前端顯示醒目警語提醒備妥下一捲）；固定常數，非可設定值。
 const ROLL_LOW_THRESHOLD = 5;
+// 財政部二聯式收銀機發票每捲固定 250 張、捲末號碼固定落在這四組末三碼（見 SettingsPage.jsx
+// invRollEndPreviewSuffixOk 同一組常數）——這是官方紙捲的固定編號規律，不論店員換捲重設時有沒有
+// 記得填「這捲共幾張」（rollSize），只要配到的號碼末三碼命中，就自動視為「這捲已印完」，之後配號
+// 直接擋下（即使沒設定 rollSize 也不會超印），逼一定要走一次換捲重設。
+const ROLL_END_SUFFIXES = ['249', '499', '749', '999'];
 
 const validateTrackNumber = (track, number) => {
   if (!TRACK_RE.test(track || '')) return { code: 'INVALID_TRACK', message: '字軌須為 2 碼大寫英文字母' };
@@ -17,17 +22,19 @@ const validateTrackNumber = (track, number) => {
   return null;
 };
 
-// 依 state 算出「剩餘張數／即將用完／已用完」——只有設過 rollEndNumber（換捲時填了張數）才會有值，
-// 未設定（含舊資料/尚未升級此功能前的設定）一律 remaining:null、不顯示任何警語，維持原行為。
+// 依 state 算出「剩餘張數／即將用完／已用完」——rollDepleted 由兩個獨立條件之一觸發：
+// ①手動設過 rollSize 且已超出 rollEndNumber ②剛配出的號碼末三碼命中官方捲末規律（rollFinishedAtConvention，
+// 不需要 rollSize 也會生效）。前端既有「🚨 這捲發票紙已用完」紅色警語（讀 rollDepleted）因此自動涵蓋這條新規則。
 const withRollStatus = (state) => {
   if (!state) return state;
-  if (!state.rollEndNumber) return { ...state, remaining: null, rollLow: false, rollDepleted: false };
+  const byConvention = !!state.rollFinishedAtConvention;
+  if (!state.rollEndNumber) return { ...state, remaining: null, rollLow: false, rollDepleted: byConvention };
   const remaining = Number(state.rollEndNumber) - Number(state.currentNumber) + 1;
   return {
     ...state,
     remaining,
-    rollLow: remaining <= ROLL_LOW_THRESHOLD && remaining > 0,
-    rollDepleted: remaining <= 0,
+    rollLow: remaining <= ROLL_LOW_THRESHOLD && remaining > 0 && !byConvention,
+    rollDepleted: remaining <= 0 || byConvention,
   };
 };
 
@@ -43,17 +50,7 @@ const getInvoiceState = async (gymId) => {
 // force=true 時跳過重複號碼警訊直接寫入；否則若該字軌+號碼已出現在 invoices 集合中，回傳 warning 不寫入。
 // rollSize（選填）：這捲共幾張——填了才會算出 rollEndNumber，之後配號才會出現「即將用完/已用完」警語；
 // 不填則沿用舊行為（無邊界、不警示，供中途校正/未量測張數時使用）。
-// isRollChange＋confirmedAlignment（2026-08-11 追加）：換捲重設與中途校正雖共用同一動作，但只有前者
-// 真的動到實體紙張——換捲後印表機的存根聯/收執聯有沒有正確定位，是純物理/視覺的事，機器沒有可靠的
-// 感測器狀態可讓軟體代為確認（見 local-print-agent README）。故改為權威擋在後端：isRollChange:true
-// （前端「換新捲」情境）時，一定要同時帶 confirmedAlignment:true（代表操作人已實際試印一張、目視確認
-// 存根聯與收執聯皆正確對位）才允許送出；isRollChange:false（「僅校正號碼」，同一捲、沒動到紙）則不要求
-// ——避免把單純數字校正也綁上一定要重新試印確認定位的多餘流程。
-const setInvoiceState = async (gymId, { track, startNumber, reason, force, rollSize, isRollChange, confirmedAlignment }, { staffId, staffName }) => {
-  if (isRollChange && !confirmedAlignment) {
-    const e = new Error('換新捲須先試印一張測試發票、確認存根聯與收執聯皆正確定位後才能完成設定');
-    e.code = 'ALIGNMENT_NOT_CONFIRMED'; throw e;
-  }
+const setInvoiceState = async (gymId, { track, startNumber, reason, force, rollSize }, { staffId, staffName }) => {
   const db = getDb();
   const t = String(track || '').toUpperCase();
   const n = String(startNumber || '').padStart(8, '0');
@@ -80,11 +77,11 @@ const setInvoiceState = async (gymId, { track, startNumber, reason, force, rollS
   const now = new Date();
   const invoiceState = {
     track: t, currentNumber: n, rollStart: n, rollSize: size, rollEndNumber, updatedAt: now,
+    rollFinishedAtConvention: false, // 換捲重設一律重新起算，明確清掉上一捲留下的捲末標記（見上方 withRollStatus）
     lastChange: {
       by: staffId || null, byName: staffName || '', at: now, reason: reason || '',
       from: prevState ? { track: prevState.track, number: prevState.currentNumber } : null,
       to: { track: t, number: n },
-      isRollChange: !!isRollChange, alignmentConfirmed: !!isRollChange && !!confirmedAlignment,
     },
   };
   await gymRef.set({ invoiceState }, { merge: true });
@@ -111,9 +108,17 @@ const allocateInvoiceNumber = async (gymId) => {
       e.code = 'ROLL_DEPLETED';
       throw e;
     }
+    // 上一次配出的號碼若剛好命中官方捲末末三碼（見 ROLL_END_SUFFIXES），代表那張就是這捲最後一張，
+    // 這次配號直接擋下——即使當初換捲重設時沒填 rollSize，也能自動抓到捲已印完，逼一定要走換捲重設。
+    if (state.rollFinishedAtConvention) {
+      const e = new Error('此捲發票紙已印到本捲末三碼（249/499/749/999），請更換新捲並在「發票號碼管理」設定新捲起始號');
+      e.code = 'ROLL_DEPLETED';
+      throw e;
+    }
     const allocated = { track: state.track, number: state.currentNumber };
     const next = String(Number(state.currentNumber) + 1).padStart(8, '0');
-    const nextState = { ...state, currentNumber: next, updatedAt: new Date() };
+    const finishedAtConvention = ROLL_END_SUFFIXES.includes(allocated.number.slice(-3));
+    const nextState = { ...state, currentNumber: next, updatedAt: new Date(), rollFinishedAtConvention: finishedAtConvention };
     tx.set(gymRef, { invoiceState: nextState }, { merge: true });
     return { ...allocated, ...withRollStatus(nextState) };
   });

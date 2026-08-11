@@ -222,6 +222,7 @@ router.get('/', authenticate, async (req, res) => {
             : '體驗課程預約申請',
           desc: `${displayName} — ${r.bookingDate} ${r.bookingTime || ''} · ${r.numParticipants}人 NT$${r.totalFee}`,
           date: r.bookingDate || (r.createdAt?._seconds ? new Date(r.createdAt._seconds*1000).toISOString().slice(0,10) : today),
+          bookingTime: r.bookingTime || '', // 供前端「今日提醒／預約」依時間排序用
           createdAt: r.createdAt?._seconds || 0,
           gymId: r.gymId, memberName: displayName,
           confirmed, ticketsIssued,

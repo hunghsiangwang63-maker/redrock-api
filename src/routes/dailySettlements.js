@@ -56,6 +56,52 @@ const manualIncomeTotal = (income, im) => im
       .reduce((s, k) => s + ((im[k] !== '' && im[k] != null) ? (Number(im[k]) || 0) : (income?.[k] || 0)), 0)
   : null;
 
+// ── 真列印權威資料（該館開啟「發票列印」後，今日收入/發票起訖/作廢一律由 invoices 集合權威決定，
+//    不再手動輸入、也不信任前端送來的值——比照加減項鎖定原則，見 findRemovedOrAlteredAutoDeductions）──
+// 由 GET /today（顯示用）與 POST /（結帳權威計算+持久化）共用同一份查詢與分段邏輯，避免各自維護一份。
+// 依字軌分段（同日內若因換捲換字軌，依出現順序拆成多段，對齊既有 invoiceSegments 多段 UI 概念）；
+// 作廢號碼/作廢總金額直接取 invoices 的 status:'void' 紀錄，不再由店員手動輸入。
+async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
+  const result = { printingEnabled: false, segments: [], voidNumbers: [], voidTotalAmount: 0, actualTotal: 0, count: 0, voidCount: 0, bySourceType: {} };
+  try {
+    const gymDoc = await db.collection('gyms').doc(gymId).get();
+    result.printingEnabled = !!(gymDoc.exists && gymDoc.data().invoicePrintingEnabled === true);
+    if (!result.printingEnabled) return result;
+    const invSnap = await db.collection('invoices').where('gymId', '==', gymId).get();
+    const tsOf = (v) => v?.toDate ? v.toDate().getTime() : ((v?._seconds || 0) * 1000);
+    const todayInvoices = invSnap.docs
+      .map(d => d.data())
+      .filter(inv => { const t = tsOf(inv.issuedAt); return t >= todayStart.getTime() && t <= todayEnd.getTime(); })
+      .sort((a, b) => tsOf(a.issuedAt) - tsOf(b.issuedAt));
+    if (!todayInvoices.length) return result;
+    const segMap = new Map(); // track -> {track, start, last}（依出現順序分段，同字軌內取最小/最大號碼）
+    const order = [];
+    todayInvoices.forEach(inv => {
+      const trk = inv.track || '';
+      if (!segMap.has(trk)) { segMap.set(trk, { track: trk, start: inv.number, last: inv.number }); order.push(trk); }
+      const seg = segMap.get(trk);
+      if (inv.number < seg.start) seg.start = inv.number;
+      if (inv.number > seg.last) seg.last = inv.number;
+    });
+    result.segments = order.map(trk => segMap.get(trk));
+    const voids = todayInvoices.filter(i => i.status === 'void');
+    result.voidNumbers = voids.map(i => (i.track ? `${i.track}-${i.number}` : i.number));
+    result.voidTotalAmount = voids.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+    const issued = todayInvoices.filter(i => i.status === 'issued');
+    result.actualTotal = issued.reduce((s, i) => s + (Number(i.amount) || 0), 0);
+    result.count = issued.length;
+    result.voidCount = voids.length;
+    // 依 sourceType 分組的今日已開立發票總額（供「以開立發票為準」的個別分類覆寫，如課程收入——
+    // 課程/比賽發票延後開立(見 checkInvoiceIssuanceTiming)，實際列印日常晚於服務認列日，此分組讓
+    // 對應分類可改用「今天實際印了多少」而非「今天認列多少」）
+    issued.forEach(i => {
+      const st = i.sourceType || '_unknown';
+      result.bySourceType[st] = (result.bySourceType[st] || 0) + (Number(i.amount) || 0);
+    });
+  } catch (e) { console.error('[今日發票權威資料]', e.message); }
+  return result;
+}
+
 // ── 系統自動記錄的加減項不可人工刪除/修改（2026-08-10 拍板）────────────────────
 // 現金補入/發票開立/發票作廢等（settlementService.addCashAdjustment 寫入的 auto:true 項目）代表一筆
 // 真實已發生的金流事件——一旦被結帳頁編輯改掉或刪除，那筆事件在帳上就憑空消失，稽核對不上。
@@ -117,34 +163,9 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     const todayStart = dayjs().startOf('day').toDate();
     const todayEnd = dayjs().endOf('day').toDate();
 
-    // 該館若已開啟「發票列印」（真列印上線），今日發票起訖號碼改由實際列印紀錄（invoices 集合）
-    // 權威帶入，不再只是「昨天最後一號+1」的手動猜測——系統本就精確知道印了哪些號碼，沒有理由
-    // 還要店員憑記憶/翻紙本謄寫。單一 gymId 等值查詢＋今日範圍本地過濾（invoices 集合尚無按日期
-    // 索引的欄位，此館規模的當日發票張數本就有限，掃描成本可忽略）；查無資料（今天還沒印過票）
-    // 則回 null，前端沿用原本「前一天+1」的手動建議 fallback。
-    let todayInvoiceSegment = null;
-    try {
-      const gymDoc = await db.collection('gyms').doc(gymId).get();
-      if (gymDoc.exists && gymDoc.data().invoicePrintingEnabled === true) {
-        const invSnap = await db.collection('invoices').where('gymId', '==', gymId).get();
-        const todayInvoices = invSnap.docs
-          .map(d => d.data())
-          .filter(inv => {
-            const t = inv.issuedAt?.toDate ? inv.issuedAt.toDate() : (inv.issuedAt?._seconds ? new Date(inv.issuedAt._seconds * 1000) : null);
-            return t && t >= todayStart && t <= todayEnd;
-          })
-          .sort((a, b) => a.number.localeCompare(b.number));
-        if (todayInvoices.length) {
-          todayInvoiceSegment = {
-            track: todayInvoices[0].track,
-            start: todayInvoices[0].number,
-            last: todayInvoices[todayInvoices.length - 1].number,
-            count: todayInvoices.length,
-            voidCount: todayInvoices.filter(i => i.status === 'void').length,
-          };
-        }
-      }
-    } catch (e) { console.error('[今日發票號碼帶入]', e.message); }
+    // 該館若已開啟「發票列印」（真列印上線）→ 今日收入/發票起訖/作廢一律由 invoices 集合權威帶入
+    // （見上方 computeTodayInvoiceAuthority）；未開啟則沿用原本「前一天+1」手動建議 fallback。
+    const invAuth = await computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd);
 
     // 入場收入（用isCancelled而非status，才能同時涵蓋QR入場與電話入場）
     const checkinSnap = await db.collection('checkIns')
@@ -235,6 +256,12 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       passByType[nm] = (passByType[nm] || 0) + amt;
     });
 
+    // 已開真列印的館別：課程收入改以「今日實際開立發票金額」為準（不再是「今日認列多少」）——
+    // 課程發票延後開立（見 checkInvoiceIssuanceTiming，須等課程結束當天才能開），實際印出的日子
+    // 常晚於服務認列日，用認列日會跟真正入帳的那天對不上；改用發票資料才是店員真正在意的
+    // 「今天到底開了多少課程發票」。
+    if (invAuth.printingEnabled) courseIncome = invAuth.bySourceType.course || 0;
+
     const totalIncome = entryIncome + shoeRentalIncome + productIncome + courseIncome + passIncome + equipmentRentalIncome;
     const totalCash = payByMethod.cash || 0;
     const totalElectronic = (payByMethod.linepay || 0) + (payByMethod.jkopay || 0) + (payByMethod.taiwanpay || 0);
@@ -274,7 +301,13 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       invoiceLastNumber: '',
       suggestedInvoiceStart,   // 前一天最後發票號+1（前端帶入，可改；未開真列印的館別用這組）
       suggestedInvoiceTrack,   // 前一天最後一段的字軌（前端帶入，可改；換發票本才需要手動改）
-      todayInvoiceSegment,     // 已開真列印的館別：今日實際列印號碼範圍（權威，前端優先帶入這組）
+      // 已開真列印的館別：今日收入/發票起訖/作廢一律由 invoices 集合權威帶入、不可手動修改
+      // （前端據此隱藏手動輸入欄與發票段落的編輯功能，比照加減項「系統自動記錄不可改」原則）
+      printingEnabled: invAuth.printingEnabled,
+      invoiceActualTotal: invAuth.actualTotal,
+      todayInvoiceSegments: invAuth.segments,
+      todayInvoiceVoidNumbers: invAuth.voidNumbers,
+      voidInvoiceAmount: invAuth.voidTotalAmount,
       difference: null,
       status: 'draft',
     };
@@ -350,16 +383,26 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
     const lockErr = findRemovedOrAlteredAutoDeductions(existDoc?.data()?.deductions, deductions);
     if (lockErr) return res.status(400).json({ error: 'AUTO_DEDUCTION_LOCKED', message: lockErr });
 
+    // 該館已開真列印 → 今日收入/發票起訖/作廢一律由 invoices 集合權威決定，忽略前端送來的值
+    // （比照加減項鎖定原則：系統帶入的資料不信任前端、也不可被覆蓋，見上方 findRemovedOrAlteredAutoDeductions）
+    const todayStart = dayjs().startOf('day').toDate();
+    const todayEnd = dayjs().endOf('day').toDate();
+    const invAuth = await computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd);
+
     // 發票多段：優先 invoiceSegments 陣列；否則回退舊單段欄位。相容性：仍寫 invoiceStartNumber=首段.start、invoiceLastNumber=末段.last
-    // track＝字軌（如 AB），跟著發票捲可能換；舊資料無此欄位一律回退空字串。
-    const segments = (Array.isArray(invoiceSegments) && invoiceSegments.length
-      ? invoiceSegments.map(sg => ({ track: String(sg.track ?? '').trim().toUpperCase(), start: String(sg.start ?? '').trim(), last: String(sg.last ?? '').trim() }))
-      : ((invoiceStartNumber || invoiceLastNumber)
-        ? [{ track: '', start: String(invoiceStartNumber || '').trim(), last: String(invoiceLastNumber || '').trim() }]
-        : [])
-    ).filter(sg => sg.track || sg.start || sg.last);
+    // track＝字軌（如 AB），跟著發票捲可能換；舊資料無此欄位一律回退空字串。真列印館別改用系統權威分段。
+    const segments = invAuth.printingEnabled ? invAuth.segments : (
+      (Array.isArray(invoiceSegments) && invoiceSegments.length
+        ? invoiceSegments.map(sg => ({ track: String(sg.track ?? '').trim().toUpperCase(), start: String(sg.start ?? '').trim(), last: String(sg.last ?? '').trim() }))
+        : ((invoiceStartNumber || invoiceLastNumber)
+          ? [{ track: '', start: String(invoiceStartNumber || '').trim(), last: String(invoiceLastNumber || '').trim() }]
+          : [])
+      ).filter(sg => sg.track || sg.start || sg.last)
+    );
     const firstStart = segments.length ? segments[0].start : (invoiceStartNumber || '');
     const lastLast = segments.length ? segments[segments.length - 1].last : (invoiceLastNumber || '');
+    const finalVoidNumbers = invAuth.printingEnabled ? invAuth.voidNumbers.join(', ') : (invoiceVoidNumbers || '');
+    const finalVoidAmount = invAuth.printingEnabled ? invAuth.voidTotalAmount : (Number(req.body.voidInvoiceAmount) || 0);
 
     // 計算實際現金
     const d = denominations || {};
@@ -374,18 +417,23 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
 
     // 計算加減項淨額：sign '+' 加入抽屜（預期上升）、'-' 取出（預期下降）；舊資料無 sign 視為 '-'（減）
     const netAdjust = (deductions || []).reduce((sum, d) => sum + ((d.sign === '+' ? 1 : -1) * (Number(d.amount) || 0)), 0);
+    // 線上支付合計（LinePay/街口/台灣Pay/轉帳；缺手動值回退系統）——不論轉換期手動模式或真列印模式，
+    // 現金都是「發票總金額（手動輸入或真列印權威）－此線上支付合計」算出，此段兩模式共用。
+    const onlineTotal = ['linePay', 'jko', 'taiwanPay', 'transfer'].reduce((sum, k) => {
+      const v = paymentManual?.[k];
+      const has = v !== undefined && v !== '' && v !== null;
+      return sum + (has ? (Number(v) || 0) : (payment?.[k] || 0));
+    }, 0);
     // 轉換期手動輸入模式（incomeManual 有帶才算，比照前端只在 settlementManualInput 開啟時才送這欄位）：
-    // 現金＝手動發票總金額（依 income/incomeManual 逐項算）－線上支付合計（LinePay/街口/台灣Pay/轉帳，
-    // 缺手動值回退系統）——現金不再靠店員另外獨立填一次，改由發票總金額扣除線上支付自動算出。
-    // 待正式發票列印上線、關閉手動輸入後，incomeManual 不會再被送出，自動回退系統 payment.cash。
+    // 現金＝手動發票總金額（依 income/incomeManual 逐項算）－線上支付合計——現金不再靠店員另外獨立填一次。
+    // 已開真列印的館別優先權威：現金＝今日實際列印發票總金額（invoices 集合）－線上支付合計，
+    // 不再需要／不再信任 incomeManual 手動輸入（前端此時亦不會顯示手動欄位、不會送出 incomeManual）。
     const isManualMode = incomeManual != null;
-    const effectiveCash = isManualMode
-      ? (manualIncomeTotal(income, incomeManual) || 0) - ['linePay', 'jko', 'taiwanPay', 'transfer'].reduce((sum, k) => {
-          const v = paymentManual?.[k];
-          const has = v !== undefined && v !== '' && v !== null;
-          return sum + (has ? (Number(v) || 0) : (payment?.[k] || 0));
-        }, 0)
-      : (payment?.cash || 0);
+    const effectiveCash = invAuth.printingEnabled
+      ? invAuth.actualTotal - onlineTotal
+      : isManualMode
+        ? (manualIncomeTotal(income, incomeManual) || 0) - onlineTotal
+        : (payment?.cash || 0);
     const expectedCash = prevBalance + effectiveCash + netAdjust;
     const difference = actualCash - expectedCash;
 
@@ -395,18 +443,22 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
       staffId: req.staff.id, staffName: req.staff.name,
       prevCashBalance: prevBalance,
       income, payment, deductions: deductions || [],
-      incomeManual: incomeManual || null, paymentManual: paymentManual || null,  // 轉換期手動值（兩者都存）
+      // 已開真列印的館別不再收 incomeManual（前端不送）；paymentManual（線上支付統計）不受影響、仍照存
+      incomeManual: invAuth.printingEnabled ? null : (incomeManual || null),
+      paymentManual: paymentManual || null,
+      printingEnabled: invAuth.printingEnabled,   // 該日結帳當下是否為真列印權威模式（供歷史檢視判斷）
+      invoiceActualTotal: invAuth.printingEnabled ? invAuth.actualTotal : null,   // 今日實際列印發票總金額
       denominations, actualCashBalance: actualCash,
       expectedCashBalance: expectedCash,
       closingCashBalance: actualCash,
       difference,
       differenceAlert: Math.abs(difference) > 200,
-      invoiceSegments: segments,   // 多段發票
+      invoiceSegments: segments,   // 多段發票（真列印館別：系統權威分段，不可手動修改）
       invoiceLastNumber: lastLast || '',
       // 月銷售紀錄用：發票起訖/作廢號、當日 check-in 人數
       invoiceStartNumber: firstStart || '',
-      invoiceVoidNumbers: invoiceVoidNumbers || '',
-      voidInvoiceAmount: Number(req.body.voidInvoiceAmount) || 0,   // 作廢票號碼總金額（打錯發票金額，總計扣除）
+      invoiceVoidNumbers: finalVoidNumbers,
+      voidInvoiceAmount: finalVoidAmount,   // 作廢票號碼總金額（真列印館別：系統依 invoices 作廢紀錄權威算出）
       checkinCount: checkinCount ?? null,
       notes: notes || '',
       status: 'settled',

@@ -11,7 +11,9 @@
 // ✅ 開錢櫃（/open-drawer、/print 的 openDrawer 參數）已於 2026-08-06 實機測試通過：
 // RJ11 錢櫃接上 WP-560 後，單獨開櫃與「現金付款列印發票同時開櫃」皆一次測試成功。
 
-require('dotenv').config();
+// path 明確指到本檔所在資料夾的 .env——用 npm start/雙擊 start.bat 時 cwd 本來就是這裡不受影響，
+// 但裝成 Windows 服務（node-windows）背景執行時 cwd 不保證等於這個資料夾，沒指定 path 會讀不到設定。
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
 const { SerialPort } = require('serialport');

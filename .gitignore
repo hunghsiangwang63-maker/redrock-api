@@ -47,6 +47,9 @@ build/Release
 # Dependency directories
 node_modules/
 
+# node-windows 在 local-print-agent 實際跑 install-service.js 時，於當地產生的服務包裝檔（Windows 機器本機產物）
+local-print-agent/daemon/
+
 # Optional npm cache directory
 .npm
 

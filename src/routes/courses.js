@@ -1207,7 +1207,7 @@ router.put('/:courseId',
         'enrollOpenDate', 'alumniOpenDate', 'fullTermRenewalDiscount', 'alumniDiscount', 'renewalDeadline',
         'fullTermRenewalDiscountEnabled', 'fullTermRenewalDiscountRate', 'alumniDiscountEnabled', 'alumniDiscountRate',
         'teamOpenDate', 'generalOpenDate', 'teamPrice',
-        'skipSignature', 'collectGenderAge', 'enrollNoteLabel', 'enrollNoteRequired',
+        'skipSignature', 'collectGenderAge', 'enrollNoteLabel', 'enrollNoteRequired', 'refundTiers',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',
         'unlimitedPracticeStart', 'unlimitedPracticeEnd',
         'allowTrial', 'trialPrice', 'trialTarget', 'makeupTarget', 'isActive', 'paymentMethods', // isActive：停用/啟用（會員課程總覽隱藏，不通知、不動報名）
@@ -1235,6 +1235,12 @@ router.put('/:courseId',
       // 候補上限：留空('')＝不限候補(null)，否則轉數字
       if (req.body.maxWaitlist !== undefined) {
         updates.maxWaitlist = (req.body.maxWaitlist === '' || req.body.maxWaitlist === null) ? null : Number(req.body.maxWaitlist);
+      }
+      // 工作坊退費分級：空陣列/未提供有效項目＝清空（套回系統預設）
+      if (req.body.refundTiers !== undefined) {
+        updates.refundTiers = Array.isArray(req.body.refundTiers) && req.body.refundTiers.length
+          ? req.body.refundTiers.map(t => ({ daysBefore: Number(t.daysBefore) || 0, rate: Number(t.rate) || 0 }))
+          : null;
       }
       // 分期規則
       if (req.body.installment !== undefined) {

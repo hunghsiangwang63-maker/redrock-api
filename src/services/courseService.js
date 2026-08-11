@@ -121,6 +121,10 @@ const createCourse = async ({ gymId, staffId, data }) => {
     collectGenderAge: data.collectGenderAge === true,
     enrollNoteLabel: data.enrollNoteLabel || null,
     enrollNoteRequired: data.enrollNoteRequired === true,
+    // 工作坊退費分級（僅 workshop 用；null/空陣列＝套用系統預設 DEFAULT_WORKSHOP_REFUND_TIERS）
+    refundTiers: Array.isArray(data.refundTiers) && data.refundTiers.length
+      ? data.refundTiers.map(t => ({ daysBefore: Number(t.daysBefore) || 0, rate: Number(t.rate) || 0 }))
+      : null,
     // 續報/舊生優惠（比率折扣，各自開關；週課專用）：續報＝前一期整期報名（插班不算）；舊生＝曾報名過或插班生
     fullTermRenewalDiscountEnabled: data.fullTermRenewalDiscountEnabled === true,
     fullTermRenewalDiscountRate: data.fullTermRenewalDiscountRate != null ? Number(data.fullTermRenewalDiscountRate) : 0.9,
@@ -1856,6 +1860,32 @@ const computeWeeklyCourseFee = (course, { completedCount, totalCount, alumni, is
   };
 };
 
+// ── 工作坊退費（整筆退課，依「距開課天數」比例；每個工作坊梯次可個別設定分級，見 course.refundTiers）──
+// tiers 依 daysBefore 由大到小排序，daysUntilStart（距開課天數）≥ tier.daysBefore 的第一個（最大）
+// 級距即為適用比例；全部不符（開課當天或之後、或不足最低級距天數）→ 比例 0（不退）。
+// 無收費工作坊（如費用直接付給講師、paidAmount=0）比例算出的金額本就是 0，不特別處理、仍走同一套核准流程。
+const DEFAULT_WORKSHOP_REFUND_TIERS = [
+  { daysBefore: 7, rate: 1.0 },  // 距開課 ≥7 天：全額退費
+  { daysBefore: 3, rate: 0.5 },  // 3~6 天前：退 50%
+  { daysBefore: 1, rate: 0.2 },  // 1~2 天前：退 20%
+];                                 // 開課當天或之後：不退（無對應級距 → rate 0）
+
+const computeWorkshopRefund = (course, { paidAmount, actuallyPaid, startDate, today }) => {
+  const daysUntilStart = dayjs(startDate).diff(dayjs(today), 'day');
+  const tiers = (Array.isArray(course.refundTiers) && course.refundTiers.length ? course.refundTiers : DEFAULT_WORKSHOP_REFUND_TIERS)
+    .slice().sort((a, b) => b.daysBefore - a.daysBefore);
+  const matchedTier = tiers.find(t => daysUntilStart >= t.daysBefore) || null;
+  const rate = matchedTier ? matchedTier.rate : 0;
+  const rawSuggestedRefund = Math.round((paidAmount || 0) * rate);
+  const cap = actuallyPaid != null ? actuallyPaid : (paidAmount || 0);
+  const suggestedRefund = Math.min(rawSuggestedRefund, cap);
+  const refundNote = !paidAmount
+    ? '此工作坊未收費（費用另計），無退費金額'
+    : `距開課 ${daysUntilStart} 天，適用退費比例 ${Math.round(rate * 100)}%（已繳 NT$${paidAmount} × ${Math.round(rate * 100)}% = NT$${rawSuggestedRefund}）`
+      + (suggestedRefund < rawSuggestedRefund ? `；因分期尚未繳完，退款上限為實收金額 NT$${suggestedRefund}` : '');
+  return { suggestedRefund, suggestedPercentage: Math.round(rate * 100), refundNote, daysUntilStart, rate, tier: matchedTier };
+};
+
 // ── 試上費有效值 ──────────────────────────────────────────────────
 // 梯次覆寫(trialPrice非null) > 週課單堂價公式(×1.1，四捨五入) > 班別/預設繼承（工作坊恆走此層，無單堂價概念）
 const getEffectiveTrialPrice = (course, rules) => {
@@ -2396,6 +2426,8 @@ module.exports = {
   getCourses,
   computeCourseFeeForMember,
   computeWeeklyCourseFee,
+  computeWorkshopRefund,
+  DEFAULT_WORKSHOP_REFUND_TIERS,
   getEffectiveTrialPrice,
   computeAlumniStatus,
   getSessions,

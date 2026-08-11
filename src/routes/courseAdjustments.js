@@ -95,32 +95,46 @@ router.post('/enrollments/:enrollmentId/refund-request',
       } catch (e) {}
       const today = taiwanToday(); // 台灣日期
       const courseStartDate = course?.startDate || null;
-      // 退費規則走班別繼承（梯次可覆寫）：每堂扣除/手續費率
-      const _refundRules = courseService.resolveRules(course || {}, await courseService.getCategoryOf(db, course?.categoryId));
-      const perSessionDeduction = _refundRules.perSessionDeduction;
-      const handlingFeeRate = _refundRules.handlingFeeRate;
 
-      // 週課退費（2026-07-18 改版）：退費＝剩餘堂數價金 − 手續費（剩餘價金 × 費率）
-      // 每堂單價＝已繳金額 ÷ 總堂數；剩餘堂數＝總堂數 − 已開課堂數（日期已過，不論出席/請假）。
-      // 費率雙軌（皆班別/梯次可調）：開課前 preStartFeeRate 預設 5%；開課後 handlingFeeRate 預設 20%。
-      const sessionSnap = await db.collection('courseSessions')
-        .where('courseId', '==', courseId)
-        .get();
-      const _allSess = sessionSnap.docs.map(d => d.data()).filter(s => s.status !== 'cancelled');
-      const totalSessions = _allSess.length || 1;
-      const heldSessions = _allSess.filter(s => s.date && s.date <= today).length;
-      const remainingSessions = Math.max(0, totalSessions - heldSessions);
-      const perSession = paidAmount / totalSessions;
-      const remainingValue = Math.round(perSession * remainingSessions);
-      const preStart = courseStartDate ? (today < courseStartDate) : (heldSessions === 0); // 開課前判定（無起始日以已開課堂數推）
-      const feeRate = preStart ? (_refundRules.preStartFeeRate ?? 0.05) : (handlingFeeRate ?? 0.2); // 開課前預設 5%／開課後預設 20%，皆班別/梯次可調
-      const fee = Math.round(remainingValue * feeRate);
-      const rawSuggestedRefund = Math.max(0, remainingValue - fee);
-      // 退款上限＝實際已收金額（分期未繳完時），避免退得比實收的錢還多；一次付清情境 actuallyPaid===paidAmount，不受影響
-      const suggestedRefund = Math.min(rawSuggestedRefund, actuallyPaid);
-      const cappedByInstallment = installmentPlanId && suggestedRefund < rawSuggestedRefund;
-      const refundNote = `剩餘 ${remainingSessions}/${totalSessions} 堂 × 每堂 NT$${Math.round(perSession)} ＝ 剩餘價金 NT$${remainingValue}；手續費 ${Math.round(feeRate * 100)}%（${preStart ? '開課前' : '開課後'}）＝NT$${fee}`
-        + (cappedByInstallment ? `；因分期尚未繳完，退款上限為實收金額 NT$${actuallyPaid}` : '');
+      // 週課／工作坊退費計算式完全不同：週課看「剩餘堂數價金」，工作坊整筆退課、看「距開課天數」比例。
+      let suggestedRefund, refundNote;
+      let totalSessions = null, heldSessions = null, remainingSessions = null, remainingValue = null, feeRate = null, fee = null, perSessionDeduction = null, handlingFeeRate = null;
+
+      if (course?.type === 'workshop') {
+        // 工作坊：整筆退課，依距開課天數分級比例退費（梯次可個別設定 course.refundTiers；見 computeWorkshopRefund）
+        const startDates = all.map(e => e.date).filter(Boolean).sort();
+        const workshopStart = startDates[0] || courseStartDate || today;
+        const wr = courseService.computeWorkshopRefund(course, { paidAmount, actuallyPaid, startDate: workshopStart, today });
+        suggestedRefund = wr.suggestedRefund;
+        refundNote = wr.refundNote;
+      } else {
+        // 週課退費（2026-07-18 改版）：退費＝剩餘堂數價金 − 手續費（剩餘價金 × 費率）
+        // 每堂單價＝已繳金額 ÷ 總堂數；剩餘堂數＝總堂數 − 已開課堂數（日期已過，不論出席/請假）。
+        // 費率雙軌（皆班別/梯次可調）：開課前 preStartFeeRate 預設 5%；開課後 handlingFeeRate 預設 20%。
+        const _refundRules = courseService.resolveRules(course || {}, await courseService.getCategoryOf(db, course?.categoryId));
+        perSessionDeduction = _refundRules.perSessionDeduction;
+        handlingFeeRate = _refundRules.handlingFeeRate;
+        const sessionSnap = await db.collection('courseSessions')
+          .where('courseId', '==', courseId)
+          .get();
+        const _allSess = sessionSnap.docs.map(d => d.data()).filter(s => s.status !== 'cancelled');
+        totalSessions = _allSess.length || 1;
+        heldSessions = _allSess.filter(s => s.date && s.date <= today).length;
+        remainingSessions = Math.max(0, totalSessions - heldSessions);
+        const perSession = paidAmount / totalSessions;
+        remainingValue = Math.round(perSession * remainingSessions);
+        const preStart = courseStartDate ? (today < courseStartDate) : (heldSessions === 0); // 開課前判定（無起始日以已開課堂數推）
+        feeRate = preStart ? (_refundRules.preStartFeeRate ?? 0.05) : (handlingFeeRate ?? 0.2); // 開課前預設 5%／開課後預設 20%，皆班別/梯次可調
+        fee = Math.round(remainingValue * feeRate);
+        const rawSuggestedRefund = Math.max(0, remainingValue - fee);
+        // 退款上限＝實際已收金額（分期未繳完時），避免退得比實收的錢還多；一次付清情境 actuallyPaid===paidAmount，不受影響
+        suggestedRefund = Math.min(rawSuggestedRefund, actuallyPaid);
+        const cappedByInstallment = installmentPlanId && suggestedRefund < rawSuggestedRefund;
+        refundNote = `剩餘 ${remainingSessions}/${totalSessions} 堂 × 每堂 NT$${Math.round(perSession)} ＝ 剩餘價金 NT$${remainingValue}；手續費 ${Math.round(feeRate * 100)}%（${preStart ? '開課前' : '開課後'}）＝NT$${fee}`
+          + (cappedByInstallment ? `；因分期尚未繳完，退款上限為實收金額 NT$${actuallyPaid}` : '');
+      }
+      // 建議退費佔已繳金額比例（供審核 modal 顯示「建議 NT$X，Y%」；週課/工作坊通用）
+      const suggestedPercentage = paidAmount > 0 ? Math.round((suggestedRefund / paidAmount) * 100) : 0;
 
       const reqId = `crefund_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
       await db.collection('courseAdjustmentRequests').doc(reqId).set({
@@ -135,8 +149,10 @@ router.post('/enrollments/:enrollmentId/refund-request',
         paidAmount,
         actuallyPaid, installmentPlanId, // 2026-08-09：分期退款上限依據，approve 時作廢分期計畫用
         suggestedRefund,
+        suggestedPercentage,
         refundNote,
-        totalSessions, heldSessions, remainingSessions, remainingValue, feeRate, fee, // 政府公式明細
+        courseType: course?.type || 'weekly', // 供審核端知道套用哪套公式（週課/工作坊），供稽核
+        totalSessions, heldSessions, remainingSessions, remainingValue, feeRate, fee, // 政府公式明細（週課專用，工作坊為 null）
         perSessionDeduction,
         handlingFeeRate,
         reason: req.body.reason,

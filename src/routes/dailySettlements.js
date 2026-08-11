@@ -117,6 +117,35 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     const todayStart = dayjs().startOf('day').toDate();
     const todayEnd = dayjs().endOf('day').toDate();
 
+    // 該館若已開啟「發票列印」（真列印上線），今日發票起訖號碼改由實際列印紀錄（invoices 集合）
+    // 權威帶入，不再只是「昨天最後一號+1」的手動猜測——系統本就精確知道印了哪些號碼，沒有理由
+    // 還要店員憑記憶/翻紙本謄寫。單一 gymId 等值查詢＋今日範圍本地過濾（invoices 集合尚無按日期
+    // 索引的欄位，此館規模的當日發票張數本就有限，掃描成本可忽略）；查無資料（今天還沒印過票）
+    // 則回 null，前端沿用原本「前一天+1」的手動建議 fallback。
+    let todayInvoiceSegment = null;
+    try {
+      const gymDoc = await db.collection('gyms').doc(gymId).get();
+      if (gymDoc.exists && gymDoc.data().invoicePrintingEnabled === true) {
+        const invSnap = await db.collection('invoices').where('gymId', '==', gymId).get();
+        const todayInvoices = invSnap.docs
+          .map(d => d.data())
+          .filter(inv => {
+            const t = inv.issuedAt?.toDate ? inv.issuedAt.toDate() : (inv.issuedAt?._seconds ? new Date(inv.issuedAt._seconds * 1000) : null);
+            return t && t >= todayStart && t <= todayEnd;
+          })
+          .sort((a, b) => a.number.localeCompare(b.number));
+        if (todayInvoices.length) {
+          todayInvoiceSegment = {
+            track: todayInvoices[0].track,
+            start: todayInvoices[0].number,
+            last: todayInvoices[todayInvoices.length - 1].number,
+            count: todayInvoices.length,
+            voidCount: todayInvoices.filter(i => i.status === 'void').length,
+          };
+        }
+      }
+    } catch (e) { console.error('[今日發票號碼帶入]', e.message); }
+
     // 入場收入（用isCancelled而非status，才能同時涵蓋QR入場與電話入場）
     const checkinSnap = await db.collection('checkIns')
       .where('gymId', '==', gymId)
@@ -243,8 +272,9 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       actualCashBalance: null,
       denominations: { d1:0, d5:0, d10:0, d50:0, d100:0, d500:0, d1000:0 },
       invoiceLastNumber: '',
-      suggestedInvoiceStart,   // 前一天最後發票號+1（前端帶入，可改）
+      suggestedInvoiceStart,   // 前一天最後發票號+1（前端帶入，可改；未開真列印的館別用這組）
       suggestedInvoiceTrack,   // 前一天最後一段的字軌（前端帶入，可改；換發票本才需要手動改）
+      todayInvoiceSegment,     // 已開真列印的館別：今日實際列印號碼範圍（權威，前端優先帶入這組）
       difference: null,
       status: 'draft',
     };

@@ -748,11 +748,15 @@ const searchMembers = async ({ query, gymId, role, limit = 20, cursor }) => {
   let ref = db.collection(COLLECTIONS.MEMBERS);
 
   // 如果是搜尋字串，先在本地過濾（Firestore 不支援全文搜尋）
-  // 實際上線建議使用 Algolia 或 Typesense
+  // 實際上線建議使用 Algolia 或 Typesense（會員數大到影響效能/成本時再評估）
   let snapshot;
   if (query) {
-    // 先取最近1000筆做本地過濾
-    snapshot = await ref.orderBy('createdAt', 'desc').limit(1000).get();
+    // ⚠️ 原本只取「最近建立的 1000 筆」做本地過濾（省成本的權宜做法）——會員數超過 1000 後，
+    // 較早建立的會員會直接被排除在候選範圍外，變成不管搜電話或姓名都完全查不到（非搜尋條件本身
+    // 的問題）。2026-08-11 發現：真實案例（會員數來到 1031 筆時，一位 7/13 建立的會員突然搜不到）。
+    // 目前會員規模（一千餘筆）全表掃描成本仍低，改為掃全部——之後真的成長到影響效能/成本再接
+    // 專用搜尋服務，不要重新加一個「只看最近 N 筆」這種會隨規模再度默默失效的上限。
+    snapshot = await ref.get();
     const all = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
     return all.filter(m =>
       m.name?.includes(query) ||

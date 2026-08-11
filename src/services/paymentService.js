@@ -269,7 +269,7 @@ async function loadGymPaymentSettings(db, gymId) {
 // 各 gateway 的顯示資訊與「該館需具備哪些金鑰」才算已設定
 const PROVIDER_META = {
   linepay:   { label: 'LinePay', icon: '💚', credKeys: ['linePayChannelId', 'linePayChannelSecret'] },
-  jkopay:    { label: '街口',    icon: '🔵', credKeys: ['jkoPayStoreId', 'jkoPaySecret'] },
+  jkopay:    { label: '街口',    icon: '🔵', credKeys: ['jkoPayStoreId', 'jkoPayApiKey', 'jkoPaySecret'] },
   taiwanpay: { label: '台灣Pay', icon: '🇹🇼', credKeys: ['taiwanPayMerchantId', 'taiwanPayBankApiKey'] },
 };
 

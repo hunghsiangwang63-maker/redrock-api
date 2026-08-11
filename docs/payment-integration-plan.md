@@ -23,7 +23,7 @@
   |---|---|---|
   | `mock` | 測試用（dev only） | — |
   | `linepay` | ✅ 可運作實作（v3、HMAC、Confirm；待金鑰） | `linePayChannelId` / `linePayChannelSecret` |
-  | `jkopay` | 🟡 骨架（待整合手冊） | `jkoPayStoreId` / `jkoPaySecret` |
+  | `jkopay` | ✅ 可運作實作（Entry/Inquiry API，依 open-doc.jkos.com 公開文件；HMAC-SHA256 hex；**Inquiry 主動核對取代 callback 驗簽**——文件未載 result_url 簽章規則，改由 verifyCallback 呼叫 Inquiry API 自行重新簽章核對 status/金額，安全性等同或優於信任 callback；待金鑰+Host） | `jkoPayStoreId` / `jkoPayApiKey` / `jkoPaySecret` |
   | `taiwanpay` | 🟡 骨架（待收單銀行 API） | `taiwanPayMerchantId` / `taiwanPayBankApiKey` |
 - **收費點接線**（orderType → orderRef）：
   | 類型 | orderType / orderRef | 後端 | 前端 |
@@ -43,10 +43,12 @@
 
 ### 待辦（多需先取得外部資源）
 1. **各館**申請 LinePay / 街口 / 台灣Pay 商戶 → 金鑰填入各 gym 的 `paymentSettings`。
-2. 環境變數：`LINEPAY_ENV`（sandbox/production）、`JKOPAY_ENV`、`API_URL`（confirmUrl）、`CLIENT_URL`（cancelUrl）。
+   - 街口特約商店合約會一併核發三項憑證（**Store ID 商店編號 / API key 商店串接金鑰 / Secret Key 商店通路密鑰**，三者缺一不可）＋ **API Host**（街口未提供公開通用網域，不像 LINE Pay 有 `sandbox-api-pay.line.me`——此網域需另外設定環境變數 `JKOPAY_API_HOST`，公開文件 open-doc.jkos.com 未列出）。
+2. 環境變數：`LINEPAY_ENV`（sandbox/production）、`JKOPAY_API_HOST`（街口 API Host，無公開通用網域）、`API_URL`（confirmUrl）、`CLIENT_URL`（cancelUrl）。
 3. LinePay sandbox 端到端測試 → 將 `PaymentFlow` 的 `linepay` `enabled` 改 `true` + 啟用 `ONLINE_PAYMENT_ENABLED`。
-4. 員工端 QR PaymentFlow（pass / installment / checkin）。
-5. 補街口 / 台灣Pay 的 adapter TODO（依整合手冊 / 收單銀行 API）。
+4. 街口 sandbox（或正式環境小額）端到端測試（Entry→付款→result_url 觸發→Inquiry 核對 status===0）→ 開啟 `jkopay` 同上。
+5. 員工端 QR PaymentFlow（pass / installment / checkin）。
+6. 台灣Pay adapter TODO（依收單銀行 API，仍待銀行合約規格）；街口已完成，見上方 adapter 表格。
 
 ---
 
@@ -164,7 +166,7 @@ refund({ providerTxnId, amount, gymSettings })                     // 之後做
 | Gateway | 模式 | 串接重點 | 取得門檻 |
 |---|---|---|---|
 | **LINE Pay** | Online API v3：Request→(導轉)→Confirm | 文件最完整、有 sandbox（sandbox-api-pay.line.me）；HMAC 簽章（Channel ID/Secret）；**需 Confirm 二次確認** | LINE Pay 線上商戶帳號 |
-| **街口 JKOPay** | 線上交易 API：建立訂單→QR/導轉→notify callback | 商戶號+API key+digest 簽章；文件需與街口簽約取得 | 街口特約商戶 |
+| **街口 JKOPay** | Online Pay API：Entry 建立訂單→導轉/QR→result_url notify（**主動 Inquiry 查詢核對，不信任 callback**） | 已依 open-doc.jkos.com 公開文件完成 adapter；HMAC-SHA256(hex) 簽章（Store ID/API key/Secret 三項憑證）；**API Host 無公開網域，需簽約後取得** | 街口特約商戶 |
 | **台灣Pay / TWQR** | 產生 EMVCo TWQR → 銀行 App 掃 → 銀行 callback | 多由**收單銀行**提供 API（非單一窗口）；格式為 TWQR/EMVCo | 收單銀行合約 |
 
 **建議起手式：先 LinePay**（沙箱與文件最友善），把 paymentService/adapter/callback/前端流程的「骨架」跑通，其餘兩家照同一 adapter 介面補上。
@@ -187,7 +189,7 @@ refund({ providerTxnId, amount, gymSettings })                     // 之後做
 - **Phase 0（不需金鑰）✅ 完成**：`payments` collection + paymentService + mock adapter + PaymentFlow，全鏈路端到端驗證（含冪等）。
 - **Phase 1 ✅ 大致完成**：收費點接 rail。會員自助（競賽/體驗/課程/租借）前後端皆接；櫃台（定期票/分期/入場）後端 rail 接好、前端員工 QR 待 Phase 2；商品 POS 不做。各收費點金額後端權威解析；建單即記帳的流程加 `deferPayment` 避免重複記帳。
 - **Phase 2 🟡 進行中**：LinePay adapter 已寫成可運作實作（待各館金鑰 + sandbox 測試 + 啟用 `ONLINE_PAYMENT_ENABLED` + 員工端 QR 前端）。
-- **Phase 3 🟡 骨架就緒**：街口、台灣Pay adapter 骨架已建並註冊（介面一致），待整合手冊/收單銀行 API + 金鑰補完 TODO。
+- **Phase 3 🟡 街口已完成、台灣Pay骨架就緒**：街口 JKOPay adapter 已依公開文件（open-doc.jkos.com）寫成可運作實作——Entry API 建立付款、Inquiry API 供 verifyCallback 主動核對（文件未載 result_url 簽章規則，故不信任 callback body，改自行重新簽章查詢，見上方 adapter 表格），待各館三項金鑰 + `JKOPAY_API_HOST` + sandbox 測試。台灣Pay 仍是骨架（介面已註冊），待收單銀行 API 規格。
 - **Phase 4（未開始）**：退款、對帳報表、逾時自動取消、發票串接。
 
 ---

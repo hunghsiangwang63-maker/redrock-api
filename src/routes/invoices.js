@@ -167,6 +167,14 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
       return res.status(400).json({ error: 'INVALID_TAX_ID', message: '統一編號檢查碼錯誤，請確認號碼是否正確' });
     }
     const db = getDb();
+    // ⚠️ 同一筆訂單只能有一張作用中發票（比照 §9 invoiceService.js 對 invoiceRecords 的既有規則）——
+    // 擋在配號之前，避免重複點擊「列印發票」白白多印一張紙本、多消耗一個真實發票號碼。前端 RealPrintPanel
+    // 開啟表單前也會先查 GET /invoices/active 提前擋下（一般情況根本不會顯示出可點的按鈕），這裡是
+    // 後端最後一道防線（雙分頁同時操作等前端擋不住的情境）。
+    const existingInvoice = await getActiveRealInvoice(db, sourceType, refId);
+    if (existingInvoice) {
+      return res.status(409).json({ error: 'ALREADY_INVOICED', message: '此訂單已開立發票，請勿重複列印', invoice: existingInvoice });
+    }
     await checkInvoiceIssuanceTiming(db, sourceType, refId); // 課程/比賽延後開立時機把關（其餘 sourceType 不受影響）
     const allocated = await invoiceNumberService.allocateInvoiceNumber(gymId); // {track, number}
     const id = uuidv4();
@@ -201,6 +209,19 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
     if (['INVOICE_STATE_NOT_CONFIGURED', 'INVOICE_TOO_EARLY', 'ROLL_DEPLETED'].includes(err.code)) return res.status(400).json({ error: err.code, message: err.message });
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }
+});
+
+// GET /invoices/active?sourceType=&refId= - 查此訂單目前有沒有「已開立」的真實發票（值班或管理員）
+// 供前端 RealPrintPanel 開啟列印表單前先查——查到就直接顯示唯讀摘要（沒有「列印發票」按鈕可按），
+// 而不是每次重新打開都又是一份空白可送出的表單。print-record 本身也有這道擋（見上方），此端點
+// 純粹是讓前端提前知道、不需要等點下去才被 409 擋回來。
+router.get('/active', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const { sourceType, refId } = req.query;
+    if (!sourceType || !refId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '缺少 sourceType/refId' });
+    const invoice = await getActiveRealInvoice(getDb(), sourceType, refId);
+    res.json({ invoice });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
 // GET /invoices/lookup?invoiceNo= - 依紙本印出的號碼查詢單張真實發票（供手動作廢 UI 用；值班或管理員）
@@ -255,15 +276,24 @@ async function voidRealInvoice(db, id, staffId, staffName, voidReason) {
   return { ...inv, status: 'void' };
 }
 
-// 供各流程取消/退貨動作自動連動作廢（§4.1.3）：查有無對應「已開立」的真實發票，有才作廢；
-// 查無或已作廢皆視為冪等成功（不拋錯），不阻斷原本的取消/退貨主流程。
-async function voidRealInvoiceIfIssued(db, { sourceType, refId }, staffId, staffName, voidReason) {
+// 查該訂單目前是否有「已開立」（未作廢）的真實發票——供①print-record 開票前擋重複開立
+// ②voidRealInvoiceIfIssued 找要作廢哪一筆 ③GET /invoices/active 供前端在顯示列印表單前先查，
+// 三處共用同一份查詢（同一筆訂單同時最多一張 status:'issued'，比照 §9 invoiceService.js 的
+// getActiveInvoice 對 invoiceRecords 集合的既有慣例）。
+async function getActiveRealInvoice(db, sourceType, refId) {
   if (!sourceType || !refId) return null;
   const snap = await db.collection('invoices')
     .where('sourceType', '==', sourceType).where('refId', '==', refId).where('status', '==', 'issued').limit(1).get();
-  if (snap.empty) return null;
+  return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+}
+
+// 供各流程取消/退貨動作自動連動作廢（§4.1.3）：查有無對應「已開立」的真實發票，有才作廢；
+// 查無或已作廢皆視為冪等成功（不拋錯），不阻斷原本的取消/退貨主流程。
+async function voidRealInvoiceIfIssued(db, { sourceType, refId }, staffId, staffName, voidReason) {
+  const existing = await getActiveRealInvoice(db, sourceType, refId);
+  if (!existing) return null;
   try {
-    return await voidRealInvoice(db, snap.docs[0].id, staffId, staffName, voidReason);
+    return await voidRealInvoice(db, existing.id, staffId, staffName, voidReason);
   } catch (e) {
     console.error('[自動連動作廢真實發票失敗]', sourceType, refId, e.message);
     return null;

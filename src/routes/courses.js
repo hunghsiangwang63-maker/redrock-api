@@ -1600,30 +1600,50 @@ router.get('/:courseId/enrollments',
           }
         });
       }
-      const enrollments = rosterDocs.map(d => {
+      // 依會員聚合（一人一列，取代原本「一場次一列＋前端 byMember 去重」——週課一位學員原本會回傳
+      // N 筆幾乎重複的列，只有 count/leaveUsed/waitlistPosition 這幾個「本質上是逐場次聚合」的欄位
+      // 需要真的掃過 rosterDocs；其餘報名層級欄位一律只取 header/transferRecords，不再逐場次挑值）。
+      const byMember = new Map();
+      rosterDocs.forEach(d => {
         const e = d.data();
-        const info = memberInfoMap[e.memberId] || {};
-        const header = headerMap[e.memberId] || {};
+        if (!e.memberId) return;
+        const m = byMember.get(e.memberId) || {
+          memberId: e.memberId, memberName: e.memberName || '',
+          count: 0, leaveUsed: 0, isWaitlist: false, waitlistPosition: null, maxLeavesAllowed: null,
+          fallbackEnrolledAt: null,
+        };
+        m.count++;
+        if (e.status === 'waitlist') { m.isWaitlist = true; if (e.waitlistPosition != null) m.waitlistPosition = e.waitlistPosition; }
+        if (e.status === 'leave') m.leaveUsed++;
+        if (e.maxLeavesAllowed != null) m.maxLeavesAllowed = e.maxLeavesAllowed;
+        if (!m.fallbackEnrolledAt && (e.enrolledAt || e.createdAt)) m.fallbackEnrolledAt = e.enrolledAt || e.createdAt;
+        byMember.set(e.memberId, m);
+      });
+
+      const enrollments = [...byMember.values()].map(m => {
+        const info = memberInfoMap[m.memberId] || {};
+        const header = headerMap[m.memberId] || {};
         const confirmedAmount = header.payEnrollmentId && confirmedMap[header.payEnrollmentId] != null
           ? confirmedMap[header.payEnrollmentId].amount : null;
         const proof = header.payEnrollmentId ? proofMap[header.payEnrollmentId] : null;
-        const paymentMethod = header.paymentMethod || e.paymentMethod || '';
-        const bankLastFive = proof?.bankLastFive || header.bankLastFive || e.bankLastFive || '';
+        const paymentMethod = header.paymentMethod || '';
+        const bankLastFive = proof?.bankLastFive || header.bankLastFive || '';
         const bankName = proof?.bankName || '';
-        const paymentDate = proof?.paymentDate || header.paymentDate || e.paymentDate || '';
-        const memberPaidAmount = header.memberPaidAmount ?? e.memberPaidAmount ?? null;
-        const fee = header.fee ?? e.fee ?? 0;
+        const paymentDate = proof?.paymentDate || header.paymentDate || '';
+        const memberPaidAmount = header.memberPaidAmount ?? null;
+        const fee = header.fee ?? 0;
         // 「實收金額」最終採用值：管理員直接編修 > 店員核對 > 會員自報 > 報名應繳費用（與 members.js attachReceivedAmounts 同一套優先序）
         const receivedAmount = header.receivedAmountOverride ?? confirmedAmount ?? memberPaidAmount ?? fee ?? 0;
         return {
-          id: d.id,
-          memberId: e.memberId,
-          memberName: info.name || e.memberName || '',
-          memberPhone: info.phone || e.memberPhone || '',
-          status: e.status || 'confirmed',
-          waitlistPosition: e.waitlistPosition ?? null,
+          memberId: m.memberId,
+          memberName: info.name || m.memberName || '',
+          memberPhone: info.phone || '',
+          isWaitlist: m.isWaitlist,
+          waitlistPosition: m.waitlistPosition,
+          count: m.count,           // 此人這門課有幾筆場次報名（含請假），供前端顯示「N 堂」
+          leaveUsed: m.leaveUsed,   // 已請假堂數
+          maxLeavesAllowed: m.maxLeavesAllowed,  // 插班個別可請假次數（null=用課程整期預設）
           paymentMethod,
-          paymentConfirmed: e.paymentConfirmed !== false,
           paymentStatus: header.paymentStatus || '',
           memberPaidAmount,
           confirmedAmount,
@@ -1632,18 +1652,13 @@ router.get('/:courseId/enrollments',
           bankLastFive,
           bankName,
           paymentDate,
-          enrolledAt: header.enrolledAt || e.enrolledAt || e.createdAt || null,
-          date: e.date || '',
-          startTime: e.startTime || '',
+          enrolledAt: header.enrolledAt || m.fallbackEnrolledAt || null,
           fee,
-          maxLeavesAllowed: e.maxLeavesAllowed ?? null,  // 插班個別可請假次數（null=用課程整期預設）
-          // 報名備註（header 優先，缺才退回場次副本；比照 members.js buildCourseMemberList）
-          enrollNote: header.enrollNote || e.enrollNote || null,
-          healthNote: header.healthNote || e.healthNote || null,
-          referralSource: header.referralSource || e.referralSource || null,
-          enrollGender: e.enrollGender || null,
-          enrollAge: e.enrollAge ?? null,
-          staffNote: header.staffNote || e.staffNote || null,   // 管理員收款確認時填的備註
+          // 報名備註：一律讀 header（單一真相；idx0-only 寫入後場次副本不再可靠，見 courseService.js getSessionRoster 的同型 fallback）
+          enrollNote: header.enrollNote || null,
+          healthNote: header.healthNote || null,
+          referralSource: header.referralSource || null,
+          staffNote: header.staffNote || null,   // 管理員收款確認時填的備註
         };
       });
       // Sort by enrolledAt desc
@@ -1906,18 +1921,19 @@ async function handleEnrollAll(req, res) {
             paymentDeadline: idx === 0 ? paymentDeadline : null,
             gymAccessStart: s.date,
             gymAccessEnd: require('dayjs')(s.date).add(course.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD'),
-            // 報名備註（存每個場次報名，任一場次名單都看得到）：健康備註/如何得知/自訂備註/性別/年齡
-            healthNote: req.body.healthNote || null,
-            referralSource: req.body.referralSource || null,
-            enrollNote: req.body.enrollNote || null,
-            enrollGender: req.body.enrollGender || null,
-            enrollAge: req.body.enrollAge != null ? req.body.enrollAge : null,
-            // 修 bug（2026-07-28）：原本這 4 個欄位前端有送、後端從未存過（只有工作坊單場 enrollCourse 有存）——
-            // 規則確認打勾與肖像權/法定代理人簽名資料在整期週課報名路徑上一直被默默丟棄。比照 healthNote 複製到每一堂。
-            confirmedLeavePolicy: !!req.body.confirmedLeavePolicy,
-            confirmedRefundPolicy: !!req.body.confirmedRefundPolicy,
-            portraitSignature: req.body.portraitSignature || null,
-            guardianSignature: req.body.guardianSignature || null,
+            // 報名備註：健康備註/如何得知/自訂備註/性別/年齡——比照 enrollmentFee/paymentMethod 只寫在主報名（idx===0）；
+            // 其餘場次的名單/CSV 讀取一律靠 courseRegistrations header 補回（getSessionRoster 已加 header fallback，
+            // 課程層報名名單/出缺席CSV/報名名單CSV 三處本就已是 header-first），不再逐堂複製同一份值。
+            healthNote: idx === 0 ? (req.body.healthNote || null) : null,
+            referralSource: idx === 0 ? (req.body.referralSource || null) : null,
+            enrollNote: idx === 0 ? (req.body.enrollNote || null) : null,
+            enrollGender: idx === 0 ? (req.body.enrollGender || null) : null,
+            enrollAge: idx === 0 ? (req.body.enrollAge != null ? req.body.enrollAge : null) : null,
+            // 規則確認打勾／肖像權・法定代理人簽名：全站無任何讀取點需要逐堂複本（僅供稽核），idx0-only。
+            confirmedLeavePolicy: idx === 0 ? !!req.body.confirmedLeavePolicy : false,
+            confirmedRefundPolicy: idx === 0 ? !!req.body.confirmedRefundPolicy : false,
+            portraitSignature: idx === 0 ? (req.body.portraitSignature || null) : null,
+            guardianSignature: idx === 0 ? (req.body.guardianSignature || null) : null,
             isGuest: isGuestEnroll,
             contactPhone: isGuestEnroll ? (req.body._guestPhone || null) : null,
             contactEmail: isGuestEnroll ? (req.body._guestEmail || null) : null,

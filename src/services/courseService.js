@@ -1693,12 +1693,34 @@ const getSessionRoster = async (sessionId) => {
     } catch (e) { memberInfoMap[mid] = { name: '（會員資料異常）', phone: '' }; }
   }
 
-  const result = roster.map(r => ({
-    ...r,
-    memberName: memberInfoMap[r.memberId]?.name || r.memberName || '',
-    memberPhone: memberInfoMap[r.memberId]?.phone || '',
-    attendanceStatus: attendanceMap[r.memberId] || 'pending',
-  }));
+  // 報名層級欄位（enrollGender/enrollAge/enrollNote/healthNote/referralSource）header fallback：
+  // 這幾個欄位只寫在該會員這門課的「第一堂」場次文件（idx===0，見 enroll-all/claimPendingCourseEnrollment），
+  // 查看的若不是第一堂，slot 本身會是 null，要靠 courseRegistrations header 補回同一筆值。
+  const courseId = roster[0]?.courseId;
+  const headerMap = {};
+  if (courseId && memberIds.length) {
+    for (let i = 0; i < memberIds.length; i += 30) {
+      const batch = memberIds.slice(i, i + 30);
+      const hSnap = await db.collection('courseRegistrations')
+        .where('courseId', '==', courseId).where('memberId', 'in', batch).get();
+      hSnap.forEach(hd => { headerMap[hd.data().memberId] = hd.data(); });
+    }
+  }
+
+  const result = roster.map(r => {
+    const header = headerMap[r.memberId] || {};
+    return {
+      ...r,
+      memberName: memberInfoMap[r.memberId]?.name || r.memberName || '',
+      memberPhone: memberInfoMap[r.memberId]?.phone || '',
+      attendanceStatus: attendanceMap[r.memberId] || 'pending',
+      enrollGender: r.enrollGender || header.enrollGender || null,
+      enrollAge: r.enrollAge ?? header.enrollAge ?? null,
+      enrollNote: r.enrollNote || header.enrollNote || null,
+      healthNote: r.healthNote || header.healthNote || null,
+      referralSource: r.referralSource || header.referralSource || null,
+    };
+  });
   // 跨期補課（上一梯/密集班學員補到此場次，非會員名單）→ 名單附註記列
   try {
     const xm = await db.collection('crossCohortMakeups')

@@ -222,7 +222,7 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
         // 認領後跑補課額度重算（min(cap, 有效請假數)）自動給補課券
         const leaveDates = Array.isArray(claim.leaveDates) ? claim.leaveDates : [];
         const batch = db.batch(); const cnt = {}; const _claimEnrollIds = [];
-        for (const s of sessions) {
+        for (const [i, s] of sessions.entries()) {
           const eid = uuidv4();
           _claimEnrollIds.push(eid);
           const isLeave = leaveDates.includes(s.date);
@@ -234,9 +234,13 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
             originalPrice: c.price || 0, enrollmentFee: 0, installment: false, firstPayment: 0, secondPayment: 0,
             paymentStatus: 'confirmed', paymentConfirmed: true, paymentDeadline: null,
             gymAccessStart, gymAccessEnd, enrolledBy: 'roster-claim', enrolledAt: now,
-            paymentDate: null, bankLastFive: claim.bankLastFive || null, healthNote: claim.healthNote || null, referralSource: null,
+            // healthNote/bankLastFive/memberPaidAmount 比照 enroll-all 只寫在第一堂（i===0）；其餘欄位本就每堂
+            // 都是相同固定值（referralSource/confirmedLeavePolicy 等），無逐堂複製問題。header（下方）保留完整值，
+            // 課程層/場次名單讀取皆已改為 header-first、slot 只是 idx0 快照。
+            paymentDate: null, bankLastFive: i === 0 ? (claim.bankLastFive || null) : null,
+            healthNote: i === 0 ? (claim.healthNote || null) : null, referralSource: null,
             confirmedLeavePolicy: false, confirmedRefundPolicy: false, portraitSignature: null, guardianSignature: null,
-            memberPaidAmount: claim.paidAmount ?? null,   // BeClass 等外部名單帶入的實際匯款金額（名單顯示用）
+            memberPaidAmount: i === 0 ? (claim.paidAmount ?? null) : null,   // BeClass 等外部名單帶入的實際匯款金額（名單顯示用）
             notes: claim.paymentNote ? `名單預留自動認領；${claim.paymentNote}` : '名單預留自動認領（註冊時姓名比對加入）', createdAt: now, updatedAt: now,
           });
           if (!isLeave) cnt[s.id] = (cnt[s.id] || 0) + 1;   // 請假堂不佔名額

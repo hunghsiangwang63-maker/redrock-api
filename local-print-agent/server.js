@@ -131,8 +131,12 @@ function queryStatus(n) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (port) port.close(() => {});
-      resolve(result);
+      // ⚠️ 2026-08-12 修：原本 port.close() 沒等關閉完成的 callback 就直接 resolve，
+      // Windows 上系統實際釋放 COM 埠控制權會晚一點點才完成——若呼叫端緊接著開下一次埠
+      // （/print 一次會連續查定位→印票→開錢櫃，開關埠三次），就可能撞上「access denied」
+      // （前一次的埠還沒被系統真正放行）。改為等 close 真的完成才 resolve，確保序列化。
+      if (port) port.close(() => resolve(result));
+      else resolve(result);
     };
     port = new SerialPort({ path: SERIAL_PORT, baudRate: BAUD, dataBits: 8, parity: 'none', stopBits: 1 }, (err) => {
       if (err) { clearTimeout(timer); reject(err); }
@@ -173,7 +177,9 @@ function withSerialPort(fn) {
     port.on('open', async () => {
       try {
         await fn(port);
-        port.drain(() => { setTimeout(() => { port.close(); resolve(); }, 1200); });
+        // ⚠️ 2026-08-12 修：同上，port.close() 要等關閉 callback 真的觸發才 resolve，
+        // 否則呼叫端緊接著開下一次埠（同一次 /print 請求可能連續開關埠 3 次）會撞 access denied。
+        port.drain(() => { setTimeout(() => { port.close(() => resolve()); }, 1200); });
       } catch (e) {
         port.close(() => reject(e));
       }

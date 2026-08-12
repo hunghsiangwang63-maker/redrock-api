@@ -633,10 +633,36 @@ const promoteNextWaitlist = async (competitionId, divisionId) => {
   return promotedId;
 };
 
+// 名單查詢用欄位投影（Firestore .select()）排除 memberSignatureUrl／guardianSignatureUrl 這兩個
+// base64 內嵌簽名圖欄位——全站唯一呼叫端是名單頁（competitions.js GET /:id/registrations），
+// 前端從不讀這兩個欄位，但它們平均佔單筆文件 80%+ 的大小（實測 58 筆報名合計 4MB 中這兩欄佔
+// 3.5MB+），是名單查詢延遲的主因。.select() 讓 Firestore 從伺服器端就不回傳這兩欄，非事後在
+// Node 端過濾（事後過濾無法省下傳輸時間）。新增欄位時記得一併加進這份清單，否則會被投影掉。
+const REGISTRATION_LIST_FIELDS = [
+  'armSpan', 'bankLastFive', 'bankName', 'birthday', 'cancelReason', 'cancelledAt', 'checkinToken',
+  'claimName', 'claimPhone', 'claimedAt', 'competitionId', 'competitionName', 'customFieldValues',
+  'divisionId', 'divisionName', 'email', 'emergencyContact', 'emergencyPhone', 'emergencyRelation',
+  'formRejected', 'formReturnReason', 'formReturned', 'formReturnedAt', 'formReturnedBy', 'gender',
+  'guardianSignedAt', 'height', 'id', 'idNumber', 'insuranceFee', 'insuranceRevenueCorrected',
+  'insuranceRevenueCorrectedAt', 'isChild', 'isComplete', 'isEarlyBird', 'isGuest', 'isHonorary',
+  'isMinor', 'isPartnerGymDiscount', 'isTeamDiscount', 'lastReturnAt', 'lastReturnByName',
+  'lastReturnReason', 'lastReturnType', 'memberId', 'memberName', 'memberNote', 'memberPaidAmount',
+  'memberSignedAt', 'memberSignedIp', 'notes', 'paidAmount', 'paidAt', 'paidConfirmedBy',
+  'paidConfirmedByName', 'parentEmail', 'parentName', 'parentPhone', 'parentRelation', 'parentRequired',
+  'parentSignToken', 'parentSignTokenExpiry', 'partnerGym', 'partnerGymId', 'partnerGymPending',
+  'partnerGymVerifiedAt', 'partnerGymVerifiedBy', 'paymentConfirmed', 'paymentDate', 'paymentDeadline',
+  'paymentMethod', 'paymentRejectReason', 'paymentRejectedAt', 'paymentStatus', 'phone',
+  'receivedAmountEditedAt', 'receivedAmountEditedBy', 'receivedAmountOverride', 'refundAccount',
+  'refundAccountName', 'refundBankCode', 'refundBankName', 'refundRequested', 'registeredAt',
+  'registrationFee', 'rejectedByStaff', 'revenueRecorded', 'source', 'staffNote', 'status',
+  'updatedAt', 'waitlistPosition', 'wasReturned', 'webhookError', 'webhookSentAt', 'webhookStatus',
+];
+
 const getCompetitionRegistrations = async (competitionId) => {
   const db = getDb();
   const snap = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS)
     .where('competitionId', '==', competitionId)
+    .select(...REGISTRATION_LIST_FIELDS)
     .get();
   return snap.docs
     .map(d => ({ id: d.id, ...d.data() }))

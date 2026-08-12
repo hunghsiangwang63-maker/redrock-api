@@ -66,7 +66,7 @@ router.post('/discount/bind',
       notificationService.notifyCardBindDisclosure({
         kind: 'discount_bind', memberName: dm?.name || req.body.memberId,
         gymId: req.staff.gymId, staffName: req.staff.name,
-        detail: `${parseInt(req.body.remainingCredits)} 次`, referenceId: card.id,
+        detail: `${parseInt(req.body.remainingCredits)} 次`, referenceId: card.id, actorStaffId: req.staff.id,
       }).catch(e => console.error('notifyCardBindDisclosure(discount) 失敗', e.message));
       res.status(201).json({ card, message: '優惠卡轉入成功' });
     } catch (err) {
@@ -134,7 +134,7 @@ router.post('/legacy-discount/bind',
       notificationService.notifyCardBindDisclosure({
         kind: 'legacy_discount_bind', memberName: lm?.name || req.body.memberId,
         gymId: req.staff.gymId, staffName: req.staff.name,
-        detail: `${parseInt(req.body.remainingCredits)} 次`, referenceId: card.id,
+        detail: `${parseInt(req.body.remainingCredits)} 次`, referenceId: card.id, actorStaffId: req.staff.id,
       }).catch(e => console.error('notifyCardBindDisclosure(legacy) 失敗', e.message));
       res.status(201).json({ card, message: '舊優惠卡綁定成功' });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
@@ -198,7 +198,7 @@ router.post('/black/bind',
       notificationService.notifyCardBindDisclosure({
         kind: 'black_bind', memberName: bm?.name || req.body.memberId,
         gymId: req.staff.gymId, staffName: req.staff.name,
-        detail: `${parseInt(req.body.remainingCredits)} 次`, referenceId: card.id,
+        detail: `${parseInt(req.body.remainingCredits)} 次`, referenceId: card.id, actorStaffId: req.staff.id,
       }).catch(e => console.error('notifyCardBindDisclosure(black) 失敗', e.message));
       res.status(201).json({ card, message: '黑卡綁定成功' });
     } catch (err) {

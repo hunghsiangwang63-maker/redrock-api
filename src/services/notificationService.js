@@ -30,7 +30,8 @@ const createNotification = async ({ gymId, targetRole, targetStaffId, type, titl
 };
 
 // ── 批次通知某館的特定角色 ───────────────────────────────────────
-const notifyRoleInGym = async ({ gymId, role, type, title, body, referenceId, referenceType , link}) => {
+// excludeStaffId：不通知動作本人（例：管理員自己執行了某項會被揭露的操作，不需要收到「你剛做了 X」的通知）
+const notifyRoleInGym = async ({ gymId, role, type, title, body, referenceId, referenceType , link, excludeStaffId}) => {
   const db = getDb();
 
   // 找出符合條件的 staff
@@ -43,7 +44,8 @@ const notifyRoleInGym = async ({ gymId, role, type, title, body, referenceId, re
   }
 
   const snap = await query.get();
-  const staffList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  let staffList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  if (excludeStaffId) staffList = staffList.filter(s => s.id !== excludeStaffId);
 
   const promises = staffList.map(staff =>
     createNotification({
@@ -88,14 +90,15 @@ const notifySingleEntryTicketApproval = async ({ ticketId, batchId, quantity, me
 // kind: 'discount_bind'（轉入優惠卡）| 'black_bind'（黑卡綁定）| 'legacy_discount_bind'（舊優惠卡綁定/拍照歸檔）
 const _BIND_LABELS = { discount_bind: '優惠卡轉入', black_bind: '黑卡綁定', legacy_discount_bind: '舊優惠卡綁定' };
 const _BIND_REFS = { discount_bind: 'discountCard', black_bind: 'blackCard', legacy_discount_bind: 'legacyDiscountCard' };
-const notifyCardBindDisclosure = async ({ kind, memberName, gymId, staffName, detail, referenceId }) => {
+// actorStaffId：執行綁定的員工本人（有帶入時排除自己，避免管理員自己操作卻收到「自己揭露自己」的通知）
+const notifyCardBindDisclosure = async ({ kind, memberName, gymId, staffName, detail, referenceId, actorStaffId }) => {
   const label = _BIND_LABELS[kind] || '卡片綁定';
   const title = `${label}揭露`;
   const body = `${staffName || '館別電腦'} 為會員 ${memberName} 進行了${label}${detail ? `（${detail}）` : ''}。`;
   const type = `${kind}_disclosure`;
   const referenceType = _BIND_REFS[kind] || null;
-  await notifyRoleInGym({ gymId, role: 'gym_manager', type, title, body, referenceId: referenceId || null, referenceType });
-  await notifyRoleInGym({ gymId, role: 'super_admin', type, title, body, referenceId: referenceId || null, referenceType });
+  await notifyRoleInGym({ gymId, role: 'gym_manager', type, title, body, referenceId: referenceId || null, referenceType, excludeStaffId: actorStaffId });
+  await notifyRoleInGym({ gymId, role: 'super_admin', type, title, body, referenceId: referenceId || null, referenceType, excludeStaffId: actorStaffId });
 };
 
 // ── 取得未讀通知 ────────────────────────────────────────────────

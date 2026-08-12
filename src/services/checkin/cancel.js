@@ -39,12 +39,12 @@ const revertRenewal = async (db, checkIn, now) => {
 // ── 取消入場通知（同館 gym_manager＋super_admin；失敗不阻斷主流程）─────────
 // 直接取消（此函式）過去完全不通知管理員，只有極少用到的「申請取消（cancelCheckin.js）」
 // 審核流程才會通知——但那套流程實際上從未被用過，等同「取消入場」通知分類永遠是空的。
-const notifyCancelCheckin = async ({ gymId, memberName, staffName, force }) => {
+const notifyCancelCheckin = async ({ gymId, memberName, staffName, force, staffId }) => {
   const { notifyRoleInGym } = require('../notificationService');
   const body = `${staffName || '員工'} 取消了 ${memberName || '會員'} 的入場記錄${force ? '（強制取消，已超過10分鐘時限）' : ''}`;
   for (const role of ['gym_manager', 'super_admin']) {
     try {
-      await notifyRoleInGym({ gymId, role, type: 'checkin_cancelled', title: '入場已取消', body });
+      await notifyRoleInGym({ gymId, role, type: 'checkin_cancelled', title: '入場已取消', body, excludeStaffId: staffId });
     } catch (e) { console.error('notifyCancelCheckin 失敗', e.message); }
   }
 };
@@ -188,7 +188,7 @@ const cancelCheckIn = async (checkInId, staffId, force = false, staffName = null
   }
 
   // 通知同館管理員（不阻斷取消本身）
-  await notifyCancelCheckin({ gymId: checkIn.gymId, memberName: checkIn.memberName, staffName, force }).catch(() => {});
+  await notifyCancelCheckin({ gymId: checkIn.gymId, memberName: checkIn.memberName, staffName, force, staffId }).catch(() => {});
 
   // 取消自動連動作廢發票（§4.1.3，先從商品銷售、再擴及入場；比照 products.js 的 return 端點；
   // 2026-08-10 定案：此功能本身也要等該館「實際有列印發票」（invoicePrintingEnabled 開啟）才正式

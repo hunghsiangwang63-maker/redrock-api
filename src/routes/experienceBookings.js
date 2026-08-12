@@ -325,14 +325,16 @@ router.post('/public', async (req, res) => {
 // 供「🧾 開立發票」固定按鍵在列表上直接反白顯示狀態＋號碼。
 const attachInvoiceStatus = async (db, bookings) => {
   const ids = [...new Set(bookings.map(b => b.id).filter(Boolean))];
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += 10) chunks.push(ids.slice(i, i + 10));
   const invoiceMap = {};
-  for (let i = 0; i < ids.length; i += 10) {
-    const chunk = ids.slice(i, i + 10);
-    if (!chunk.length) break;
-    const [realSnap, legacySnap] = await Promise.all([
-      db.collection('invoices').where('refId', 'in', chunk).get(),
-      db.collection('invoiceRecords').where('refId', 'in', chunk).get(),
-    ]);
+  // 名單筆數多時（多批次查詢）原本逐批依序 await，一批批排隊會讓等待時間線性拉長；
+  // 每批的兩個查詢彼此獨立、批次之間也彼此獨立，全部一次平行送出即可。
+  const results = await Promise.all(chunks.map(chunk => Promise.all([
+    db.collection('invoices').where('refId', 'in', chunk).get(),
+    db.collection('invoiceRecords').where('refId', 'in', chunk).get(),
+  ])));
+  results.forEach(([realSnap, legacySnap]) => {
     legacySnap.docs.forEach(d => {
       const v = d.data();
       if (v.sourceType !== 'experience' || v.status === 'voided') return;
@@ -343,7 +345,7 @@ const attachInvoiceStatus = async (db, bookings) => {
       if (v.sourceType !== 'experience' || v.status !== 'issued') return;
       invoiceMap[v.refId] = { invoiceNo: v.invoiceNo || '', amount: Number(v.amount) || 0 };
     });
-  }
+  });
   bookings.forEach(b => {
     const info = invoiceMap[b.id];
     if (info) { b.invoiceNo = info.invoiceNo; b.invoicedAmount = info.amount; }

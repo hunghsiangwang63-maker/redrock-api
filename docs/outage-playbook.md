@@ -70,3 +70,14 @@
   - 密鑰 `EDGE_SECRET` 存於 Railway 環境變數 + Cloudflare Transform Rule（兩邊須一致）+ Render（同步備妥、但 Render 端 EDGE_ENFORCE 保持關）。
 - **Railway 區域＝Singapore（asia-southeast1）**（2026-07-22 自 US West 搬遷、離台近；改單一區域 Hobby 即可、多區域副本才需 Pro）。全端點快約 2 倍。⚠️ Render 冷備仍在 US 區。
 - **其餘網域維持灰雲**：app / staff / comp（Firebase Hosting 自有 CDN/憑證，勿 Proxy）；根網域 A 記錄灰雲。SSL/TLS 模式 Full。
+
+## 七、固定對外 IP（Static Outbound IPs，2026-08-12 為街口 JKOPay 白名單啟用）
+
+- **緣由**：街口特約商戶串接審核通過後，要求提供後端伺服器的固定 IP 供其 API 白名單（否則我方主動呼叫街口 Entry/Inquiry API 會被拒）。Railway 預設**無固定對外 IP**（浮動/共用），故升級 **Railway Pro 方案**（$20/月起，原 Hobby $5/月）並在 `redrock-api` 服務 Settings → Networking 開啟 **Enable Static IPs**。
+- **目前 3 組固定 IP**（流量在三者間負載平衡，**街口白名單須三個都加**，否則會出現「有時候能連、有時候不能」的間歇性失敗）：
+  - `208.77.246.240`
+  - `208.77.246.241`
+  - `208.77.246.242`
+- **只有一套環境**：無獨立測試站台，此 3 組 IP 同時作為「正式」與「街口 sandbox 測試」用途，已於回信中說明。
+- ⚠️ **會變動的情況**：Railway 官方僅明確保證「服務**換區域**時這 3 個 IP 會改變」（目前區域 Singapore，見上方六、無搬遷計畫）；其餘情況（停用重開此功能、Railway 基礎設施調整、方案降級）**沒有正式 SLA 保證永久不變**——這是共用 IP 池、非獨享保留 IP。真的需要異動時：Railway 後台查新 IP → 通知街口技術窗口更新白名單（屬正常維護動作，非緊急事故）。
+- 若未來要更嚴格的「合約保證永不變動」，需另接 Fixie / QuotaGuard 等專門靜態 IP 代理服務（見比價評估，本次判斷此規模不需要）。

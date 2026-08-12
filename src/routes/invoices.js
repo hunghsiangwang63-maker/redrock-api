@@ -224,6 +224,25 @@ router.get('/active', authenticate, requireManagerOrStation, async (req, res) =>
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// GET /invoices/today?gymId= - 該館今日全部發票（含已作廢），供「系統設定 → 發票號碼管理」頁面
+// 直接顯示今日列表用（值班或管理員；限當館，同 /state 慣例）。依列印時間新到舊排序。
+router.get('/today', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const gymId = req.staff?.role === 'super_admin' ? (req.query.gymId || req.staff?.gymId) : req.staff?.gymId;
+    if (!gymId) return res.status(400).json({ error: 'MISSING_GYM', message: '請指定館別' });
+    const dayjs = require('dayjs');
+    const todayStart = dayjs().startOf('day').toDate();
+    const todayEnd = dayjs().endOf('day').toDate();
+    const tsOf = (v) => v?.toDate ? v.toDate().getTime() : ((v?._seconds || 0) * 1000);
+    const snap = await getDb().collection('invoices').where('gymId', '==', gymId).get();
+    const invoices = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(inv => { const t = tsOf(inv.issuedAt); return t >= todayStart.getTime() && t <= todayEnd.getTime(); })
+      .sort((a, b) => tsOf(b.issuedAt) - tsOf(a.issuedAt));
+    res.json({ invoices });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // GET /invoices/lookup?invoiceNo= - 依紙本印出的號碼查詢單張真實發票（供手動作廢 UI 用；值班或管理員）
 // ⚠️ 限當館：非 super_admin 查到他館發票一律回 404（非 403）——避免透露「這個號碼存在、只是不是你的館」
 // 這種跨館存在性資訊。

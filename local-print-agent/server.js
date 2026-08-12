@@ -122,28 +122,31 @@ function buildInvoiceLines({ gymId, items, total, date, buyerTaxId }) {
 // 精準對應到「哪一聯出問題哪一個位元才變」，非巧合。故沿用手冊的 bit 位置（bit5=存根聯／
 // bit6=收執聯），但解讀極性改成「1=正常」。
 const STATUS_TIMEOUT_MS = 800;
-function queryStatus(n) {
-  return new Promise((resolve, reject) => {
+
+// ⚠️ 2026-08-12 二次修正：第一版修法（等 port.close() 的 callback 真的觸發才繼續）只縮小了
+// 「access denied」發生機率、沒有根除——實機回報「一直按最後印得出來，後面又卡住」，代表 Windows
+// 就算已觸發 close 的 callback，OS 底層真正把 COM 埠交還可用的時間點可能還要再晚一點點，緊接著
+// 開下一次埠的空窗期依然存在。真正的解法：**一次 /print 請求只開關序列埠一次**（查紙張定位→
+// 列印→開錢櫃三個動作都在同一個已開啟的 port 上依序做完），而不是像原本各自獨立開關三次——
+// 這樣同一次請求內完全沒有「關了又立刻開」的動作，只剩跨越不同次 HTTP 請求之間的間隔（間隔通常
+// 有幾百毫秒以上，足夠讓 OS 完成釋放，不會撞到）。/status 同理（原本查 n=1、n=4 各自開關一次）。
+
+// 在「已經開啟」的 port 上送出 DLE EOT n 並等待單次回應，本身不開關埠
+// （開關埠交由外層 withSerialPort 統一管理，供 /status、/print 在同一個 session 內共用）。
+function queryOnOpenPort(port, n) {
+  return new Promise((resolve) => {
     let settled = false;
-    let port;
     const timer = setTimeout(() => finish({ responded: false }), STATUS_TIMEOUT_MS);
+    const onData = (buf) => finish({ responded: true, statusByte: buf[0] });
     const finish = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      // ⚠️ 2026-08-12 修：原本 port.close() 沒等關閉完成的 callback 就直接 resolve，
-      // Windows 上系統實際釋放 COM 埠控制權會晚一點點才完成——若呼叫端緊接著開下一次埠
-      // （/print 一次會連續查定位→印票→開錢櫃，開關埠三次），就可能撞上「access denied」
-      // （前一次的埠還沒被系統真正放行）。改為等 close 真的完成才 resolve，確保序列化。
-      if (port) port.close(() => resolve(result));
-      else resolve(result);
+      port.removeListener('data', onData);
+      resolve(result);
     };
-    port = new SerialPort({ path: SERIAL_PORT, baudRate: BAUD, dataBits: 8, parity: 'none', stopBits: 1 }, (err) => {
-      if (err) { clearTimeout(timer); reject(err); }
-    });
-    port.on('data', (buf) => finish({ responded: true, statusByte: buf[0] }));
-    port.on('error', (e) => { if (!settled) { settled = true; clearTimeout(timer); reject(e); } });
-    port.on('open', () => port.write(Buffer.from([0x10, 0x04, n])));
+    port.on('data', onData);
+    port.write(Buffer.from([0x10, 0x04, n]));
   });
 }
 
@@ -155,31 +158,30 @@ function parsePaperSensorByte(byte) {
   return { journalMarkOk, receiptMarkOk, positionOk: journalMarkOk && receiptMarkOk };
 }
 
-// 查詢「是否定位正常」——查無回應（可能斷線/沒開電，或這條指令這次剛好沒回應）一律回
-// positionOk:null（未知，不擋列印，交由 connected 那道檢查把關），只有真的收到「未偵測到黑點」
-// 的回應才回 false。
-async function checkPositionOk() {
-  try {
-    const r = await queryStatus(4);
-    if (!r.responded) return { positionOk: null, journalMarkOk: null, receiptMarkOk: null };
-    return parsePaperSensorByte(r.statusByte);
-  } catch (e) {
-    return { positionOk: null, journalMarkOk: null, receiptMarkOk: null };
-  }
+// 查詢「是否定位正常」（於已開啟的 port 上）——查無回應（可能斷線/沒開電，或這次剛好沒回應）
+// 一律回 positionOk:null（未知，不擋列印，交由 connected 那道檢查把關），只有真的收到
+// 「未偵測到黑點」的回應才回 false。
+async function checkPositionOnPort(port) {
+  const r = await queryOnOpenPort(port, 4);
+  if (!r.responded) return { positionOk: null, journalMarkOk: null, receiptMarkOk: null };
+  return parsePaperSensorByte(r.statusByte);
 }
 
-// ── 序列埠操作（每次開關，不維持長連線——量小、印一張開一次埠即可，避免長連線佔用埠導致其他程式衝突）──
-function withSerialPort(fn) {
+// ── 序列埠操作：整個 fn 執行期間只開關埠一次，fn 內可依序做多個讀寫動作 ──
+// （量小、單次 HTTP 請求開一次埠即可；drain+1200ms 延遲是給印表機機構動作完成的緩衝時間，
+// 僅在真的送過列印/開櫃指令時需要，見 withSerialPort 呼叫端各自決定）。
+function withSerialPort(fn, { settleMs = 1200 } = {}) {
   return new Promise((resolve, reject) => {
     const port = new SerialPort({ path: SERIAL_PORT, baudRate: BAUD, dataBits: 8, parity: 'none', stopBits: 1 }, (err) => {
       if (err) return reject(err);
     });
     port.on('open', async () => {
       try {
-        await fn(port);
-        // ⚠️ 2026-08-12 修：同上，port.close() 要等關閉 callback 真的觸發才 resolve，
-        // 否則呼叫端緊接著開下一次埠（同一次 /print 請求可能連續開關埠 3 次）會撞 access denied。
-        port.drain(() => { setTimeout(() => { port.close(() => resolve()); }, 1200); });
+        const result = await fn(port);
+        const closeAndResolve = () => port.close(() => resolve(result));
+        // port.close() 的 callback 觸發後才視為完成（見上方說明二次修正）；settleMs 為
+        // 額外緩衝（真正列印/開櫃過才需要，狀態查詢傳 settleMs:0 跳過，避免拖慢輪詢速度）。
+        port.drain(() => { settleMs > 0 ? setTimeout(closeAndResolve, settleMs) : closeAndResolve(); });
       } catch (e) {
         port.close(() => reject(e));
       }
@@ -188,19 +190,10 @@ function withSerialPort(fn) {
   });
 }
 
-function printInvoice(lines) {
-  return withSerialPort((port) => new Promise((resolve, reject) => {
-    const parts = [ESC_INIT];
-    lines.forEach((l) => parts.push(big5(l + '\n')));
-    parts.push(FORM_FEED);
-    port.write(Buffer.concat(parts), (err) => (err ? reject(err) : resolve()));
-  }));
-}
-
-function pulseDrawer() {
-  return withSerialPort((port) => new Promise((resolve, reject) => {
-    port.write(ESC_OPEN_DRAWER, (err) => (err ? reject(err) : resolve()));
-  }));
+function writeAndDrain(port, buf) {
+  return new Promise((resolve, reject) => {
+    port.write(buf, (err) => (err ? reject(err) : resolve()));
+  });
 }
 
 // ── HTTP 服務 ────────────────────────────────────────────────
@@ -218,35 +211,49 @@ app.use((req, res, next) => {
 
 app.get('/status', async (req, res) => {
   try {
-    const basic = await queryStatus(1);
-    // connected＝印表機真的有回應（DLE EOT 1，已於 2026-08-12 實機驗證通過），不再只是「COM 埠開得起來」
-    // ——USB 轉接線即使印表機沒開電通常也照樣開得起來，這道檢查才是員工端「開立發票」按鈕是否可按的判斷依據。
-    if (!basic.responded) {
-      return res.json({ connected: false, positionOk: null, journalMarkOk: null, receiptMarkOk: null, port: SERIAL_PORT, baud: BAUD });
-    }
-    const pos = await checkPositionOk();
-    res.json({ connected: true, positionOk: pos.positionOk, journalMarkOk: pos.journalMarkOk, receiptMarkOk: pos.receiptMarkOk, port: SERIAL_PORT, baud: BAUD });
+    // 整個查詢（n=1 基本狀態 + n=4 紙張定位）只開關埠一次；settleMs:0＝純查詢無實際列印動作，
+    // 不需要機構動作緩衝，避免拖慢前端輪詢。
+    const result = await withSerialPort(async (port) => {
+      const basic = await queryOnOpenPort(port, 1);
+      // connected＝印表機真的有回應（DLE EOT 1，已於 2026-08-12 實機驗證通過），不再只是「COM 埠開得起來」
+      // ——USB 轉接線即使印表機沒開電通常也照樣開得起來，這道檢查才是員工端「開立發票」按鈕是否可按的判斷依據。
+      if (!basic.responded) {
+        return { connected: false, positionOk: null, journalMarkOk: null, receiptMarkOk: null };
+      }
+      const pos = await checkPositionOnPort(port);
+      return { connected: true, positionOk: pos.positionOk, journalMarkOk: pos.journalMarkOk, receiptMarkOk: pos.receiptMarkOk };
+    }, { settleMs: 0 });
+    res.json({ ...result, port: SERIAL_PORT, baud: BAUD });
   } catch (e) {
-    // 連 COM 埠本身都開不起來（USB 轉接線沒插上/驅動未裝等）——比「印表機沒回應」更基礎的連線問題
+    // 連 COM 埠本身都開不起來（USB 轉接線沒插上/驅動未裝/被其他程式佔用等）——比「印表機沒回應」更基礎的連線問題
     res.json({ connected: false, positionOk: null, port: SERIAL_PORT, error: e.message });
   }
 });
 
 app.post('/print', async (req, res) => {
   try {
-    // 列印前先查紙張定位狀態——真的偵測到「未定位」（黑點感應器讀不到，見上方 checkPositionOk，
-    // 極性已依實機驗證校正）才擋下；查詢無回應一律放行，交由印表機自己走既有的 0x0C 自動對位流程。
-    const pos = await checkPositionOk();
-    if (pos.positionOk === false) {
-      return res.json({ ok: false, error: '發票紙未正確定位（存根聯/收執聯黑點感應異常），請確認紙張是否裝妥後再試一次' });
-    }
     const { gymId, items, total, date, buyerTaxId, openDrawer } = req.body || {};
-    const lines = buildInvoiceLines({ gymId, items, total, date, buyerTaxId });
-    await printInvoice(lines);
-    if (openDrawer) {
-      try { await pulseDrawer(); } catch (e) { console.error('⚠️ 開錢櫃失敗（列印已成功、不影響發票）:', e.message); }
-    }
-    res.json({ ok: true });
+    // 查紙張定位→列印→（選）開錢櫃，整個流程只開關埠一次（見上方 withSerialPort 註解，
+    // 這是這次修正的核心：避免同一次請求內連續開關埠三次造成的 access denied）。
+    const result = await withSerialPort(async (port) => {
+      // 先查紙張定位狀態——真的偵測到「未定位」（黑點感應器讀不到，極性已依實機驗證校正）才擋下；
+      // 查詢無回應一律放行，交由印表機自己走既有的 0x0C 自動對位流程。
+      const pos = await checkPositionOnPort(port);
+      if (pos.positionOk === false) {
+        return { ok: false, error: '發票紙未正確定位（存根聯/收執聯黑點感應異常），請確認紙張是否裝妥後再試一次' };
+      }
+      const lines = buildInvoiceLines({ gymId, items, total, date, buyerTaxId });
+      const parts = [ESC_INIT];
+      lines.forEach((l) => parts.push(big5(l + '\n')));
+      parts.push(FORM_FEED);
+      await writeAndDrain(port, Buffer.concat(parts));
+      if (openDrawer) {
+        try { await writeAndDrain(port, ESC_OPEN_DRAWER); }
+        catch (e) { console.error('⚠️ 開錢櫃失敗（列印已成功、不影響發票）:', e.message); }
+      }
+      return { ok: true };
+    });
+    res.json(result);
   } catch (e) {
     console.error('❌ 列印失敗:', e.message);
     res.json({ ok: false, error: e.message });
@@ -255,7 +262,7 @@ app.post('/print', async (req, res) => {
 
 app.post('/open-drawer', async (req, res) => {
   try {
-    await pulseDrawer();
+    await withSerialPort((port) => writeAndDrain(port, ESC_OPEN_DRAWER));
     res.json({ ok: true });
   } catch (e) {
     console.error('❌ 開錢櫃失敗:', e.message);

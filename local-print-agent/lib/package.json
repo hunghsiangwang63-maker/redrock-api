@@ -1,0 +1,8 @@
+{
+  "name": "redrock-print-agent-lib",
+  "private": true,
+  "description": "發票排版/測試頁共用模組（server.js 與 win7/server.js 共用）——獨立安裝，避免依賴根目錄含 serialport 的 package.json（Win7 機器上那個裝不起來）。",
+  "dependencies": {
+    "iconv-lite": "^0.7.3"
+  }
+}

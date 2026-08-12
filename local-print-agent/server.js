@@ -17,7 +17,8 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
 const { SerialPort } = require('serialport');
-const iconv = require('iconv-lite');
+const { GYMS, big5, buildInvoiceLines: buildInvoiceLinesRaw, encodeLinesToBig5 } = require('./lib/invoiceFormat');
+const { renderTestPage } = require('./lib/testPage');
 
 // ── 設定（.env 覆寫，見 .env.example）──────────────────────────
 const HTTP_PORT = parseInt(process.env.HTTP_PORT || '3399', 10);
@@ -27,13 +28,16 @@ const DEFAULT_GYM = process.env.DEFAULT_GYM || 'hsinchu'; // 這台櫃檯電腦�
 // 允許呼叫本代理的來源（正式員工端網域 + 本機開發網址）；Private Network Access 需求見下方 cors 設定。
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://staff.redrocktaiwan.com,http://localhost:5173')
   .split(',').map(s => s.trim()).filter(Boolean);
+// 發票內容排版（GYMS 抬頭/LINE_SPACING 行距等）已抽到 lib/invoiceFormat.js，與 win7/server.js 共用，
+// 修改排版時改那一份即可、這裡不再重複維護。
+const buildInvoiceLines = (args) => buildInvoiceLinesRaw(args, DEFAULT_GYM);
 
 // ── ESC/POS 底層（2026-07-31 PoC 已驗證，見 invoice-integration-plan.md §5.5）──
 // - 初始化只送 ESC @（0x1B 0x40）
 // - 中文/英數混合一律先轉 Big5 編碼再送位元組（勿用預設 UTF-8，會亂碼）
 // - 不支援 ESC G/ESC E（雙重列印/加粗）、FS &/FS .（Kanji 模式切換）——送出會變成亂碼文字，勿使用
 // - ESC 3 n（設定行距為 n/180 吋）：2026-08-12 實測不會亂碼，但也完全沒有視覺效果（機器不理會此
-//   指令）——行距改用 LINE_SPACING（見下方常數，純內容插空行）達成，勿再嘗試這個 ESC 指令。
+//   指令）——行距改用 LINE_SPACING（見 lib/invoiceFormat.js，純內容插空行）達成，勿再嘗試這個 ESC 指令。
 // - 如需加強視覺效果用 GS !（字體放大）；本檔預設不放大，維持一般字級
 // - 每張內容印完送 0x0C（Form Feed）→ 印表機自動對位＋裁切，不需自己算行數校正
 const ESC_INIT = Buffer.from([0x1B, 0x40]);
@@ -41,78 +45,6 @@ const FORM_FEED = Buffer.from([0x0C]);
 // ESC p m t1 t2：開錢櫃脈衝訊號（m=接腳編號 0，t1/t2=通電/斷電時間，單位約 2ms）。
 // 標準值 m=0, t1=25(=50ms), t2=250(=500ms) 為業界常見的可靠開櫃脈衝長度。✅ 已實機測試通過，見檔頭。
 const ESC_OPEN_DRAWER = Buffer.from([0x1B, 0x70, 0x00, 25, 250]);
-
-const big5 = (s) => iconv.encode(s, 'big5');
-const LINE_WIDTH = 24; // 已實測：24 半形字元（12 個中文全形字）＝一行寬度
-// 行距：印表機不支援 ESC/POS 的行高控制指令（見上方檔頭警語），故用純內容的方式（每行間多插入
-// N 個空行）達到「加大行距」的視覺效果——保證相容，不會像未支援的 ESC 指令那樣印出亂碼。
-// 0=原本緊密排版；1=每行間多一個空行（目前預設）；可依實際印出結果調整。
-const LINE_SPACING = parseInt(process.env.LINE_SPACING || '1', 10);
-
-function displayWidth(str) {
-  let w = 0;
-  for (const ch of str) w += (ch.codePointAt(0) > 0x7F) ? 2 : 1;
-  return w;
-}
-function center(str) {
-  const pad = Math.max(0, Math.floor((LINE_WIDTH - displayWidth(str)) / 2));
-  return ' '.repeat(pad) + str;
-}
-function money(n) { return 'NT$' + Number(n || 0).toLocaleString(); }
-
-// 兩館發票抬頭資訊（統一發票明細，已隨 2026-07-31 PoC 實機試印驗證過版面）。
-// 只有兩館、變動機率低，故直接寫死於代理設定，不做動態查詢（代理刻意保持單純、不依賴任何外部服務）。
-const GYMS = {
-  hsinchu: {
-    header: '紅石攀岩有限公司新竹館',
-    taxId: '87549069',
-    addr1: '新竹市東區',
-    addr2: '光復路一段75號B1',
-  },
-  shilin: {
-    header: '紅石攀岩有限公司士林館',
-    taxId: '24966621',
-    addr1: '台北市士林區',
-    addr2: '承德路四段261號B1',
-  },
-};
-
-// ── 發票內容排版（比照 scratchpad/printer-test/test-invoice-final.js 已驗證版面）──
-function buildInvoiceLines({ gymId, items, total, date, buyerTaxId }) {
-  const g = GYMS[gymId] || GYMS[DEFAULT_GYM];
-  const dateStr = date || (() => {
-    const now = new Date();
-    const pad2 = (n) => String(n).padStart(2, '0');
-    return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
-  })();
-  const itemList = Array.isArray(items) && items.length ? items : [];
-  const itemLines = itemList.map((it) => {
-    const name = String(it.name || '');
-    const qty = Number(it.qty || 1);
-    const price = Number(it.price || 0);
-    const subtotal = qty * price;
-    const right = `${price}*${qty}=${subtotal}`;
-    const padCount = Math.max(1, LINE_WIDTH - displayWidth(name) - displayWidth(right));
-    return name + ' '.repeat(padCount) + right;
-  });
-  // total 由呼叫端（RedRock 後端/前端）權威提供；缺省才用品項合計備援（代理不做金額判斷）
-  const totalAmount = total != null ? Number(total) : itemList.reduce((s, it) => s + Number(it.qty || 1) * Number(it.price || 0), 0);
-
-  const lines = [
-    g.header,
-    center(`統編：${g.taxId}`),
-    center(g.addr1),
-    center(g.addr2),
-    dateStr,
-    ...itemLines,
-    `合計：      ${money(totalAmount)}`,
-  ];
-  if (buyerTaxId) {
-    lines.push(`買受人統編：${buyerTaxId}`);
-  }
-  lines.push(center('以下空白'));
-  return lines;
-}
 
 // ── 即時狀態查詢（2026-08-11 新增，2026-08-12 實機驗證＋校正極性後恢復紙張定位偵測）─────
 // DLE EOT n（0x10 0x04 n）＝ESC/POS 家族的「即時狀態回傳」指令。
@@ -249,8 +181,7 @@ app.post('/print', async (req, res) => {
         return { ok: false, error: '發票紙未正確定位（存根聯/收執聯黑點感應異常），請確認紙張是否裝妥後再試一次' };
       }
       const lines = buildInvoiceLines({ gymId, items, total, date, buyerTaxId });
-      const parts = [ESC_INIT];
-      lines.forEach((l) => parts.push(big5(l + '\n'.repeat(1 + LINE_SPACING))));
+      const parts = [ESC_INIT, ...encodeLinesToBig5(lines)];
       parts.push(FORM_FEED);
       await writeAndDrain(port, Buffer.concat(parts));
       if (openDrawer) {
@@ -276,64 +207,10 @@ app.post('/open-drawer', async (req, res) => {
   }
 });
 
-// 簡易測試頁（不經過 RedRock 系統，供裝機當下手動驗證用；沿用 printer-test 原型）
+// 簡易測試頁（不經過 RedRock 系統，供裝機當下手動驗證用；HTML 已抽到 lib/testPage.js 與
+// win7/server.js 共用）
 app.get('/', (req, res) => {
-  res.type('html').send(`<!doctype html>
-<html><head><meta charset="utf-8"><title>發票列印代理・測試頁</title>
-<style>
-  body{font-family:-apple-system,sans-serif;max-width:420px;margin:40px auto;padding:0 16px;}
-  h1{font-size:18px;} label{display:block;margin-top:12px;font-size:13px;color:#555;}
-  input,select{width:100%;padding:8px;font-size:14px;box-sizing:border-box;margin-top:4px;}
-  button{width:100%;margin-top:16px;padding:14px;font-size:16px;font-weight:600;
-    background:#8B1A1A;color:#fff;border:none;border-radius:8px;cursor:pointer;}
-  button.secondary{background:#666;}
-  #status{margin-top:14px;font-size:13px;white-space:pre-wrap;}
-</style></head>
-<body>
-  <h1>🧾 發票列印代理・測試頁</h1>
-  <p style="font-size:12px;color:#999">此頁僅供裝機/除錯手動測試，正式使用由員工端網頁自動呼叫。</p>
-  <label>場館
-    <select id="gym"><option value="hsinchu">新竹館</option><option value="shilin">士林館</option></select>
-  </label>
-  <label>品項名稱 <input id="itemName" value="入場費"></label>
-  <label>金額 <input id="itemPrice" type="number" value="300"></label>
-  <label>買受人統編（選填） <input id="buyerTaxId" placeholder="留空不印該行"></label>
-  <label><input type="checkbox" id="openDrawer" style="width:auto;display:inline-block"> 同時開錢櫃（僅現金情境使用）</label>
-  <button onclick="doPrint()">🖨️ 測試列印</button>
-  <button class="secondary" onclick="doOpenDrawer()">💰 單獨開錢櫃</button>
-  <button class="secondary" onclick="doStatus()">🔌 檢查連線狀態</button>
-  <div id="status"></div>
-<script>
-async function doPrint(){
-  const status = document.getElementById('status');
-  status.textContent = '列印中...';
-  try {
-    const res = await fetch('/print', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
-      gymId: document.getElementById('gym').value,
-      items: [{ name: document.getElementById('itemName').value, price: Number(document.getElementById('itemPrice').value), qty: 1 }],
-      buyerTaxId: document.getElementById('buyerTaxId').value.trim(),
-      openDrawer: document.getElementById('openDrawer').checked,
-    })});
-    const data = await res.json();
-    status.textContent = data.ok ? '✅ 已送出列印' : ('❌ 失敗：' + data.error);
-  } catch (e) { status.textContent = '❌ 連線失敗：' + e.message; }
-}
-async function doOpenDrawer(){
-  const status = document.getElementById('status');
-  status.textContent = '開櫃中...';
-  try {
-    const res = await fetch('/open-drawer', { method:'POST' });
-    const data = await res.json();
-    status.textContent = data.ok ? '✅ 已送出開櫃指令' : ('❌ 失敗：' + data.error);
-  } catch (e) { status.textContent = '❌ 連線失敗：' + e.message; }
-}
-async function doStatus(){
-  const status = document.getElementById('status');
-  const res = await fetch('/status');
-  status.textContent = JSON.stringify(await res.json(), null, 2);
-}
-</script>
-</body></html>`);
+  res.type('html').send(renderTestPage());
 });
 
 app.listen(HTTP_PORT, () => {

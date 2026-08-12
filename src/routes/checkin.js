@@ -568,13 +568,20 @@ router.get('/today',
 
       // 今日全部紀錄（依館分組排列；當日量級小、全量回傳讓清單與統計數一致）
       // ⚠ amountPaid/rentShoes/rentChalk 原本漏在此投影（前端「今日入場紀錄」一律顯示空白金額/無岩鞋粉袋標籤，非僅線上支付才如此）
+      // ⚠ memberId/entryFee/shoesPrice/chalkPrice/partnerVendor/isTeamDiscount 原本也漏在此投影——
+      //   「今日入場」列表的開立發票按鈕靠這些欄位判斷品項名稱/會員歸屬，漏了會讓發票品項名稱錯誤
+      //   （少了特約商店/隊員折扣標註）；memberId 缺漏本身不會讓按鈕壞掉（InvoiceIssuer 只靠 gymId 判斷
+      //   是否顯示視窗），但發票紀錄上的會員歸屬會是空的，一併補上。
       const recent = targetGyms.flatMap(gym =>
         records.filter(r => r.gymId === gym.id).map(r => ({
-          id: r.id, memberName: r.memberName, gymId: r.gymId,
+          id: r.id, memberId: r.memberId || null, memberName: r.memberName, gymId: r.gymId,
           entryType: r.entryType || r.passType, checkedInAt: r.checkedInAt,
-          legacyDiscount: r.legacyDiscount === true,
+          legacyDiscount: r.legacyDiscount === true, partnerVendor: r.partnerVendor === true,
+          isTeamDiscount: r.isTeamDiscount === true,
           amountPaid: r.amountPaid || 0, paymentMethod: r.paymentMethod || null,
+          entryFee: r.entryFee != null ? r.entryFee : null,
           rentShoes: r.rentShoes === true, rentChalk: r.rentChalk === true,
+          shoesPrice: r.shoesPrice || 0, chalkPrice: r.chalkPrice || 0,
         }))
       );
 

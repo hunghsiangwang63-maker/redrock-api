@@ -32,6 +32,8 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://staff.redrockta
 // - 初始化只送 ESC @（0x1B 0x40）
 // - 中文/英數混合一律先轉 Big5 編碼再送位元組（勿用預設 UTF-8，會亂碼）
 // - 不支援 ESC G/ESC E（雙重列印/加粗）、FS &/FS .（Kanji 模式切換）——送出會變成亂碼文字，勿使用
+// - ESC 3 n（設定行距為 n/180 吋）：2026-08-12 實測不會亂碼，但也完全沒有視覺效果（機器不理會此
+//   指令）——行距改用 LINE_SPACING（見下方常數，純內容插空行）達成，勿再嘗試這個 ESC 指令。
 // - 如需加強視覺效果用 GS !（字體放大）；本檔預設不放大，維持一般字級
 // - 每張內容印完送 0x0C（Form Feed）→ 印表機自動對位＋裁切，不需自己算行數校正
 const ESC_INIT = Buffer.from([0x1B, 0x40]);
@@ -42,6 +44,10 @@ const ESC_OPEN_DRAWER = Buffer.from([0x1B, 0x70, 0x00, 25, 250]);
 
 const big5 = (s) => iconv.encode(s, 'big5');
 const LINE_WIDTH = 24; // 已實測：24 半形字元（12 個中文全形字）＝一行寬度
+// 行距：印表機不支援 ESC/POS 的行高控制指令（見上方檔頭警語），故用純內容的方式（每行間多插入
+// N 個空行）達到「加大行距」的視覺效果——保證相容，不會像未支援的 ESC 指令那樣印出亂碼。
+// 0=原本緊密排版；1=每行間多一個空行（目前預設）；可依實際印出結果調整。
+const LINE_SPACING = parseInt(process.env.LINE_SPACING || '1', 10);
 
 function displayWidth(str) {
   let w = 0;
@@ -244,7 +250,7 @@ app.post('/print', async (req, res) => {
       }
       const lines = buildInvoiceLines({ gymId, items, total, date, buyerTaxId });
       const parts = [ESC_INIT];
-      lines.forEach((l) => parts.push(big5(l + '\n')));
+      lines.forEach((l) => parts.push(big5(l + '\n'.repeat(1 + LINE_SPACING))));
       parts.push(FORM_FEED);
       await writeAndDrain(port, Buffer.concat(parts));
       if (openDrawer) {

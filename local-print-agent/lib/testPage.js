@@ -1,6 +1,11 @@
 // 簡易測試頁（不經過 RedRock 系統，供裝機當下手動驗證用）——由 server.js（Mac/Win10+）與
 // win7/server.js（Win7）共用；頁面本身只是打相對路徑的 /print、/status、/open-drawer，
 // 兩邊底層傳輸方式不同，但這三個路由的行為/回應格式一致，故頁面可以直接共用不用複製。
+//
+// ⚠️ 2026-08-13：改用 XMLHttpRequest + 一般 function（不用 fetch/async/await）——Windows 7 上
+// 常見預設瀏覽器是 Internet Explorer 11，完全不支援 fetch/async/await，原本的寫法在 IE11 下
+// <script> 直接語法錯誤、整段都不會執行，按鈕看起來完全沒反應。XMLHttpRequest 從 IE5 就有，
+// 保證任何瀏覽器都能用。
 function renderTestPage() {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>發票列印代理・測試頁</title>
@@ -28,33 +33,48 @@ function renderTestPage() {
   <button class="secondary" onclick="doStatus()">🔌 檢查連線狀態</button>
   <div id="status"></div>
 <script>
-async function doPrint(){
-  const status = document.getElementById('status');
+function xhrJson(method, url, bodyObj, cb) {
+  var xhr = new XMLHttpRequest();
+  xhr.open(method, url, true);
+  if (bodyObj) xhr.setRequestHeader('Content-Type', 'application/json');
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState !== 4) return;
+    if (xhr.status < 200 || xhr.status >= 300) { cb(new Error('HTTP ' + xhr.status)); return; }
+    try { cb(null, JSON.parse(xhr.responseText)); }
+    catch (e) { cb(e); }
+  };
+  xhr.onerror = function () { cb(new Error('連線失敗（代理沒有回應，確認代理是否還在執行）')); };
+  xhr.send(bodyObj ? JSON.stringify(bodyObj) : null);
+}
+function doPrint(){
+  var status = document.getElementById('status');
   status.textContent = '列印中...';
-  try {
-    const res = await fetch('/print', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({
-      gymId: document.getElementById('gym').value,
-      items: [{ name: document.getElementById('itemName').value, price: Number(document.getElementById('itemPrice').value), qty: 1 }],
-      buyerTaxId: document.getElementById('buyerTaxId').value.trim(),
-      openDrawer: document.getElementById('openDrawer').checked,
-    })});
-    const data = await res.json();
+  var body = {
+    gymId: document.getElementById('gym').value,
+    items: [{ name: document.getElementById('itemName').value, price: Number(document.getElementById('itemPrice').value), qty: 1 }],
+    buyerTaxId: document.getElementById('buyerTaxId').value,
+    openDrawer: document.getElementById('openDrawer').checked
+  };
+  xhrJson('POST', '/print', body, function (err, data) {
+    if (err) { status.textContent = '❌ 連線失敗：' + err.message; return; }
     status.textContent = data.ok ? '✅ 已送出列印' : ('❌ 失敗：' + data.error);
-  } catch (e) { status.textContent = '❌ 連線失敗：' + e.message; }
+  });
 }
-async function doOpenDrawer(){
-  const status = document.getElementById('status');
+function doOpenDrawer(){
+  var status = document.getElementById('status');
   status.textContent = '開櫃中...';
-  try {
-    const res = await fetch('/open-drawer', { method:'POST' });
-    const data = await res.json();
+  xhrJson('POST', '/open-drawer', null, function (err, data) {
+    if (err) { status.textContent = '❌ 連線失敗：' + err.message; return; }
     status.textContent = data.ok ? '✅ 已送出開櫃指令' : ('❌ 失敗：' + data.error);
-  } catch (e) { status.textContent = '❌ 連線失敗：' + e.message; }
+  });
 }
-async function doStatus(){
-  const status = document.getElementById('status');
-  const res = await fetch('/status');
-  status.textContent = JSON.stringify(await res.json(), null, 2);
+function doStatus(){
+  var status = document.getElementById('status');
+  status.textContent = '查詢中...';
+  xhrJson('GET', '/status', null, function (err, data) {
+    if (err) { status.textContent = '❌ 連線失敗：' + err.message; return; }
+    status.textContent = JSON.stringify(data, null, 2);
+  });
 }
 </script>
 </body></html>`;

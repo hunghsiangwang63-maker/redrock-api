@@ -1100,20 +1100,39 @@ router.post('/registrations/:regId/refund',
   async (req, res) => {
     try {
       const db = getDb();
-      await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations')
-        .doc(req.params.regId).update({
-          paymentStatus: 'refunded',
-          refundAmount: req.body.refundAmount || null,
-          refundReason: req.body.reason || '',
-          refundedAt: new Date(),
-          refundedBy: req.staff.id,
-          status: 'cancelled',
-          updatedAt: new Date(),
-        });
+      const regRef = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations').doc(req.params.regId);
+      const regDoc = await regRef.get();
+      if (!regDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名記錄' });
+      await regRef.update({
+        paymentStatus: 'refunded',
+        refundAmount: req.body.refundAmount || null,
+        refundReason: req.body.reason || '',
+        refundedAt: new Date(),
+        refundedBy: req.staff.id,
+        status: 'cancelled',
+        updatedAt: new Date(),
+      });
       // 記負向交易（退費，認列在比賽前一天）
       try { await competitionService.recordCompetitionRevenue({ db, regId: req.params.regId, sign: -1, refund: true, staffId: req.staff.id, staffName: req.staff.name }); }
       catch (e) { console.error('比賽退費記帳失敗', e.message); }
-      res.json({ success: true, message: '退費已處理' });
+      // 退費 → 自動連動作廢已開立發票（§4.1.3 同款，比照課程退費/入場/商品/租借；2026-08-10 定案：
+      // 僅該館已開啟「發票列印」才會做，關閉時維持此功能上線前的原本行為）
+      let invoiceVoided = false;
+      try {
+        const { isInvoicePrintingEnabled, voidRealInvoiceIfIssued } = require('./invoices');
+        if (await isInvoicePrintingEnabled(db, regDoc.data().gymId)) {
+          const invoiceService = require('../services/invoiceService');
+          try {
+            const legacyInv = await invoiceService.getActiveInvoice(db, 'competition', req.params.regId);
+            if (legacyInv) { await invoiceService.voidInvoice(db, legacyInv.id, req.staff.id, req.staff.name, '比賽退費自動作廢'); invoiceVoided = true; }
+          } catch (e) { console.error('[比賽退費連動作廢-手動記帳發票]', e.message); }
+          try {
+            const realInv = await voidRealInvoiceIfIssued(db, { sourceType: 'competition', refId: req.params.regId }, req.staff.id, req.staff.name, '比賽退費自動作廢');
+            if (realInv) invoiceVoided = true;
+          } catch (e) { console.error('[比賽退費連動作廢-真實發票]', e.message); }
+        }
+      } catch (e) { console.error('[比賽退費連動作廢]', e.message); }
+      res.json({ success: true, invoiceVoided, message: `退費已處理${invoiceVoided ? '，發票已自動作廢' : ''}` });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );

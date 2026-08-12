@@ -342,13 +342,31 @@ router.post('/requests/:id/approve',
             });
           } catch (e) { console.error('退費記帳失敗', e.message); }
         }
+        // 退費核准 → 自動連動作廢已開立發票（§4.1.3 同款，比照入場/商品/租借；2026-08-10 定案：
+        // 僅該館已開啟「發票列印」才會做，關閉時維持此功能上線前的原本行為）
+        let invoiceVoided = false;
+        try {
+          const { isInvoicePrintingEnabled, voidRealInvoiceIfIssued } = require('./invoices');
+          if (await isInvoicePrintingEnabled(db, request.gymId)) {
+            const invoiceService = require('../services/invoiceService');
+            try {
+              const legacyInv = await invoiceService.getActiveInvoice(db, 'course', request.enrollmentId);
+              if (legacyInv) { await invoiceService.voidInvoice(db, legacyInv.id, req.staff.id, req.staff.name, '課程退費核准自動作廢'); invoiceVoided = true; }
+            } catch (e) { console.error('[課程退費連動作廢-手動記帳發票]', e.message); }
+            try {
+              const realInv = await voidRealInvoiceIfIssued(db, { sourceType: 'course', refId: request.enrollmentId }, req.staff.id, req.staff.name, '課程退費核准自動作廢');
+              if (realInv) invoiceVoided = true;
+            } catch (e) { console.error('[課程退費連動作廢-真實發票]', e.message); }
+          }
+        } catch (e) { console.error('[課程退費連動作廢]', e.message); }
+
         await db.collection('courseAdjustmentRequests').doc(req.params.id).update({
           status: 'approved', finalRefund, finalDepositRefund, cancelledCount: cancelled,
           approvedBy: req.staff.id, approvedByName: req.staff.name, approvedAt: new Date(), updatedAt: new Date(),
         });
         return res.json({
-          success: true,
-          message: `退費申請已核准，退款 NT$${finalRefund}${finalDepositRefund > 0 ? `＋保證金 NT$${finalDepositRefund}` : ''}（已取消 ${cancelled} 堂報名）`,
+          success: true, invoiceVoided,
+          message: `退費申請已核准，退款 NT$${finalRefund}${finalDepositRefund > 0 ? `＋保證金 NT$${finalDepositRefund}` : ''}（已取消 ${cancelled} 堂報名）${invoiceVoided ? '，發票已自動作廢' : ''}`,
         });
       }
 

@@ -74,16 +74,34 @@ async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
       .filter(inv => { const t = tsOf(inv.issuedAt); return t >= todayStart.getTime() && t <= todayEnd.getTime(); })
       .sort((a, b) => tsOf(a.issuedAt) - tsOf(b.issuedAt));
     if (!todayInvoices.length) return result;
-    const segMap = new Map(); // track -> {track, start, last}（依出現順序分段，同字軌內取最小/最大號碼）
-    const order = [];
+    // 依字軌分組，組內再依號碼排序找出連續區段——號碼不連續就視為換過捲，即使字軌相同也拆成新一段
+    // （同字軌換捲很常見：字軌不見得每次換捲都會變，若純粹「同字軌合併成一段、取最小~最大號」，
+    // 換捲造成的號碼斷層會被誤呈現成「這中間全部印過」，對發票號碼這種要對稅務/會計交代的紀錄不精確）。
+    // 段落間的顯示順序依該段最早列印時間排序，反映當天實際使用先後。
+    const byTrack = new Map(); // track -> invoices[]
     todayInvoices.forEach(inv => {
       const trk = inv.track || '';
-      if (!segMap.has(trk)) { segMap.set(trk, { track: trk, start: inv.number, last: inv.number }); order.push(trk); }
-      const seg = segMap.get(trk);
-      if (inv.number < seg.start) seg.start = inv.number;
-      if (inv.number > seg.last) seg.last = inv.number;
+      if (!byTrack.has(trk)) byTrack.set(trk, []);
+      byTrack.get(trk).push(inv);
     });
-    result.segments = order.map(trk => segMap.get(trk));
+    const segments = [];
+    byTrack.forEach((invs, trk) => {
+      const sorted = [...invs].sort((a, b) => Number(a.number) - Number(b.number));
+      let seg = null;
+      sorted.forEach(inv => {
+        const num = Number(inv.number);
+        const ts = tsOf(inv.issuedAt);
+        if (seg && num === seg.lastNum + 1) {
+          seg.last = inv.number; seg.lastNum = num;
+          seg.firstTs = Math.min(seg.firstTs, ts);
+        } else {
+          seg = { track: trk, start: inv.number, last: inv.number, lastNum: num, firstTs: ts };
+          segments.push(seg);
+        }
+      });
+    });
+    segments.sort((a, b) => a.firstTs - b.firstTs);
+    result.segments = segments.map(({ track, start, last }) => ({ track, start, last }));
     const voids = todayInvoices.filter(i => i.status === 'void');
     result.voidNumbers = voids.map(i => (i.track ? `${i.track}-${i.number}` : i.number));
     result.voidTotalAmount = voids.reduce((s, i) => s + (Number(i.amount) || 0), 0);

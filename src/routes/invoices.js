@@ -13,6 +13,7 @@ const { v4: uuidv4 } = require('uuid');
 const { authenticate, requireManagerOrStation } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const invoiceNumberService = require('../services/invoiceNumberService');
+const { addCashAdjustment } = require('../services/settlementService');
 const { isValidTaiwanTaxId } = require('../utils/taiwanTaxId');
 const { taiwanToday } = require('../utils/taiwanDate');
 const dayjs = require('dayjs');
@@ -165,7 +166,7 @@ router.put('/printing-status', authenticate, async (req, res) => {
 // invoiceRecords 是不同集合，此為第 1-8 節「真實印表機」計畫專用，供日後 P5 結帳自動化讀取）。
 router.post('/print-record', authenticate, requireManagerOrStation, async (req, res) => {
   try {
-    const { sourceType, refId, memberId, memberName, itemName, amount, taxId, note, issuedAt } = req.body;
+    const { sourceType, refId, memberId, memberName, itemName, amount, taxId, note, issuedAt, paymentMethod } = req.body;
     // 限當館：非 super_admin 一律用自己登入/值班的館別（五流程既有呼叫本就是自己館，這裡是保險；
     // 「手動開立無來源發票」尤其需要這道權威擋，避免士林操作直接消耗新竹的號碼）
     const gymId = req.staff?.role === 'super_admin' ? (req.body.gymId || req.staff?.gymId) : req.staff?.gymId;
@@ -209,6 +210,18 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
       }),
     };
     await db.collection('invoices').doc(id).set(record);
+
+    // 「手動開立發票（無來源）」沒有任何既有訂單/收款流程會把這筆錢記進當日結帳——五個既有流程
+    // （入場/課程/比賽/租借/POS）本身各自的收款確認就會記帳，這裡才是唯一機會（2026-08-12 案例：
+    // 兩張無來源發票印出後完全沒進結帳資訊，事後才發現）。僅現金（會實際放進抽屜、需要盤點核對）
+    // 才記；「其他（不開錢櫃）」代表沒有實體現金入帳，不計入現金盤點加減項。
+    if (!sourceType && validity.valid && paymentMethod === 'cash') {
+      await addCashAdjustment({
+        gymId, amount: amt, sign: '+', type: '現金補入',
+        note: `${record.invoiceNo}：${itemName || '費用'}${memberName ? `（${memberName}）` : ''}${note ? `／${note}` : ''}`,
+      });
+    }
+
     // 配號後的紙捲剩餘狀態（僅該館設過紙捲張數時才有意義）——供前端在列印成功畫面同步跳出
     // 「即將用完」醒目警語，不用等下次開設定頁才看到。
     res.json({

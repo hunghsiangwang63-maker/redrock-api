@@ -320,6 +320,36 @@ router.post('/public', async (req, res) => {
 });
 
 // ── GET /experience-bookings - 員工查詢 ────────────────────────────
+// 體驗/試上預約每筆的「已開立發票」狀態 join（依 bookingId 批次查，比照課程/比賽同款邏輯——優先
+// 真實列印版 invoices，缺才退回過渡期 §9 手動記帳版 invoiceRecords，兩邊都有以真實列印版為準）。
+// 供「🧾 開立發票」固定按鍵在列表上直接反白顯示狀態＋號碼。
+const attachInvoiceStatus = async (db, bookings) => {
+  const ids = [...new Set(bookings.map(b => b.id).filter(Boolean))];
+  const invoiceMap = {};
+  for (let i = 0; i < ids.length; i += 10) {
+    const chunk = ids.slice(i, i + 10);
+    if (!chunk.length) break;
+    const [realSnap, legacySnap] = await Promise.all([
+      db.collection('invoices').where('refId', 'in', chunk).get(),
+      db.collection('invoiceRecords').where('refId', 'in', chunk).get(),
+    ]);
+    legacySnap.docs.forEach(d => {
+      const v = d.data();
+      if (v.sourceType !== 'experience' || v.status === 'voided') return;
+      invoiceMap[v.refId] = { invoiceNo: v.invoiceNo || '', amount: Number(v.amount) || 0 };
+    });
+    realSnap.docs.forEach(d => {
+      const v = d.data();
+      if (v.sourceType !== 'experience' || v.status !== 'issued') return;
+      invoiceMap[v.refId] = { invoiceNo: v.invoiceNo || '', amount: Number(v.amount) || 0 };
+    });
+  }
+  bookings.forEach(b => {
+    const info = invoiceMap[b.id];
+    if (info) { b.invoiceNo = info.invoiceNo; b.invoicedAmount = info.amount; }
+  });
+};
+
 router.get('/', authenticate, async (req, res) => {
   try {
     const db = getDb();
@@ -333,6 +363,7 @@ router.get('/', authenticate, async (req, res) => {
     if (from) bookings = bookings.filter(b=>b.bookingDate>=from);
     if (to)   bookings = bookings.filter(b=>b.bookingDate<=to);
     bookings.sort((a,b)=>a.bookingDate.localeCompare(b.bookingDate));
+    await attachInvoiceStatus(db, bookings);
     res.json({ bookings, courseTypes: COURSE_TYPES });
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
 });
@@ -488,7 +519,24 @@ router.post('/:id/cancel', authenticate, async (req, res) => {
     }
     // 清理自動建立的課程/場次/教練排班（若當初有指定教練排課）
     const cleanup = await cleanupExperienceCourseAndSchedule(db, booking, req.staff);
-    res.json({ success:true, voidedTickets: voided, cleanup });
+    // 取消 → 自動連動作廢已開立發票（§4.1.3 同款，比照入場/商品/課程/比賽/租借；2026-08-10 定案：
+    // 僅該館已開啟「發票列印」才會做，關閉時維持此功能上線前的原本行為）
+    let invoiceVoided = false;
+    try {
+      const { isInvoicePrintingEnabled, voidRealInvoiceIfIssued } = require('./invoices');
+      if (await isInvoicePrintingEnabled(db, booking.gymId)) {
+        const invoiceService = require('../services/invoiceService');
+        try {
+          const legacyInv = await invoiceService.getActiveInvoice(db, 'experience', req.params.id);
+          if (legacyInv) { await invoiceService.voidInvoice(db, legacyInv.id, req.staff.id, req.staff.name, '體驗預約取消自動作廢'); invoiceVoided = true; }
+        } catch (e) { console.error('[體驗取消連動作廢-手動記帳發票]', e.message); }
+        try {
+          const realInv = await voidRealInvoiceIfIssued(db, { sourceType: 'experience', refId: req.params.id }, req.staff.id, req.staff.name, '體驗預約取消自動作廢');
+          if (realInv) invoiceVoided = true;
+        } catch (e) { console.error('[體驗取消連動作廢-真實發票]', e.message); }
+      }
+    } catch (e) { console.error('[體驗取消連動作廢]', e.message); }
+    res.json({ success:true, voidedTickets: voided, cleanup, invoiceVoided });
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
 });
 
@@ -555,6 +603,22 @@ router.post('/:id/member-cancel', authenticateAny, async (req, res) => {
         .forEach(d=>batch.update(d.ref,{ status:'void', voidReason:'booking_cancelled', updatedAt:new Date() }));
       await batch.commit();
     } catch(e) {}
+    // 會員自行取消 → 自動連動作廢已開立發票（同款，見員工取消端點註解）
+    let invoiceVoided = false;
+    try {
+      const { isInvoicePrintingEnabled, voidRealInvoiceIfIssued } = require('./invoices');
+      if (await isInvoicePrintingEnabled(db, booking.gymId)) {
+        const invoiceService = require('../services/invoiceService');
+        try {
+          const legacyInv = await invoiceService.getActiveInvoice(db, 'experience', booking.id);
+          if (legacyInv) { await invoiceService.voidInvoice(db, legacyInv.id, null, '會員自行取消', '會員取消預約自動作廢'); invoiceVoided = true; }
+        } catch (e) { console.error('[會員取消連動作廢-手動記帳發票]', e.message); }
+        try {
+          const realInv = await voidRealInvoiceIfIssued(db, { sourceType: 'experience', refId: booking.id }, null, '會員自行取消', '會員取消預約自動作廢');
+          if (realInv) invoiceVoided = true;
+        } catch (e) { console.error('[會員取消連動作廢-真實發票]', e.message); }
+      }
+    } catch (e) { console.error('[會員取消連動作廢]', e.message); }
     // 已繳費退款 → 通知同館管理員處理
     if (upd.refundRequested) {
       try {
@@ -644,6 +708,59 @@ router.put('/:id/staff-note', authenticate, async (req, res) => {
     });
     res.json({ success:true, message:'備註已儲存' });
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
+});
+
+// ── 體驗課程/試上開立發票（預先建立，待日後發票機串接；手動記帳版，比照課程/比賽/入場/租借同一套）──
+// 底層共用 invoiceService（sourceType:'experience'，refId=bookingId）。金額預填邏輯與
+// recordExperienceRevenue 同一套：試上＝全額試上費；一般體驗＝發票金額（invoiceAmount ?? 總費−人數×175）。
+router.get('/:id/invoices', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('invoiceRecords')
+      .where('sourceType', '==', 'experience').where('refId', '==', req.params.id).get();
+    const invoices = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.issuedAt?._seconds || 0) - (a.issuedAt?._seconds || 0));
+    res.json({ invoices });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+router.post('/:id/invoices', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const bookingDoc = await db.collection('experienceBookings').doc(req.params.id).get();
+    if (!bookingDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到預約記錄' });
+    const b = bookingDoc.data();
+    const n = Number(b.numParticipants) || 0;
+    const defaultAmount = b.kind === 'trial' ? (b.totalFee || 0) : (b.invoiceAmount != null ? b.invoiceAmount : Math.max(0, (b.totalFee || 0) - n * 175));
+    const { itemName, amount, taxId, note, issuedAt, track, number } = req.body;
+    const invoiceService = require('../services/invoiceService');
+    const record = await invoiceService.createInvoice(db, {
+      sourceType: 'experience', refId: req.params.id,
+      memberId: b.memberId || null, memberName: b.memberName || b.contactName || '',
+      itemName: itemName || (b.kind === 'trial' ? '課程試上費' : '體驗課程費用'), amount: amount ?? defaultAmount,
+      taxId, note, gymId: b.gymId, issuedAt, track, number,
+      staffId: req.staff.id, staffName: req.staff.name || '',
+      meta: { bookingId: req.params.id },
+    });
+    res.json({ success: true, invoice: record });
+  } catch (err) {
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400, INVALID_TAX_ID: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+router.post('/invoices/:id/void', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const invoiceService = require('../services/invoiceService');
+    await invoiceService.voidInvoice(db, req.params.id, req.staff.id, req.staff.name, req.body.voidReason);
+    res.json({ success: true });
+  } catch (err) {
+    const map = { NOT_FOUND: 404, ALREADY_VOIDED: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
 });
 
 router.post('/:id/issue-tickets', authenticate, async (req, res) => {

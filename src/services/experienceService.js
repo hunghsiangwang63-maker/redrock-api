@@ -537,6 +537,19 @@ async function handleTrialSessionCancelled(db, bookingId, { reason } = {}) {
   await ref.update(upd);
   await reverseExperienceRevenue(db, ref, booking).catch(e => console.error('[試上場次取消沖銷]', e.message));
   const voided = await voidExperienceTickets(db, bookingId, '場次取消').catch(() => 0);
+  // 場次取消（館方因素）→ 自動連動作廢已開立發票（同款，見 experienceBookings.js 兩個取消端點註解）
+  try {
+    const { isInvoicePrintingEnabled, voidRealInvoiceIfIssued } = require('../routes/invoices');
+    if (await isInvoicePrintingEnabled(db, booking.gymId)) {
+      const invoiceService = require('./invoiceService');
+      try {
+        const legacyInv = await invoiceService.getActiveInvoice(db, 'experience', bookingId);
+        if (legacyInv) await invoiceService.voidInvoice(db, legacyInv.id, null, '系統（場次取消）', '場次取消自動作廢');
+      } catch (e) { console.error('[場次取消連動作廢-手動記帳發票]', e.message); }
+      try { await voidRealInvoiceIfIssued(db, { sourceType: 'experience', refId: bookingId }, null, '系統（場次取消）', '場次取消自動作廢'); }
+      catch (e) { console.error('[場次取消連動作廢-真實發票]', e.message); }
+    }
+  } catch (e) { console.error('[場次取消連動作廢]', e.message); }
   // 作廢 pending 轉帳單（避免殘留待收款）
   try {
     const ts = await db.collection('transferRecords').where('refId', '==', bookingId).get();

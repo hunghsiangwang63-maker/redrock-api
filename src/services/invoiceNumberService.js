@@ -8,12 +8,13 @@ const { getDb } = require('../config/firebase');
 
 const TRACK_RE = /^[A-Z]{2}$/;
 const NUMBER_RE = /^\d{8}$/;
-// 剩餘張數低於此值 → 視為「即將用完」（前端顯示醒目警語提醒備妥下一捲）；固定常數，非可設定值。
+// 剩餘張數低於此值 → 每次配號都提醒「即將用完」（固定常數，最後 5 張，非可設定值）。
 const ROLL_LOW_THRESHOLD = 5;
-// 財政部二聯式收銀機發票每捲固定 250 張、捲末號碼固定落在這四組末三碼（見 SettingsPage.jsx
-// invRollEndPreviewSuffixOk 同一組常數）——這是官方紙捲的固定編號規律，不論店員換捲重設時有沒有
-// 記得填「這捲共幾張」（rollSize），只要配到的號碼末三碼命中，就自動視為「這捲已印完」，之後配號
-// 直接擋下（即使沒設定 rollSize 也不會超印），逼一定要走一次換捲重設。
+// 財政部二聯式收銀機發票固定編號規律：每 1000 號分成四等分、各 250 張，末三碼固定落在這四組
+// （見 SettingsPage.jsx 同一組常數，供換捲時的預覽文字使用）——這是官方紙捲的固定規律，只要知道
+// 目前配到哪個號碼，就能直接反推這捲會印到哪個號碼結束，**不需要店員另外輸入「這捲共幾張」**
+// （人工輸入容易忘記/填錯；官方規律是固定死的，用號碼本身反推才是唯一真相來源，見下方
+// computeRollEndNumber）。
 const ROLL_END_SUFFIXES = ['249', '499', '749', '999'];
 
 const validateTrackNumber = (track, number) => {
@@ -22,19 +23,31 @@ const validateTrackNumber = (track, number) => {
   return null;
 };
 
-// 依 state 算出「剩餘張數／即將用完／已用完」——rollDepleted 由兩個獨立條件之一觸發：
-// ①手動設過 rollSize 且已超出 rollEndNumber ②剛配出的號碼末三碼命中官方捲末規律（rollFinishedAtConvention，
-// 不需要 rollSize 也會生效）。前端既有「🚨 這捲發票紙已用完」紅色警語（讀 rollDepleted）因此自動涵蓋這條新規則。
+// 依「任一號碼」直接反推它所屬那一捲（250 張為一個四分位區間）的結束號碼——同一個 1000 號區間內，
+// 0-249／250-499／500-749／750-999 四個四分位，各自的結尾固定是 249/499/749/999。不管這個號碼是
+// 换捲重設當下輸入的起始號、還是中途校正的號碼，只要落在哪個四分位，那一捲就一定印到那個位置結束
+// （物理紙捲本身的編號規律，不受店員什麼時候開始用這套系統影響——即使是接續舊有人工紀錄的中途號碼
+// 也一樣適用）。
+const computeRollEndNumber = (numberStr) => {
+  const n = Number(numberStr);
+  const base = Math.floor(n / 1000) * 1000;
+  const rem = n - base;
+  const boundary = ROLL_END_SUFFIXES.map(Number).find(b => rem <= b) ?? 999;
+  return String(base + boundary).padStart(8, '0');
+};
+
+// 依 state 算出「剩餘張數／即將用完／已用完」——rollEndNumber 一律即時由 rollStart（該捲起始號）
+// 反推計算，不讀任何店員手動輸入的張數，永遠有值（不會是 null）。
 const withRollStatus = (state) => {
   if (!state) return state;
-  const byConvention = !!state.rollFinishedAtConvention;
-  if (!state.rollEndNumber) return { ...state, remaining: null, rollLow: false, rollDepleted: byConvention };
-  const remaining = Number(state.rollEndNumber) - Number(state.currentNumber) + 1;
+  const rollEndNumber = computeRollEndNumber(state.rollStart || state.currentNumber);
+  const remaining = Number(rollEndNumber) - Number(state.currentNumber) + 1;
   return {
     ...state,
+    rollEndNumber,
     remaining,
-    rollLow: remaining <= ROLL_LOW_THRESHOLD && remaining > 0 && !byConvention,
-    rollDepleted: remaining <= 0 || byConvention,
+    rollLow: remaining <= ROLL_LOW_THRESHOLD && remaining > 0,
+    rollDepleted: remaining <= 0,
   };
 };
 
@@ -48,19 +61,14 @@ const getInvoiceState = async (gymId) => {
 
 // ── 換捲重設／中途校正（同一動作，見 §5.2.1）──
 // force=true 時跳過重複號碼警訊直接寫入；否則若該字軌+號碼已出現在 invoices 集合中，回傳 warning 不寫入。
-// rollSize（選填）：這捲共幾張——填了才會算出 rollEndNumber，之後配號才會出現「即將用完/已用完」警語；
-// 不填則沿用舊行為（無邊界、不警示，供中途校正/未量測張數時使用）。
-const setInvoiceState = async (gymId, { track, startNumber, reason, force, rollSize }, { staffId, staffName }) => {
+// 這捲會印到哪裡結束一律由 startNumber 依官方固定規律反推（見 computeRollEndNumber），不再收
+// 「這捲共幾張」這個手動欄位——人工輸入容易忘記/填錯，官方規律是固定死的，不需要店員另外量測告知。
+const setInvoiceState = async (gymId, { track, startNumber, reason, force }, { staffId, staffName }) => {
   const db = getDb();
   const t = String(track || '').toUpperCase();
   const n = String(startNumber || '').padStart(8, '0');
   const invalid = validateTrackNumber(t, n);
   if (invalid) throw invalid;
-  const size = rollSize != null && rollSize !== '' ? Number(rollSize) : null;
-  if (size != null && (!Number.isInteger(size) || size <= 0)) {
-    const e = new Error('紙捲張數須為正整數'); e.code = 'INVALID_ROLL_SIZE'; throw e;
-  }
-  const rollEndNumber = size != null ? String(Number(n) + size - 1).padStart(8, '0') : null;
 
   if (!force) {
     const dupSnap = await db.collection('invoices')
@@ -76,8 +84,7 @@ const setInvoiceState = async (gymId, { track, startNumber, reason, force, rollS
   const prevState = gymDoc.exists ? (gymDoc.data().invoiceState || null) : null;
   const now = new Date();
   const invoiceState = {
-    track: t, currentNumber: n, rollStart: n, rollSize: size, rollEndNumber, updatedAt: now,
-    rollFinishedAtConvention: false, // 換捲重設一律重新起算，明確清掉上一捲留下的捲末標記（見上方 withRollStatus）
+    track: t, currentNumber: n, rollStart: n, updatedAt: now,
     lastChange: {
       by: staffId || null, byName: staffName || '', at: now, reason: reason || '',
       from: prevState ? { track: prevState.track, number: prevState.currentNumber } : null,
@@ -90,8 +97,8 @@ const setInvoiceState = async (gymId, { track, startNumber, reason, force, rollS
 
 // ── 配號（原子遞增；印表機正式列印前呼叫，P3 InvoiceCheckout 用）──
 // 回傳本次配到的號碼（配號當下的 currentNumber）+ 配號後剩餘狀態，並把 gyms.invoiceState.currentNumber 遞增為下一號。
-// ⚠️ 已設定紙捲張數且這捲已無號碼可配（currentNumber 已超出 rollEndNumber）→ 直接擋下、不予配號（紙上根本
-// 沒有這個號碼可印），須先在「發票號碼管理」換上新捲、輸入新捲起始號才能繼續列印。
+// ⚠️ 這捲已無號碼可配（currentNumber 已超出依官方規律反推的 rollEndNumber）→ 直接擋下、不予配號（紙上
+// 根本沒有這個號碼可印），須先在「發票號碼管理」換上新捲、輸入新捲起始號才能繼續列印。
 const allocateInvoiceNumber = async (gymId) => {
   const db = getDb();
   const gymRef = db.collection('gyms').doc(gymId);
@@ -103,22 +110,15 @@ const allocateInvoiceNumber = async (gymId) => {
       e.code = 'INVOICE_STATE_NOT_CONFIGURED';
       throw e;
     }
-    if (state.rollEndNumber && Number(state.currentNumber) > Number(state.rollEndNumber)) {
+    const rollEndNumber = computeRollEndNumber(state.rollStart || state.currentNumber);
+    if (Number(state.currentNumber) > Number(rollEndNumber)) {
       const e = new Error('此捲發票紙已用完，請更換新捲並在「發票號碼管理」設定新捲起始號');
-      e.code = 'ROLL_DEPLETED';
-      throw e;
-    }
-    // 上一次配出的號碼若剛好命中官方捲末末三碼（見 ROLL_END_SUFFIXES），代表那張就是這捲最後一張，
-    // 這次配號直接擋下——即使當初換捲重設時沒填 rollSize，也能自動抓到捲已印完，逼一定要走換捲重設。
-    if (state.rollFinishedAtConvention) {
-      const e = new Error('此捲發票紙已印到本捲末三碼（249/499/749/999），請更換新捲並在「發票號碼管理」設定新捲起始號');
       e.code = 'ROLL_DEPLETED';
       throw e;
     }
     const allocated = { track: state.track, number: state.currentNumber };
     const next = String(Number(state.currentNumber) + 1).padStart(8, '0');
-    const finishedAtConvention = ROLL_END_SUFFIXES.includes(allocated.number.slice(-3));
-    const nextState = { ...state, currentNumber: next, updatedAt: new Date(), rollFinishedAtConvention: finishedAtConvention };
+    const nextState = { ...state, currentNumber: next, updatedAt: new Date() };
     tx.set(gymRef, { invoiceState: nextState }, { merge: true });
     return { ...allocated, ...withRollStatus(nextState) };
   });
@@ -129,5 +129,6 @@ module.exports = {
   getInvoiceState,
   setInvoiceState,
   allocateInvoiceNumber,
+  computeRollEndNumber,
   ROLL_LOW_THRESHOLD,
 };

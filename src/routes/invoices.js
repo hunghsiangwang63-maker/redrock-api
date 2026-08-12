@@ -47,6 +47,16 @@ async function checkInvoiceIssuanceTiming(db, sourceType, refId) {
         e.code = 'INVOICE_TOO_EARLY'; throw e;
       }
     }
+  } else if (sourceType === 'experience') {
+    // 體驗課程/單堂試上：須等活動當天才能開票（2026-08-12 定案）。直接讀當下的 bookingDate——
+    // 若活動日期改期過，這裡讀到的就是最新（改期後）的日期，天然「跟上最終日期」，不需要另外處理。
+    const doc = await db.collection('experienceBookings').doc(refId).get();
+    if (!doc.exists) return;
+    const bookingDate = doc.data().bookingDate;
+    if (bookingDate && today < bookingDate) {
+      const e = new Error(`此預約活動日為 ${bookingDate}，須等活動當天才能開立發票`);
+      e.code = 'INVOICE_TOO_EARLY'; throw e;
+    }
   }
 }
 

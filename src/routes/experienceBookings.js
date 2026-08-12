@@ -733,6 +733,7 @@ router.post('/:id/invoices', authenticate, requireManagerOrStation, async (req, 
     const n = Number(b.numParticipants) || 0;
     const defaultAmount = b.kind === 'trial' ? (b.totalFee || 0) : (b.invoiceAmount != null ? b.invoiceAmount : Math.max(0, (b.totalFee || 0) - n * 175));
     const { itemName, amount, taxId, note, issuedAt, track, number } = req.body;
+    await require('./invoices').checkInvoiceIssuanceTiming(db, 'experience', req.params.id); // 須等活動當天才能開票
     const invoiceService = require('../services/invoiceService');
     const record = await invoiceService.createInvoice(db, {
       sourceType: 'experience', refId: req.params.id,
@@ -744,7 +745,7 @@ router.post('/:id/invoices', authenticate, requireManagerOrStation, async (req, 
     });
     res.json({ success: true, invoice: record });
   } catch (err) {
-    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400, INVALID_TAX_ID: 400 };
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400, INVALID_TAX_ID: 400, INVOICE_TOO_EARLY: 400 };
     if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }

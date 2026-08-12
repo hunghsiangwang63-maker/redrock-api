@@ -120,11 +120,42 @@ router.get('/:id/quote', authenticateAny, async (req, res) => {
 });
 
 // ── GET /competitions/:id/registrations - 報名名單（工作人員）──────
+// 報名名單每筆的「已開立發票」狀態 join（依 registrationId 批次查，比照課程學員報表 members.js
+// 同款邏輯——優先真實列印版 invoices，缺才退回過渡期 §9 手動記帳版 invoiceRecords，兩邊都有以真實
+// 列印版為準）。供「🧾 開立發票」固定按鍵在名單上直接反白顯示狀態＋號碼。
+const attachInvoiceStatus = async (db, registrations) => {
+  const ids = [...new Set(registrations.map(r => r.id).filter(Boolean))];
+  const invoiceMap = {};
+  for (let i = 0; i < ids.length; i += 10) {
+    const chunk = ids.slice(i, i + 10);
+    if (!chunk.length) break;
+    const [realSnap, legacySnap] = await Promise.all([
+      db.collection('invoices').where('refId', 'in', chunk).get(),
+      db.collection('invoiceRecords').where('refId', 'in', chunk).get(),
+    ]);
+    legacySnap.docs.forEach(d => {
+      const v = d.data();
+      if (v.sourceType !== 'competition' || v.status === 'voided') return;
+      invoiceMap[v.refId] = { invoiceNo: v.invoiceNo || '', amount: Number(v.amount) || 0 };
+    });
+    realSnap.docs.forEach(d => {
+      const v = d.data();
+      if (v.sourceType !== 'competition' || v.status !== 'issued') return;
+      invoiceMap[v.refId] = { invoiceNo: v.invoiceNo || '', amount: Number(v.amount) || 0 };
+    });
+  }
+  registrations.forEach(r => {
+    const info = invoiceMap[r.id];
+    if (info) { r.invoiceNo = info.invoiceNo; r.invoicedAmount = info.amount; }
+  });
+};
+
 router.get('/:id/registrations', authenticate, checkPermission('competitions.manage'), async (req, res) => {
   try {
     const registrations = await competitionService.getCompetitionRegistrations(req.params.id);
     // 附加「實收金額」（管理員編修 > 匯款確認金額-保費 > 應繳費用-保費），供名單/開發票 modal 顯示與預填
     registrations.forEach(r => { r.receivedAmount = competitionService.computeNetReceivedAmount(r); });
+    await attachInvoiceStatus(getDb(), registrations);
     res.json({ registrations });
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

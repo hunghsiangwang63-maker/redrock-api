@@ -491,6 +491,7 @@ const buildActiveCourseStudents = async (gymId) => {
   });
   out.sort((a, b) => b.count - a.count);
   await attachReceivedAmounts(db, out);
+  await attachInvoiceStatus(db, out);
   return { courses: out, total: out.reduce((s, c) => s + c.count, 0) };
 };
 
@@ -522,11 +523,13 @@ const buildFutureCourseStudents = async (gymId) => {
   });
   out.sort((a, b) => (a.practiceStart || '').localeCompare(b.practiceStart || '')); // 最快開課的排前面
   await attachReceivedAmounts(db, out);
+  await attachInvoiceStatus(db, out);
   return { courses: out, total: out.reduce((s, c) => s + c.count, 0) };
 };
 
-// 課程學員名單 → XLSX 列資料（active/future 下載共用；已開立發票金額/號碼另外 join）
-const buildCourseStudentRows = (filtered, invoicedMap, invoiceNoMap) => {
+// 課程學員名單 → XLSX 列資料（active/future 下載共用；已開立發票金額/號碼讀 m.invoicedAmount/m.invoiceNo，
+// 由 attachInvoiceStatus 在 builder 函式內批次 join 好，這裡不用再各自查一次）
+const buildCourseStudentRows = (filtered) => {
   const gymLabel = (g) => g === 'gym-hsinchu' ? '新竹館' : g === 'gym-shilin' ? '士林館' : (g || '');
   const payLabel = (v) => ({ pending: '待確認', confirmed: '已確認', pending_confirm: '待確認', transfer_rejected: '已退回' }[v] || v || '');
   const rows = [];
@@ -552,8 +555,8 @@ const buildCourseStudentRows = (filtered, invoicedMap, invoiceNoMap) => {
         '健康備註': m.healthNote || '',
         '如何得知': m.referralSource || '',
         '自訂備註': m.enrollNote || '',
-        '已開立發票金額': invoicedMap[m.enrollmentId] || '',
-        '已開立發票號碼': invoiceNoMap[m.enrollmentId] || '',
+        '已開立發票金額': m.invoicedAmount || '',
+        '已開立發票號碼': m.invoiceNo || '',
       });
     });
   });
@@ -561,22 +564,35 @@ const buildCourseStudentRows = (filtered, invoicedMap, invoiceNoMap) => {
   return rows;
 };
 
-// 已開立發票金額/號碼 join（依 enrollmentId 批次查，active/future 下載共用；只計未作廢的）
-const attachInvoicedMap = async (db, filtered) => {
-  const enrollIds = [...new Set(filtered.flatMap(c => c.members.map(m => m.enrollmentId).filter(Boolean)))];
-  const invoicedMap = {}, invoiceNoMap = {};
+// 課程學員每筆報名的「已開立發票」狀態 join（依 enrollmentId 批次查、直接 mutate members）——
+// 優先讀真實列印版 invoices（status:'issued'），缺才退回過渡期 §9 手動記帳版 invoiceRecords
+// （只計未作廢的）；兩邊都有的話以真實列印版為準。供列表 JSON（畫面按鍵即時反白＋號碼）與
+// XLSX 下載共用同一份結果，不必各自再查一次。
+const attachInvoiceStatus = async (db, courses) => {
+  const enrollIds = [...new Set(courses.flatMap(c => c.members.map(m => m.enrollmentId).filter(Boolean)))];
+  const invoiceMap = {};
   for (let i = 0; i < enrollIds.length; i += 10) {
     const chunk = enrollIds.slice(i, i + 10);
     if (!chunk.length) break;
-    const snap = await db.collection('invoiceRecords').where('refId', 'in', chunk).get();
-    snap.docs.forEach(d => {
+    const [realSnap, legacySnap] = await Promise.all([
+      db.collection('invoices').where('refId', 'in', chunk).get(),
+      db.collection('invoiceRecords').where('refId', 'in', chunk).get(),
+    ]);
+    legacySnap.docs.forEach(d => {
       const v = d.data();
-      if (v.status === 'voided') return;
-      invoicedMap[v.refId] = (invoicedMap[v.refId] || 0) + (Number(v.amount) || 0);
-      if (v.invoiceNo) invoiceNoMap[v.refId] = v.invoiceNo;
+      if (v.sourceType !== 'course' || v.status === 'voided') return;
+      invoiceMap[v.refId] = { invoiceNo: v.invoiceNo || '', amount: Number(v.amount) || 0 };
+    });
+    realSnap.docs.forEach(d => { // 真實發票優先覆蓋（若兩邊都有，以正式列印版為準）
+      const v = d.data();
+      if (v.sourceType !== 'course' || v.status !== 'issued') return;
+      invoiceMap[v.refId] = { invoiceNo: v.invoiceNo || '', amount: Number(v.amount) || 0 };
     });
   }
-  return { invoicedMap, invoiceNoMap };
+  courses.forEach(c => c.members.forEach(m => {
+    const info = m.enrollmentId ? invoiceMap[m.enrollmentId] : null;
+    if (info) { m.invoiceNo = info.invoiceNo; m.invoicedAmount = info.amount; }
+  }));
 };
 
 // 歷史開課（已過期，practiceEnd < today）輕量清單：僅課程資訊＋人數，不含逐位學員明細
@@ -631,6 +647,7 @@ const buildHistoricalCourseDetail = async (gymId, courseId) => {
     count: members.length, members,
   }];
   await attachReceivedAmounts(db, out);
+  await attachInvoiceStatus(db, out);
   return out[0];
 };
 
@@ -659,9 +676,7 @@ router.get('/reports/future-course-students/download', authenticate, requireMana
     const courseId = req.query.courseId || null;
     const filtered = courseId ? courses.filter(c => c.courseId === courseId) : courses;
 
-    const db = getDb();
-    const { invoicedMap, invoiceNoMap } = await attachInvoicedMap(db, filtered);
-    const rows = buildCourseStudentRows(filtered, invoicedMap, invoiceNoMap);
+    const rows = buildCourseStudentRows(filtered);
 
     const ws = sanitizeSheet(XLSX.utils.json_to_sheet(rows));
     ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 12, 12, 16, 10, 10, 20, 20, 14, 20, 12, 14].map(w => ({ wch: w }));
@@ -746,9 +761,7 @@ router.get('/reports/active-course-students/download', authenticate, requireMana
       filtered = futureCourses.filter(c => c.courseId === courseId);
     }
 
-    const db = getDb();
-    const { invoicedMap, invoiceNoMap } = await attachInvoicedMap(db, filtered);
-    const rows = buildCourseStudentRows(filtered, invoicedMap, invoiceNoMap);
+    const rows = buildCourseStudentRows(filtered);
 
     const ws = sanitizeSheet(XLSX.utils.json_to_sheet(rows));
     ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 12, 12, 16, 10, 10, 20, 20, 14, 20, 12, 14].map(w => ({ wch: w }));

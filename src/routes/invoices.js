@@ -224,6 +224,22 @@ router.get('/active', authenticate, requireManagerOrStation, async (req, res) =>
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// GET /invoices/status?sourceType=&refId= - 純顯示用途：這筆訂單目前有沒有已開立的發票，不論走哪一套
+// （真實列印版 invoices，或過渡期尚未開真列印時的 §9 手動記帳版 invoiceRecords）——供五流程「開立發票」
+// 固定按鍵在畫面上直接反白顯示狀態＋號碼，不用點進去才看得到。與上面 /active（只查真實版、專門用來
+// 擋「不能重複列印」的權威判斷）用途不同、刻意分開，不影響任何實際列印/開票流程。
+router.get('/status', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const { sourceType, refId } = req.query;
+    if (!sourceType || !refId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '缺少 sourceType/refId' });
+    const db = getDb();
+    const real = await getActiveRealInvoice(db, sourceType, refId);
+    if (real) return res.json({ invoiceNo: real.invoiceNo, amount: real.amount });
+    const legacy = await require('../services/invoiceService').getActiveInvoice(db, sourceType, refId);
+    res.json(legacy ? { invoiceNo: legacy.invoiceNo || '', amount: Number(legacy.amount) || 0 } : { invoiceNo: null, amount: null });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // GET /invoices/today?gymId= - 該館今日全部發票（含已作廢），供「系統設定 → 發票號碼管理」頁面
 // 直接顯示今日列表用（值班或管理員；限當館，同 /state 慣例）。依列印時間新到舊排序。
 router.get('/today', authenticate, requireManagerOrStation, async (req, res) => {

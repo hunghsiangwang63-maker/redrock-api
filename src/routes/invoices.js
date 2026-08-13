@@ -10,7 +10,7 @@
 const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
-const { authenticate, requireManagerOrStation } = require('../middleware/auth');
+const { authenticate, requireManagerOrStation, requireManager } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const invoiceNumberService = require('../services/invoiceNumberService');
 const { addCashAdjustment } = require('../services/settlementService');
@@ -437,6 +437,55 @@ router.put('/source-payment-method', authenticate, requireManagerOrStation, asyn
     } catch (e) { console.error('[付款方式修正] 交易同步失敗:', e.message); }
 
     res.json({ success: true, paymentMethod });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// GET /invoices/download?gymId=&from=&to= - 歷史發票號碼詳細資料下載（XLSX；僅管理員）
+// 逐筆列出區間內全部發票（含已作廢）——「今日發票列表」只看得到當天，這裡供稽核/對帳查任意區間。
+// ⚠️ 權限比照其餘 invoices 端點嚴格一級：requireManager（super_admin/gym_manager），值班/場館電腦不可下載。
+const SOURCE_TYPE_LABEL = {
+  checkin: '入場', product: '商品銷售', rental: '器材租借', competition: '比賽報名',
+  course: '課程', experience: '體驗課程／試上', null: '手動開立（無來源）',
+};
+router.get('/download', authenticate, requireManager, async (req, res) => {
+  try {
+    const XLSX = require('xlsx');
+    const gymId = req.staff?.role === 'super_admin' ? (req.query.gymId || req.staff?.gymId) : req.staff?.gymId;
+    if (!gymId) return res.status(400).json({ error: 'MISSING_GYM', message: '請指定館別' });
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || '') ? req.query.from : dayjs().startOf('month').format('YYYY-MM-DD');
+    const to = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || '') ? req.query.to : dayjs().format('YYYY-MM-DD');
+    const rangeStart = dayjs(`${from}T00:00:00+08:00`).toDate();
+    const rangeEnd = dayjs(`${to}T23:59:59+08:00`).toDate();
+    const tsOf = (v) => v?.toDate ? v.toDate().getTime() : ((v?._seconds || 0) * 1000);
+    const fmtTs = (v) => v ? dayjs(tsOf(v)).format('YYYY/MM/DD HH:mm') : '';
+
+    const snap = await getDb().collection('invoices').where('gymId', '==', gymId).get();
+    const rows = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(inv => { const t = tsOf(inv.issuedAt); return t >= rangeStart.getTime() && t <= rangeEnd.getTime(); })
+      .sort((a, b) => tsOf(a.issuedAt) - tsOf(b.issuedAt));
+
+    const aoa = [['開立日期時間', '發票號碼', '狀態', '來源類型', '品項', '金額', '會員', '統編', '備註', '經手人', '作廢時間', '作廢人', '作廢原因']];
+    rows.forEach(inv => {
+      aoa.push([
+        fmtTs(inv.issuedAt), inv.invoiceNo || `${inv.track || ''}${inv.number || ''}`,
+        inv.status === 'void' ? '已作廢' : '已開立',
+        SOURCE_TYPE_LABEL[inv.sourceType] || inv.sourceType || '手動開立（無來源）',
+        inv.itemName || '', inv.amount ?? '', inv.memberName || '', inv.taxId || '', inv.note || '',
+        inv.staffName || '', inv.status === 'void' ? fmtTs(inv.voidedAt) : '', inv.status === 'void' ? (inv.voidedByName || '') : '',
+        inv.status === 'void' ? (inv.voidReason || '') : '',
+      ]);
+    });
+
+    const ws = require('../utils/xlsxSafe').sanitizeSheet(XLSX.utils.aoa_to_sheet(aoa));
+    ws['!cols'] = [{ wch:16 }, { wch:12 }, { wch:8 }, { wch:16 }, { wch:20 }, { wch:10 }, { wch:12 }, { wch:12 }, { wch:24 }, { wch:10 }, { wch:16 }, { wch:10 }, { wch:24 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '發票明細');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const gymSlug = gymId === 'gym-hsinchu' ? 'hsinchu' : gymId === 'gym-shilin' ? 'shilin' : 'all';
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="invoices_${gymSlug}_${from}_${to}.xlsx"`);
+    res.send(buf);
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

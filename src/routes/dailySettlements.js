@@ -120,6 +120,17 @@ async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
   return result;
 }
 
+// 已結帳快照的「發票總金額」正確算法（供月銷售/統一發票明細表 Excel 用；供每日結帳頁本身在
+// 結帳當下即時算 income.total 用，日後歷史查詢一律讀這裡、不要各自重寫一份）：
+// ⚠️ 2026-08-14 修復：printingEnabled 館別原本沿用舊制「income.total－voidInvoiceAmount」公式，
+// 但真列印下 voidInvoiceAmount 是「真實作廢發票」的權威加總——大多數作廢是「印錯金額、作廢後
+// 重印正確金額」（同一筆交易），income.total 本就只反映正確一次（216），從沒把作廢那筆錯誤金額
+// （251）算進去過，再扣一次會低報實收（真實案例：8/13 新竹館 income.total=13646 已是對的，
+// 錯誤地扣掉 voidInvoiceAmount=251 後變 13395，短報了 251 元本來就有收到的錢）。printingEnabled
+// 館別改直接用 invoiceActualTotal（已開立、未作廢發票的加總，本就正確排除作廢，來源即真實列印
+// 紀錄）；未開真列印（尚用店員手動輸入 voidInvoiceAmount 的舊制館別）維持原公式不變。
+const invoiceGrandTotal = (s) => s.printingEnabled ? (s.invoiceActualTotal || 0) : ((s.income?.total || 0) - (s.voidInvoiceAmount || 0));
+
 // ── 系統自動記錄的加減項不可人工刪除/修改（2026-08-10 拍板）────────────────────
 // 現金補入/發票開立/發票作廢等（settlementService.addCashAdjustment 寫入的 auto:true 項目）代表一筆
 // 真實已發生的金流事件——一旦被結帳頁編輯改掉或刪除，那筆事件在帳上就憑空消失，稽核對不上。
@@ -278,7 +289,11 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     // 課程發票延後開立（見 checkInvoiceIssuanceTiming，須等課程結束當天才能開），實際印出的日子
     // 常晚於服務認列日，用認列日會跟真正入帳的那天對不上；改用發票資料才是店員真正在意的
     // 「今天到底開了多少課程發票」。
-    if (invAuth.printingEnabled) courseIncome = invAuth.bySourceType.course || 0;
+    // ⚠️ 2026-08-14 補：體驗課程/單堂試上（sourceType:'experience'）收入雖走 type:'course' 記帳
+    // （比照課程歸「教學費」大項，見 experienceService.js recordExperienceRevenue），但開立發票時
+    // invoices 集合存的 sourceType 是 'experience' 非 'course'——只加 bySourceType.course 會漏算，
+    // 這類發票金額整筆消失於「課程」項目。一併加回。
+    if (invAuth.printingEnabled) courseIncome = (invAuth.bySourceType.course || 0) + (invAuth.bySourceType.experience || 0);
 
     const totalIncome = entryIncome + shoeRentalIncome + productIncome + courseIncome + passIncome + equipmentRentalIncome;
     const totalCash = payByMethod.cash || 0;
@@ -653,7 +668,7 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
     aoa.push(R('', '結束號碼', '', s => withTrack(s, 'last', s.invoiceLastNumber)));
     aoa.push(R('', '作廢號碼', '', s => s.invoiceVoidNumbers));
     aoa.push(R('', '作廢票號碼總金額', '', s => s.voidInvoiceAmount || ''));
-    aoa.push(R('結帳報表', '實收總額', '', s => (s.income?.total || 0) - (s.voidInvoiceAmount || 0)));
+    aoa.push(R('結帳報表', '實收總額', '', s => invoiceGrandTotal(s)));
     aoa.push(R('', '退貨總額', '', s => dedSum(s, '其他退款')));
     aoa.push(R('收支', '定線費', '', s => dedSum(s, '定線費')));
     aoa.push(R('', '教練費', '', s => dedSum(s, '教練費')));
@@ -676,7 +691,7 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
     aoa.push(R('商品販售', '商品', '', s => s.income?.product));
     passLabels.forEach(lb => aoa.push(R('定期票', lb, '', s => itemVal(s, 'passItems', lb))));
     aoa.push(R('教學費', '課程', '', s => s.income?.course));
-    aoa.push(R('總計', '', '', s => (s.income?.total || 0) - (s.voidInvoiceAmount || 0)));
+    aoa.push(R('總計', '', '', s => invoiceGrandTotal(s)));
 
     // ── 手動輸入金額（轉換期 settlementManualInput 逐項手動值；當月任一天有填才輸出此區）──
     const manVal = (st, key) => { const v = st.incomeManual?.[key]; return (v !== '' && v != null) ? (Number(v) || 0) : ''; };
@@ -798,7 +813,7 @@ router.get('/invoice-export', authenticate, requireManager, async (req, res) => 
       segs.forEach((sg, idx) => {
         aoa.push([
           idx === 0 ? d.format('YYYY/MM/DD') : '', idx === 0 ? WD[d.day()] : '', idx === 0 ? totalCnt : '',
-          numCell(sg, sg.start), numCell(sg, sg.last), idx === 0 ? ((s.income?.total || 0) - (s.voidInvoiceAmount || 0)) : '',
+          numCell(sg, sg.start), numCell(sg, sg.last), idx === 0 ? invoiceGrandTotal(s) : '',
           idx === 0 ? (s.invoiceVoidNumbers || '') : '',
           idx === 0 ? (s.voidInvoiceAmount || '') : '',
         ]);

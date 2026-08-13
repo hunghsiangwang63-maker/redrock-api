@@ -186,6 +186,16 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
     if (existingInvoice) {
       return res.status(409).json({ error: 'ALREADY_INVOICED', message: '此訂單已開立發票，請勿重複列印', invoice: existingInvoice });
     }
+    // 合併列印（refId 本身為 null，上面那道擋不到）——逐一檢查陣列裡每筆入場是否已被開過發票
+    // （個別開過，或已被另一張合併發票涵蓋），任一筆已開過就整批擋下，避免同一筆入場費被重複列印。
+    if (sourceType === 'checkin_merged' && Array.isArray(mergedCheckinIds) && mergedCheckinIds.length) {
+      for (const checkinId of mergedCheckinIds) {
+        const dup = await getActiveRealInvoice(db, 'checkin', checkinId);
+        if (dup) {
+          return res.status(409).json({ error: 'ALREADY_INVOICED', message: `其中一筆入場（id: ${checkinId}）已開立過發票（${dup.invoiceNo}），請重新選取後再試`, invoice: dup });
+        }
+      }
+    }
     await checkInvoiceIssuanceTiming(db, sourceType, refId); // 課程/比賽延後開立時機把關（其餘 sourceType 不受影響）
     const allocated = await invoiceNumberService.allocateInvoiceNumber(gymId); // {track, number}
     const id = uuidv4();

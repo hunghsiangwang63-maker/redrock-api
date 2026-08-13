@@ -116,7 +116,7 @@ app.use((req, res, next) => { res.setHeader('Access-Control-Allow-Private-Networ
 
 app.get('/status', async (req, res) => {
   try {
-    const line = await runBridge(['-Mode', 'status']);
+    const line = await runBridge({ mode: 'status' });
     const result = parseStatusLine(line);
     res.json({ ...result, port: SERIAL_PORT, baud: BAUD });
   } catch (e) {
@@ -133,9 +133,7 @@ app.post('/print', async (req, res) => {
     const payload = Buffer.concat([ESC_INIT, ...encodeLinesToBig5(lines), FORM_FEED]);
     tempFile = writeTempPayload(payload);
 
-    const args = ['-Mode', 'print', '-PrintFile', tempFile];
-    if (openDrawer) args.push('-OpenDrawer');
-    const line = await runBridge(args);
+    const line = await runBridge({ mode: 'print', printFile: tempFile, openDrawer });
 
     if (line === 'OK') {
       res.json({ ok: true });
@@ -156,7 +154,7 @@ app.post('/print', async (req, res) => {
 
 app.post('/open-drawer', async (req, res) => {
   try {
-    const line = await runBridge(['-Mode', 'drawer']);
+    const line = await runBridge({ mode: 'drawer' });
     if (line === 'OK') res.json({ ok: true });
     else res.json({ ok: false, error: line.startsWith('ERROR:') ? line.slice(6) : line });
   } catch (e) {

@@ -44,7 +44,10 @@ function runBridge(args) {
   return new Promise((resolve, reject) => {
     execFile(POWERSHELL_EXE,
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', BRIDGE_SCRIPT, '-Port', SERIAL_PORT, '-Baud', String(BAUD), ...args],
-      { timeout: TIMEOUT_MS, windowsHide: true },
+      // ⚠️ 2026-08-13 踩雷：windowsHide:true（隱藏子行程視窗）在這台機器上會讓透過這裡呼叫的
+      // PowerShell 序列埠操作變慢/卡住逾時，但直接在互動式視窗執行同一行指令完全正常——先拿掉
+      // 這個選項排查（副作用：執行列印/查狀態時螢幕上會短暫閃過一個 PowerShell 視窗，可接受）。
+      { timeout: TIMEOUT_MS },
       (err, stdout, stderr) => {
         if (err) {
           // 完整回報 exit code + stdout + stderr，避免只顯示 Node 產生的通用「Command failed」

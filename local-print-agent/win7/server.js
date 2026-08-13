@@ -32,7 +32,10 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://staff.redrockta
 // 例如 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
 const POWERSHELL_EXE = process.env.POWERSHELL_EXE || 'powershell.exe';
 const BRIDGE_SCRIPT = path.join(__dirname, 'serial-bridge.ps1');
-const TIMEOUT_MS = parseInt(process.env.BRIDGE_TIMEOUT_MS || '5000', 10); // PowerShell 子行程逾時保護
+// PowerShell 子行程逾時保護。⚠️ 2026-08-13 踩雷：這台機器直接測試約需 6 秒才有回應（USB
+// 轉接序列埠的硬體/驅動本身較慢，非程式問題），原本設 5 秒導致還沒跑完就被強制中止（無任何
+// stdout/stderr，只回報 exitCode=未知）——拉長到 15 秒給足夠餘裕，避免誤殺實際上會成功的請求。
+const TIMEOUT_MS = parseInt(process.env.BRIDGE_TIMEOUT_MS || '15000', 10);
 
 const buildInvoiceLines = (args) => buildInvoiceLinesRaw(args, DEFAULT_GYM);
 

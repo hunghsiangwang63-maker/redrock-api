@@ -166,7 +166,7 @@ router.put('/printing-status', authenticate, async (req, res) => {
 // invoiceRecords 是不同集合，此為第 1-8 節「真實印表機」計畫專用，供日後 P5 結帳自動化讀取）。
 router.post('/print-record', authenticate, requireManagerOrStation, async (req, res) => {
   try {
-    const { sourceType, refId, memberId, memberName, itemName, amount, taxId, note, issuedAt, paymentMethod } = req.body;
+    const { sourceType, refId, memberId, memberName, itemName, amount, taxId, note, issuedAt, paymentMethod, mergedCheckinIds } = req.body;
     // 限當館：非 super_admin 一律用自己登入/值班的館別（五流程既有呼叫本就是自己館，這裡是保險；
     // 「手動開立無來源發票」尤其需要這道權威擋，避免士林操作直接消耗新竹的號碼）
     const gymId = req.staff?.role === 'super_admin' ? (req.body.gymId || req.staff?.gymId) : req.staff?.gymId;
@@ -204,6 +204,9 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
       issuedAt: issuedAt ? new Date(issuedAt) : now,
       staffId: req.staff.id, staffName: req.staff.name || '',
       createdAt: now, updatedAt: now,
+      // 合併列印（多筆入場合開一張發票，sourceType:'checkin_merged'、refId:null）——存底下實際合併的
+      // checkIns id 陣列供稽核追溯；一般單筆來源的發票此欄位不存在，不影響既有任何邏輯。
+      ...(Array.isArray(mergedCheckinIds) && mergedCheckinIds.length ? { mergedCheckinIds } : {}),
       ...(validity.valid ? {} : {
         voidedAt: now, voidedBy: null, voidedByName: '系統自動判定',
         voidReason: `列印當下對應交易已失效（${validity.reason}），號碼已消耗故仍記錄並直接標記作廢`,
@@ -444,7 +447,7 @@ router.put('/source-payment-method', authenticate, requireManagerOrStation, asyn
 // 逐筆列出區間內全部發票（含已作廢）——「今日發票列表」只看得到當天，這裡供稽核/對帳查任意區間。
 // ⚠️ 權限比照其餘 invoices 端點嚴格一級：requireManager（super_admin/gym_manager），值班/場館電腦不可下載。
 const SOURCE_TYPE_LABEL = {
-  checkin: '入場', product: '商品銷售', rental: '器材租借', competition: '比賽報名',
+  checkin: '入場', checkin_merged: '入場（合併列印）', product: '商品銷售', rental: '器材租借', competition: '比賽報名',
   course: '課程', experience: '體驗課程／試上', null: '手動開立（無來源）',
 };
 router.get('/download', authenticate, requireManager, async (req, res) => {

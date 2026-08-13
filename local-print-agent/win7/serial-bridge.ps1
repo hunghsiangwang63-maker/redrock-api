@@ -1,4 +1,4 @@
-# serial-bridge.ps1 — Windows 7 用序列埠橋接
+﻿# serial-bridge.ps1 — Windows 7 用序列埠橋接
 #
 # 為什麼需要這個：serialport npm 套件（win7 之外的 server.js 用的）需要 Node.js >=20 才能編譯原生模組，
 # 而 Node.js 從 v14 起就不支援 Windows 7（v13.14.0 是最後一個官方支援 Win7 的版本）。這個版本改用
@@ -17,6 +17,12 @@
 #   status 模式：CONNECTED=<0|1> POSITION=<0|1|NULL> JOURNAL=<0|1|NULL> RECEIPT=<0|1|NULL>
 #   print  模式：OK 或 NOT_POSITIONED 或 ERROR:<訊息>
 #   drawer 模式：OK 或 ERROR:<訊息>
+#
+# ⚠️ 2026-08-14 踩雷：debug log 訊息原本用中文字串，這台 Windows 7 讀取 .ps1 檔案時（透過 server.js
+# 呼叫、非互動輸入）疑似用錯 codepage 解析多位元組中文字，導致字串裡的位元組被誤判成別的符號（例如
+# 誤判成引號 "），字串提早結束、後面內容被當成程式碼解析失敗（ParserError: ExpectedExpression）。
+# 互動輸入沒事是因為根本沒有「讀取檔案」這個動作，不會踩到這個問題。改成全部用英文/ASCII 字串，
+# 徹底避開這個編碼風險——註解仍可用中文（註解只找行尾，不會被當程式碼解析、不受影響）。
 
 param(
   [Parameter(Mandatory=$true)][string]$Port,
@@ -27,10 +33,10 @@ param(
   [int]$ReadTimeoutMs = 800
 )
 
-# 除錯記錄檔（2026-08-13 加入）：直接互動式執行都正常，但透過 server.js/Node 呼叫時卡住逾時，
-# 目前還不知道確切卡在哪一步——每一行用 Add-Content 立即寫入磁碟（不是等程式結束才寫），
-# 就算這次執行被 Node 強制中止，記錄檔裡也會留下「執行到哪一步」的完整軌跡可以事後查看。
-# 固定存在腳本同一個資料夾，每次執行開頭覆蓋重寫（只保留最近一次的記錄，避免無限長大）。
+# 除錯記錄檔：直接互動式執行都正常，但透過 server.js/Node 呼叫時卡住逾時，目前還不知道確切卡在
+# 哪一步——每一行用 Add-Content 立即寫入磁碟（不是等程式結束才寫），就算這次執行被 Node 強制中止，
+# 記錄檔裡也會留下「執行到哪一步」的完整軌跡可以事後查看。固定存在腳本同一個資料夾，每次執行開頭
+# 覆蓋重寫（只保留最近一次的記錄，避免無限長大）。
 # ⚠️ 不能用 $PSScriptRoot——這個自動變數 PowerShell 3.0+ 才有，這台機器是 2.0（同一類版本
 # 相容性踩雷，跟 -shr 那次一樣），改用 PS 2.0 就有的 $MyInvocation.MyCommand.Path 取得腳本路徑。
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -39,7 +45,7 @@ function Log($msg) {
   $line = "[$(Get-Date -Format 'HH:mm:ss.fff')] $msg"
   Add-Content -Path $LogFile -Value $line -Encoding UTF8
 }
-Set-Content -Path $LogFile -Value "[$(Get-Date -Format 'HH:mm:ss.fff')] ===== 開始執行 Mode=$Mode Port=$Port Baud=$Baud =====" -Encoding UTF8
+Set-Content -Path $LogFile -Value "[$(Get-Date -Format 'HH:mm:ss.fff')] ===== START Mode=$Mode Port=$Port Baud=$Baud =====" -Encoding UTF8
 
 # ESC p m t1 t2：開錢櫃脈衝（與 server.js 的 ESC_OPEN_DRAWER 相同，已於 2026-08-06 實機驗證通過）
 $DrawerBytes = [byte[]](0x1B, 0x70, 0x00, 25, 250)
@@ -49,31 +55,31 @@ function Read-OneByteOrNull($sp) {
   catch [System.TimeoutException] { return $null }
 }
 
-Log "建立 SerialPort 物件前"
+Log "before creating SerialPort object"
 $sp = New-Object System.IO.Ports.SerialPort($Port, $Baud, [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One)
 $sp.ReadTimeout = $ReadTimeoutMs
-Log "建立 SerialPort 物件完成，準備 Open()"
+Log "SerialPort object created, about to call Open()"
 
 try {
   $sp.Open()
-  Log "Open() 完成"
+  Log "Open() done"
 
   if ($Mode -eq 'status') {
-    Log "status 模式：準備寫入查詢基本狀態(n=1)"
+    Log "status mode: about to write basic-status query (n=1)"
     # n=1：印表機基本狀態（有無回應＝真的開電連線，不只是 COM 埠開得起來）
     $sp.Write([byte[]](0x10, 0x04, 1), 0, 3)
-    Log "已寫入 n=1 查詢，準備讀取回應"
+    Log "n=1 query written, about to read response"
     $basic = Read-OneByteOrNull $sp
-    Log "讀取完成，basic=$basic"
+    Log "read done, basic=$basic"
     if ($null -eq $basic) {
       Write-Output 'CONNECTED=0 POSITION=NULL JOURNAL=NULL RECEIPT=NULL'
     } else {
-      Log "準備寫入查詢紙張感應(n=4)"
+      Log "about to write paper-sensor query (n=4)"
       # n=4：紙張黑點感應（極性依 2026-08-12 實機驗證校正：1=偵測到黑點/正常）
       $sp.Write([byte[]](0x10, 0x04, 4), 0, 3)
-      Log "已寫入 n=4 查詢，準備讀取回應"
+      Log "n=4 query written, about to read response"
       $pos = Read-OneByteOrNull $sp
-      Log "讀取完成，pos=$pos"
+      Log "read done, pos=$pos"
       if ($null -eq $pos) {
         Write-Output 'CONNECTED=1 POSITION=NULL JOURNAL=NULL RECEIPT=NULL'
       } else {
@@ -88,12 +94,12 @@ try {
     }
   }
   elseif ($Mode -eq 'print') {
-    Log "print 模式：準備寫入查詢紙張感應(n=4)"
+    Log "print mode: about to write paper-sensor query (n=4)"
     # 先查紙張定位——真的偵測到「未定位」才擋下；查無回應一律放行（交由印表機自己走 0x0C 自動對位）。
     $sp.Write([byte[]](0x10, 0x04, 4), 0, 3)
-    Log "已寫入 n=4 查詢，準備讀取回應"
+    Log "n=4 query written, about to read response"
     $pos = Read-OneByteOrNull $sp
-    Log "讀取完成，pos=$pos"
+    Log "read done, pos=$pos"
     $blocked = $false
     if ($null -ne $pos) {
       $journal = if (($pos -band 0x20) -ne 0) { 1 } else { 0 }
@@ -104,14 +110,14 @@ try {
       Write-Output 'NOT_POSITIONED'
     } else {
       if ($PrintFile -and (Test-Path $PrintFile)) {
-        Log "準備寫入列印內容 ($((Get-Item $PrintFile).Length) bytes)"
+        Log "about to write print payload ($((Get-Item $PrintFile).Length) bytes)"
         $bytes = [System.IO.File]::ReadAllBytes($PrintFile)
         $sp.Write($bytes, 0, $bytes.Length)
-        Log "列印內容寫入完成"
+        Log "print payload written"
       }
       if ($OpenDrawer) {
         $sp.Write($DrawerBytes, 0, $DrawerBytes.Length)
-        Log "開錢櫃指令寫入完成"
+        Log "drawer command written"
       }
       # 對齊 server.js 的 settleMs：給機構動作（裁切等）完成時間，太快關埠可能撞到下一次開埠。
       Start-Sleep -Milliseconds 1200
@@ -120,17 +126,17 @@ try {
   }
   elseif ($Mode -eq 'drawer') {
     $sp.Write($DrawerBytes, 0, $DrawerBytes.Length)
-    Log "開錢櫃指令寫入完成"
+    Log "drawer command written"
     Write-Output 'OK'
   }
-  Log "主要流程完成，準備進 finally 關閉埠"
+  Log "main flow done, about to enter finally block to close port"
 }
 catch {
-  Log "發生例外：$($_.Exception.Message)"
+  Log "exception: $($_.Exception.Message)"
   Write-Output "ERROR:$($_.Exception.Message)"
   exit 1
 }
 finally {
   if ($sp.IsOpen) { $sp.Close() }
-  Log "===== 執行結束 ====="
+  Log "===== END ====="
 }

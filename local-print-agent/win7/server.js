@@ -40,15 +40,27 @@ const TIMEOUT_MS = parseInt(process.env.BRIDGE_TIMEOUT_MS || '15000', 10);
 const buildInvoiceLines = (args) => buildInvoiceLinesRaw(args, DEFAULT_GYM);
 
 // ── 呼叫 serial-bridge.ps1、回傳其 stdout（trim 過的單行文字）─────────────
-function runBridge(args) {
+// ⚠️ 2026-08-13 重大改法：原本用「陣列多個獨立參數」（-Port ... -Mode ... 分開傳給 execFile）
+// 呼叫時完全卡住逾時（連 serial-bridge.ps1 第一行程式碼都沒執行到，記錄檔案從未被建立過），
+// 但直接在互動式 PowerShell 視窗打同一行指令完全正常——懷疑是這台機器的舊版 Node.js 在把
+// 陣列參數組成 Windows 命令列字串時有跳脫符號拼接的已知舊版問題，導致 PowerShell 實際收到
+// 的指令被拼錯，-Port/-Mode 這類必填參數綁不到值，PowerShell 因此卡在互動式提示「請輸入
+// 缺少的參數值」等待輸入——但這裡背後沒有人可以輸入，於是卡到逾時被強制關掉。改成自己組
+// 一整段單一字串（-Command "& '...' -Port '...' ..."）傳給 execFile，避開陣列逐一拼接。
+function runBridge({ mode, printFile, openDrawer }) {
   return new Promise((resolve, reject) => {
+    let cmd = "& '" + BRIDGE_SCRIPT + "' -Port '" + SERIAL_PORT + "' -Baud " + BAUD + " -Mode '" + mode + "'";
+    if (printFile) cmd += " -PrintFile '" + printFile + "'";
+    if (openDrawer) cmd += " -OpenDrawer";
+    // 診斷用：不管 PowerShell 那邊卡不卡住，Node 這裡一定會印出來——如果這次還是失敗，
+    // 把這行印出的完整指令原封不動複製到互動式 PowerShell 視窗貼上手動跑一次，能直接判斷
+    // 是「指令內容本身有問題」還是「透過這裡呼叫的啟動方式本身有問題」（2026-08-13）。
+    console.log('[執行前] ' + POWERSHELL_EXE + ' -NoProfile -ExecutionPolicy Bypass -Command "' + cmd + '"');
     execFile(POWERSHELL_EXE,
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', BRIDGE_SCRIPT, '-Port', SERIAL_PORT, '-Baud', String(BAUD), ...args],
-      // ⚠️ 2026-08-13 踩雷：windowsHide:true（隱藏子行程視窗）在這台機器上會讓透過這裡呼叫的
-      // PowerShell 序列埠操作變慢/卡住逾時，但直接在互動式視窗執行同一行指令完全正常——先拿掉
-      // 這個選項排查（副作用：執行列印/查狀態時螢幕上會短暫閃過一個 PowerShell 視窗，可接受）。
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', cmd],
       { timeout: TIMEOUT_MS },
       (err, stdout, stderr) => {
+        console.log('[執行後] err=' + (err ? 'YES' : 'NO') + (err ? (' code=' + (err.code != null ? err.code : '未知') + ' killed=' + (err.killed ? 'YES' : 'NO') + ' signal=' + (err.signal || '無')) : ''));
         if (err) {
           // 完整回報 exit code + stdout + stderr，避免只顯示 Node 產生的通用「Command failed」
           // 摘要看不到真正原因（2026-08-13 踩雷：PowerShell 有時非零結束碼卻沒有任何 stderr，

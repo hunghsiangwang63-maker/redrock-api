@@ -345,7 +345,16 @@ async function getActiveRealInvoice(db, sourceType, refId) {
   if (!sourceType || !refId) return null;
   const snap = await db.collection('invoices')
     .where('sourceType', '==', sourceType).where('refId', '==', refId).where('status', '==', 'issued').limit(1).get();
-  return snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+  if (!snap.empty) return { id: snap.docs[0].id, ...snap.docs[0].data() };
+  // 個別入場（sourceType:'checkin'）另外檢查有沒有被「合併列印發票」涵蓋（sourceType:'checkin_merged'，
+  // 本身 refId 為 null、實際涵蓋的入場 id 存在 mergedCheckinIds 陣列）——避免已被合併開票的人回頭單獨
+  // 查詢時被誤判成「沒開過」而重複再開一張。單一 array-contains 查詢＋記憶體過濾狀態，避免複合索引。
+  if (sourceType === 'checkin') {
+    const mergedSnap = await db.collection('invoices').where('mergedCheckinIds', 'array-contains', refId).get();
+    const found = mergedSnap.docs.find(d => d.data().status === 'issued');
+    if (found) return { id: found.id, ...found.data() };
+  }
+  return null;
 }
 
 // 供各流程取消/退貨動作自動連動作廢（§4.1.3）：查有無對應「已開立」的真實發票，有才作廢；

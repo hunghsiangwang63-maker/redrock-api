@@ -1551,6 +1551,15 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
     if (!isTargetOpen(targetCourse.makeupTarget, tReg.size, targetCourse.type)) {
       throw { code: 'MAKEUP_TARGET_CLOSED', message: '此梯次目前未開放作為補課場次，請改選其他梯次' };
     }
+    // 目標梯次「第一堂課已正式開始」才開放補課申請（2026-08-13 拍板）：避免補課提前佔用尚未
+    // 開課梯次的名額、排擠該梯次正在進行中的正式報名。用該梯次首堂真實日期（unlimitedPracticeStart，
+    // 首次產生場次時寫入，見 createWeeklySessions）判斷；缺此欄位（極舊/手動建立的課程）才退回
+    // startDate，兩者皆無則不擋（放行，避免因資料缺漏誤傷合法申請）。同班別補課因來源梯次本身
+    // 已開課過（否則不會有請假紀錄），天然不受此限。
+    const targetFirstDate = targetCourse.unlimitedPracticeStart || targetCourse.startDate || null;
+    if (targetFirstDate && taiwanToday() < targetFirstDate) {
+      throw { code: 'TARGET_NOT_STARTED', message: `此梯次尚未開課（首堂 ${targetFirstDate}），須等第一堂課正式開始後才開放補課申請，避免佔用正式報名名額` };
+    }
   }
 
   const now = new Date();

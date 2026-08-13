@@ -54,8 +54,11 @@ try {
       if ($null -eq $pos) {
         Write-Output 'CONNECTED=1 POSITION=NULL JOURNAL=NULL RECEIPT=NULL'
       } else {
-        $journal = ($pos -shr 5) -band 1
-        $receipt = ($pos -shr 6) -band 1
+        # -shr/-shl（位元位移）PowerShell 3.0+ 才支援，Win7 內建預設是 PowerShell 2.0 沒有這兩個運算子
+        # （2026-08-13 實機踩雷：真正原因不是語法錯字，是這台機器的 PowerShell 版本太舊）。
+        # 改用「位元遮罩比對」達到同樣效果（-band 從 v1 就有）：0x20=bit5、0x40=bit6。
+        $journal = if (($pos -band 0x20) -ne 0) { 1 } else { 0 }
+        $receipt = if (($pos -band 0x40) -ne 0) { 1 } else { 0 }
         $posOk = if ($journal -eq 1 -and $receipt -eq 1) { 1 } else { 0 }
         Write-Output "CONNECTED=1 POSITION=$posOk JOURNAL=$journal RECEIPT=$receipt"
       }
@@ -67,8 +70,8 @@ try {
     $pos = Read-OneByteOrNull $sp
     $blocked = $false
     if ($null -ne $pos) {
-      $journal = ($pos -shr 5) -band 1
-      $receipt = ($pos -shr 6) -band 1
+      $journal = if (($pos -band 0x20) -ne 0) { 1 } else { 0 }
+      $receipt = if (($pos -band 0x40) -ne 0) { 1 } else { 0 }
       if (-not ($journal -eq 1 -and $receipt -eq 1)) { $blocked = $true }
     }
     if ($blocked) {

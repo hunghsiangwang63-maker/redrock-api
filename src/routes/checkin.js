@@ -647,10 +647,14 @@ router.get('/history',
 
       // 會員只能查自己或子會員的；員工可查指定館別
       const isMemberToken = !!req.member && !req.staff;
-      // 個人帳號（兼職／正職，未打卡值班）權限收斂（2026-08-08 拍板，同日再擴及正職）：
-      // 不可查歷史入場（對齊前端「歷史入場」分頁已隱藏）
-      if (!isMemberToken && req.staff?.type === 'staff' && ['part_time', 'full_time'].includes(req.staff?.role)) {
-        return res.status(403).json({ error: 'MANAGER_OR_STATION_REQUIRED', message: '此功能限值班/管理員使用' });
+      // 歷史入場查詢（員工端）限管理員「個人帳號」使用（2026-08-08 先擋個人正職/兼職未值班；
+      // 2026-08-13 再拍板擴大擋「值班 operator」——含館長/系統管理員值班身分時也一併擋，
+      // 一律要用管理員自己的個人帳號登入才查得到。改用允許清單避免遺漏其他身分組合。
+      if (!isMemberToken) {
+        const isManagerPersonal = req.staff?.type === 'staff' && ['super_admin', 'gym_manager'].includes(req.staff?.role);
+        if (!isManagerPersonal) {
+          return res.status(403).json({ error: 'MANAGER_ONLY', message: '此功能限管理員個人帳號使用' });
+        }
       }
       let scopedMemberId = isMemberToken ? req.member.id : req.query.memberId;
       if (isMemberToken && req.query.memberId && req.query.memberId !== req.member.id) {

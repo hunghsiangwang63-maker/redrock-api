@@ -222,27 +222,6 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
       });
     }
 
-    // 體驗課程／試上（專班體驗＋單堂體驗，sourceType:'experience'）開真列印發票時，同步記一筆等額
-    // 「－專班體驗課程」加減項（2026-08-14 拍板）——這類發票的實際收款早在 recordExperienceRevenue
-    // （確認收款當下）就已經記過一次「課程」收入，「延後開立」規則使今天印發票的日子常晚於實際
-    // 收款日；為了讓「課程」項目顯示今天開了多少票（見 dailySettlements.js courseIncome 併入
-    // bySourceType.experience）同時不讓今日總額被這筆「補印紙本」的動作虛增，用同金額負向加減項
-    // 抵消。⚠️ 只套用體驗課程，不套用一般週課（週課的「今天開課結束才印」全額算今天是設計本意）。
-    // 以 experienceBookings 文件本身的旗標冪等——只在第一次成功列印時記一次，避免作廢後重印又重複扣。
-    if (sourceType === 'experience' && validity.valid && refId) {
-      try {
-        const bookingRef = db.collection('experienceBookings').doc(refId);
-        const bookingSnap = await bookingRef.get();
-        if (bookingSnap.exists && !bookingSnap.data().courseAdjDone) {
-          await addCashAdjustment({
-            gymId, amount: amt, sign: '-', type: '專班體驗課程',
-            note: `${record.invoiceNo}：${itemName || '體驗課程費用'}${memberName ? `（${memberName}）` : ''}（收款已於確認當下記帳，避免補印發票重複計入今日總額）`,
-          });
-          await bookingRef.update({ courseAdjDone: true, courseAdjDoneAt: now });
-        }
-      } catch (e) { console.error('[專班體驗加減項]', e.message); }
-    }
-
     // 配號後的紙捲剩餘狀態（僅該館設過紙捲張數時才有意義）——供前端在列印成功畫面同步跳出
     // 「即將用完」醒目警語，不用等下次開設定頁才看到。
     res.json({

@@ -378,6 +378,68 @@ router.post('/:id/void', authenticate, requireManagerOrStation, async (req, res)
   }
 });
 
+// ── PUT /invoices/source-payment-method - 開票當下修正付款方式（值班或管理員）─────
+// 用途：會員自助流程可能選錯付款方式（如選 LinePay、實際到櫃檯付現金），值班人員在同一個
+// 開立發票畫面直接改正並回寫來源記錄，不用另外找該筆訂單的編輯畫面。
+//
+// 課程（sourceType:'course'）比較特殊：refId 是「主報名」那筆 courseEnrollments 文件 id，
+// 對應的 transactions.relatedId 存的卻是 courseId（同一門課全部學員共用同一個值，無法安全
+// 定位「唯一一筆」該報名的交易）——這種情況只更正報名記錄本身（含 courseRegistrations
+// header，比照既有 receivedAmountOverride 編修同一套雙寫模式），不去動 transactions。
+// 其餘四種 sourceType 的 transactions.relatedId 皆等同 refId（1:1，可安全定位），一併更正
+// 對應交易的付款方式，讓「今日」（尚未結帳、屬即時計算）的營收/結帳付款方式統計同步反映；
+// 已凍結（已結帳）的過去日期快照不會被追溯更動——如需要請走既有「當日再次結帳」機制。
+const SOURCE_PM_COLLECTION = { checkin: 'checkIns', rental: 'equipmentRentals', product: 'productSales', competition: 'competitionRegistrations', experience: 'experienceBookings' };
+// ⚠️ experience 的收入交易寫 type:'course'（比照課程「教學費」歸類，見 experienceService.js
+// recordExperienceRevenue），但 relatedId 存的是 experienceBookings 自己的 id（1:1，非 courseId 那種
+// 多筆共用），可安全定位、不會誤傷真正的課程報名交易（那些的 relatedId 存的是 courseId）。
+const SOURCE_PM_TXN_TYPE = { checkin: 'checkin', rental: 'rental', product: 'product', competition: 'competition', experience: 'course' };
+const VALID_PAYMENT_METHODS = ['cash', 'transfer', 'linepay', 'jkopay', 'taiwanpay'];
+
+router.put('/source-payment-method', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const { sourceType, refId, paymentMethod } = req.body;
+    if (!sourceType || !refId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '缺少 sourceType/refId' });
+    if (!VALID_PAYMENT_METHODS.includes(paymentMethod)) return res.status(400).json({ error: 'INVALID_METHOD', message: '付款方式不正確' });
+    const db = getDb();
+    const now = new Date();
+
+    if (sourceType === 'course') {
+      const ref = db.collection('courseEnrollments').doc(refId);
+      const doc = await ref.get();
+      if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此報名紀錄' });
+      const en = doc.data();
+      await ref.update({ paymentMethod, updatedAt: now });
+      if (en.memberId && en.courseId) {
+        try {
+          const { updateRegistrationStatusByCourseMember } = require('../services/courseRegistrationService');
+          await updateRegistrationStatusByCourseMember(db, en.memberId, en.courseId, { paymentMethod });
+        } catch (e) { console.error('[付款方式修正] 課程 header 同步失敗:', e.message); }
+      }
+      return res.json({ success: true, paymentMethod });
+    }
+
+    const coll = SOURCE_PM_COLLECTION[sourceType];
+    if (!coll) return res.status(400).json({ error: 'UNSUPPORTED_SOURCE', message: '此來源類型不支援修正付款方式' });
+    const ref = db.collection(coll).doc(refId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此紀錄' });
+    await ref.update({ paymentMethod, updatedAt: now });
+
+    try {
+      const txnType = SOURCE_PM_TXN_TYPE[sourceType];
+      const txnSnap = await db.collection('transactions').where('relatedId', '==', refId).where('type', '==', txnType).get();
+      if (!txnSnap.empty) {
+        const batch = db.batch();
+        txnSnap.docs.forEach(d => batch.update(d.ref, { paymentMethod, updatedAt: now }));
+        await batch.commit();
+      }
+    } catch (e) { console.error('[付款方式修正] 交易同步失敗:', e.message); }
+
+    res.json({ success: true, paymentMethod });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 module.exports = router;
 module.exports.voidRealInvoiceIfIssued = voidRealInvoiceIfIssued;
 module.exports.isInvoicePrintingEnabled = isInvoicePrintingEnabled;

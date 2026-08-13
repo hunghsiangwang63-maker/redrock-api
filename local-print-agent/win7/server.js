@@ -48,7 +48,9 @@ function runBridge(args) {
           // 摘要看不到真正原因（2026-08-13 踩雷：PowerShell 有時非零結束碼卻沒有任何 stderr，
           // 原本 `stderr || err.message` 這種寫法在這種情況下就完全看不出問題出在哪）。
           const detail = [
-            `exitCode=${err.code ?? '未知'}`,
+            // ⚠️ 這台機器的 Node.js 太舊（見檔頭說明），不支援 ?? / ?. 語法（2026-08-13 踩雷過），
+            // 這個檔案全程只能用最基本、ES5 相容的寫法（三元運算子、!= null），不要再用新語法。
+            `exitCode=${err.code != null ? err.code : '未知'}`,
             stdout ? `stdout=${String(stdout).trim()}` : 'stdout=(空)',
             stderr ? `stderr=${String(stderr).trim()}` : 'stderr=(空)',
           ].join(' | ');

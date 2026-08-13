@@ -43,7 +43,17 @@ function runBridge(args) {
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', BRIDGE_SCRIPT, '-Port', SERIAL_PORT, '-Baud', String(BAUD), ...args],
       { timeout: TIMEOUT_MS, windowsHide: true },
       (err, stdout, stderr) => {
-        if (err && !stdout) return reject(new Error(stderr || err.message));
+        if (err) {
+          // 完整回報 exit code + stdout + stderr，避免只顯示 Node 產生的通用「Command failed」
+          // 摘要看不到真正原因（2026-08-13 踩雷：PowerShell 有時非零結束碼卻沒有任何 stderr，
+          // 原本 `stderr || err.message` 這種寫法在這種情況下就完全看不出問題出在哪）。
+          const detail = [
+            `exitCode=${err.code ?? '未知'}`,
+            stdout ? `stdout=${String(stdout).trim()}` : 'stdout=(空)',
+            stderr ? `stderr=${String(stderr).trim()}` : 'stderr=(空)',
+          ].join(' | ');
+          return reject(new Error(detail));
+        }
         resolve(String(stdout || '').trim());
       });
   });

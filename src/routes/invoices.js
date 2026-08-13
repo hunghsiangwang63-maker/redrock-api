@@ -260,7 +260,7 @@ router.get('/status', authenticate, requireManagerOrStation, async (req, res) =>
     if (!sourceType || !refId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '缺少 sourceType/refId' });
     const db = getDb();
     const real = await getActiveRealInvoice(db, sourceType, refId);
-    if (real) return res.json({ invoiceNo: real.invoiceNo, amount: real.amount });
+    if (real) return res.json({ invoiceNo: real.invoiceNo, amount: real.amount, merged: real.sourceType === 'checkin_merged' });
     const legacy = await require('../services/invoiceService').getActiveInvoice(db, sourceType, refId);
     res.json(legacy ? { invoiceNo: legacy.invoiceNo || '', amount: Number(legacy.amount) || 0 } : { invoiceNo: null, amount: null });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }

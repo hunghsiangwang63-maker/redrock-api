@@ -97,18 +97,19 @@ const computePaidEntryAmount = async (entryType, member, opts = {}) => {
   let amount = originalAmount;
   if (opts.legacyDiscountCard) amount = Math.round(amount * DISCOUNT_CARD_RATE); // 舊折扣卡 8 折
   if (teamEligible) amount = Math.round(amount * PRICES.team_discount_rate);      // 有效隊員再疊 9 折
-  // 友館隊員(×rate,預設9折) 與 特約廠商(定額−N) 皆自行出示證明；僅【未套舊折扣卡 且 非有效隊員】且全票/學生票；兩者互斥、友館隊員優先（9折較優）
+  // 友館隊員(×rate,預設9折)：全票/學生票皆適用。特約廠商(定額−N)：僅全票（2026-08-13 拿掉學生
+  // 身分適用，學生票不再顯示此選項）。皆僅【未套舊折扣卡 且 非有效隊員】、自行出示證明；
+  // 兩者互斥（同時符合資格時，友館隊員優先，9折通常較優）。
   let partnerVendor = false;
   let partnerGymMember = false;
-  if (!opts.legacyDiscountCard && !teamEligible
-      && (entryType === 'single_ticket' || entryType === 'student_free')) {
-    if (opts.partnerGymMember) {
+  if (!opts.legacyDiscountCard && !teamEligible) {
+    if (opts.partnerGymMember && (entryType === 'single_ticket' || entryType === 'student_free')) {
       const pg = await getPartnerGymMemberConfig();
       if (pg.enabled && pg.rate > 0 && pg.rate < 1) {
         amount = Math.round(originalAmount * pg.rate);
         partnerGymMember = true;
       }
-    } else if (opts.partnerVendor) {
+    } else if (opts.partnerVendor && entryType === 'single_ticket') {
       const pv = await getPartnerVendorConfig();
       if (pv.enabled && pv.discount > 0) {
         amount = Math.max(0, originalAmount - pv.discount);

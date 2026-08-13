@@ -138,8 +138,8 @@ const verifyEntry = async (memberId, gymId) => {
       price: t.price,
       discountedPrice: withTeam(t.price),
       teamDiscount: isTeam && withTeam(t.price) < t.price,
-      // 特約廠商優惠：全票/學生票且非隊員（隊員 9 折較優、不提供特約）；設定停用/金額0 則一律 false
-      partnerVendorEligible: pvOn && (t.id === 'single_ticket' || t.id === 'student_free') && !isTeam,
+      // 特約廠商優惠：僅全票（2026-08-13 拿掉學生身分適用）且非隊員；設定停用/金額0 則一律 false
+      partnerVendorEligible: pvOn && t.id === 'single_ticket' && !isTeam,
       partnerGymMemberEligible: pgmOn && (t.id === 'single_ticket' || t.id === 'student_free') && !isTeam,
       available: true,
       requiresPayment: true,
@@ -162,7 +162,7 @@ const verifyEntry = async (memberId, gymId) => {
       type: singleTypeId, label: singleLabel, price: singlePrice,
       discountedPrice: withTeam(singlePrice),
       teamDiscount: isTeam && withTeam(singlePrice) < singlePrice,
-      partnerVendorEligible: pvOn && (singleTypeId === 'single_ticket' || singleTypeId === 'student_free') && !isTeam,
+      partnerVendorEligible: pvOn && singleTypeId === 'single_ticket' && !isTeam,
       partnerGymMemberEligible: pgmOn && (singleTypeId === 'single_ticket' || singleTypeId === 'student_free') && !isTeam,
       available: true, requiresPayment: true,
     }];

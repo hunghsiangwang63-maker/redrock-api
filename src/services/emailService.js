@@ -434,6 +434,28 @@ const sendTrialCancelledNotice = async ({ email, cc, gymLabel, memberName, cours
   });
 };
 
+// ── 比賽報名資料異動通知（館方人工更正組別/榮譽參賽等欄位後，系統寄信告知會員）─────────
+const sendCompetitionRegistrationModified = async (to, { memberName, competitionName, oldDivisionName, newDivisionName, isHonorary }) => {
+  const divisionChanged = oldDivisionName && newDivisionName && oldDivisionName !== newDivisionName;
+  return sendEmail({
+    to,
+    subject: `【紅石攀岩】報名資料異動通知－${competitionName}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">報名資料異動通知</h2>
+        <p>親愛的 ${esc(memberName)}，</p>
+        <p>您報名的 <strong>「${esc(competitionName)}」</strong>，館方已為您更新以下資料：</p>
+        <div style="background:#FBF5F5;border-radius:8px;padding:16px;margin:16px 0;line-height:1.8">
+          ${divisionChanged ? `<div>組別：${esc(oldDivisionName)} → <strong>${esc(newDivisionName)}</strong></div>` : ''}
+          ${isHonorary ? `<div>參賽身分：<strong>榮譽參賽</strong></div>` : ''}
+        </div>
+        <p>如對此異動有任何疑問，請聯繫館方。</p>
+        <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+  });
+};
+
 module.exports = {
   esc, // HTML 跳脫（供各路由組信件時共用）
   sendEmail,
@@ -452,4 +474,5 @@ module.exports = {
   sendParentCompetitionWaiverLink,
   sendDeviceVerificationCode,
   sendTrialCancelledNotice,
+  sendCompetitionRegistrationModified,
 };

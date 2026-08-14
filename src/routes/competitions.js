@@ -9,6 +9,7 @@ const { authenticate, authenticateAny, checkPermission , requireManagerOrStation
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const competitionService = require('../services/competitionService');
+const emailService = require('../services/emailService');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -1242,6 +1243,53 @@ router.put('/registrations/:regId/received-amount', authenticate, requireManager
     res.json({ success: true, receivedAmountOverride: amount });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
+
+// ── POST /registrations/:regId/admin-update - 館方人工更正報名資料（目前支援組別/榮譽參賽）
+// 供已確認/已收款的報名事後需要修正組別、或標記為榮譽參賽時使用（非會員自助流程，不影響
+// 費用/收款狀態，也不透過退回修改那套流程）。異動後系統自動寄信通知會員。
+router.post('/registrations/:regId/admin-update',
+  authenticate, checkPermission('competitions.manage'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const ref = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(req.params.regId);
+      const doc = await ref.get();
+      if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+      const reg = doc.data();
+      const compDoc = await db.collection(COLLECTIONS.COMPETITIONS).doc(reg.competitionId).get();
+      const comp = compDoc.data();
+      if (!comp) return res.status(404).json({ error: 'COMPETITION_NOT_FOUND', message: '找不到對應賽事' });
+
+      const updates = { updatedAt: new Date() };
+      const oldDivisionName = reg.divisionName;
+      let newDivisionName = reg.divisionName;
+      if (req.body.divisionId && req.body.divisionId !== reg.divisionId) {
+        const division = (comp.divisions || []).find(d => d.id === req.body.divisionId);
+        if (!division) return res.status(400).json({ error: 'INVALID_DIVISION', message: '組別不正確' });
+        updates.divisionId = division.id;
+        updates.divisionName = division.name;
+        newDivisionName = division.name;
+      }
+      if (req.body.isHonorary !== undefined) updates.isHonorary = !!req.body.isHonorary;
+
+      await ref.update(updates);
+
+      // 異動通知信（系統自動寄；寄信失敗不影響資料已更新成功）
+      if (reg.email) {
+        emailService.sendCompetitionRegistrationModified(reg.email, {
+          memberName: reg.memberName, competitionName: comp.name,
+          oldDivisionName, newDivisionName,
+          isHonorary: updates.isHonorary !== undefined ? updates.isHonorary : reg.isHonorary,
+        }).catch(() => {});
+      }
+
+      res.json({ success: true, message: '報名資料已更新，已寄送異動通知' });
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
 
 // ── 比賽報名開立發票（預先建立，待日後發票機串接）─────────────────────
 // 與課程學員發票共用 invoiceService（sourceType:'competition'，refId=registrationId）：

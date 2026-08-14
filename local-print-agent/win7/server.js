@@ -47,6 +47,24 @@ const buildInvoiceLines = (args) => buildInvoiceLinesRaw(args, DEFAULT_GYM);
 // 的指令被拼錯，-Port/-Mode 這類必填參數綁不到值，PowerShell 因此卡在互動式提示「請輸入
 // 缺少的參數值」等待輸入——但這裡背後沒有人可以輸入，於是卡到逾時被強制關掉。改成自己組
 // 一整段單一字串（-Command "& '...' -Port '...' ..."）傳給 execFile，避開陣列逐一拼接。
+// ⚠️ 2026-08-14 踩雷：serial-bridge.ps1 中文編碼問題修好後，print/status 兩種模式實測
+// 「動作本身確實成功」（印表機真的印出來、CONNECTED/POSITION/JOURNAL/RECEIPT 四個欄位都
+// 正確），但這裡卻仍回報失敗——關鍵線索是 exitCode=未知：Node 的 execFile 在子行程被「訊
+// 號終止」（非正常 exit，而不是腳本自己 exit 1）時，err.code 會是 null/undefined（不是某
+// 個實際的數字），這正是 execFile 的 timeout 選項把行程強制關閉時的特徵。也就是說
+// serial-bridge.ps1 已經把正確的最終結果寫進 stdout，但行程本身在那之後遲遲沒有真正結
+// 束（很可能卡在 finally 區塊呼叫 $sp.Close() 這一步——便宜 USB 轉序列埠晶片的驅動程式
+// 收尾偶爾會卡住），直到撞到 TIMEOUT_MS 逾時被強制關閉。
+// 修法：不要無條件把「execFile 回報 err」當成失敗，先看 stdout 是不是這個模式該有的合法
+// 完整格式——是的話直接當成功處理（並印一行警告方便事後追查是否真的是收尾卡住），只有
+// stdout 內容本身不合法（真的沒有任何有效輸出）才視為真正失敗。這樣即使子行程收尾卡住被
+// 強制關閉，只要它已經把結果寫出來，使用者這邊看到的行為就會是正確的「成功」。
+const VALID_STDOUT_PATTERNS = {
+  status: /^CONNECTED=(0|1) POSITION=(0|1|NULL) JOURNAL=(0|1|NULL) RECEIPT=(0|1|NULL)$/,
+  print: /^(OK|NOT_POSITIONED|ERROR:[\s\S]+)$/,
+  drawer: /^(OK|ERROR:[\s\S]+)$/,
+};
+
 function runBridge({ mode, printFile, openDrawer }) {
   return new Promise((resolve, reject) => {
     let cmd = "& '" + BRIDGE_SCRIPT + "' -Port '" + SERIAL_PORT + "' -Baud " + BAUD + " -Mode '" + mode + "'";
@@ -60,7 +78,16 @@ function runBridge({ mode, printFile, openDrawer }) {
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', cmd],
       { timeout: TIMEOUT_MS },
       (err, stdout, stderr) => {
-        console.log('[執行後] err=' + (err ? 'YES' : 'NO') + (err ? (' code=' + (err.code != null ? err.code : '未知') + ' killed=' + (err.killed ? 'YES' : 'NO') + ' signal=' + (err.signal || '無')) : ''));
+        const trimmedOut = String(stdout || '').trim();
+        console.log('[執行後] err=' + (err ? 'YES' : 'NO') + (err ? (' code=' + (err.code != null ? err.code : '未知') + ' killed=' + (err.killed ? 'YES' : 'NO') + ' signal=' + (err.signal || '無')) : '') + ' stdout=' + (trimmedOut || '(空)'));
+        const pattern = VALID_STDOUT_PATTERNS[mode];
+        const stdoutLooksValid = pattern && pattern.test(trimmedOut);
+        if (err && stdoutLooksValid) {
+          // execFile 認為失敗（很可能是收尾逾時被強制關閉），但 stdout 內容完整合法——
+          // 相信已經拿到的真實結果，不要把使用者導向錯誤的「失敗」畫面。
+          console.log('⚠️ execFile 回報錯誤，但 stdout 內容完整合法，視為成功：' + trimmedOut);
+          return resolve(trimmedOut);
+        }
         if (err) {
           // 完整回報 exit code + stdout + stderr，避免只顯示 Node 產生的通用「Command failed」
           // 摘要看不到真正原因（2026-08-13 踩雷：PowerShell 有時非零結束碼卻沒有任何 stderr，
@@ -69,12 +96,12 @@ function runBridge({ mode, printFile, openDrawer }) {
             // ⚠️ 這台機器的 Node.js 太舊（見檔頭說明），不支援 ?? / ?. 語法（2026-08-13 踩雷過），
             // 這個檔案全程只能用最基本、ES5 相容的寫法（三元運算子、!= null），不要再用新語法。
             `exitCode=${err.code != null ? err.code : '未知'}`,
-            stdout ? `stdout=${String(stdout).trim()}` : 'stdout=(空)',
+            stdout ? `stdout=${trimmedOut}` : 'stdout=(空)',
             stderr ? `stderr=${String(stderr).trim()}` : 'stderr=(空)',
           ].join(' | ');
           return reject(new Error(detail));
         }
-        resolve(String(stdout || '').trim());
+        resolve(trimmedOut);
       });
   });
 }

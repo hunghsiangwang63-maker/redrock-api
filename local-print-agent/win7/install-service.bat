@@ -1,10 +1,16 @@
 @echo off
-REM RedRock 發票列印代理 - 安裝成 Windows 服務（開機自動啟動 + 當掉自動重啟）
-REM 用法：把 nssm.exe（https://nssm.cc/download 下載，32/64 位元視這台機器而定）放到
-REM 跟這個 .bat 同一個資料夾（win7\），或先加進系統 PATH，再直接雙擊這個 .bat 執行。
-REM 需要系統管理員權限——如果雙擊後立刻關閉視窗或出現「拒絕存取」，改成「以系統管理員身分執行」。
+REM RedRock Invoice Print Agent - Install as Windows Service (auto-start on boot + auto-restart on crash)
+REM Usage: download nssm.exe from https://nssm.cc/download (win32 build works on both 32/64-bit Windows)
+REM and put it in this same folder (win7\), next to server.js. Then right-click this .bat file and
+REM choose "Run as administrator" (installing a service needs admin rights - double-clicking normally
+REM will fail with an access-denied error).
+REM
+REM 2026-08-14 note: this file was rewritten in plain English after the Chinese-character version
+REM caused the console window to close instantly with no output on this machine - same root cause
+REM as the serial-bridge.ps1 encoding bug fixed earlier (non-ASCII text breaking non-interactive
+REM file parsing on this old Windows 7 setup). Keep this file ASCII-only going forward.
 
-echo ===== RedRock 發票列印代理 - 安裝成 Windows 服務 =====
+echo ===== RedRock Invoice Print Agent - Install as Windows Service =====
 echo.
 
 set NSSM=nssm.exe
@@ -13,9 +19,9 @@ if errorlevel 1 (
   if exist "%~dp0nssm.exe" (
     set NSSM=%~dp0nssm.exe
   ) else (
-    echo 找不到 nssm.exe。
-    echo 請先到 https://nssm.cc/download 下載，把裡面的 nssm.exe 複製到跟這個 .bat 同一個資料夾
-    echo （win7\），或加進系統 PATH，再重新執行這個 .bat。
+    echo Could not find nssm.exe.
+    echo Please download it from https://nssm.cc/download, copy nssm.exe into this same
+    echo folder as this .bat file, or add it to your system PATH, then run this again.
     pause
     exit /b 1
   )
@@ -28,8 +34,9 @@ for /f "delims=" %%i in ('where node 2^>nul') do (
 )
 :found_node
 if "%NODE_EXE%"=="" (
-  echo 找不到 node.exe（跑 node -v 沒有反應）。請確認 Node.js 已安裝、且能在命令提示字元
-  echo 正常執行 node -v 之後，再重新執行這個 .bat。
+  echo Could not find node.exe - "node -v" did not return anything.
+  echo Please make sure Node.js is installed and "node -v" works from a normal
+  echo Command Prompt window, then run this again.
   pause
   exit /b 1
 )
@@ -38,34 +45,37 @@ set SERVICE_NAME=RedRockPrintAgent
 set SCRIPT_DIR=%~dp0
 set SERVER_JS=%SCRIPT_DIR%server.js
 
-echo 找到 Node.exe：%NODE_EXE%
-echo 對應的 server.js：%SERVER_JS%
+echo Found node.exe at: %NODE_EXE%
+echo Using server.js at: %SERVER_JS%
 echo.
 
 "%NSSM%" install %SERVICE_NAME% "%NODE_EXE%" "%SERVER_JS%"
 "%NSSM%" set %SERVICE_NAME% AppDirectory "%SCRIPT_DIR%"
-REM 開機自動啟動（不用等有人登入）
+REM Start automatically on boot, before anyone logs in
 "%NSSM%" set %SERVICE_NAME% Start SERVICE_AUTO_START
-REM 程式當掉／被關掉，3 秒後自動重啟（NSSM 內建行為，這裡只是明確設定間隔）
+REM If the process crashes or is killed, restart it after 3 seconds
 "%NSSM%" set %SERVICE_NAME% AppRestartDelay 3000
-REM 把原本印在黑底視窗的訊息（開機banner、[執行前]/[執行後] 除錯記錄）改寫進這兩個檔案，
-REM 因為裝成服務後背景執行、不再有終端機視窗可以看——事後排查問題要看這兩個 log 檔。
+REM Once installed as a service there is no visible console window anymore, so redirect what
+REM used to print there (startup banner, [before]/[after] debug logs) into these two log files
+REM instead - check them if something needs troubleshooting later.
 "%NSSM%" set %SERVICE_NAME% AppStdout "%SCRIPT_DIR%service-stdout.log"
 "%NSSM%" set %SERVICE_NAME% AppStderr "%SCRIPT_DIR%service-stderr.log"
-REM log 檔案輪替，避免長期執行後檔案無限長大（超過 1MB 自動輪替保留一份舊檔）
+REM Rotate log files so they do not grow forever (auto-rotate past 1MB, keeps one old copy)
 "%NSSM%" set %SERVICE_NAME% AppRotateFiles 1
 "%NSSM%" set %SERVICE_NAME% AppRotateBytes 1048576
 
 echo.
-echo ===== 安裝完成，啟動服務中... =====
+echo ===== Install complete, starting service now... =====
 "%NSSM%" start %SERVICE_NAME%
 
 echo.
-echo 完成！之後這台電腦開機會自動啟動發票列印代理，不用再手動開命令提示字元打
-echo node server.js；程式如果意外關閉或當掉，也會在 3 秒後自動重新啟動。
+echo Done! From now on this computer will start the invoice print agent automatically
+echo on boot - no need to manually open Command Prompt and run "node server.js" anymore.
+echo If the program closes unexpectedly or crashes, it will also restart itself after 3 seconds.
 echo.
-echo 驗證方式：重開機後，直接開瀏覽器到 http://localhost:3399/ 應該就能看到測試頁
-echo （不需要先手動啟動任何東西）。
+echo To verify: restart this computer, then just open a browser to http://localhost:3399/
+echo without doing anything else manually - you should see the test page if it worked.
 echo.
-echo 如果要暫時停用／之後想移除服務，用同一個資料夾的 uninstall-service.bat。
+echo To temporarily stop or later remove the service, use uninstall-service.bat in this
+echo same folder.
 pause

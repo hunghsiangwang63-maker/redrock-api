@@ -1,6 +1,9 @@
 @echo off
-REM RedRock 發票列印代理 - 移除 Windows 服務（還原成手動 node server.js 執行）
-REM 需要系統管理員權限——如果雙擊後立刻關閉視窗或出現「拒絕存取」，改成「以系統管理員身分執行」。
+REM RedRock Invoice Print Agent - Uninstall Windows Service (revert to manually running node server.js)
+REM Needs administrator rights - right-click this file and choose "Run as administrator". If the
+REM window closes immediately or shows "Access is denied", that is why - try again as administrator.
+REM
+REM 2026-08-14 note: rewritten in plain English, see install-service.bat for why (encoding issue).
 
 set NSSM=nssm.exe
 where %NSSM% >nul 2>nul
@@ -8,7 +11,8 @@ if errorlevel 1 (
   if exist "%~dp0nssm.exe" (
     set NSSM=%~dp0nssm.exe
   ) else (
-    echo 找不到 nssm.exe（跟安裝時用的要是同一個，或至少同版本）。
+    echo Could not find nssm.exe - it should be the same one (or at least the same
+    echo version) you used when you first installed the service.
     pause
     exit /b 1
   )
@@ -16,12 +20,13 @@ if errorlevel 1 (
 
 set SERVICE_NAME=RedRockPrintAgent
 
-echo 停止服務中...
+echo Stopping service...
 "%NSSM%" stop %SERVICE_NAME%
-echo 移除服務中...
+echo Removing service...
 "%NSSM%" remove %SERVICE_NAME% confirm
 
 echo.
-echo 已移除。之後要跑發票列印代理，需要重新手動執行 node server.js（或重新跑
-echo install-service.bat 裝回服務）。
+echo Removed. If you need to run the invoice print agent again after this, you will
+echo need to either manually run "node server.js" again, or run install-service.bat
+echo again to reinstall it as a service.
 pause

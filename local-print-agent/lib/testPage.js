@@ -14,6 +14,15 @@
 // 純測試硬體用的按鈕）、檢查連線狀態（正式頁面開啟時會自動檢查一次＋一個「重新檢查」小連結，這裡
 // 沿用同樣的自動檢查＋手動重新檢查兩者並存的做法）。
 //
+// ⚠️ 2026-08-14 續：加「付款方式」選單＋現金找零計算機，比照正式頁面的 PaymentMethodFixBox
+// （InvoiceModal.jsx）。付款方式本身不會印在紙本上（買受人統編/品項/金額才會，見 invoiceFormat.js
+// 的 buildInvoiceLines——這份代理刻意不做金額判斷/不記錄任何交易，付款方式純粹是「是否開錢櫃」
+// 的判斷依據＋找零算給收銀的人看，不送進 /print 的 request body）。選「現金」時比照正式頁面邏輯
+// 自動 openDrawer=true（列印成功同時開櫃），故拿掉原本那個手動勾選「同時開錢櫃」的 checkbox——
+// 跟正式頁面完全一樣改成「選現金就會開櫃」，不用另外記得勾。找零計算純前端算術，不呼叫任何 API。
+// 正式頁面的「更新為 XXX 並回寫系統」按鈕不重現——那是回寫某一筆真實訂單的付款方式，這個測試頁
+// 沒有訂單可以回寫（沒有 sourceType/refId 概念），不適用。
+//
 // ⚠️ CSS 全程避開 IE11 不支援的寫法：不用 CSS Grid、不用 CSS 變數（--foo）、不用 8 碼帶透明度的
 // hex 顏色（IE11 只認 6 碼）、flexbox 一律用 margin 排間距（不用 gap，IE11 的 flex container 不
 // 支援 gap）。JS 全程 var/function，不用 let/const/箭頭函式/樣板字串（樣板字串只用在 Node.js 端
@@ -34,8 +43,16 @@ function renderTestPage() {
   .box{background:#FBF5F5;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:#666;}
   .statusRow{margin-top:0;}
   .link{color:#185FA5;background:none;border:none;cursor:pointer;text-decoration:underline;font-size:11px;padding:0;margin-left:8px;}
-  .checkboxRow{font-size:13px;color:#444;margin-bottom:14px;}
-  .checkboxRow input{width:auto;display:inline-block;vertical-align:middle;margin-right:6px;}
+  .payBtn{padding:6px 10px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:400;
+    border:1px solid #E8D5D5;background:#fff;color:#444;margin:0 6px 0 0;}
+  .payBtnActive{border:1.5px solid #8B1A1A;background:#FCEBEB;color:#8B1A1A;font-weight:700;}
+  .cashRow{margin-top:10px;}
+  .cashCol{width:48%;box-sizing:border-box;}
+  .cashColLeft{float:left;}
+  .cashColRight{float:right;text-align:right;}
+  .clearfix:after{content:"";display:block;clear:both;}
+  .dueLabel{font-size:11px;color:#999;}
+  .changeAmount{font-size:20px;font-weight:700;color:#2D7D46;}
   .btnPrimary{width:100%;height:44px;font-size:14px;font-weight:600;background:#8B1A1A;color:#fff;
     border:none;border-radius:9px;cursor:pointer;margin-bottom:8px;}
   .btnPrimary[disabled]{background:#ccc;cursor:not-allowed;}
@@ -55,6 +72,22 @@ function renderTestPage() {
     <div id="connDetail" class="resultBox resultInfo"></div>
   </div>
 
+  <div class="box">
+    <div style="font-size:12px;font-weight:600;color:#666;margin-bottom:8px;">付款方式</div>
+    <div id="payMethodBtns"></div>
+    <div id="cashRow" class="cashRow clearfix">
+      <div class="cashCol cashColLeft">
+        <label>收現</label>
+        <input type="number" id="cashReceived" placeholder="輸入實收現金金額" oninput="updateChange()">
+      </div>
+      <div class="cashCol cashColRight">
+        <div class="dueLabel">找零（應收 <span id="dueAmount">NT$0</span>）</div>
+        <div class="changeAmount" id="changeAmount">—</div>
+      </div>
+    </div>
+    <div class="hint" style="margin-top:8px;margin-bottom:0;">選「現金」時列印成功會自動開錢櫃（比照正式頁面行為）；其他付款方式不開櫃。</div>
+  </div>
+
   <div class="field">
     <label>場館</label>
     <select id="gym"><option value="hsinchu">新竹館</option><option value="shilin">士林館</option></select>
@@ -65,14 +98,11 @@ function renderTestPage() {
   </div>
   <div class="field">
     <label>金額</label>
-    <input type="number" id="itemPrice" value="300">
+    <input type="number" id="itemPrice" value="300" oninput="updateChange()">
   </div>
   <div class="field">
     <label>買受人統編（選填）</label>
     <input type="text" id="buyerTaxId" placeholder="留空不印該行">
-  </div>
-  <div class="checkboxRow">
-    <input type="checkbox" id="openDrawer">同時開錢櫃（僅現金情境使用）
   </div>
 
   <button class="btnPrimary" id="printBtn" onclick="doPrint()">🖨️ 測試列印</button>
@@ -99,6 +129,52 @@ function showResult(el, ok, text) {
   el.style.display = 'block';
   el.textContent = text;
 }
+
+// 付款方式選單＋現金找零計算機（純前端，不呼叫任何 API；付款方式只用來決定要不要開錢櫃）
+var PM_METHODS = [
+  { key: 'cash', label: '現金', icon: '💵' },
+  { key: 'transfer', label: '轉帳', icon: '🏦' },
+  { key: 'linepay', label: 'LinePay', icon: '💚' },
+  { key: 'jkopay', label: '街口', icon: '🔵' },
+  { key: 'taiwanpay', label: '台灣Pay', icon: '🇹🇼' }
+];
+var payMethod = 'cash';
+function makePayClickHandler(key) {
+  return function () { setPayMethod(key); };
+}
+function renderPayButtons() {
+  var container = document.getElementById('payMethodBtns');
+  var html = '';
+  for (var i = 0; i < PM_METHODS.length; i++) {
+    var active = (PM_METHODS[i].key === payMethod);
+    html += '<button type="button" class="payBtn' + (active ? ' payBtnActive' : '') + '" id="payBtn_' + PM_METHODS[i].key + '">' + PM_METHODS[i].icon + ' ' + PM_METHODS[i].label + '</button>';
+  }
+  container.innerHTML = html;
+  for (var j = 0; j < PM_METHODS.length; j++) {
+    document.getElementById('payBtn_' + PM_METHODS[j].key).onclick = makePayClickHandler(PM_METHODS[j].key);
+  }
+}
+function setPayMethod(key) {
+  payMethod = key;
+  renderPayButtons();
+  document.getElementById('cashRow').style.display = (payMethod === 'cash') ? 'block' : 'none';
+  updateChange();
+}
+function updateChange() {
+  var due = Number(document.getElementById('itemPrice').value) || 0;
+  document.getElementById('dueAmount').textContent = 'NT$' + due;
+  var cashVal = document.getElementById('cashReceived').value;
+  var changeEl = document.getElementById('changeAmount');
+  if (payMethod === 'cash' && cashVal !== '' && !isNaN(Number(cashVal))) {
+    var change = Number(cashVal) - due;
+    changeEl.textContent = 'NT$' + change;
+    changeEl.style.color = change < 0 ? '#A32D2D' : '#2D7D46';
+  } else {
+    changeEl.textContent = '—';
+    changeEl.style.color = '#2D7D46';
+  }
+}
+
 function doPrint(){
   var btn = document.getElementById('printBtn');
   var result = document.getElementById('printResult');
@@ -109,7 +185,7 @@ function doPrint(){
     gymId: document.getElementById('gym').value,
     items: [{ name: document.getElementById('itemName').value, price: Number(document.getElementById('itemPrice').value), qty: 1 }],
     buyerTaxId: document.getElementById('buyerTaxId').value,
-    openDrawer: document.getElementById('openDrawer').checked
+    openDrawer: (payMethod === 'cash')
   };
   xhrJson('POST', '/print', body, function (err, data) {
     btn.disabled = false;
@@ -165,6 +241,8 @@ function doStatus(){
   });
 }
 doStatus();
+renderPayButtons();
+updateChange();
 </script>
 </body></html>`;
 }

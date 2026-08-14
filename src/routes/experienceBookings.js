@@ -397,6 +397,11 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
     const booking = { id: doc.id, ...doc.data() };
     const _gymCcDoc = await db.collection('gyms').doc(booking.gymId).get();
     const _gymCc = _gymCcDoc.exists ? _gymCcDoc.data().email : undefined; // 確認信副本給該館
+    // 此端點也被「指定教練/改教練」按鈕重用（ExperienceBookingsPage 對已確認的預約改教練時
+    // 仍呼叫同一支 /confirm）——確認信只該在「這次真的從未確認→確認」時寄一次，不能每次改教練
+    // 都重寄「已確認收款」給會員（2026-08-14 案例：改教練/事後補教練誤重複通知會員）。
+    // revenueRecorded/發券本身已冪等，僅信件需要額外擋。
+    const _wasAlreadyConfirmed = booking.status === 'confirmed';
     // 管理員可編輯備註（選填；留空不動既有值）
     const noteUpdate = req.body.staffNote != null ? { staffNote: String(req.body.staffNote).trim() } : {};
 
@@ -414,7 +419,7 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
         await recordExperienceRevenue(db, ref, booking, req.staff).catch(e => console.error('[體驗營收]', e.message));
         // 試上確認收款 → 自動發 1 張當日體驗券（冪等：sync 依已發張數補差；入場當日豁免墜測）
         await syncExperienceTickets(db, booking, req.staff, true).catch(e => console.error('[試上發券]', e.message));
-        if (booking.contactEmail) {
+        if (!_wasAlreadyConfirmed && booking.contactEmail) {
           emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking, _gymCc).catch(e => console.error('[Email]', e.message));
         }
         return res.json({ success:true, isTrial:true, enrollmentStatus: enDoc.data().status, message: enDoc.data().status === 'waitlist' ? '已確認收款（目前為候補，名額釋出將自動轉正）' : '已確認收款' });
@@ -435,7 +440,7 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
       });
       await recordExperienceRevenue(db, ref, booking, req.staff).catch(e => console.error('[體驗營收]', e.message));
       await syncExperienceTickets(db, booking, req.staff, true).catch(e => console.error('[試上發券]', e.message));
-      if (booking.contactEmail) {
+      if (!_wasAlreadyConfirmed && booking.contactEmail) {
         emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking, _gymCc).catch(e => console.error('[Email]', e.message));
       }
       return res.json({
@@ -486,8 +491,8 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
       ticketResult = await syncExperienceTickets(db, booking, req.staff, true);
     } catch (e) { console.error('[體驗發券]', e.message); }
 
-    // 發送確認信
-    if (booking.contactEmail) {
+    // 發送確認信（僅這次真的從未確認過才寄；已確認的預約改教練/重新指派不再重寄）
+    if (!_wasAlreadyConfirmed && booking.contactEmail) {
       emailService.sendExperienceBookingConfirmation(booking.contactEmail, booking.contactName, booking, _gymCc).catch(e => console.error('[Email]', e.message));
     }
     const scheduleMsg = reassigned ? '已更新教練與排班' : created ? '，並加入課程與教練排班' : '';

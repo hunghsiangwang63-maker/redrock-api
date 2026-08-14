@@ -109,15 +109,18 @@ try {
     if ($blocked) {
       Write-Output 'NOT_POSITIONED'
     } else {
+      # 2026-08-14：開櫃指令改到列印內容「之前」送出——開櫃是電氣脈衝幾乎即時，列印+裁切是機構
+      # 動作要幾秒；原本順序（先印完整張才開櫃）等於收銀員要等紙印完才能開始收現/找零。位置檢查
+      # 通過後先送開櫃指令、緊接著才送列印內容，讓錢櫃盡早彈開，列印本身耗時不變、只是先後對調。
+      if ($OpenDrawer) {
+        $sp.Write($DrawerBytes, 0, $DrawerBytes.Length)
+        Log "drawer command written (before print payload)"
+      }
       if ($PrintFile -and (Test-Path $PrintFile)) {
         Log "about to write print payload ($((Get-Item $PrintFile).Length) bytes)"
         $bytes = [System.IO.File]::ReadAllBytes($PrintFile)
         $sp.Write($bytes, 0, $bytes.Length)
         Log "print payload written"
-      }
-      if ($OpenDrawer) {
-        $sp.Write($DrawerBytes, 0, $DrawerBytes.Length)
-        Log "drawer command written"
       }
       # 對齊 server.js 的 settleMs：給機構動作（裁切等）完成時間，太快關埠可能撞到下一次開埠。
       Start-Sleep -Milliseconds 1200

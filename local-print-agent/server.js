@@ -171,7 +171,7 @@ app.get('/status', async (req, res) => {
 app.post('/print', async (req, res) => {
   try {
     const { gymId, items, total, date, buyerTaxId, openDrawer } = req.body || {};
-    // 查紙張定位→列印→（選）開錢櫃，整個流程只開關埠一次（見上方 withSerialPort 註解，
+    // 查紙張定位→（選）開錢櫃→列印，整個流程只開關埠一次（見上方 withSerialPort 註解，
     // 這是這次修正的核心：避免同一次請求內連續開關埠三次造成的 access denied）。
     const result = await withSerialPort(async (port) => {
       // 先查紙張定位狀態——真的偵測到「未定位」（黑點感應器讀不到，極性已依實機驗證校正）才擋下；
@@ -180,14 +180,18 @@ app.post('/print', async (req, res) => {
       if (pos.positionOk === false) {
         return { ok: false, error: '發票紙未正確定位（存根聯/收執聯黑點感應異常），請確認紙張是否裝妥後再試一次' };
       }
+      // ⚠️ 2026-08-14：開錢櫃改到列印內容「之前」送出——原本順序是先印完整張收據（含 FORM_FEED
+      // 觸發的自動裁切，機構動作要幾秒）才開櫃，等於收銀員要等紙張印完才能開始收現/找零。改成
+      // 位置檢查通過後**先送開櫃指令**（電氣脈衝幾乎即時）、緊接著才送列印內容，讓錢櫃盡早彈開、
+      // 收銀員可以在紙張印製的同時就開始處理現金，列印本身耗時不變、只是跟開櫃的先後對調。
+      if (openDrawer) {
+        try { await writeAndDrain(port, ESC_OPEN_DRAWER); }
+        catch (e) { console.error('⚠️ 開錢櫃失敗（不影響接下來的列印）:', e.message); }
+      }
       const lines = buildInvoiceLines({ gymId, items, total, date, buyerTaxId });
       const parts = [ESC_INIT, ...encodeLinesToBig5(lines)];
       parts.push(FORM_FEED);
       await writeAndDrain(port, Buffer.concat(parts));
-      if (openDrawer) {
-        try { await writeAndDrain(port, ESC_OPEN_DRAWER); }
-        catch (e) { console.error('⚠️ 開錢櫃失敗（列印已成功、不影響發票）:', e.message); }
-      }
       return { ok: true };
     });
     res.json(result);

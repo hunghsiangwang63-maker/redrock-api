@@ -36,6 +36,10 @@ const BRIDGE_SCRIPT = path.join(__dirname, 'serial-bridge.ps1');
 // 轉接序列埠的硬體/驅動本身較慢，非程式問題），原本設 5 秒導致還沒跑完就被強制中止（無任何
 // stdout/stderr，只回報 exitCode=未知）——拉長到 15 秒給足夠餘裕，避免誤殺實際上會成功的請求。
 const TIMEOUT_MS = parseInt(process.env.BRIDGE_TIMEOUT_MS || '15000', 10);
+// ⚠️ 純診斷用版本標記，跟修 bug 無關——2026-08-14 兩輪修復後使用者仍回報一模一樣的舊錯誤，
+// 為了在下一次回報時能立刻分辨「到底有沒有真的換到新檔案」，把這個字串直接放進 /status、
+// /print 的 JSON 回應與開機訊息裡。每次真的動到 runBridge 邏輯就把這個字串換掉。
+const AGENT_VERSION = 'stdout-rescue-2026-08-14b';
 
 const buildInvoiceLines = (args) => buildInvoiceLinesRaw(args, DEFAULT_GYM);
 
@@ -145,10 +149,10 @@ app.get('/status', async (req, res) => {
   try {
     const line = await runBridge({ mode: 'status' });
     const result = parseStatusLine(line);
-    res.json({ ...result, port: SERIAL_PORT, baud: BAUD });
+    res.json({ ...result, port: SERIAL_PORT, baud: BAUD, agentVersion: AGENT_VERSION });
   } catch (e) {
     // 連 PowerShell 都叫不動/COM 埠開不起來（USB 轉接線沒插上/驅動未裝/被其他程式佔用等）
-    res.json({ connected: false, positionOk: null, port: SERIAL_PORT, error: e.message });
+    res.json({ connected: false, positionOk: null, port: SERIAL_PORT, error: e.message, agentVersion: AGENT_VERSION });
   }
 });
 
@@ -163,17 +167,17 @@ app.post('/print', async (req, res) => {
     const line = await runBridge({ mode: 'print', printFile: tempFile, openDrawer });
 
     if (line === 'OK') {
-      res.json({ ok: true });
+      res.json({ ok: true, agentVersion: AGENT_VERSION });
     } else if (line === 'NOT_POSITIONED') {
-      res.json({ ok: false, error: '發票紙未正確定位（存根聯/收執聯黑點感應異常），請確認紙張是否裝妥後再試一次' });
+      res.json({ ok: false, error: '發票紙未正確定位（存根聯/收執聯黑點感應異常），請確認紙張是否裝妥後再試一次', agentVersion: AGENT_VERSION });
     } else if (line.startsWith('ERROR:')) {
-      res.json({ ok: false, error: line.slice(6) });
+      res.json({ ok: false, error: line.slice(6), agentVersion: AGENT_VERSION });
     } else {
-      res.json({ ok: false, error: `未預期的回應：${line}` });
+      res.json({ ok: false, error: `未預期的回應：${line}`, agentVersion: AGENT_VERSION });
     }
   } catch (e) {
     console.error('❌ 列印失敗:', e.message);
-    res.json({ ok: false, error: e.message });
+    res.json({ ok: false, error: e.message, agentVersion: AGENT_VERSION });
   } finally {
     if (tempFile) cleanupTempFile(tempFile);
   }
@@ -182,11 +186,11 @@ app.post('/print', async (req, res) => {
 app.post('/open-drawer', async (req, res) => {
   try {
     const line = await runBridge({ mode: 'drawer' });
-    if (line === 'OK') res.json({ ok: true });
-    else res.json({ ok: false, error: line.startsWith('ERROR:') ? line.slice(6) : line });
+    if (line === 'OK') res.json({ ok: true, agentVersion: AGENT_VERSION });
+    else res.json({ ok: false, error: line.startsWith('ERROR:') ? line.slice(6) : line, agentVersion: AGENT_VERSION });
   } catch (e) {
     console.error('❌ 開錢櫃失敗:', e.message);
-    res.json({ ok: false, error: e.message });
+    res.json({ ok: false, error: e.message, agentVersion: AGENT_VERSION });
   }
 });
 
@@ -197,6 +201,7 @@ app.get('/', (req, res) => {
 
 app.listen(HTTP_PORT, () => {
   console.log(`✅ 發票列印代理已啟動（Windows 7 版）：http://localhost:${HTTP_PORT}`);
+  console.log(`   版本標記：${AGENT_VERSION}　←（若這行跟預期的版本字串不同，代表這台機器還在跑舊檔案，還沒真的換到新版）`);
   console.log(`   序列埠：${SERIAL_PORT} @ ${BAUD} baud　預設館別：${DEFAULT_GYM}`);
   console.log(`   允許來源：${ALLOWED_ORIGINS.join(', ')}`);
   console.log(`   序列埠橋接：${POWERSHELL_EXE} -File ${BRIDGE_SCRIPT}`);

@@ -306,11 +306,13 @@ router.post('/events',
   }
 );
 
-// ── POST /events/recurring - 重要事項循環安排（每週／每兩週／每月固定日期，起始日期起算最長 1 年）──
+// ── POST /events/recurring - 重要事項循環安排（每週／每兩週／每月固定日期，起始日期起算最長 6 個月，
+// 可帶 endDate 自訂結束日期，不可超過 6 個月上限）──
 router.post('/events/recurring',
   authenticate, checkPermission('schedule.events'),
   [
     body('startDate').isDate().withMessage('請輸入有效起始日期'),
+    body('endDate').optional({ checkFalsy: true }).isDate().withMessage('結束日期格式不正確'),
     body('recurType').isIn(['weekly', 'biweekly', 'monthly']).withMessage('循環類型不正確'),
     body('category').isIn(['closure', 'competition', 'maintenance', 'routesetting', 'other']).withMessage('類別不正確'),
   ],
@@ -319,7 +321,7 @@ router.post('/events/recurring',
     try {
       const gymId = req.staff.role === 'super_admin' ? (req.body.gymId || null) : req.staff.gymId;
       const result = await scheduleService.createRecurringScheduleEvents({
-        gymId, startDate: req.body.startDate, recurType: req.body.recurType,
+        gymId, startDate: req.body.startDate, endDate: req.body.endDate || null, recurType: req.body.recurType,
         allDay: req.body.allDay, startTime: req.body.startTime, endTime: req.body.endTime,
         category: req.body.category, title: req.body.title, note: req.body.note,
         createdBy: req.staff.id,
@@ -332,12 +334,17 @@ router.post('/events/recurring',
   }
 );
 
+// scope（single｜following｜all）決定套用範圍——single＝只有這一筆；following＝這筆及同系列
+// 日期在它之後（含）的所有筆；all＝整個循環系列。非循環系列事項一律視同 single（後端權威判斷，
+// 不理會前端傳錯的 scope）。
 router.put('/events/:eventId',
   authenticate, checkPermission('schedule.events'),
   async (req, res) => {
     try {
-      const event = await scheduleService.updateScheduleEvent(req.params.eventId, req.body);
-      res.json({ event, message: '重要事項已更新' });
+      const scope = ['single', 'following', 'all'].includes(req.body.scope) ? req.body.scope : 'single';
+      const result = await scheduleService.updateScheduleEvent(req.params.eventId, req.body, scope);
+      const message = result.count > 1 ? `已更新 ${result.count} 筆重要事項` : '重要事項已更新';
+      res.json({ ...result, message });
     } catch (err) {
       if (err.code) return res.status(400).json(err);
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
@@ -349,8 +356,10 @@ router.delete('/events/:eventId',
   authenticate, checkPermission('schedule.events'),
   async (req, res) => {
     try {
-      await scheduleService.deleteScheduleEvent(req.params.eventId);
-      res.json({ message: '重要事項已刪除' });
+      const scope = ['single', 'following', 'all'].includes(req.query.scope) ? req.query.scope : 'single';
+      const result = await scheduleService.deleteScheduleEvent(req.params.eventId, scope);
+      const message = result.count > 1 ? `已刪除 ${result.count} 筆重要事項` : '重要事項已刪除';
+      res.json({ ...result, message });
     } catch (err) {
       if (err.code) return res.status(400).json(err);
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

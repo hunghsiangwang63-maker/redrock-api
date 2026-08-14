@@ -413,11 +413,11 @@ const createScheduleEvent = async ({ gymId, date, allDay, startTime, endTime, ca
   return event;
 };
 
-// ── 重要事項循環安排（每週／每兩週／每月固定日期）：起始日期起算，最長 1 年 ──
+// ── 重要事項循環安排（每週／每兩週／每月固定日期）：起始日期起算，最長 6 個月，可自訂結束日期 ──
 const EVENT_RECUR_TYPES = ['weekly', 'biweekly', 'monthly'];
-const MAX_EVENT_RECURRING_MONTHS = 12;
+const MAX_EVENT_RECURRING_MONTHS = 6;
 
-const createRecurringScheduleEvents = async ({ gymId, startDate, recurType, allDay, startTime, endTime, category, title, note, createdBy }) => {
+const createRecurringScheduleEvents = async ({ gymId, startDate, endDate, recurType, allDay, startTime, endTime, category, title, note, createdBy }) => {
   if (!startDate) throw { code: 'MISSING_DATE', message: '請選擇起始日期' };
   if (!EVENT_RECUR_TYPES.includes(recurType)) throw { code: 'INVALID_RECUR_TYPE', message: '循環類型須為每週/每兩週/每月固定日期' };
   if (!EVENT_CATEGORIES.includes(category)) throw { code: 'INVALID_CATEGORY', message: '類別不正確' };
@@ -426,8 +426,15 @@ const createRecurringScheduleEvents = async ({ gymId, startDate, recurType, allD
     if (startTime >= endTime) throw { code: 'INVALID_TIME_RANGE', message: '結束時間必須晚於開始時間' };
   }
 
-  // 起始日期起算最長 1 年（含起始日當天），依循環類型逐一往後推算日期，超過範圍即停止
-  const maxEnd = dayjs(startDate).add(MAX_EVENT_RECURRING_MONTHS, 'month');
+  // 起始日期起算最長 6 個月（含起始日當天）；可自訂結束日期（不可早於起始日、不可超過 6 個月上限），
+  // 未提供則預設用滿 6 個月上限——依循環類型逐一往後推算日期，超過範圍即停止
+  const maxAllowedEnd = dayjs(startDate).add(MAX_EVENT_RECURRING_MONTHS, 'month');
+  let maxEnd = maxAllowedEnd;
+  if (endDate) {
+    if (dayjs(endDate).isBefore(dayjs(startDate), 'day')) throw { code: 'INVALID_END_DATE', message: '結束日期不可早於起始日期' };
+    if (dayjs(endDate).isAfter(maxAllowedEnd, 'day')) throw { code: 'END_DATE_TOO_FAR', message: '結束日期不可超過起始日期起算 6 個月' };
+    maxEnd = dayjs(endDate);
+  }
   const dates = [];
   if (recurType === 'monthly') {
     // 每月固定「日期」：每次都從起始日直接 +N 個月（而非用上一次算好的日期繼續疊加），
@@ -472,15 +479,30 @@ const createRecurringScheduleEvents = async ({ gymId, startDate, recurType, allD
   return { events, count: events.length, recurrenceGroupId };
 };
 
-const updateScheduleEvent = async (id, { gymId, date, allDay, startTime, endTime, category, title, note }) => {
-  const db = getDb();
-  const ref = db.collection(COLLECTIONS.SCHEDULE_EVENTS).doc(id);
+// 依 scope 找出要異動的 event id 清單——single＝只有這一筆；following＝這筆及同一個
+// recurrenceGroupId 裡日期 >= 這筆日期的所有筆；all＝整個 recurrenceGroupId。非循環系列的
+// 一次性事項（沒有 recurrenceGroupId）一律視同 single，不受 scope 影響（沒有系列可套用）。
+const resolveSeriesEventIds = async (db, eventId, scope) => {
+  const ref = db.collection(COLLECTIONS.SCHEDULE_EVENTS).doc(eventId);
   const doc = await ref.get();
   if (!doc.exists) throw { code: 'NOT_FOUND', message: '找不到此事項' };
+  const anchor = doc.data();
+  if (scope === 'single' || !anchor.recurrenceGroupId) return { ids: [eventId], anchor };
+  const snap = await db.collection(COLLECTIONS.SCHEDULE_EVENTS)
+    .where('recurrenceGroupId', '==', anchor.recurrenceGroupId).get();
+  const ids = snap.docs
+    .filter(d => scope === 'all' || d.data().date >= anchor.date)
+    .map(d => d.id);
+  return { ids, anchor };
+};
 
-  const finalAllDay = allDay !== undefined ? !!allDay : doc.data().allDay;
-  const finalStart = startTime !== undefined ? startTime : doc.data().startTime;
-  const finalEnd = endTime !== undefined ? endTime : doc.data().endTime;
+const updateScheduleEvent = async (id, { gymId, date, allDay, startTime, endTime, category, title, note }, scope = 'single') => {
+  const db = getDb();
+  const { ids, anchor } = await resolveSeriesEventIds(db, id, scope);
+
+  const finalAllDay = allDay !== undefined ? !!allDay : anchor.allDay;
+  const finalStart = startTime !== undefined ? startTime : anchor.startTime;
+  const finalEnd = endTime !== undefined ? endTime : anchor.endTime;
   if (!finalAllDay) {
     if (!finalStart || !finalEnd) throw { code: 'MISSING_TIME', message: '非全天事項需填寫開始與結束時間' };
     if (finalStart >= finalEnd) throw { code: 'INVALID_TIME_RANGE', message: '結束時間必須晚於開始時間' };
@@ -489,7 +511,8 @@ const updateScheduleEvent = async (id, { gymId, date, allDay, startTime, endTime
 
   const updates = { updatedAt: new Date() };
   if (gymId !== undefined) updates.gymId = gymId || null;
-  if (date !== undefined) updates.date = date;
+  // 日期只在單筆編輯時才能改——套用到「這筆及之後」或「整個系列」時，各筆維持各自原本的日期
+  if (date !== undefined && ids.length === 1) updates.date = date;
   if (allDay !== undefined) updates.allDay = !!allDay;
   updates.startTime = finalAllDay ? null : finalStart;
   updates.endTime = finalAllDay ? null : finalEnd;
@@ -497,16 +520,19 @@ const updateScheduleEvent = async (id, { gymId, date, allDay, startTime, endTime
   if (title !== undefined) updates.title = (title || '').trim();
   if (note !== undefined) updates.note = note;
 
-  await ref.update(updates);
-  return { id, ...doc.data(), ...updates };
+  const batch = db.batch();
+  ids.forEach(eid => batch.update(db.collection(COLLECTIONS.SCHEDULE_EVENTS).doc(eid), updates));
+  await batch.commit();
+  return ids.length === 1 ? { id: ids[0], count: 1, ...anchor, ...updates } : { count: ids.length };
 };
 
-const deleteScheduleEvent = async (id) => {
+const deleteScheduleEvent = async (id, scope = 'single') => {
   const db = getDb();
-  const ref = db.collection(COLLECTIONS.SCHEDULE_EVENTS).doc(id);
-  const doc = await ref.get();
-  if (!doc.exists) throw { code: 'NOT_FOUND', message: '找不到此事項' };
-  await ref.delete();
+  const { ids } = await resolveSeriesEventIds(db, id, scope);
+  const batch = db.batch();
+  ids.forEach(eid => batch.delete(db.collection(COLLECTIONS.SCHEDULE_EVENTS).doc(eid)));
+  await batch.commit();
+  return { count: ids.length };
 };
 
 // gymId 為 null 的事項（全館）與指定館的事項都回傳；月份範圍過濾同 getMonthlyShifts。

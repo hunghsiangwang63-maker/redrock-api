@@ -185,6 +185,13 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
       const clearReject = { paymentConfirmed: true, paymentRejectReason: null, paymentRejectedAt: null };
       if (t.orderType === 'experience' && t.refId) {
         const bkRef = db.collection('experienceBookings').doc(t.refId);
+        // 轉帳確認這條路徑原本完全沒有寄「已確認收款」通知信給會員（只有走待辦頁「體驗預約詳情」
+        // 彈窗、POST /experience-bookings/:id/confirm 那條路徑才會寄）——course/competition 兩個
+        // orderType 分支都有寄、唯獨 experience 沒有，屬遺漏。補上，並比照 experienceBookings.js
+        // 那邊的作法：讀取異動前的原始狀態，只在「這次真的從未確認過」才寄一次，避免重複確認/
+        // 之後改教練等後續動作誤觸重寄。
+        const bkDocBefore = await bkRef.get();
+        const wasAlreadyConfirmed = bkDocBefore.exists && bkDocBefore.data().status === 'confirmed';
         await bkRef.update({
           status: 'confirmed', paymentStatus: 'confirmed', ...clearReject, ...noteUpdate,
           confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
@@ -198,6 +205,12 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
             await recordExperienceRevenue(db, bkRef, bk, req.staff);
             // 試上：確認收款自動發 1 張當日體驗券（冪等；當日豁免墜測）。一般體驗維持員工手動發放。
             if (bk.kind === 'trial') await syncExperienceTickets(db, bk, req.staff, true).catch(e => console.error('[試上發券/transfers]', e.message));
+            if (!wasAlreadyConfirmed && bk.contactEmail) {
+              const gymDoc = await db.collection('gyms').doc(bk.gymId).get();
+              const gymCc = gymDoc.exists ? gymDoc.data().email : undefined;
+              require('../services/emailService').sendExperienceBookingConfirmation(bk.contactEmail, bk.contactName, bk, gymCc)
+                .catch(e => console.error('[Email] 體驗轉帳確認通知', e.message));
+            }
           }
         } catch (e) { console.error('[體驗營收/transfers]', e.message); }
       } else if (t.orderType === 'course' && t.refId) {

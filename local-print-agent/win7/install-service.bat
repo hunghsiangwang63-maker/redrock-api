@@ -42,8 +42,18 @@ if "%NODE_EXE%"=="" (
 )
 
 set SERVICE_NAME=RedRockPrintAgent
+REM %~dp0 always ends with a trailing backslash. Do NOT wrap "%SCRIPT_DIR%" (with that
+REM trailing backslash still attached) in double quotes anywhere below - a backslash
+REM immediately before a closing quote escapes the quote instead of closing the string,
+REM which silently produces a broken path with a stray literal quote character stuck on
+REM the end (this exact bug happened on 2026-08-14: AppDirectory ended up stored as
+REM "...\win7"" - notice the trailing quote - so Windows could not find that directory
+REM and the service failed to start with completely empty stdout/stderr logs, since
+REM node.exe never even got a chance to launch). Strip the trailing backslash once here,
+REM then always join it back explicitly with "\" when building each path below.
 set SCRIPT_DIR=%~dp0
-set SERVER_JS=%SCRIPT_DIR%server.js
+if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
+set SERVER_JS=%SCRIPT_DIR%\server.js
 
 echo Found node.exe at: %NODE_EXE%
 echo Using server.js at: %SERVER_JS%
@@ -58,8 +68,8 @@ REM If the process crashes or is killed, restart it after 3 seconds
 REM Once installed as a service there is no visible console window anymore, so redirect what
 REM used to print there (startup banner, [before]/[after] debug logs) into these two log files
 REM instead - check them if something needs troubleshooting later.
-"%NSSM%" set %SERVICE_NAME% AppStdout "%SCRIPT_DIR%service-stdout.log"
-"%NSSM%" set %SERVICE_NAME% AppStderr "%SCRIPT_DIR%service-stderr.log"
+"%NSSM%" set %SERVICE_NAME% AppStdout "%SCRIPT_DIR%\service-stdout.log"
+"%NSSM%" set %SERVICE_NAME% AppStderr "%SCRIPT_DIR%\service-stderr.log"
 REM Rotate log files so they do not grow forever (auto-rotate past 1MB, keeps one old copy)
 "%NSSM%" set %SERVICE_NAME% AppRotateFiles 1
 "%NSSM%" set %SERVICE_NAME% AppRotateBytes 1048576
@@ -67,6 +77,15 @@ REM Rotate log files so they do not grow forever (auto-rotate past 1MB, keeps on
 echo.
 echo ===== Install complete, starting service now... =====
 "%NSSM%" start %SERVICE_NAME%
+if errorlevel 1 (
+  echo.
+  echo WARNING: the service was installed, but did NOT start successfully just now.
+  echo Check service-stdout.log and service-stderr.log in this same folder for details,
+  echo fix whatever is wrong, then try "nssm start %SERVICE_NAME%" again by hand -
+  echo you do not need to run this whole install script a second time.
+  pause
+  exit /b 1
+)
 
 echo.
 echo Done! From now on this computer will start the invoice print agent automatically

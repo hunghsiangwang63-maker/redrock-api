@@ -27,6 +27,15 @@
 // hex 顏色（IE11 只認 6 碼）、flexbox 一律用 margin 排間距（不用 gap，IE11 的 flex container 不
 // 支援 gap）。JS 全程 var/function，不用 let/const/箭頭函式/樣板字串（樣板字串只用在 Node.js 端
 // 產生這段 HTML 字串本身，那是安全的；瀏覽器實際執行的 <script> 內容一律 ES5）。
+//
+// ⚠️ 2026-08-14 續：整個 <script> 內容是包在**這個檔案自己的**外層樣板字串（下面 return 的那個
+// 反引號字串）裡——Node.js 解析這個檔案本身時，`\D`／`\d`／`\s`／`\w`／`\b` 這類「反斜線+字母」
+// 在標準字串/樣板字串裡**不是合法跳脫序列**，會被靜默吃掉反斜線（`\D` 變成純字母 `D`），送到瀏覽器
+// 的正規表示式因此整個跑掉（`/\D/g` 變成 `/D/g`，比對邏輯完全不同、不會報錯，只是結果不對，很難
+// 用肉眼發現）。**這裡任何要給瀏覽器用的正規表示式，凡是含這類字母跳脫，原始碼要寫兩個反斜線
+// （`\\D`）**——外層樣板字串吃掉一個之後，送到瀏覽器的字串才會正確含有單一 `\D`。已在
+// isValidTaiwanTaxId／onTaxIdInput 踩過這個雷（原寫單一反斜線，統編防呆完全沒作用，數字沒過濾、
+// 檢查碼也永遠比對失敗——已修正），之後加任何新的正規表示式務必比照兩個反斜線寫法。
 function renderTestPage() {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>發票列印代理・測試頁</title>
@@ -102,7 +111,8 @@ function renderTestPage() {
   </div>
   <div class="field">
     <label>買受人統編（選填）</label>
-    <input type="text" id="buyerTaxId" placeholder="留空不印該行">
+    <input type="text" id="buyerTaxId" maxlength="8" inputmode="numeric" placeholder="8 碼統編（三聯式）" oninput="onTaxIdInput()">
+    <div id="taxIdWarn" style="display:none;font-size:11px;color:#A32D2D;margin-top:4px;">⚠️ 檢查碼不符，請確認統一編號是否正確</div>
   </div>
 
   <button class="btnPrimary" id="printBtn" onclick="doPrint()">🖨️ 測試列印</button>
@@ -128,6 +138,29 @@ function showResult(el, ok, text) {
   el.className = 'resultBox ' + (ok ? 'resultOk' : 'resultErr');
   el.style.display = 'block';
   el.textContent = text;
+}
+
+// 買受人統編防呆：只留數字、限8碼、8碼齊了才驗檢查碼——跟正式頁面（redrock-web
+// src/utils/taiwanTaxId.js）同一套演算法，純前端即時提示，不擋送出（跟正式頁面一樣，
+// 這個代理本身也不做金額/內容判斷，檢查碼不符只顯示提示，仍可照原輸入列印）。
+var TAX_WEIGHTS = [1, 2, 1, 2, 1, 2, 4, 1];
+function isValidTaiwanTaxId(id) {
+  var s = String(id || '');
+  if (!/^\\d{8}$/.test(s)) return false;
+  var sum = 0;
+  for (var i = 0; i < 8; i++) {
+    var prod = Number(s.charAt(i)) * TAX_WEIGHTS[i];
+    sum += Math.floor(prod / 10) + (prod % 10);
+  }
+  if (s.charAt(6) === '7') return (sum % 5 === 0) || ((sum + 1) % 5 === 0);
+  return sum % 5 === 0;
+}
+function onTaxIdInput() {
+  var input = document.getElementById('buyerTaxId');
+  var digitsOnly = input.value.replace(/\\D/g, '').slice(0, 8);
+  if (digitsOnly !== input.value) input.value = digitsOnly;
+  var warn = document.getElementById('taxIdWarn');
+  warn.style.display = (digitsOnly.length === 8 && !isValidTaiwanTaxId(digitsOnly)) ? 'block' : 'none';
 }
 
 // 付款方式選單＋現金找零計算機（純前端，不呼叫任何 API；付款方式只用來決定要不要開錢櫃）

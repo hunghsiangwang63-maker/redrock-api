@@ -39,7 +39,7 @@ const TIMEOUT_MS = parseInt(process.env.BRIDGE_TIMEOUT_MS || '15000', 10);
 // ⚠️ 純診斷用版本標記，跟修 bug 無關——2026-08-14 兩輪修復後使用者仍回報一模一樣的舊錯誤，
 // 為了在下一次回報時能立刻分辨「到底有沒有真的換到新檔案」，把這個字串直接放進 /status、
 // /print 的 JSON 回應與開機訊息裡。每次真的動到 runBridge 邏輯就把這個字串換掉。
-const AGENT_VERSION = 'stdout-rescue-2026-08-14b';
+const AGENT_VERSION = 'pna-preflight-fix-2026-08-15';
 
 const buildInvoiceLines = (args) => buildInvoiceLinesRaw(args, DEFAULT_GYM);
 
@@ -142,8 +142,14 @@ const FORM_FEED = Buffer.from([0x0C]);
 
 const app = express();
 app.use(express.json());
-app.use(cors({ origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.includes(origin)) }));
+// ⚠️ 2026-08-15 修：PNA header 一定要在 cors() 之前設定——cors() 收到 OPTIONS 預檢請求會直接
+// 結束回應（不呼叫 next()），原本寫在 cors() 之後的這個 middleware 對預檢請求根本沒機會執行，
+// 導致預檢回應永遠缺這個 header。Chrome 的 Private Network Access 檢查看的正是「預檢回應」
+// 有沒有這個 header，缺了就直接擋掉整個請求（連 fetch 都送不出去，前端顯示「無法連線」）——
+// 士林 Win7 機器上這樣直接列印的第一次真實回報就是撞到這個。改到 cors() 之前即可讓預檢回應
+// 也帶上這個 header（用 curl 送 OPTIONS 帶 Access-Control-Request-Private-Network 驗證過）。
 app.use((req, res, next) => { res.setHeader('Access-Control-Allow-Private-Network', 'true'); next(); });
+app.use(cors({ origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.includes(origin)) }));
 
 app.get('/status', async (req, res) => {
   try {

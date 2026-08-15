@@ -139,13 +139,18 @@ const app = express();
 app.use(express.json());
 // CORS + Private Network Access：staff.redrocktaiwan.com 是 HTTPS，呼叫 http://localhost 屬合法的
 // mixed-content 例外，但 Chrome 的 Private Network Access 規範會先發 preflight 檢查這兩個 header。
-app.use(cors({
-  origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.includes(origin)),
-}));
+// ⚠️ 2026-08-15 修：這個 header 一定要在 cors() 之前設定——cors() 遇到 OPTIONS 預檢請求會直接
+// 結束回應（不呼叫 next()），寫在 cors() 之後的 middleware 對預檢請求根本不會執行，導致預檢回應
+// 永遠缺這個 header。Chrome 檢查的正是「預檢回應」有沒有這個 header，缺了就直接擋掉整個請求
+// （士林 Win7 機器 print 直接回報「無法連線」，用 curl 送 OPTIONS 帶
+// Access-Control-Request-Private-Network 重現＋驗證這個順序修復有效）。
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Private-Network', 'true');
   next();
 });
+app.use(cors({
+  origin: (origin, cb) => cb(null, !origin || ALLOWED_ORIGINS.includes(origin)),
+}));
 
 app.get('/status', async (req, res) => {
   try {

@@ -403,7 +403,11 @@ router.get('/transition', authenticate, async (req, res) => {
     const db = getDb();
     const doc = await db.collection('systemSettings').doc('transitionSettings').get();
     res.json(doc.exists ? doc.data() : {
-      settlementManualInput: false,     // 結帳：所有項目手動輸入與系統值並列
+      settlementManualInput: false,          // 結帳：收入（六大類）手動輸入與系統值並列
+      settlementPaymentManualInput: false,   // 結帳：付款方式（LinePay/街口/台灣Pay/轉帳）手動輸入與系統值並列
+      // 2026-08-15 拆分自 settlementManualInput——原本收入/付款方式共用一顆開關，因付款方式相關
+      // 的多個既有計算 bug（無來源發票漏記付款方式、體驗改期未同步認列日等）已修復，使用者確認
+      // 系統計算的付款方式可信、要求「一切以系統為準」單獨關掉付款方式手動輸入，收入手動輸入維持不動。
       checkinAlreadyPaid: false,        // 入場電話搜尋：『已付費』直接放行選項
       checkinLegacyDiscountCard: false, // 入場電話搜尋：可手動套『舊折扣卡 8 折』（持實體舊卡未轉入者）
     });
@@ -416,9 +420,10 @@ router.put('/transition', authenticate, async (req, res) => {
     return res.status(403).json({ error: '權限不足' });
   try {
     const db = getDb();
-    const { settlementManualInput, checkinAlreadyPaid, checkinLegacyDiscountCard } = req.body;
+    const { settlementManualInput, settlementPaymentManualInput, checkinAlreadyPaid, checkinLegacyDiscountCard } = req.body;
     await db.collection('systemSettings').doc('transitionSettings').set({
       settlementManualInput: !!settlementManualInput,
+      settlementPaymentManualInput: !!settlementPaymentManualInput,
       checkinAlreadyPaid: !!checkinAlreadyPaid,
       checkinLegacyDiscountCard: !!checkinLegacyDiscountCard,
       updatedAt: new Date(),

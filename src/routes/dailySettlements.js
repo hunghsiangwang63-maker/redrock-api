@@ -474,10 +474,16 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
 
     // 計算加減項淨額：sign '+' 加入抽屜（預期上升）、'-' 取出（預期下降）；舊資料無 sign 視為 '-'（減）
     const netAdjust = (deductions || []).reduce((sum, d) => sum + ((d.sign === '+' ? 1 : -1) * (Number(d.amount) || 0)), 0);
+    // 付款方式手動輸入（2026-08-15 拆分自 settlementManualInput——原本收入/付款方式共用同一顆開關，
+    // 使用者確認系統計算的付款方式已經可信、要求「一切以系統為準」單獨關掉這塊，收入手動輸入維持
+    // 不動）。後端權威判斷：即使前端仍送 paymentManual（如舊分頁快取），設定關閉時一律忽略，
+    // 只信任即時算出的 payment.* 值——不是只在畫面上藏輸入框而已。
+    const transitionDoc = await db.collection('systemSettings').doc('transitionSettings').get();
+    const settlementPaymentManualInput = !!(transitionDoc.exists && transitionDoc.data().settlementPaymentManualInput);
     // 線上支付合計（LinePay/街口/台灣Pay/轉帳；缺手動值回退系統）——不論轉換期手動模式或真列印模式，
     // 現金都是「發票總金額（手動輸入或真列印權威）－此線上支付合計」算出，此段兩模式共用。
     const onlineTotal = ['linePay', 'jko', 'taiwanPay', 'transfer'].reduce((sum, k) => {
-      const v = paymentManual?.[k];
+      const v = settlementPaymentManualInput ? paymentManual?.[k] : undefined;
       const has = v !== undefined && v !== '' && v !== null;
       return sum + (has ? (Number(v) || 0) : (payment?.[k] || 0));
     }, 0);
@@ -500,9 +506,10 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
       staffId: req.staff.id, staffName: req.staff.name,
       prevCashBalance: prevBalance,
       income, payment, deductions: deductions || [],
-      // 已開真列印的館別不再收 incomeManual（前端不送）；paymentManual（線上支付統計）不受影響、仍照存
+      // 已開真列印的館別不再收 incomeManual（前端不送）
       incomeManual: invAuth.printingEnabled ? null : (incomeManual || null),
-      paymentManual: paymentManual || null,
+      // 付款方式手動輸入關閉時一律存 null（即使前端仍送值也不採用，見上方 settlementPaymentManualInput）
+      paymentManual: settlementPaymentManualInput ? (paymentManual || null) : null,
       printingEnabled: invAuth.printingEnabled,   // 該日結帳當下是否為真列印權威模式（供歷史檢視判斷）
       invoiceActualTotal: invAuth.printingEnabled ? invAuth.actualTotal : null,   // 今日實際列印發票總金額
       denominations, actualCashBalance: actualCash,

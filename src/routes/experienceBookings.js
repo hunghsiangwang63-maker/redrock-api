@@ -682,7 +682,7 @@ router.put('/:id/member-edit', authenticateAny, async (req, res) => {
         bookingDate: sess.date || booking.bookingDate,
         bookingTime: `${sess.startTime||''}~${sess.endTime||''}`,
         trialEnrollmentId: trial.enrollmentId, isWaitlist,
-        editedAt: new Date(), editedBy: 'member', updatedAt: new Date(),
+        editedAt: new Date(), editedBy: req.member.id, editedByName: req.member.name || '', updatedAt: new Date(),
       });
       return res.json({ success:true, isWaitlist,
         message: isWaitlist ? '已改期（該場次額滿，已列入候補）' : '已改期至新場次' });
@@ -692,7 +692,7 @@ router.put('/:id/member-edit', authenticateAny, async (req, res) => {
     const bookingTime = (req.body.bookingTime || '').trim();
     if (!bookingDate) return res.status(400).json({ error:'MISSING_DATE', message:'請填寫體驗日期' });
     if (taiwanToday() >= bookingDate) return res.status(400).json({ error:'INVALID_DATE', message:'新日期需晚於今天' });
-    await ref.update({ bookingDate, bookingTime, editedAt:new Date(), editedBy:'member', updatedAt:new Date() });
+    await ref.update({ bookingDate, bookingTime, editedAt:new Date(), editedBy:req.member.id, editedByName:req.member.name || '', updatedAt:new Date() });
     const b = { id: booking.id, ...booking, bookingDate, bookingTime };
     const r = await updateExperienceSchedule(db, b, null);
     if ((r.scheduleShiftId || null) !== (booking.scheduleShiftId || null)) {
@@ -810,7 +810,10 @@ router.put('/:id/schedule', authenticate, async (req, res) => {
     const bookingDate = (req.body.bookingDate || '').trim();
     const bookingTime = (req.body.bookingTime || '').trim();
     if (!bookingDate) return res.status(400).json({ error: 'MISSING_DATE', message: '請填寫體驗日期' });
-    await ref.update({ bookingDate, bookingTime, updatedAt: new Date() });
+    // 2026-08-15：原本這裡只更新日期/時段本身，沒有記錄是誰改的——事後想追查「這筆日期是誰改的」
+    // 完全無從查起（只能從連動建立的教練排班 createdBy 間接推測，不可靠）。補上 editedBy/editedByName/
+    // editedAt，比照下方 /member-edit 會員自助改期的既有記錄方式（該處記 'member'，這裡改記實際員工）。
+    await ref.update({ bookingDate, bookingTime, editedBy: req.staff.id, editedByName: req.staff.name || '', editedAt: new Date(), updatedAt: new Date() });
     const b = { id: doc.id, ...doc.data(), bookingDate, bookingTime };
     const r = await updateExperienceSchedule(db, b, req.staff);
     if ((r.scheduleShiftId || null) !== (b.scheduleShiftId || null)) {

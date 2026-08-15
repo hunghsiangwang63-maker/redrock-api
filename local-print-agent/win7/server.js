@@ -365,7 +365,7 @@ app.get('/', (req, res) => {
   res.type('html').send(renderTestPage());
 });
 
-app.listen(HTTP_PORT, () => {
+const httpServer = app.listen(HTTP_PORT, () => {
   console.log(`✅ 發票列印代理已啟動（Windows 7 版）：http://localhost:${HTTP_PORT}`);
   console.log(`   版本標記：${AGENT_VERSION}　←（若這行跟預期的版本字串不同，代表這台機器還在跑舊檔案，還沒真的換到新版）`);
   console.log(`   序列埠：${SERIAL_PORT} @ ${BAUD} baud　預設館別：${DEFAULT_GYM}`);
@@ -373,4 +373,18 @@ app.listen(HTTP_PORT, () => {
   console.log(`   允許來源：${ALLOWED_ORIGINS.join(', ')}`);
   console.log(`   序列埠橋接：${POWERSHELL_EXE} -File ${BRIDGE_SCRIPT}`);
   if (PERSISTENT_MODE) startDaemon();
+});
+
+// ⚠️ 2026-08-15 加：httpServer.listen() 原本沒接錯誤處理——EADDRINUSE（port 3399 已被佔用，最常見
+// 是「換檔案時舊的服務行程沒真的死透、還握著這個 port」）這類錯誤是非同步從 server 物件的 'error'
+// 事件丟出來的，沒人接住的話 Node 會直接當成未攔截例外整個崩潰，NSSM/服務管理員只會看到「服務無法
+// 啟動」、log 檔案裡卻是一段語意不明的堆疊、看不出真正原因。改成接住並印出清楚訊息再結束行程，
+// 服務仍會被 NSSM 判定成啟動失敗（行為不變、只是原因看得懂），供下次發生時直接從 log 判斷。
+httpServer.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`❌ 啟動失敗：port ${HTTP_PORT} 已經被佔用——最可能是舊版的發票代理行程還在背景跑（例如換檔案/重啟服務時沒有真的關乾淨）。請開「工作管理員」找 node.exe 行程結束掉，或直接重開機後再啟動服務。`);
+  } else {
+    console.error(`❌ 啟動失敗（${err.code || '未知錯誤'}）：${err.message}`);
+  }
+  process.exit(1);
 });

@@ -222,8 +222,20 @@ app.get('/', (req, res) => {
   res.type('html').send(renderTestPage());
 });
 
-app.listen(HTTP_PORT, () => {
+const httpServer = app.listen(HTTP_PORT, () => {
   console.log(`✅ 發票列印代理已啟動：http://localhost:${HTTP_PORT}`);
   console.log(`   序列埠：${SERIAL_PORT} @ ${BAUD} baud　預設館別：${DEFAULT_GYM}`);
   console.log(`   允許來源：${ALLOWED_ORIGINS.join(', ')}`);
+});
+
+// ⚠️ 2026-08-15 加（win7/server.js 同步修）：EADDRINUSE（port 已被佔用，最常見是舊行程沒關乾淨還
+// 握著這個 port）沒接錯誤處理的話會變未攔截例外整個崩潰，只看得到語意不明的堆疊。改成印清楚訊息
+// 再結束行程，方便下次診斷。
+httpServer.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`❌ 啟動失敗：port ${HTTP_PORT} 已經被佔用——最可能是舊版的發票代理行程還在背景跑。請確認沒有其他 node 行程還在用這個 port，或重開機後再試。`);
+  } else {
+    console.error(`❌ 啟動失敗（${err.code || '未知錯誤'}）：${err.message}`);
+  }
+  process.exit(1);
 });

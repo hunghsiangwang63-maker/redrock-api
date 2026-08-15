@@ -166,7 +166,7 @@ router.put('/printing-status', authenticate, async (req, res) => {
 // invoiceRecords 是不同集合，此為第 1-8 節「真實印表機」計畫專用，供日後 P5 結帳自動化讀取）。
 router.post('/print-record', authenticate, requireManagerOrStation, async (req, res) => {
   try {
-    const { sourceType, refId, memberId, memberName, itemName, amount, taxId, note, issuedAt, paymentMethod, mergedCheckinIds } = req.body;
+    const { sourceType, refId, memberId, memberName, itemName, amount, taxId, note, issuedAt, paymentMethod, mergedCheckinIds, amountModified, originalAmount } = req.body;
     // 限當館：非 super_admin 一律用自己登入/值班的館別（五流程既有呼叫本就是自己館，這裡是保險；
     // 「手動開立無來源發票」尤其需要這道權威擋，避免士林操作直接消耗新竹的號碼）
     const gymId = req.staff?.role === 'super_admin' ? (req.body.gymId || req.staff?.gymId) : req.staff?.gymId;
@@ -176,6 +176,12 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
     const taxIdVal = taxId ? String(taxId).trim() : '';
     if (taxIdVal && !isValidTaiwanTaxId(taxIdVal)) {
       return res.status(400).json({ error: 'INVALID_TAX_ID', message: '統一編號檢查碼錯誤，請確認號碼是否正確' });
+    }
+    // 列印當下金額被人工改過（跟預設值不同）一律要求備註說明原因（前端已擋，這裡是後端最後一道防線）——
+    // 供結帳頁自動列出「今日發票金額異動」清單，稽核時看得到當初為何金額跟計算值不同。
+    const isAmountModified = !!amountModified;
+    if (isAmountModified && !(note && String(note).trim())) {
+      return res.status(400).json({ error: 'NOTE_REQUIRED', message: '金額已修改，請填寫備註說明原因' });
     }
     const db = getDb();
     // ⚠️ 同一筆訂單只能有一張作用中發票（比照 §9 invoiceService.js 對 invoiceRecords 的既有規則）——
@@ -214,6 +220,9 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
       issuedAt: issuedAt ? new Date(issuedAt) : now,
       staffId: req.staff.id, staffName: req.staff.name || '',
       createdAt: now, updatedAt: now,
+      // 列印當下金額是否被人工改過原本計算值（isAmountModified 已含備註必填檢查）；originalAmount
+      // 供事後對照「原本應該是多少」，僅在有改過時才有意義。
+      ...(isAmountModified ? { amountModified: true, originalAmount: originalAmount != null ? Number(originalAmount) : null } : {}),
       // 合併列印（多筆入場合開一張發票，sourceType:'checkin_merged'、refId:null）——存底下實際合併的
       // checkIns id 陣列供稽核追溯；一般單筆來源的發票此欄位不存在，不影響既有任何邏輯。
       ...(Array.isArray(mergedCheckinIds) && mergedCheckinIds.length ? { mergedCheckinIds } : {}),

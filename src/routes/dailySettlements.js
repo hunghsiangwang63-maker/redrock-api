@@ -62,7 +62,7 @@ const manualIncomeTotal = (income, im) => im
 // 依字軌分段（同日內若因換捲換字軌，依出現順序拆成多段，對齊既有 invoiceSegments 多段 UI 概念）；
 // 作廢號碼/作廢總金額直接取 invoices 的 status:'void' 紀錄，不再由店員手動輸入。
 async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
-  const result = { printingEnabled: false, segments: [], voidNumbers: [], voidTotalAmount: 0, actualTotal: 0, count: 0, voidCount: 0, bySourceType: {} };
+  const result = { printingEnabled: false, segments: [], voidNumbers: [], voidTotalAmount: 0, actualTotal: 0, count: 0, voidCount: 0, bySourceType: {}, amountModifiedList: [] };
   try {
     const gymDoc = await db.collection('gyms').doc(gymId).get();
     result.printingEnabled = !!(gymDoc.exists && gymDoc.data().invoicePrintingEnabled === true);
@@ -116,6 +116,12 @@ async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
       const st = i.sourceType || '_unknown';
       result.bySourceType[st] = (result.bySourceType[st] || 0) + (Number(i.amount) || 0);
     });
+    // 列印當下金額被人工改過（見 invoices.js /print-record 的 amountModified 判斷）的清單——
+    // 讓結帳頁自動看得到這類異動、不用另外去翻發票紀錄；備註在列印當下已強制必填。
+    result.amountModifiedList = issued.filter(i => i.amountModified === true).map(i => ({
+      invoiceNo: i.invoiceNo, itemName: i.itemName, originalAmount: i.originalAmount ?? null,
+      amount: i.amount, note: i.note || '', staffName: i.staffName || '',
+    }));
   } catch (e) { console.error('[今日發票權威資料]', e.message); }
   return result;
 }
@@ -341,6 +347,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       todayInvoiceSegments: invAuth.segments,
       todayInvoiceVoidNumbers: invAuth.voidNumbers,
       voidInvoiceAmount: invAuth.voidTotalAmount,
+      amountModifiedInvoices: invAuth.amountModifiedList,   // 今日列印時金額被人工修改過的發票（含備註）
       difference: null,
       status: 'draft',
     };
@@ -493,6 +500,7 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
       invoiceVoidNumbers: finalVoidNumbers,
       voidInvoiceAmount: finalVoidAmount,   // 作廢票號碼總金額（真列印館別：系統依 invoices 作廢紀錄權威算出）
       checkinCount: checkinCount ?? null,
+      amountModifiedInvoices: invAuth.amountModifiedList,   // 今日列印時金額被人工修改過的發票（結帳當下快照，供歷史查詢）
       notes: notes || '',
       status: 'settled',
       settledAt: new Date(),

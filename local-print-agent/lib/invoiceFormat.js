@@ -7,8 +7,9 @@ const big5 = (s) => iconv.encode(s, 'big5');
 const LINE_WIDTH = 24; // 已實測：24 半形字元（12 個中文全形字）＝一行寬度
 // 行距：印表機不支援 ESC/POS 的行高控制指令（ESC 3 n 實測無效、不亂碼但也無效果），
 // 故用純內容的方式（每行間多插入 N 個空行）達到「加大行距」的視覺效果——保證相容。
-// 0=原本緊密排版；1=每行間多一個空行（目前預設）；可依實際印出結果調整。
-const LINE_SPACING = parseInt(process.env.LINE_SPACING || '1', 10);
+// 0=正常/緊密排版（預設）；1=每行間多一個空行；可依實際印出結果調整。
+// ⚠️ 2026-08-15：曾一度預設拉大成 1，實機印出後使用者反映太鬆散、要求改回正常行距，改回 0。
+const LINE_SPACING = parseInt(process.env.LINE_SPACING || '0', 10);
 
 function displayWidth(str) {
   let w = 0;

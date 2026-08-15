@@ -2687,6 +2687,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **範圍界定（避免誤改）**：`payByMethod` 只在 `GET /today` 這個 handler 內宣告使用（`grep` 確認），`POST /`（正式送出結帳）並不自己重算 `payByMethod`，是直接吃前端回傳的 `payment`（前端顯示的值已經是修正後的 `GET /today` 回應）——故只需要改 `GET /today` 這一處，`POST /` 與前端 `DailySettlementPage.jsx` 都不用碰，改動自然透過既有的資料流傳遞下去。
   - **未處理**：歷史上已經結帳、且真的因這個雙重計算而被多報現金的過去日期（printing 剛上線沒多久，實際曝險應該很小）——這是**過去已結帳的財務紀錄**，比照專案一貫原則不主動回頭改動，除非使用者要求核對特定日期。
 
+## 目前進度（2026-08-15 續7）— 補租器材（岩鞋/粉袋）確認收款後補上開發票入口
+> 承續6：使用者問「補借岩鞋或粉袋這條路徑會帶出開發票嗎」→ 追過整條路徑確認**不會**（畫面只有 alert、後端完全沒碰任何發票邏輯）→ 使用者要求補上。過程中又發現並修掉一個範圍侷限在這次新增路徑內的雙重計算風險。後端 `/health` `3.308.0-rental-addon-invoice`；前後端已 commit+push+deploy。commit 後端 `a0f1a9b`、前端 `0e13e73`。
+- ✅ **補租確認收款後渲染 InvoiceIssuer**：`CheckinPage.jsx` 掃碼確認補租的區塊，原本成功只有 `alert('已確認補租，扣費完成')`，改成保留補租資訊（新 state `confirmedRentalAddon`）並渲染 `InvoiceIssuer`（依館別 `printingEnabled` 開關自動切真列印/§9 手動記帳版，與其餘五流程共用同一元件、行為一致）。
+- ✅ **新 `sourceType:'rental_addon'`，`refId`＝補租請求自己的文件 id（非原入場的 `checkInId`）**：同一組 `sourceType+refId` 只能有一張作用中發票（見 `getActiveRealInvoice`/`getActiveInvoice` 的既有唯一性約束）——原入場當下可能早就已經開過一張入場費發票了，若沿用 `checkInId` 當 refId 會直接撞上 `ALREADY_INVOICED`，用補租請求自己的 id 讓這筆補租金額能獨立開一張。P2/P3 真列印版（`invoices.js` 的 `checkStillValidForInvoice`/`checkInvoiceIssuanceTiming` 兩個把關函式）對未知 sourceType 本就安全 fallback 成「一律有效／不延後」，不用額外改動即可支援新值——這代表整個發票號碼配號/驗證基礎設施本身是通用的，新增一種來源類型不需要特殊處理。
+- ✅ **`checkin/flow.js`**：`confirmRentalAddon` 補回開發票要用的欄位（`addonId/memberId/gymId/cost/paymentMethod/addShoes/addChalk`），`scanRentalAddon` 預覽也補 `memberId`（對稱）。
+- ✅ **§9 手動記帳版新端點**：`GET/POST /checkin/add-rental/:addonId/invoices`（作廢共用既有 `POST /checkin/invoices/:id/void`，該端點本就不分 sourceType、單純依 `id` 查詢，不用另外寫）。
+- 🐞 **附帶修一個範圍收斂在這次新增路徑內的雙重計算風險**：`invoiceService.js`（§9）的 `createInvoice` 原本**無條件**呼叫 `addCashAdjustment` 記一筆「+發票開立」加減項——但補租金額本就已經寫進對應 `checkIns` 文件的 `amountPaid`/`paymentMethod`，結帳頁 `GET /today` 直接重新掃描 `checkIns` 算出來、完全不看有沒有開過發票，兩邊相加會把同一筆錢算兩次（跟續6修的那個 bug 是同一種形狀）。**修法**：新增選填參數 `skipCashAdjustment`（預設 `false`，**course/competition/既有 checkin 呼叫端完全不變、不評斷/不動它們現有行為**），只有這次新增的補租發票路徑明確傳 `true` 跳過。
+  - ⚠️ **範圍界定（刻意縮小）**：同樣的雙重計算疑慮，理論上也可能存在於既有 `course`/`competition`/`checkin` 的 §9 路徑——它們的收入是否也已經透過 `transactions`/`checkIns` 即時查詢重複算過，需要逐一查證才能下定論（不像補租這次，是我自己新寫、100% 確定資料流向的程式碼）。**這是更大範圍、需要分別驗證每個 sourceType 的既有問題，不在這次要求範圍內，故只處理這次新增的部分、完全沒動既有呼叫端**——已明確告知使用者此發現，留待日後決定是否要展開查證。
+
 - ✅ **發票列印時機／方式（2026-08-04 全部拍板，見 `invoice-integration-plan.md` §8）**：**B**＝逐筆開票（入場一張、POS一張）／**C**＝非臨櫃付款（課程/比賽/體驗/入隊/分期）不自動觸發，一律留給店員手動按既有 §9 發票 modal（硬體接上後原地升級成真列印）／**D**＝LinePay入場一律到場掃碼確認入場當下才印（未入場轉券者延後至持券入場時）。純設計定案，實作仍待 P1（發票機硬體：正式財政部紙捲、錢櫃）到位。
 - ❌ **【已決定不做，2026-08-04 拍板】補課期限模式 B「請假日後 N 天」**：使用者確認**一律維持「課程結束後固定天數」（模式 A），跟請假日期無關**——不加模式切換，維持現行 `makeupDeadlineDays`（結束日+N）單一算法（原 2026-07-19 暫緩的方案已明確作廢，非之後再議）。
 - ✅（查證後撤銷，2026-08-04）**「小蜘蛛人一A(7-8)閎」`3f35216f` 已不存在**：查證正式資料庫，該課程已在 7/13 課程樹狀架構大改造時當重複梯次一併刪除（連 9 場次）；朱智萩目前有效報名為「技巧班 5-7月週五A班」，與此無關、無資料遺失。原提醒作廢。

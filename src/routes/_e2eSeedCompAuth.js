@@ -5,7 +5,7 @@ const router = express.Router();
 const { getCompDb } = require('../config/compFirebase');
 const { hashPw } = require('../services/compAuthService');
 
-const TEST_COMP_ID = '__e2e_auth_bridge_test__';
+const TEST_COMP_ID = 'e2eAuthBridgeTest123'; // Firestore 保留 __xxx__ 格式的 doc id，不能用
 
 router.post('/seed', async (req, res) => {
   try {

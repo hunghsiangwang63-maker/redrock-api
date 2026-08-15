@@ -743,7 +743,7 @@ const scanRentalAddon = async (token, staffGymId = null, isSuperAdmin = false) =
   if (staffGymId && !isSuperAdmin && p.gymId !== staffGymId) {
     throw { code: 'GYM_MISMATCH', message: `此為「${GYM_NAMES[p.gymId] || p.gymId}」的補租請求，請至該館掃碼確認` };
   }
-  return { token, memberName: p.memberName, gymId: p.gymId, addShoes: p.addShoes, addChalk: p.addChalk, cost: p.cost, paymentMethod: p.paymentMethod };
+  return { token, memberId: p.memberId, memberName: p.memberName, gymId: p.gymId, addShoes: p.addShoes, addChalk: p.addChalk, cost: p.cost, paymentMethod: p.paymentMethod };
 };
 
 const confirmRentalAddon = async (token, staffId, staffName, staffGymId = null, isSuperAdmin = false) => {
@@ -761,7 +761,13 @@ const confirmRentalAddon = async (token, staffId, staffName, staffGymId = null, 
   }
   const result = await addRentalToCheckIn(p.checkInId, { addShoes: p.addShoes, addChalk: p.addChalk }, staffId, staffName, p.paymentMethod);
   await ref.update({ status: 'confirmed', confirmedAt: new Date(), confirmedBy: staffId });
-  return result;
+  // 補回開發票要用的欄位（2026-08-15 新增，供 CheckinPage.jsx 確認後渲染 InvoiceIssuer）：
+  // token 就是這筆補租請求自己的文件 id（呼叫端已在路由層剝掉 rentaladd: 前綴），拿來當
+  // sourceType:'rental_addon' 的 refId——刻意不沿用原入場的 checkInId 當 refId，因為原入場
+  // 可能早就已經開過一張發票了（同一組 sourceType+refId 只能有一張作用中發票，見 invoices.js
+  // getActiveRealInvoice），補租這筆錢要能獨立再開一張，不能被那張擋住。
+  return { ...result, addonId: token, memberId: p.memberId, memberName: p.memberName, gymId: p.gymId,
+    cost: p.cost, paymentMethod: p.paymentMethod, addShoes: p.addShoes, addChalk: p.addChalk };
 };
 
 module.exports = {

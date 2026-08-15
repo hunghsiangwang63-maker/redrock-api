@@ -25,6 +25,12 @@ const NUMBER_RE = /^\d{8}$/;
 const createInvoice = async (db, {
   sourceType, refId, memberId, memberName, itemName, amount, taxId, note,
   gymId, issuedAt, staffId, staffName, meta, track, number,
+  // 2026-08-15 新增：這筆訂單的錢是否「已經」透過其他即時查詢管道算進今日結帳（例如補租器材，
+  // 金額本就存在對應 checkIns 文件的 amountPaid/paymentMethod，結帳頁 GET /today 會直接重新掃描
+  // checkIns 算出來，不看這裡有沒有開過發票）——這種情況再叫下面的 addCashAdjustment 多記一筆
+  // 「+發票開立」加減項會把同一筆錢算兩次。預設 false（維持既有 course/competition/checkin 呼叫端
+  // 沒改過的行為，不評斷/不動它們現有的正確性），只有呼叫端明確知道會重複時才傳 true 跳過。
+  skipCashAdjustment = false,
 }) => {
   const amt = Number(amount);
   if (!(amt > 0)) { const e = new Error('發票金額需大於 0'); e.code = 'INVALID_AMOUNT'; throw e; }
@@ -53,13 +59,15 @@ const createInvoice = async (db, {
     ...(meta || {}),
   };
   await db.collection(COLL).doc(id).set(record);
-  // 計入當日營收（結帳加減項；不動原本認列的營收交易）
-  try {
-    await require('./settlementService').addCashAdjustment({
-      gymId: gymId || null, amount: amt, sign: '+', type: '發票開立',
-      note: `發票開立：${trackVal}${numberVal}・${memberName || ''}・${itemName || '費用'}${taxId ? '（統編 ' + taxId + '）' : ''}`,
-    });
-  } catch (e) { console.error('[發票加減項]', e.message); }
+  // 計入當日營收（結帳加減項；不動原本認列的營收交易）——skipCashAdjustment 見上方參數說明
+  if (!skipCashAdjustment) {
+    try {
+      await require('./settlementService').addCashAdjustment({
+        gymId: gymId || null, amount: amt, sign: '+', type: '發票開立',
+        note: `發票開立：${trackVal}${numberVal}・${memberName || ''}・${itemName || '費用'}${taxId ? '（統編 ' + taxId + '）' : ''}`,
+      });
+    } catch (e) { console.error('[發票加減項]', e.message); }
+  }
   return record;
 };
 

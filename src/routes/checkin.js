@@ -313,6 +313,49 @@ router.post('/:checkInId/invoices', authenticate, requireManagerOrStation, async
   }
 });
 
+// ── 補租器材開立發票（手動記帳版，比照上面入場開立發票同一套；作廢共用下方 /invoices/:id/void，
+//    該端點不分 sourceType，不用另外寫）。底層共用 invoiceService（sourceType:'rental_addon'，
+//    refId=補租請求自己的 id，非原入場的 checkInId——同一入場可能已經開過另一張入場費發票，見
+//    checkin/flow.js confirmRentalAddon 的說明；此處與 P2/P3 真列印那邊（invoices.js/routes 的
+//    'rental_addon' sourceType）用同一套命名，只是 §9 手動記帳版走 invoiceRecords 集合、
+//    P2/P3 真列印版走 invoices 集合，兩邊各自獨立、互不影響（見 invoiceService.js 檔頭說明）。
+router.get('/add-rental/:addonId/invoices', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('invoiceRecords')
+      .where('sourceType', '==', 'rental_addon').where('refId', '==', req.params.addonId).get();
+    const invoices = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.issuedAt?._seconds || 0) - (a.issuedAt?._seconds || 0));
+    res.json({ invoices });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+router.post('/add-rental/:addonId/invoices', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const addonDoc = await db.collection('pendingRentalAddons').doc(req.params.addonId).get();
+    if (!addonDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到補租紀錄' });
+    const a = addonDoc.data();
+    const { itemName, amount, taxId, note, issuedAt, track, number } = req.body;
+    const invoiceService = require('../services/invoiceService');
+    const record = await invoiceService.createInvoice(db, {
+      sourceType: 'rental_addon', refId: req.params.addonId,
+      memberId: a.memberId, memberName: a.memberName || '',
+      itemName: itemName || '補租器材', amount, taxId, note, gymId: a.gymId, issuedAt, track, number,
+      staffId: req.staff.id, staffName: req.staff.name || '',
+      meta: { checkInId: a.checkInId || '', addShoes: !!a.addShoes, addChalk: !!a.addChalk },
+      // 補租金額本就存在對應 checkIns 文件的 amountPaid/paymentMethod，結帳頁 GET /today 直接重新
+      // 掃描 checkIns 算出來、不看這裡有沒有開發票——再讓 addCashAdjustment 多記一筆會重複計算。
+      skipCashAdjustment: true,
+    });
+    res.json({ success: true, invoice: record });
+  } catch (err) {
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400, INVALID_TAX_ID: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 router.post('/invoices/:id/void', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const db = getDb();

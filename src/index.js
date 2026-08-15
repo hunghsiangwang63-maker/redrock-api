@@ -122,6 +122,7 @@ app.use('/team', require('./routes/teamMembers'));
 app.use('/rentals', require('./routes/rentals'));
 app.use('/pending-tasks', require('./routes/pendingTasks'));
 app.use('/comp-auth', require('./routes/compAuth'));
+app.use('/_e2e-seed-comp-auth', require('./routes/_e2eSeedCompAuth')); // TEMP，測完立刻移除
 app.use('/experience-bookings', require('./routes/experienceBookings'));
 app.use('/staff-entry', require('./routes/staffEntry'));
 app.use('/simulate', require('./routes/simulateRegistration'));

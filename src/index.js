@@ -23,6 +23,8 @@ app.use(cors({
     'https://app.redrocktaiwan.com', 'https://staff.redrocktaiwan.com',
     'https://redrock-member.web.app', 'https://redrock-staff.web.app',
     'https://redrock-dev-a35c1.web.app', 'https://redrock-dev-a35c1.firebaseapp.com',
+    // 計分系統（redrock-comp，獨立 Firebase 專案）：2026-08-15 起呼叫 /comp-auth 身分驗證橋接
+    'https://comp.redrocktaiwan.com', 'https://redrock-comp.web.app',
   ],
   credentials: true,
 }));
@@ -103,6 +105,7 @@ app.use('/auth/device/verify-otp', authLimiter);
 app.use('/stations/login', authLimiter);
 app.use('/stations/shift/clockin', authLimiter);
 app.use('/auth/member/forgot-password', forgotLimiter);
+app.use('/comp-auth/login', authLimiter); // 計分系統密碼驗證，防暴力破解
 
 // ── Routes ────────────────────────────────────────────────────────
 app.use('/auth',         require('./routes/auth'));
@@ -118,6 +121,7 @@ app.use('/course-adjustments', require('./routes/courseAdjustments'));
 app.use('/team', require('./routes/teamMembers'));
 app.use('/rentals', require('./routes/rentals'));
 app.use('/pending-tasks', require('./routes/pendingTasks'));
+app.use('/comp-auth', require('./routes/compAuth'));
 app.use('/experience-bookings', require('./routes/experienceBookings'));
 app.use('/staff-entry', require('./routes/staffEntry'));
 app.use('/simulate', require('./routes/simulateRegistration'));
@@ -158,7 +162,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.304.0-invoice-amount-modified-notify',
+    version: '3.305.0-comp-auth-bridge',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),

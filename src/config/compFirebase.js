@@ -9,11 +9,13 @@
  */
 const admin = require('firebase-admin');
 
-let compDb = null;
+let compApp = null;
 let tried = false;
 
-const getCompDb = () => {
-  if (compDb) return compDb;
+// 取得（或懶初始化）連到 Redrock-comp 專案的第二個 Admin app——getCompDb/getCompAuth 共用同一個
+// instance（依 name:'compApp' 找既有的，不管誰先呼叫都收斂到同一個，避免重複初始化炸掉）。
+const getCompApp = () => {
+  if (compApp) return compApp;
   if (tried) return null;
   tried = true;
   try {
@@ -24,17 +26,27 @@ const getCompDb = () => {
     }
     const sa = typeof raw === 'string' ? JSON.parse(raw) : raw;
     const existing = admin.apps.find(a => a && a.name === 'compApp');
-    const app = existing || admin.initializeApp({ credential: admin.credential.cert(sa) }, 'compApp');
-    compDb = app.firestore();
-    console.log(`✅ 紅石賽事計分系統(Redrock-comp) Firestore 已連線（project ${sa.project_id || '?'}）`);
-    return compDb;
+    compApp = existing || admin.initializeApp({ credential: admin.credential.cert(sa) }, 'compApp');
+    console.log(`✅ 紅石賽事計分系統(Redrock-comp) Admin app 已連線（project ${sa.project_id || '?'}）`);
+    return compApp;
   } catch (e) {
     console.error('[紅石賽事計分系統] Redrock-comp 連線失敗：', e.message);
     return null;
   }
 };
 
+const getCompDb = () => {
+  const app = getCompApp();
+  return app ? app.firestore() : null;
+};
+
+// 供 compAuthService 核發/驗證 custom token 用（見 §「計分系統 Firestore 規則加固」）
+const getCompAuth = () => {
+  const app = getCompApp();
+  return app ? app.auth() : null;
+};
+
 // 是否已設定金鑰（供前端/狀態判斷）
 const isCompConfigured = () => !!process.env.COMP_FIREBASE_SA;
 
-module.exports = { getCompDb, isCompConfigured };
+module.exports = { getCompDb, getCompAuth, isCompConfigured };

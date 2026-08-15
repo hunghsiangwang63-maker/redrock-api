@@ -13,7 +13,6 @@ const { v4: uuidv4 } = require('uuid');
 const { authenticate, requireManagerOrStation, requireManager } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const invoiceNumberService = require('../services/invoiceNumberService');
-const { addCashAdjustment } = require('../services/settlementService');
 const { notifyRoleInGym } = require('../services/notificationService');
 const { isValidTaiwanTaxId } = require('../utils/taiwanTaxId');
 const { taiwanToday } = require('../utils/taiwanDate');
@@ -217,6 +216,9 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
       gymId, memberId: memberId || null, memberName: memberName || '',
       itemName: itemName || '費用', amount: amt,
       track: allocated.track, number: allocated.number, invoiceNo: `${allocated.track}${allocated.number}`,
+      // 2026-08-15 新增：先前完全沒存這欄（只在下面「無來源現金補入」判斷用完即丟）——結帳頁若要
+      // 事後查「這張發票當初收的是哪種付款方式」（如稽核/對帳）查不到；補存，對所有 sourceType 皆存。
+      paymentMethod: paymentMethod || null,
       taxId: taxIdVal, note: note ? String(note).trim() : '',
       issuedAt: issuedAt ? new Date(issuedAt) : now,
       staffId: req.staff.id, staffName: req.staff.name || '',
@@ -249,15 +251,17 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
     }
 
     // 「手動開立發票（無來源）」沒有任何既有訂單/收款流程會把這筆錢記進當日結帳——五個既有流程
-    // （入場/課程/比賽/租借/POS）本身各自的收款確認就會記帳，這裡才是唯一機會（2026-08-12 案例：
-    // 兩張無來源發票印出後完全沒進結帳資訊，事後才發現）。僅現金（會實際放進抽屜、需要盤點核對）
-    // 才記；「其他（不開錢櫃）」代表沒有實體現金入帳，不計入現金盤點加減項。
-    if (!sourceType && validity.valid && paymentMethod === 'cash') {
-      await addCashAdjustment({
-        gymId, amount: amt, sign: '+', type: '現金補入',
-        note: `${record.invoiceNo}：${itemName || '費用'}${memberName ? `（${memberName}）` : ''}${note ? `／${note}` : ''}`,
-      });
-    }
+    // （入場/課程/比賽/租借/POS）本身各自的收款確認就會記帳，發票號碼是唯一連結（2026-08-12 案例：
+    // 兩張無來源發票印出後完全沒進結帳資訊，事後才發現）。
+    // ⚠️ 2026-08-15 移除「現金另外記一筆加減項」的做法（原本這裡有一段 addCashAdjustment 呼叫）：
+    // 已開真列印的館別（此端點唯一會被呼叫到的情境——見上方 invoiceNumberService.allocateInvoiceNumber
+    // 前提），結帳的「現金」是用『發票總金額（invoices 集合逐筆加總，含這張）－線上支付合計』反推，
+    // 見 dailySettlements.js 的 effectiveCash/invAuth.actualTotal——這張發票的金額已經算在「發票總金額」
+    // 那一側了，若再多寫一筆「+現金補入」加減項會被算兩次（現金多報，實際點鈔會比預期少、誤觸差異
+    // 警示）。真正需要補的是「電子支付合計」那一側要知道這張錢不是現金：見
+    // dailySettlements.js computeTodayInvoiceAuthority 的 noSourceByMethod（依這裡剛存的 paymentMethod
+    // 分組，併入 GET /today 的 payByMethod）——LinePay/街口/台灣Pay/轉帳都會正確從「發票總金額」那
+    // 一大坨裡被扣出來歸類，現金則不用另外處理（本來就正確落在「發票總金額－電子支付」剩下的那份）。
 
     // 配號後的紙捲剩餘狀態（僅該館設過紙捲張數時才有意義）——供前端在列印成功畫面同步跳出
     // 「即將用完」醒目警語，不用等下次開設定頁才看到。

@@ -62,7 +62,7 @@ const manualIncomeTotal = (income, im) => im
 // 依字軌分段（同日內若因換捲換字軌，依出現順序拆成多段，對齊既有 invoiceSegments 多段 UI 概念）；
 // 作廢號碼/作廢總金額直接取 invoices 的 status:'void' 紀錄，不再由店員手動輸入。
 async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
-  const result = { printingEnabled: false, segments: [], voidNumbers: [], voidTotalAmount: 0, actualTotal: 0, count: 0, voidCount: 0, bySourceType: {}, amountModifiedList: [] };
+  const result = { printingEnabled: false, segments: [], voidNumbers: [], voidTotalAmount: 0, actualTotal: 0, count: 0, voidCount: 0, bySourceType: {}, amountModifiedList: [], noSourceByMethod: {} };
   try {
     const gymDoc = await db.collection('gyms').doc(gymId).get();
     result.printingEnabled = !!(gymDoc.exists && gymDoc.data().invoicePrintingEnabled === true);
@@ -115,6 +115,17 @@ async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
     issued.forEach(i => {
       const st = i.sourceType || '_unknown';
       result.bySourceType[st] = (result.bySourceType[st] || 0) + (Number(i.amount) || 0);
+    });
+    // 「無來源手動發票」（sourceType 為空，見 SettingsPage 手動開立發票）依付款方式分組——供 GET /today
+    // 併入 payByMethod（2026-08-15 新增，見 invoices.js print-record 同一批改動的說明）：這類發票的
+    // 金額本就已算進上面 result.actualTotal（供 effectiveCash＝發票總金額－線上支付合計 使用），若付款
+    // 方式是 LinePay/街口/台灣Pay/轉帳，要讓「線上支付合計」也正確吃到這筆，才不會被誤算成現金。
+    // paymentMethod 是 2026-08-15 才開始存的新欄位，這之前印的無來源發票沒有這欄，一律當現金（fallback
+    // 'cash'——維持這批修正之前「現金才特別處理、其餘都無感」的舊行為，不會讓歷史資料無故被歸類成
+    // 某個電子支付方式）。
+    issued.filter(i => !i.sourceType).forEach(i => {
+      const m = i.paymentMethod || 'cash';
+      result.noSourceByMethod[m] = (result.noSourceByMethod[m] || 0) + (Number(i.amount) || 0);
     });
     // 列印當下金額被人工改過（見 invoices.js /print-record 的 amountModified 判斷）的清單——
     // 讓結帳頁自動看得到這類異動、不用另外去翻發票紀錄；備註在列印當下已強制必填。
@@ -300,6 +311,12 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     // invoices 集合存的 sourceType 是 'experience' 非 'course'——只加 bySourceType.course 會漏算，
     // 這類發票金額整筆消失於「課程」項目。一併加回。
     if (invAuth.printingEnabled) courseIncome = (invAuth.bySourceType.course || 0) + (invAuth.bySourceType.experience || 0);
+
+    // 「無來源手動發票」的付款方式併入 payByMethod（2026-08-15 新增，見 invoices.js print-record
+    // 同一批改動的說明）——這類發票沒有 checkIns/productSales/transactions 記錄可依循，是目前
+    // payByMethod 唯一漏掉的收入來源；併入後 LinePay/街口/台灣Pay/轉帳合計才會正確涵蓋，effectiveCash
+    // （＝發票總金額－線上支付合計，見下方/POST）才不會把這類電子支付誤算成現金。
+    Object.entries(invAuth.noSourceByMethod).forEach(([m, amt]) => addPay(m, amt));
 
     const totalIncome = entryIncome + shoeRentalIncome + productIncome + courseIncome + passIncome + equipmentRentalIncome;
     const totalCash = payByMethod.cash || 0;

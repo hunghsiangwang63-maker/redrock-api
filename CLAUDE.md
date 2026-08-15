@@ -2711,6 +2711,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端（`DailySettlementPage.jsx`）全面比照拆分**：付款方式統計卡片（標題文字/現金自動列/手動輸入框/系統值顏色）、線上支付合計計算（`onlinePaymentManualTotal`）、送出結帳的 payload 組裝（`paymentManual` 併入條件）、確認彈窗預覽（`SettlementSummary` 的 `paymentManual` prop），全部改讀 `transition.settlementPaymentManualInput`；「今日收入」卡片與 `manualIncomeTotal`/`incomeManual` 相關的全部保留原本 `transition.settlementManualInput`、完全不動。**歷史紀錄檢視**（`h.paymentManual`）不受影響——那是讀取歷史結帳文件已存的值，跟這次的即時開關無關，過去的記錄原樣顯示。
 - ✅ **體驗預約改期補記編輯者**：查「剛剛的體驗編輯日期是誰改的」時發現，員工端「編輯資訊」改日期/時段（`PUT /:id/schedule`）完全沒有記錄操作人（只更新 `bookingDate`/`bookingTime`/一個會被後續其他動作覆蓋掉的通用 `updatedAt`），只能從連動建立的教練排班 `createdBy` 間接推測、不可靠且常被後續操作蓋掉時間戳。補上 `editedBy`/`editedByName`/`editedAt`。順手把會員自助改期（`PUT /:id/member-edit`，含一般體驗與試上換場次兩分支）原本記死板字串 `'member'` 的兩處，改成記實際會員 `id`/`name`（家長代訂/子女帳號情境下才看得出精確是誰改的）。**純記錄資料，未加對應的 UI 顯示**（使用者要求「記錄」，未要求顯示；之後若需要在「編輯資訊」面板顯示最後編輯者，資料已經有了）。
 
+## 目前進度（2026-08-15 續10）— 士林第二台發票機（ASUS，Win11 備用機）安裝＋失效切換 SOP
+> 士林除既有 Win7 機外，另有一台 ASUS 主機（Win11）**獨立接一台 WP-560、當備用機用**——像今天 Win7 那次連不上時切過去頂替，**同一時間只會用一台**，且發票號碼要跟原本的序列**接續不中斷**。純安裝交付＋架構確認，無程式異動。
+- ✅ **安裝包已寄出**：`local-print-agent/` 根目錄版（現代 Node.js、非 win7 那份 PowerShell 橋接版）用 `git archive` 打包成 zip（排除 `win7/`／`node_modules`／`.env`，僅 13 個 git 追蹤檔案，40KB），Email 附件寄給使用者（Outlook 網頁版瀏覽器自動化操作，內文含硬體確認/裝 Node.js/`install.bat`+`start.bat`/`npm run install-service` 裝 Windows 服務四步驟，服務名同樣叫 `RedRockPrintAgent`，機制是 `node-windows` 非 NSSM）。
+- ✅ **確認「發票號碼延續」架構本就自動成立、不需另外設定**：重新核對 `invoiceNumberService.js`——`invoiceState`（`{track, currentNumber}`）存在 **`gyms/{gymId}` 文件上、以 gymId 為鍵**（`getInvoiceState(gymId)`／`allocateInvoiceNumber(gymId)` 皆是），**不是綁機器**。兩台機器的 `local-print-agent` 都只是本地印表機驅動，實際配號永遠是瀏覽器打 `staff.redrocktaiwan.com` → 後端 → 同一個 `gym-shilin` 的 `invoiceState` Firestore transaction——只要兩台都用士林的店員/值班帳號登入，切換機器時號碼自動接續，**無需為 ASUS 另開一組序列／另做設定**。
+- 📋 **切換當下唯一要注意的是實體紙捲對不對得上**（軟體只能保證「數字序列連續」，紙捲是否物理對得上要人工確認）：
+  - **方案一（建議）**：直接把捲筒**從故障機器移到 ASUS**——同一捲紙，號碼天生完全連續，不用碰任何設定。
+  - **方案二**：ASUS 平常就另外插一捲備用捲筒待命——切換前**務必**先到「發票號碼管理」設定頁做「換捲重設／校正」（`PUT /invoices/state`），把系統 `currentNumber` 校正成 ASUS 那捲紙實際下一張印出來的號碼，再開始用；沒做這步，系統仍會照原本 Win7 機器停在的號碼繼續配、跟 ASUS 紙捲上實際印出的號碼對不起來。
+  - 兩台機器登入帳號都是士林帳號（如既有站台帳號 `redrocktaiwan@gmail.com`），`gymId` 由登入帳號決定、與裝在哪台電腦無關。
+
 - ✅ **發票列印時機／方式（2026-08-04 全部拍板，見 `invoice-integration-plan.md` §8）**：**B**＝逐筆開票（入場一張、POS一張）／**C**＝非臨櫃付款（課程/比賽/體驗/入隊/分期）不自動觸發，一律留給店員手動按既有 §9 發票 modal（硬體接上後原地升級成真列印）／**D**＝LinePay入場一律到場掃碼確認入場當下才印（未入場轉券者延後至持券入場時）。純設計定案，實作仍待 P1（發票機硬體：正式財政部紙捲、錢櫃）到位。
 - ❌ **【已決定不做，2026-08-04 拍板】補課期限模式 B「請假日後 N 天」**：使用者確認**一律維持「課程結束後固定天數」（模式 A），跟請假日期無關**——不加模式切換，維持現行 `makeupDeadlineDays`（結束日+N）單一算法（原 2026-07-19 暫緩的方案已明確作廢，非之後再議）。
 - ✅（查證後撤銷，2026-08-04）**「小蜘蛛人一A(7-8)閎」`3f35216f` 已不存在**：查證正式資料庫，該課程已在 7/13 課程樹狀架構大改造時當重複梯次一併刪除（連 9 場次）；朱智萩目前有效報名為「技巧班 5-7月週五A班」，與此無關、無資料遺失。原提醒作廢。

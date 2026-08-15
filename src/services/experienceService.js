@@ -201,6 +201,23 @@ async function updateExperienceSchedule(db, booking, staff) {
     await tb.commit();
   }
 
+  // 5) 若此預約已記過營收（見 recordExperienceRevenue），改期要讓那筆交易的認列日跟著搬到新日期，
+  //    否則帳會停在改期前的舊日子（2026-08-15 真實案例：士林一筆體驗課改期到 8/16，但原始日期是
+  //    8/15 時就已確認收款、記過帳，改期後 recognitionDate 沒跟著搬，8/15 結帳出現一筆「明天才上課」
+  //    的交易）。只在「目前仍是有效認列」（revenueRecorded 且未被取消沖銷）時才動；換算公式與
+  //    revenueLedger.js recordTransaction 對字串型 recognitionDate 的轉換方式一致（Asia/Taipei
+  //    當天 00:00）；找不到對應交易/失敗都不阻斷改期本身。
+  if (booking.revenueRecorded && !booking.revenueReversed && booking.bookingDate) {
+    try {
+      const txnSnap = await db.collection('transactions')
+        .where('relatedId', '==', booking.id).where('type', '==', 'course').get();
+      const txnDoc = txnSnap.docs.find(d => (d.data().totalAmount || 0) > 0);
+      if (txnDoc) {
+        await txnDoc.ref.update({ recognitionDate: new Date(`${booking.bookingDate}T00:00:00+08:00`) });
+      }
+    } catch (e) { console.error('[體驗改期] 同步營收認列日失敗（不阻斷改期）', e.message || e.code); }
+  }
+
   return { scheduleShiftId, ticketsUpdated: tk.size };
 }
 

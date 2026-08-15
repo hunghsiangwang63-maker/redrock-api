@@ -2720,6 +2720,19 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **方案二**：ASUS 平常就另外插一捲備用捲筒待命——切換前**務必**先到「發票號碼管理」設定頁做「換捲重設／校正」（`PUT /invoices/state`），把系統 `currentNumber` 校正成 ASUS 那捲紙實際下一張印出來的號碼，再開始用；沒做這步，系統仍會照原本 Win7 機器停在的號碼繼續配、跟 ASUS 紙捲上實際印出的號碼對不起來。
   - 兩台機器登入帳號都是士林帳號（如既有站台帳號 `redrocktaiwan@gmail.com`），`gymId` 由登入帳號決定、與裝在哪台電腦無關。
 
+## 目前進度（2026-08-15 續11）— 士林 win7 常駐模式當機事故：緊急回滾＋NSSM 服務層未解（待續）
+> 續10 之後同一晚：士林 win7 那台實際安裝「常駐序列埠連線」新架構（`4b342a4`）時，`RedRockPrintAgent` 服務**從頭到尾沒有一次成功啟動過**（Error 3 路徑找不到→重裝服務後變成「unexpected status SERVICE_STOPPED」→懷疑帳號權限問題），現場整晚無法開發票。全程無遠端存取、純靠使用者複製貼上文字/log 內容盲測，過程曲折，最終**業務面已恢復、服務自動啟動仍未解決**。
+- 🐞 **修：`app.listen()` 缺 EADDRINUSE 等錯誤處理**（commit `a3807d1`，`win7/server.js`＋根目錄 `server.js` 皆補）：port 被佔用等錯誤原本沒接住會變成看不懂的未攔截例外崩潰；補上後至少能在 log 裡看到明確原因（此次事故並非此問題，但診斷路上一併修掉，供以後排查用）。
+- ✅ **緊急回滾**：確認新架構（`persistent-serial-daemon-2026-08-15`）從未在此機器上真正跑起來過（`service-stdout.log` 全程沒出現過這個版本標記）→ 直接用 `git show deeff99:...` 從 git 歷史拉回**今天中午已驗證成功印過 2 張發票**的舊版（`pna-preflight-fix-2026-08-15`，`win7/server.js`＋`win7/serial-bridge.ps1` 兩檔案配套一致），Email 附件重寄＋明確標註「ROLLBACK」避免跟今晚其他版本搞混。使用者用 `copy /y` 直接覆蓋（改用滑鼠重新命名附件曾因**檔案總管隱藏副檔名、疑似存成 `server.js.js` 雙副檔名**導致覆蓋失敗，改命令列複製後才確認生效）；`npm start`（互動式手動執行）驗證版本標記正確、發票機 `connected:true`——**確認程式碼與檔案本身完全沒問題**。
+- 🐞 **發現與 npm start 無關、獨立存在的 NSSM 服務層 bug（尚未徹底解決）**：即使檔案已確認正確，`RedRockPrintAgent` 服務本身仍啟動失敗（`service-stdout.log`/`service-stderr.log` **完全空白**＝node.exe 從未被真正啟動，非程式崩潰）。直接用 `nssm get RedRockPrintAgent Application/AppParameters/AppDirectory` 撈出實際設定值，抓到兩個具體錯誤並修正：
+  1. `AppDirectory` 結尾多一個字元 `"`（存成 `...\win7"`）——**與 `install-service.bat` 檔頭註解記載的 2026-08-14 那次一模一樣的 bug**（batch 裡路徑結尾反斜線緊接右引號會被解讀成跳脫字元、吃掉右引號，需先剝除結尾反斜線再包引號；`install-service.bat` 本身邏輯已對此加固，但**這次的壞值明顯不是這次乾淨跑這支腳本產生的**，成因未查清，可能是先前某次手動 `nssm set` 或更早的殘留設定）。
+  2. `Application`（node.exe 路徑）存成 `C:\Program Files\node.js\node.exe`（多一個點，資料夾名稱錯誤）——實際正確路徑（`where node` 驗證）是 `C:\Program Files\nodejs\node.exe`（無點）。同上，成因未查清。
+  - 兩者皆用 `nssm set RedRockPrintAgent Application/AppDirectory "正確值"` 直接修正，仍未解決啟動失敗（log 依舊全空）。
+- 🐞 **岔題嘗試：服務改用具名帳號登入（懷疑 LocalSystem 對這台機器的 USB 轉序列埠裝置權限不同於互動式登入）——未成功、已撤回**：`nssm set RedRockPrintAgent ObjectName ".\user" "密碼"` 撞到帳號本身**無密碼**、Windows 預設政策擋掉空密碼帳號的「服務登入」類型（僅允許主控台互動登入）；改關閉 `LimitBlankPasswordUse` 政策＋改設一組真實密碼（`net user user Redrock2026!`）後，**仍然 Error 1069（登入失敗）**——此路徑最終判斷方向不明確、已改回 `nssm set RedRockPrintAgent ObjectName LocalSystem`，**未確認是否為真正病灶**，純屬排除法的一次嘗試。
+- ✅ **全新移除＋重裝服務**（`nssm remove ... confirm` → 重新以系統管理員身分執行 `install-service.bat`）：安裝腳本本身輸出訊息前後矛盾（同時出現「無法啟動」與「done」字樣，懷疑 `install-service.bat` 收尾的 `nssm start` + `if errorlevel 1` 判斷本身在這台機器上不可靠、**未查證，留給下次**），實際服務狀態仍為 Stopped、log 仍空白。
+- ⛔ **當晚判斷：停止繼續盲測、恢復業務優先**——服務自動啟動問題**未解決**，改為**手動 `npm start` 常駐一個命令視窗**頂著整晚運作（已驗證可正常開發票），交代現場人員該視窗不可關閉。此為當晚收尾狀態，非最終方案。
+- 📋 **下次要接手這個問題時**：①`AppDirectory`/`Application` 這兩個壞值的**真正成因未查清**（不是這次乾淨重裝產生的，值得懷疑機器上是否還留著更早期、非本次一系列腳本產生的舊 service 設定殘跡，或有其他自動化/手動流程在背後動過 NSSM 設定）②`install-service.bat` 收尾的啟動結果判斷邏輯本身可疑，需要另外驗證 `nssm start` 的 exitcode 在這台機器上是否真的可靠③帳號登入那條線（LocalSystem vs 具名帳號的 USB 序列埠裝置權限差異）**未證實也未證偽**，若之後還是連不上、且能拿到更完整的錯誤資訊，可以回頭撿起來查④最理想是找機會**遠端連線或現場直接操作**這台機器，純文字盲測這一晚已經證明效率很低、容易在單一步驟間來回猜測浪費大量時間。
+
 - ✅ **發票列印時機／方式（2026-08-04 全部拍板，見 `invoice-integration-plan.md` §8）**：**B**＝逐筆開票（入場一張、POS一張）／**C**＝非臨櫃付款（課程/比賽/體驗/入隊/分期）不自動觸發，一律留給店員手動按既有 §9 發票 modal（硬體接上後原地升級成真列印）／**D**＝LinePay入場一律到場掃碼確認入場當下才印（未入場轉券者延後至持券入場時）。純設計定案，實作仍待 P1（發票機硬體：正式財政部紙捲、錢櫃）到位。
 - ❌ **【已決定不做，2026-08-04 拍板】補課期限模式 B「請假日後 N 天」**：使用者確認**一律維持「課程結束後固定天數」（模式 A），跟請假日期無關**——不加模式切換，維持現行 `makeupDeadlineDays`（結束日+N）單一算法（原 2026-07-19 暫緩的方案已明確作廢，非之後再議）。
 - ✅（查證後撤銷，2026-08-04）**「小蜘蛛人一A(7-8)閎」`3f35216f` 已不存在**：查證正式資料庫，該課程已在 7/13 課程樹狀架構大改造時當重複梯次一併刪除（連 9 場次）；朱智萩目前有效報名為「技巧班 5-7月週五A班」，與此無關、無資料遺失。原提醒作廢。

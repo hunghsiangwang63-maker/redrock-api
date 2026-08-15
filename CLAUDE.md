@@ -2678,6 +2678,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - `AGENT_VERSION` 更新為 `persistent-serial-daemon-2026-08-15`；`/status`/`/print` JSON 回應補 `persistentMode` 欄位供現場快速確認目前是哪個模式在跑。`README.md` 新增「常駐序列埠連線」章節，含明日安裝的 5 步驗證流程（開機日誌看到 `[daemon] ready`／連續兩次查詢第二次應近乎即時／連續兩次列印驗證變快／正式流程走一次確認一致）與 fallback 切換方式。
   - **驗證範圍**：`node -c` 語法檢查通過、全域掃描確認未誤用 `??`/`?.`（已知 Node 13.14 不支援）；PowerShell 邏輯僅能靠人工逐行審閱（本機無 `pwsh`/`powershell` 可測），沿用既有已驗證過的位元組序列/PS2.0 相容寫法降低風險。**真正的正確性驗證要等明天實機安裝**。
 
+## 目前進度（2026-08-15 續6）— 收現欄拿掉上下鍵＋無來源手動發票補選具體電子支付方式（連帶修現金雙重計算 bug）
+> 兩個各自獨立的小需求，第二個過程中順藤摸瓜挖出一個既有的結帳雙重計算 bug 一併修掉。後端 `/health` `3.307.0-adhoc-invoice-payment-method`；前端已 build+deploy。commit 前端 `2dfcb6c`（收現欄）＋`5196da6`（付款方式選單），後端 `7ebe230`。
+- ✅ **發票列印彈窗收現欄拿掉瀏覽器原生上下鍵**：`PaymentMethodFixBox`（`InvoiceModal.jsx`，`InvoiceModal` 手動記帳版與 `InvoiceIssuer` 的 `RealPrintPanel` 真列印版共用元件）的「收現」`<input type="number">` inline style 碰不到 `::-webkit-inner/outer-spin-button` 這類偽元素，改用一個 scoped `<style>` 標籤＋專屬 class（`cash-received-input`），只影響這個輸入框、不影響全站其他 number 輸入。
+- ✅ **無來源手動發票「其他」改再多跳一階選具體方式**：`SettingsPage.jsx`「手動開立發票（無來源）」原本只有 現金／其他（不開錢櫃）兩個選項，選「其他」實際存進去的值就是字面 `'other'`，後端完全不知道是 LinePay/街口/台灣Pay/轉帳。改成選「其他」後再顯示一排具體方式（沿用 `InvoiceModal.jsx` 既有 `PM_METHODS` 常數，圖示/label 全站一致），未選定前「開立發票」按鈕鎖定。
+- 🐞 **深入追查「結帳才準確」引出的既有雙重計算 bug（已修）**：查證「已開真列印的館別，現金＝發票總金額（`invoices` 集合逐筆加總，`invAuth.actualTotal` 不分 `sourceType`）－線上支付合計」——無來源手動發票的金額**本就已經**算進「發票總金額」那一側，但先前完全沒存 `paymentMethod` 到 `invoices` 文件上（只在 `print-record` 當下讀一次就丟），導致：①電子支付（LinePay/街口/台灣Pay/轉帳）完全沒有管道被扣出來歸類，結帳的「線上支付合計」漏算，這筆錢會被誤算成現金（多報現金、實際點鈔比預期少、誤觸差異警示）②現金選項原本另外呼叫 `addCashAdjustment` 寫一筆「+現金補入」加減項——但這張發票的金額已經算進「發票總金額」那一側，再多記一筆加減項等於**同一筆現金被算兩次**。此端點（`POST /invoices/print-record`）只會被已開真列印的館別呼叫（配號機制的前提），故雙重計算對所有呼叫情境皆成立，非邊界案例。
+  - **修法**：`invoices.js` 補存 `paymentMethod` 到 `invoices` 文件（對所有 `sourceType` 皆存，非僅無來源）；**移除**現金的 `addCashAdjustment` 呼叫（不需要條件判斷保留舊行為，任何呼叫此端點的情境都在雙重計算）。`dailySettlements.js` 的 `computeTodayInvoiceAuthority` 新增 `noSourceByMethod`（依已開立的無來源發票 `paymentMethod` 分組聚合；缺此欄的歷史舊資料 fallback 當現金，維持「這批修正之前只有現金被特別處理」的舊行為，不讓歷史資料被無故歸類成某個電子支付方式）；`GET /today` 用既有 `addPay` helper 把 `noSourceByMethod` 併入 `payByMethod`（與 checkIns/productSales/transactions 同一個聚合，供 `payment.linePay/jko/taiwanPay/transfer` 使用）。
+  - **範圍界定（避免誤改）**：`payByMethod` 只在 `GET /today` 這個 handler 內宣告使用（`grep` 確認），`POST /`（正式送出結帳）並不自己重算 `payByMethod`，是直接吃前端回傳的 `payment`（前端顯示的值已經是修正後的 `GET /today` 回應）——故只需要改 `GET /today` 這一處，`POST /` 與前端 `DailySettlementPage.jsx` 都不用碰，改動自然透過既有的資料流傳遞下去。
+  - **未處理**：歷史上已經結帳、且真的因這個雙重計算而被多報現金的過去日期（printing 剛上線沒多久，實際曝險應該很小）——這是**過去已結帳的財務紀錄**，比照專案一貫原則不主動回頭改動，除非使用者要求核對特定日期。
+
 - ✅ **發票列印時機／方式（2026-08-04 全部拍板，見 `invoice-integration-plan.md` §8）**：**B**＝逐筆開票（入場一張、POS一張）／**C**＝非臨櫃付款（課程/比賽/體驗/入隊/分期）不自動觸發，一律留給店員手動按既有 §9 發票 modal（硬體接上後原地升級成真列印）／**D**＝LinePay入場一律到場掃碼確認入場當下才印（未入場轉券者延後至持券入場時）。純設計定案，實作仍待 P1（發票機硬體：正式財政部紙捲、錢櫃）到位。
 - ❌ **【已決定不做，2026-08-04 拍板】補課期限模式 B「請假日後 N 天」**：使用者確認**一律維持「課程結束後固定天數」（模式 A），跟請假日期無關**——不加模式切換，維持現行 `makeupDeadlineDays`（結束日+N）單一算法（原 2026-07-19 暫緩的方案已明確作廢，非之後再議）。
 - ✅（查證後撤銷，2026-08-04）**「小蜘蛛人一A(7-8)閎」`3f35216f` 已不存在**：查證正式資料庫，該課程已在 7/13 課程樹狀架構大改造時當重複梯次一併刪除（連 9 場次）；朱智萩目前有效報名為「技巧班 5-7月週五A班」，與此無關、無資料遺失。原提醒作廢。

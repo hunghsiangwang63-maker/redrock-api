@@ -226,6 +226,15 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     const payByMethod = {};
     const addPay = (method, amt) => { if (amt) { const m = method || 'cash'; payByMethod[m] = (payByMethod[m] || 0) + amt; } };
     const buyPassAmounts = {}; // buyPassTypeId → 票款（入場購定期票一次付清 → 歸「定期票」大項）
+    // 2026-08-16：checkIns 只有單一頂層 paymentMethod 欄位，代表「整筆 amountPaid」的付款方式——但若入場後
+    // 又補租器材（addRentalToCheckIn）且用不同付款方式，該函式會把整個欄位覆蓋成 addon 的方式，導致混付時
+    // 整筆入場（含原本正確的付款方式那部分）被誤記成同一種（真實案例：入場費 linepay+補租現金，卻整筆被結成現金）。
+    // 底層 confirmCheckIn／addRentalToCheckIn／/checkin/phone 三處實際上都各自會建立對應的 type:'checkin'
+    // transactions（見 flow.js/checkin.js），且每一筆都各自帶正確的 paymentMethod——改成逐筆用這些交易記錄歸類
+    // （下方 txnSnap 迴圈），checkinSnap 這裡只記錄「應收總額＋fallback 付款方式」，供交易記錄涵蓋不到時（理論上
+    // 不該發生，例如未來新增的付款路徑忘了記交易）補差額用，確保金額不會被漏算，只有「分類」在精確化。
+    const checkinFallback = new Map();     // checkInId → { amount, paymentMethod }
+    const checkinAccountedFor = new Map(); // checkInId → 已由 type:'checkin' 交易記錄歸類的金額
     checkinSnap.docs.forEach(d => {
       const data = d.data();
       const amount = data.amountPaid || 0;
@@ -234,7 +243,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       const rentalAmt = (data.shoesPrice || 0) + (data.chalkPrice || 0);
       const entryAmt = Math.max(0, amount - rentalAmt);
       shoeRentalIncome += rentalAmt;
-      addPay(data.paymentMethod, amount);   // 免費入場但有租借 → paymentMethod 可能為 null，預設歸現金
+      if (amount) checkinFallback.set(d.id, { amount, paymentMethod: data.paymentMethod });
       if (data.entryType === 'buy_pass') {
         // 入場購買定期票：票款歸「定期票」大項（賣票收入統一一處；分期時 entryAmt=0 首期由分期計畫記）
         if (entryAmt > 0) { const k = data.buyPassTypeId || '_unknown'; buyPassAmounts[k] = (buyPassAmounts[k] || 0) + entryAmt; }
@@ -284,9 +293,22 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
         addPay(data.paymentMethod, amount);
         const nm = ((data.notes || '').split('：')[1] || '定期票').trim() || '定期票';
         passByType[nm] = (passByType[nm] || 0) + amount;
+      } else if (data.type === 'checkin') {
+        // 入場金額本身（entryIncome/shoeRentalIncome）已由 checkinSnap 統計、此處不重複加總；
+        // 但付款方式改逐筆用這裡的交易記錄歸類（見上方 checkinFallback 說明），只在此累加 payByMethod。
+        if (checkinFallback.has(data.relatedId)) {
+          addPay(data.paymentMethod, amount);
+          checkinAccountedFor.set(data.relatedId, (checkinAccountedFor.get(data.relatedId) || 0) + amount);
+        }
       }
-      // type === 'checkin' / 'product' / 'single_entry_ticket' / 'refund' 等
-      // 入場/商品已分別由 checkinSnap / salesSnap 統計，此處不重複加總
+      // type === 'product' / 'single_entry_ticket' / 'refund' 等：入場/商品已分別由 checkinSnap / salesSnap 統計
+    });
+
+    // 補上沒有對應 type:'checkin' 交易記錄涵蓋到的差額（理論上應為 0——見上方說明；保留 fallback 只是防呆，
+    // 確保即使未來出現漏記交易的路徑，金額也只會退回舊行為的粗略分類，而不會整筆從付款方式統計中消失）
+    checkinFallback.forEach((info, id) => {
+      const gap = info.amount - (checkinAccountedFor.get(id) || 0);
+      if (gap > 0) addPay(info.paymentMethod, gap);
     });
 
     // buy_pass 票款併入定期票大項（依票種名細項；查無票種名 fallback「購買定期票」）

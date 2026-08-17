@@ -205,7 +205,12 @@ router.get('/all', authenticate, async (req, res) => {
   try {
     const db = getDb();
     const snap = await db.collection(COLLECTIONS.GYMS).get();
-    const gyms = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // 過濾掉沒有 name 的文件——E2E 測試偶爾會用 gyms/{假館id} 掛測試資料（如發票號碼測試的
+    // invoiceState）卻沒填真實場館欄位，殘留未清時會被本端點原樣撈出，讓「含暫停場館」的員工
+    // 端全域場館選單（StaffLayout）出現空白但可選取的選項，選了會查到 gymId 對不到任何真實
+    // 資料而整頁空白（2026-08-18 查獲）。此端點本意是「連暫停中的真實場館也要看得到」，
+    // 沒有 name 的文件本就不是合法場館紀錄，過濾掉不影響「含暫停場館」的原意。
+    const gyms = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(g => g.name);
     gyms.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     res.json({ gyms });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }

@@ -2769,6 +2769,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 補街口 / 台灣Pay adapter 的 API TODO（依整合手冊 / 收單銀行）
 - 資料移轉（Climbio 18,000+ 筆）——**墜測對照已完成**（2026-07-13：`legacyFallTests` 17,335 筆＋隊員名單 41 筆，新註冊自動認領）；會員基本資料不預先匯入（採「註冊時認領」模式，會員自行註冊＋重簽文件）
 - ✅（已完成 2026-07-04 六）站台隊員 9 折端到端實測 → 見上方進度；**真站台帳號實機亦可直接做**（館別電腦帳號經 `/stations/login` 實測有效，見上方修正），後端邏輯已由 super_admin 打 `/checkin/phone` 等價驗證通過
+## 目前進度（2026-08-17）— 今日課程學員名單加「最後一堂，請開立發票」提醒
+> 需求：週課學員名單旁，若今天是該梯次最後一堂，加提醒；順帶問「直接加開立發票，資料能順利帶過來嗎」。查證後：能，但發票的實際建立動作目前限管理員（非本頁其餘功能的值班/管理員）。後端 `/health` `3.312.0-today-course-students-last-session-invoice`。
+- 🔍 **關鍵發現：「最後一堂」判斷本就有現成、跟發票時機驗證同一份的權威欄位**——課程發票（`POST /members/course-invoices`）後端早有 `checkInvoiceIssuanceTiming`（`invoices.js`）擋「須等課程最後一堂（`course.endDate`）才能開票」，且此值就是課程列表/月曆顯示用的同一個既有欄位（非另外算 `courseSessions` 最大日期）——我的「最後一堂」判斷直接比對同一個 `course.endDate`，兩邊定義天生一致，不會出現「badge 顯示了但按下去被 `INVOICE_TOO_EARLY` 擋下」的錯位。
+- 🔍 **另一發現：課程發票建立目前限管理員**——`POST /members/course-invoices`／`.../void` 皆 `requireManager`（不像入場/補租/租借三個流程走 `requireManagerOrStation`，比賽發票同樣是 `requireManager`）。`MembersPage.jsx` 既有的課程發票按鈕註解宣稱「站台/值班比照 requireManagerOrStation 一併開放」，但後端實際仍是 manager-only——判斷為既有的文件/實作落差（非本次改動範圍，未動它），故這次新按鈕**保守跟隨實際後端權限**：值班站台看得到「最後一堂」badge（提醒作用），但「🧾 開立課程發票」按鈕只顯示給管理員。
+- ✅ **後端（`checkin.js` `today-course-students`）**：常態學員（排除補課/試上/跨期補課，這些非整期報名、無 `courseRegistrations` 對應）比對 `course.endDate===今天`；是最後一堂時額外查 `courseRegistrations`（header，`payEnrollmentId`＝發票 `refId` 權威來源，非場次副本欄位——比照 `members.js buildCourseMemberList` 同一套邏輯，避免用可能不同步的場次副本值）＋批次查 `transferRecords` 取店員核對金額，算出 `receivedAmount`（`receivedAmountOverride ?? confirmedAmount ?? memberPaidAmount ?? fee ?? 0`，與既有課程學員報表同一優先序）。
+- ✅ **前端（`CheckinPage.jsx`）**：學員卡加紅底「最後一堂，請開立發票」badge；卡片改用 `<div>`（原為 `<button>`，巢狀 button 不合法 HTML，改點擊區域+`stopPropagation` 供內部發票按鈕獨立運作）；管理員可見「🧾 開立課程發票」（`InvoiceButtonAuto`+`InvoiceIssuer`，沿用五流程共用元件，依館別發票列印開關自動切真列印/§9 手動記帳版）。
+- **驗證（打正式資料）**：模擬「小蜘蛛人初級班 7-8月週五B班」（endDate 8/21）—— `courseRegistrations.payEnrollmentId` 對應到真實存在的 `courseEnrollments` 文件（發票 refId 有效）、`fee`/`memberPaidAmount`/`receivedAmountOverride` 三者一致（3960）——確認資料流可正確帶到發票。今日（8/17）暫無梯次剛好最後一堂，未能端到端實測按鈕點擊，邏輯經程式碼+真實資料結構雙重核對。
+
 - 會員端 UI 驗證：課程試上分頁 + 場次代班「（代班）」顯示（需會員帳號登入實測）
 - 「試上人數」目前僅由試上報名流程產生 `isTrial` 名單；如需員工手動加試上者，需另做 UI
 - 清理 dev Firebase 殘留測試會員：`【練習】…` 系列、`測試/測試API會員/管理員測試會員/Test1/Who` 等，以及測試用 `王大明`(0900222222)/子帳號 `小明明`；可用員工端「刪除會員」或 `DELETE /members/:id`（super_admin）清除（會一併刪子帳號、保留歷史紀錄）

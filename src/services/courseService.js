@@ -1697,14 +1697,19 @@ const getSessionRoster = async (sessionId) => {
   attendanceSnap.docs.forEach(d => { attendanceMap[d.data().memberId] = d.data().status; });
 
   // 補上會員姓名/電話，方便工作人員端直接顯示完整名單，不需要再額外查會員資料
+  // 批次 db.getAll() 取代逐筆 await getMember()（原為 N 次序列查詢，名單越大越慢，
+  // 2026-08-18 查獲——改批次後同樣資料一次網路往返取得，不逐筆等待）
   const roster = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  const memberIds = [...new Set(roster.map(r => r.memberId))];
+  const memberIds = [...new Set(roster.map(r => r.memberId).filter(Boolean))];
   const memberInfoMap = {};
-  for (const mid of memberIds) {
-    try {
-      const m = await getMember(mid);
-      memberInfoMap[mid] = { name: m.name, phone: m.phone };
-    } catch (e) { memberInfoMap[mid] = { name: '（會員資料異常）', phone: '' }; }
+  for (let i = 0; i < memberIds.length; i += 30) {
+    const batch = memberIds.slice(i, i + 30);
+    const refs = batch.map(mid => db.collection('members').doc(mid));
+    const docs = await db.getAll(...refs);
+    docs.forEach((doc, idx) => {
+      const mid = batch[idx];
+      memberInfoMap[mid] = doc.exists ? { name: doc.data().name, phone: doc.data().phone } : { name: '（會員資料異常）', phone: '' };
+    });
   }
 
   // 報名層級欄位（enrollGender/enrollAge/enrollNote/healthNote/referralSource）header fallback：
@@ -1961,8 +1966,13 @@ const getCourses = async (gymId) => {
   } catch (e) {}
 
   // 計算各課程目前報名人數（不重複計算同一會員，weekly課程會有多筆場次報名紀錄）
+  // ⚠️ .select() 只抓需要的欄位——courseEnrollments 每筆會內嵌簽名圖(base64 PNG，平均
+  // ~77KB、最大180KB，見 portraitSignature/guardianSignature)，全文件抓 1300+ 筆會
+  // 傳輸破百MB、單次查詢常 17~25 秒（2026-08-18 查獲，staff 課程列表頁「梯次」超慢即此因）；
+  // 只投影這裡實際用到的 4 個欄位後同一份資料 <1 秒。
   const enrollSnap = await db.collection(ENROLLMENT_COLLECTION)
-    .where('status', '==', 'confirmed').get();
+    .where('status', '==', 'confirmed')
+    .select('courseId', 'memberId', 'isMakeup', 'isTrial').get();
   const enrolledByCourse = {};
   enrollSnap.docs.forEach(d => {
     const e = d.data();
@@ -1973,7 +1983,8 @@ const getCourses = async (gymId) => {
 
   // 課程層候補人數（不重複計算同一會員，同一位候補會員在週課每個未來場次各有一筆 waitlist 副本）
   const waitlistSnap = await db.collection(ENROLLMENT_COLLECTION)
-    .where('status', '==', 'waitlist').get();
+    .where('status', '==', 'waitlist')
+    .select('courseId', 'memberId').get();
   const waitlistByCourse = {};
   waitlistSnap.docs.forEach(d => {
     const e = d.data();
@@ -2058,7 +2069,9 @@ const getSessions = async (gymId, fromDate, toDate) => {
   for (let i = 0; i < sessionIds.length; i += 30) chunks.push(sessionIds.slice(i, i + 30)); // Firestore 'in' 上限30
   const allEnrollments = [];
   for (const chunk of chunks) {
-    const enrollSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', 'in', chunk).get();
+    // .select() 只抓需要欄位——避免拖回每筆內嵌的簽名圖(base64)，見 getCourses 同型註解
+    const enrollSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', 'in', chunk)
+      .select('sessionId', 'status', 'isMakeup', 'isTrial').get();
     enrollSnap.docs.forEach(d => allEnrollments.push(d.data()));
   }
 

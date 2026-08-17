@@ -464,6 +464,98 @@ router.post('/direct', authenticate, requireManagerOrStation, async (req, res) =
   }
 });
 
+// ── 共用：今日「課程最後一堂」開發票資料（today-course-students 與 /today 今日入場清單皆用）──
+// 回傳 { sessions, courseEndDateMap, byCourseAndMember, byMember }：
+//   byCourseAndMember：`${courseId}_${memberId}` -> 發票欄位（today-course-students 逐堂比對用）
+//   byMember：memberId -> 發票欄位（今日入場清單只有 memberId、無 courseId 可比對，取第一筆命中）
+// 與 invoices.js checkInvoiceIssuanceTiming 課程發票「須等 course.endDate」用同一份欄位、同一套定義。
+async function getLastSessionCourseInvoiceData(db, gymId, today) {
+  const empty = { sessions: [], courseEndDateMap: {}, byCourseAndMember: new Map(), byMember: new Map() };
+  const sessionsSnap = await db.collection('courseSessions')
+    .where('gymId', '==', gymId)
+    .where('date', '==', today)
+    .where('status', '==', 'scheduled')
+    .get();
+  let sessions = sessionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  if (sessions.length === 0) return empty;
+
+  const courseIds = [...new Set(sessions.map(s => s.courseId).filter(Boolean))];
+  const courseEndDateMap = {};
+  if (courseIds.length) {
+    const courseDocs = await db.getAll(...courseIds.map(id => db.collection('courses').doc(id)));
+    const workshopIds = new Set(courseDocs.filter(d => d.exists && d.data().type === 'workshop').map(d => d.id));
+    courseDocs.forEach(d => { if (d.exists) courseEndDateMap[d.id] = d.data().endDate || null; });
+    if (workshopIds.size) sessions = sessions.filter(s => !workshopIds.has(s.courseId));
+    if (sessions.length === 0) return empty;
+  }
+
+  const sessionIds = sessions.map(s => s.id);
+  const chunks = [];
+  for (let i = 0; i < sessionIds.length; i += 30) chunks.push(sessionIds.slice(i, i + 30));
+  const courseIdChunks = [];
+  for (let i = 0; i < courseIds.length; i += 30) courseIdChunks.push(courseIds.slice(i, i + 30));
+
+  const [enrollSnaps, regSnaps] = await Promise.all([
+    Promise.all(chunks.map(chunk => db.collection('courseEnrollments')
+      .where('sessionId', 'in', chunk).where('status', '==', 'confirmed').get())),
+    courseIdChunks.length
+      ? Promise.all(courseIdChunks.map(chunk => db.collection('courseRegistrations')
+          .where('courseId', 'in', chunk).where('status', '==', 'confirmed').get()))
+      : Promise.resolve([]),
+  ]);
+  const enrollments = [];
+  enrollSnaps.forEach(snap => snap.docs.forEach(d => enrollments.push({ id: d.id, ...d.data() })));
+
+  // 課程報名 header（enrollmentId＝發票 refId、費用/付款方式的權威來源，見 members.js
+  // buildCourseMemberList 同一套邏輯——場次副本欄位可能不同步，不可信）
+  const regMap = {}; // `${courseId}_${memberId}` -> header 資料
+  regSnaps.forEach(snap => snap.docs.forEach(d => {
+    const h = d.data();
+    regMap[`${h.courseId}_${h.memberId}`] = {
+      enrollmentId: h.payEnrollmentId || null,
+      fee: h.fee ?? 0,
+      paymentMethod: h.paymentMethod || '',
+      memberPaidAmount: h.memberPaidAmount ?? null,
+      receivedAmountOverride: h.receivedAmountOverride ?? null,
+    };
+  }));
+  // 店員核對金額（transferRecords 最新一筆 confirmed），比照 attachReceivedAmounts 同一套優先序
+  const payEnrollmentIds = [...new Set(Object.values(regMap).map(r => r.enrollmentId).filter(Boolean))];
+  const confirmedMap = {};
+  for (let i = 0; i < payEnrollmentIds.length; i += 30) {
+    const chunk = payEnrollmentIds.slice(i, i + 30);
+    const snap = await db.collection('transferRecords').where('refId', 'in', chunk).get();
+    snap.docs.forEach(d => {
+      const t = d.data();
+      if (t.status === 'confirmed' && t.confirmedAmount != null) {
+        const at = t.confirmedAt?._seconds || t.confirmedAt?.seconds || 0;
+        const prev = confirmedMap[t.refId];
+        if (!prev || at >= prev.at) confirmedMap[t.refId] = { amount: Number(t.confirmedAmount), at };
+      }
+    });
+  }
+
+  const sessionMap = {};
+  sessions.forEach(s => { sessionMap[s.id] = s; });
+
+  const byCourseAndMember = new Map();
+  const byMember = new Map();
+  enrollments.forEach(e => {
+    const s = sessionMap[e.sessionId];
+    if (!s) return;
+    const isRegular = e.isMakeup !== true && e.isTrial !== true; // 補課/試上非整期報名，不適用課程發票
+    if (!isRegular || courseEndDateMap[s.courseId] !== today) return;
+    const reg = regMap[`${s.courseId}_${e.memberId}`];
+    if (!reg) return;
+    const receivedAmount = reg.receivedAmountOverride ?? (reg.enrollmentId && confirmedMap[reg.enrollmentId]?.amount) ?? reg.memberPaidAmount ?? reg.fee ?? 0;
+    const entry = { courseId: s.courseId, courseName: s.courseName || e.courseName || '', enrollmentId: reg.enrollmentId, paymentMethod: reg.paymentMethod, receivedAmount };
+    byCourseAndMember.set(`${s.courseId}_${e.memberId}`, entry);
+    if (!byMember.has(e.memberId)) byMember.set(e.memberId, entry); // 同會員多堂最後一堂只取第一筆（罕見邊界）
+  });
+
+  return { sessions, courseEndDateMap, byCourseAndMember, byMember };
+}
+
 // ── GET /checkin/today-course-students - 今日課程學員名單（手機入場頁快速入場用）──
 router.get('/today-course-students', authenticate, requireManagerOrStation, async (req, res) => {
   try {
@@ -472,38 +564,17 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
     const db = getDb();
     const today = dayjs().format('YYYY-MM-DD');
 
-    // 今日該館所有場次
-    const sessionsSnap = await db.collection('courseSessions')
-      .where('gymId', '==', gymId)
-      .where('date', '==', today)
-      .where('status', '==', 'scheduled')
-      .get();
-    let sessions = sessionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const { sessions: sessionsAfterFilter, byCourseAndMember } = await getLastSessionCourseInvoiceData(db, gymId, today);
+    let sessions = sessionsAfterFilter;
     if (sessions.length === 0) return res.json({ students: [] });
 
-    // 排除工作坊課程（單堂性質活動，非常態上課學員，不列入快速入場名單）；順便記下週課
-    // endDate（供下方「最後一堂」判斷——與 invoices.js checkInvoiceIssuanceTiming 課程發票的
-    // 「須等課程最後一堂」時機驗證用同一份欄位、同一套定義，兩邊不會對不上）。
-    const courseIds = [...new Set(sessions.map(s => s.courseId).filter(Boolean))];
-    const courseEndDateMap = {};
-    if (courseIds.length) {
-      const courseDocs = await db.getAll(...courseIds.map(id => db.collection('courses').doc(id)));
-      const workshopIds = new Set(courseDocs.filter(d => d.exists && d.data().type === 'workshop').map(d => d.id));
-      courseDocs.forEach(d => { if (d.exists) courseEndDateMap[d.id] = d.data().endDate || null; });
-      if (workshopIds.size) sessions = sessions.filter(s => !workshopIds.has(s.courseId));
-      if (sessions.length === 0) return res.json({ students: [] });
-    }
-
-    // 各場次報名者（正取）+ 今日已入場 + 跨期補課 + 課程報名header（供最後一堂開發票用的費用/付款方式）
-    // → 平行查詢（原序列多次往返造成慢）
+    // 各場次報名者（正取，含補課/試上供完整名單）+ 今日已入場 + 跨期補課 → 平行查詢
     const sessionIds = sessions.map(s => s.id);
     const chunks = [];
     for (let i = 0; i < sessionIds.length; i += 30) chunks.push(sessionIds.slice(i, i + 30));
-    const courseIdChunks = [];
-    for (let i = 0; i < courseIds.length; i += 30) courseIdChunks.push(courseIds.slice(i, i + 30));
     const todayStr0 = taiwanToday();
     const todayStart = new Date(todayStr0 + 'T00:00:00+08:00');
-    const [enrollSnaps, checkedInSnap, xmSnap, regSnaps] = await Promise.all([
+    const [enrollSnaps, checkedInSnap, xmSnap] = await Promise.all([
       Promise.all(chunks.map(chunk => db.collection('courseEnrollments')
         .where('sessionId', 'in', chunk).where('status', '==', 'confirmed').get())),
       db.collection('checkIns')
@@ -511,43 +582,10 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
         .where('checkedInAt', '>=', todayStart).get(),
       db.collection('crossCohortMakeups')
         .where('targetDate', '==', today).where('status', '==', 'booked').get(),
-      courseIdChunks.length
-        ? Promise.all(courseIdChunks.map(chunk => db.collection('courseRegistrations')
-            .where('courseId', 'in', chunk).where('status', '==', 'confirmed').get()))
-        : Promise.resolve([]),
     ]);
     const enrollments = [];
     enrollSnaps.forEach(snap => snap.docs.forEach(d => enrollments.push({ id: d.id, ...d.data() })));
     const checkedInMemberIds = new Set(checkedInSnap.docs.map(d => d.data().memberId));
-
-    // 課程報名 header（enrollmentId＝發票 refId、費用/付款方式的權威來源，見 members.js
-    // buildCourseMemberList 同一套邏輯——場次副本欄位可能不同步，不可信）
-    const regMap = {}; // `${courseId}_${memberId}` -> header 資料
-    regSnaps.forEach(snap => snap.docs.forEach(d => {
-      const h = d.data();
-      regMap[`${h.courseId}_${h.memberId}`] = {
-        enrollmentId: h.payEnrollmentId || null,
-        fee: h.fee ?? 0,
-        paymentMethod: h.paymentMethod || '',
-        memberPaidAmount: h.memberPaidAmount ?? null,
-        receivedAmountOverride: h.receivedAmountOverride ?? null,
-      };
-    }));
-    // 店員核對金額（transferRecords 最新一筆 confirmed），比照 attachReceivedAmounts 同一套優先序
-    const payEnrollmentIds = [...new Set(Object.values(regMap).map(r => r.enrollmentId).filter(Boolean))];
-    const confirmedMap = {};
-    for (let i = 0; i < payEnrollmentIds.length; i += 30) {
-      const chunk = payEnrollmentIds.slice(i, i + 30);
-      const snap = await db.collection('transferRecords').where('refId', 'in', chunk).get();
-      snap.docs.forEach(d => {
-        const t = d.data();
-        if (t.status === 'confirmed' && t.confirmedAmount != null) {
-          const at = t.confirmedAt?._seconds || t.confirmedAt?.seconds || 0;
-          const prev = confirmedMap[t.refId];
-          if (!prev || at >= prev.at) confirmedMap[t.refId] = { amount: Number(t.confirmedAmount), at };
-        }
-      });
-    }
 
     const sessionMap = {};
     sessions.forEach(s => { sessionMap[s.id] = s; });
@@ -556,12 +594,7 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
       .filter(e => sessionMap[e.sessionId])
       .map(e => {
         const s = sessionMap[e.sessionId];
-        const isRegular = e.isMakeup !== true && e.isTrial !== true; // 補課/試上非整期報名，不適用課程發票
-        const isLastSession = isRegular && !!courseEndDateMap[s.courseId] && courseEndDateMap[s.courseId] === today;
-        const reg = isRegular ? regMap[`${s.courseId}_${e.memberId}`] : null;
-        const receivedAmount = reg
-          ? (reg.receivedAmountOverride ?? (reg.enrollmentId && confirmedMap[reg.enrollmentId]?.amount) ?? reg.memberPaidAmount ?? reg.fee ?? 0)
-          : null;
+        const inv = byCourseAndMember.get(`${s.courseId}_${e.memberId}`) || null;
         return {
           memberId: e.memberId,
           memberName: e.memberName || '',
@@ -572,12 +605,8 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
           isMakeup: e.isMakeup === true,                                  // 補課學員標籤
           isTrial: e.isTrial === true,                                    // 試上學員標籤
           trialUnpaid: e.isTrial === true && e.paymentStatus !== 'paid',  // 試上費未收提醒
-          isLastSession,                                                  // 今日為此梯次最後一堂（courses.endDate）
-          ...(isLastSession && reg ? {
-            enrollmentId: reg.enrollmentId,
-            paymentMethod: reg.paymentMethod,
-            receivedAmount,
-          } : {}),
+          isLastSession: !!inv,                                           // 今日為此梯次最後一堂（courses.endDate）
+          ...(inv ? { enrollmentId: inv.enrollmentId, paymentMethod: inv.paymentMethod, receivedAmount: inv.receivedAmount } : {}),
         };
       })
       .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
@@ -661,6 +690,20 @@ router.get('/today',
         return { gymId: gym.id, gymName: gym.name, total: gymRecords.length, counts };
       });
 
+      // 課程學員（course_access）入場，若剛好是該梯次最後一堂 → 附帶課程發票欄位，讓「今日入場」
+      // 清單也能開立同一張課程發票（不限「今日課程學員」快速入場那個列表——2026-08-17 需求：
+      // 先點了入場、名單卡片消失後，還是要能從這裡找到人開發票）。只對「今天有 course_access 記錄」
+      // 的館別才查（避免沒人走這條路徑的一般日子多付查詢成本）；查詢與 today-course-students 共用
+      // 同一份權威邏輯（同一個 courseEndDateMap 定義），兩處不會對不上。
+      const gymsNeedingCourseInvoice = [...new Set(records.filter(r => r.entryType === 'course_access').map(r => r.gymId))];
+      const courseInvoiceByGym = {};
+      await Promise.all(gymsNeedingCourseInvoice.map(async (gid) => {
+        try {
+          const { byMember } = await getLastSessionCourseInvoiceData(db, gid, todayStr);
+          courseInvoiceByGym[gid] = byMember;
+        } catch (e) { courseInvoiceByGym[gid] = new Map(); }
+      }));
+
       // 今日全部紀錄（依館分組排列；當日量級小、全量回傳讓清單與統計數一致）
       // ⚠ amountPaid/rentShoes/rentChalk 原本漏在此投影（前端「今日入場紀錄」一律顯示空白金額/無岩鞋粉袋標籤，非僅線上支付才如此）
       // ⚠ memberId/entryFee/shoesPrice/chalkPrice/partnerVendor/isTeamDiscount 原本也漏在此投影——
@@ -668,16 +711,23 @@ router.get('/today',
       //   （少了特約商店/隊員折扣標註）；memberId 缺漏本身不會讓按鈕壞掉（InvoiceIssuer 只靠 gymId 判斷
       //   是否顯示視窗），但發票紀錄上的會員歸屬會是空的，一併補上。
       const recent = targetGyms.flatMap(gym =>
-        records.filter(r => r.gymId === gym.id).map(r => ({
-          id: r.id, memberId: r.memberId || null, memberName: r.memberName, gymId: r.gymId,
-          entryType: r.entryType || r.passType, checkedInAt: r.checkedInAt,
-          legacyDiscount: r.legacyDiscount === true, partnerVendor: r.partnerVendor === true,
-          isTeamDiscount: r.isTeamDiscount === true,
-          amountPaid: r.amountPaid || 0, paymentMethod: r.paymentMethod || null,
-          entryFee: r.entryFee != null ? r.entryFee : null,
-          rentShoes: r.rentShoes === true, rentChalk: r.rentChalk === true,
-          shoesPrice: r.shoesPrice || 0, chalkPrice: r.chalkPrice || 0,
-        }))
+        records.filter(r => r.gymId === gym.id).map(r => {
+          const courseInv = (r.entryType === 'course_access' && r.memberId)
+            ? (courseInvoiceByGym[gym.id]?.get(r.memberId) || null) : null;
+          return {
+            id: r.id, memberId: r.memberId || null, memberName: r.memberName, gymId: r.gymId,
+            entryType: r.entryType || r.passType, checkedInAt: r.checkedInAt,
+            legacyDiscount: r.legacyDiscount === true, partnerVendor: r.partnerVendor === true,
+            isTeamDiscount: r.isTeamDiscount === true,
+            amountPaid: r.amountPaid || 0, paymentMethod: r.paymentMethod || null,
+            entryFee: r.entryFee != null ? r.entryFee : null,
+            rentShoes: r.rentShoes === true, rentChalk: r.rentChalk === true,
+            shoesPrice: r.shoesPrice || 0, chalkPrice: r.chalkPrice || 0,
+            ...(courseInv ? {
+              courseInvoice: { courseId: courseInv.courseId, courseName: courseInv.courseName, enrollmentId: courseInv.enrollmentId, paymentMethod: courseInv.paymentMethod, receivedAmount: courseInv.receivedAmount },
+            } : {}),
+          };
+        })
       );
 
       res.json({ statsByGym, total: records.length, recent });

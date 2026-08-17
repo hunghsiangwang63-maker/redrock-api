@@ -481,22 +481,29 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
     let sessions = sessionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     if (sessions.length === 0) return res.json({ students: [] });
 
-    // 排除工作坊課程（單堂性質活動，非常態上課學員，不列入快速入場名單）
+    // 排除工作坊課程（單堂性質活動，非常態上課學員，不列入快速入場名單）；順便記下週課
+    // endDate（供下方「最後一堂」判斷——與 invoices.js checkInvoiceIssuanceTiming 課程發票的
+    // 「須等課程最後一堂」時機驗證用同一份欄位、同一套定義，兩邊不會對不上）。
     const courseIds = [...new Set(sessions.map(s => s.courseId).filter(Boolean))];
+    const courseEndDateMap = {};
     if (courseIds.length) {
       const courseDocs = await db.getAll(...courseIds.map(id => db.collection('courses').doc(id)));
       const workshopIds = new Set(courseDocs.filter(d => d.exists && d.data().type === 'workshop').map(d => d.id));
+      courseDocs.forEach(d => { if (d.exists) courseEndDateMap[d.id] = d.data().endDate || null; });
       if (workshopIds.size) sessions = sessions.filter(s => !workshopIds.has(s.courseId));
       if (sessions.length === 0) return res.json({ students: [] });
     }
 
-    // 各場次報名者（正取）+ 今日已入場 + 跨期補課 → 平行查詢（原序列多次往返造成慢）
+    // 各場次報名者（正取）+ 今日已入場 + 跨期補課 + 課程報名header（供最後一堂開發票用的費用/付款方式）
+    // → 平行查詢（原序列多次往返造成慢）
     const sessionIds = sessions.map(s => s.id);
     const chunks = [];
     for (let i = 0; i < sessionIds.length; i += 30) chunks.push(sessionIds.slice(i, i + 30));
+    const courseIdChunks = [];
+    for (let i = 0; i < courseIds.length; i += 30) courseIdChunks.push(courseIds.slice(i, i + 30));
     const todayStr0 = taiwanToday();
     const todayStart = new Date(todayStr0 + 'T00:00:00+08:00');
-    const [enrollSnaps, checkedInSnap, xmSnap] = await Promise.all([
+    const [enrollSnaps, checkedInSnap, xmSnap, regSnaps] = await Promise.all([
       Promise.all(chunks.map(chunk => db.collection('courseEnrollments')
         .where('sessionId', 'in', chunk).where('status', '==', 'confirmed').get())),
       db.collection('checkIns')
@@ -504,10 +511,43 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
         .where('checkedInAt', '>=', todayStart).get(),
       db.collection('crossCohortMakeups')
         .where('targetDate', '==', today).where('status', '==', 'booked').get(),
+      courseIdChunks.length
+        ? Promise.all(courseIdChunks.map(chunk => db.collection('courseRegistrations')
+            .where('courseId', 'in', chunk).where('status', '==', 'confirmed').get()))
+        : Promise.resolve([]),
     ]);
     const enrollments = [];
     enrollSnaps.forEach(snap => snap.docs.forEach(d => enrollments.push({ id: d.id, ...d.data() })));
     const checkedInMemberIds = new Set(checkedInSnap.docs.map(d => d.data().memberId));
+
+    // 課程報名 header（enrollmentId＝發票 refId、費用/付款方式的權威來源，見 members.js
+    // buildCourseMemberList 同一套邏輯——場次副本欄位可能不同步，不可信）
+    const regMap = {}; // `${courseId}_${memberId}` -> header 資料
+    regSnaps.forEach(snap => snap.docs.forEach(d => {
+      const h = d.data();
+      regMap[`${h.courseId}_${h.memberId}`] = {
+        enrollmentId: h.payEnrollmentId || null,
+        fee: h.fee ?? 0,
+        paymentMethod: h.paymentMethod || '',
+        memberPaidAmount: h.memberPaidAmount ?? null,
+        receivedAmountOverride: h.receivedAmountOverride ?? null,
+      };
+    }));
+    // 店員核對金額（transferRecords 最新一筆 confirmed），比照 attachReceivedAmounts 同一套優先序
+    const payEnrollmentIds = [...new Set(Object.values(regMap).map(r => r.enrollmentId).filter(Boolean))];
+    const confirmedMap = {};
+    for (let i = 0; i < payEnrollmentIds.length; i += 30) {
+      const chunk = payEnrollmentIds.slice(i, i + 30);
+      const snap = await db.collection('transferRecords').where('refId', 'in', chunk).get();
+      snap.docs.forEach(d => {
+        const t = d.data();
+        if (t.status === 'confirmed' && t.confirmedAmount != null) {
+          const at = t.confirmedAt?._seconds || t.confirmedAt?.seconds || 0;
+          const prev = confirmedMap[t.refId];
+          if (!prev || at >= prev.at) confirmedMap[t.refId] = { amount: Number(t.confirmedAmount), at };
+        }
+      });
+    }
 
     const sessionMap = {};
     sessions.forEach(s => { sessionMap[s.id] = s; });
@@ -516,6 +556,12 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
       .filter(e => sessionMap[e.sessionId])
       .map(e => {
         const s = sessionMap[e.sessionId];
+        const isRegular = e.isMakeup !== true && e.isTrial !== true; // 補課/試上非整期報名，不適用課程發票
+        const isLastSession = isRegular && !!courseEndDateMap[s.courseId] && courseEndDateMap[s.courseId] === today;
+        const reg = isRegular ? regMap[`${s.courseId}_${e.memberId}`] : null;
+        const receivedAmount = reg
+          ? (reg.receivedAmountOverride ?? (reg.enrollmentId && confirmedMap[reg.enrollmentId]?.amount) ?? reg.memberPaidAmount ?? reg.fee ?? 0)
+          : null;
         return {
           memberId: e.memberId,
           memberName: e.memberName || '',
@@ -526,6 +572,12 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
           isMakeup: e.isMakeup === true,                                  // 補課學員標籤
           isTrial: e.isTrial === true,                                    // 試上學員標籤
           trialUnpaid: e.isTrial === true && e.paymentStatus !== 'paid',  // 試上費未收提醒
+          isLastSession,                                                  // 今日為此梯次最後一堂（courses.endDate）
+          ...(isLastSession && reg ? {
+            enrollmentId: reg.enrollmentId,
+            paymentMethod: reg.paymentMethod,
+            receivedAmount,
+          } : {}),
         };
       })
       .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));

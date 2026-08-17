@@ -2803,6 +2803,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端** `MemberCoursesPage.jsx` `openMakeupModal` 改呼叫新端點（單一請求取代原本兩支）；新增 `makeupLoading`/`makeupError` 狀態＋彈窗載入中／錯誤重試 UI，**避免任何未來的暫時性失敗再被誤顯示成「沒有可補課場次」**（原本的靜默失敗是獨立於本次效能問題的另一個隱患，一併修掉）。
 - 📌 **教訓**：查「畫面顯示空清單」類回報，光靠重現後端邏輯／資料正確性不夠——這次資料/邏輯兩次驗證都通過，直到**直接測正式 HTTP API 的實際回應時間**才抓到真正問題；往後遇到「查資料是對的、但畫面就是空的」，要記得測**實際 HTTP 往返耗時**，尤其是通用/全表查詢端點隨資料量增長而變慢的情境。
 
+## 目前進度（2026-08-18）— 修：課程列表「梯次」與場次報名名單查詢緩慢（根因：報名文件內嵌簽名圖）
+> 承上一輪王登第補課排查後，使用者接著問「查詢其他課程(如運動按摩）梯次跟場次報名名單的時間好像也很久」——查出是不同於上次的另一個效能根因，影響範圍更廣（員工端課程管理主頁）。後端 `/health` `3.317.0-course-enrollment-select-projection`（純後端，無需重新部署前端）。
+- 🔍 **量測（正式 API，員工端課程列表）**：`GET /courses?gymId=gym-hsinchu` 實測 **25.7 秒**；`GET /courses/sessions/:id/roster`（6人名單）**1.2 秒**。逐段 profiling 揪出瓶頸：`courses`/`courseCategories` 查詢皆 <300ms，但 `courseEnrollments` 依 `status=='confirmed'` 抓全部（1,319 筆）要 **18.6 秒**、`status=='waitlist'`（43 筆）要 **2 秒**——`count()` 聚合查詢同樣條件只要 40ms，證明不是文件數量問題。
+- 🐞 **真根因**：抽查文件大小，`courseEnrollments` 每筆平均 **77KB**、最大 **180KB**——因為每筆都內嵌**兩張簽名圖**（`portraitSignature`/`guardianSignature`，base64 PNG，各 80~100KB，比照專案慣例「圖片一律內嵌 base64」）。`getCourses()`／`getSessions()` 原本只是要算「這門課有幾個不重複的人報名」，卻把 1,300+ 筆全文件（含簽名圖）整批抓回來，累計傳輸破百 MB——這正是課程列表頁「梯次」讀取緩慢的根因，且隨報名資料持續累積只會越來越慢（本次調查恰逢巧合，與稍早王登第補課彈窗的根因是同一個 `courseEnrollments` 集合但不同查詢模式，各自獨立成因）。
+- ✅ **修法：Firestore `.select()` 欄位投影**——三處只抓實際用到的欄位（`getCourses` 的 confirmed/waitlist 兩查詢只投影 `courseId/memberId/isMakeup/isTrial`；`getSessions` 批次算場次人數投影 `sessionId/status/isMakeup/isTrial`），不含簽名圖等大欄位。實測同一份 1,319 筆查詢 **18.6秒→467ms**（40倍）。
+- ✅ **附帶修：`getSessionRoster`（場次報名名單）另一個獨立的 N+1 問題**——原本逐一 `await getMember(mid)` 序列查會員姓名/電話（名單人數越多越慢），改批次 `db.getAll()`（比照本檔案既有慣例，如 `getAlumniGroupMap`）。
+- **驗證（正式 API，皆與修復前資料比對一致）**：`GET /courses?gymId=gym-hsinchu` 25.7秒→**1.04秒**（含抽查運動按摩兩場次 enrolledCount=6/7、小蜘蛛人週一A班 enrolledCount=6 皆與修復前相同）；6人場次名單 1.2秒→**0.52秒**（姓名/電話全部正確）。純查詢層改動、API 回傳格式/欄位完全不變，**不需重新部署前端**。
+- 📋 **順手掃描確認**：`courseService.js` 全部 35 處 `courseEnrollments` 查詢中，只有這兩處（`getCourses` 的 confirmed/waitlist 全查詢）是「無 courseId/sessionId/memberId 限定」的全表掃描型態，其餘皆已被具體欄位（courseId/sessionId/memberId）縮小範圍、風險低，本次修復已涵蓋此類查詢的主要風險點。
+
 - 會員端 UI 驗證：課程試上分頁 + 場次代班「（代班）」顯示（需會員帳號登入實測）
 - 「試上人數」目前僅由試上報名流程產生 `isTrial` 名單；如需員工手動加試上者，需另做 UI
 - 清理 dev Firebase 殘留測試會員：`【練習】…` 系列、`測試/測試API會員/管理員測試會員/Test1/Who` 等，以及測試用 `王大明`(0900222222)/子帳號 `小明明`；可用員工端「刪除會員」或 `DELETE /members/:id`（super_admin）清除（會一併刪子帳號、保留歷史紀錄）

@@ -37,8 +37,9 @@ const revertRenewal = async (db, checkIn, now) => {
 };
 
 // ── 取消入場通知（同館 gym_manager＋super_admin；失敗不阻斷主流程）─────────
-// 直接取消（此函式）過去完全不通知管理員，只有極少用到的「申請取消（cancelCheckin.js）」
-// 審核流程才會通知——但那套流程實際上從未被用過，等同「取消入場」通知分類永遠是空的。
+// 直接取消（此函式）過去完全不通知管理員（2026-08-06 補上，見下方 notifyCancelCheckin 呼叫）。
+// 原本另有一條「申請取消→管理員核准」的審核流程（cancelCheckin.js），但全前端從未呼叫過、
+// 正式環境 0 筆資料，已於 2026-08-17 確認為死碼並整條移除，不再是兩條並存的路徑。
 const notifyCancelCheckin = async ({ gymId, memberName, staffName, force, staffId }) => {
   const { notifyRoleInGym } = require('../notificationService');
   const body = `${staffName || '員工'} 取消了 ${memberName || '會員'} 的入場記錄${force ? '（強制取消，已超過10分鐘時限）' : ''}`;
@@ -74,7 +75,7 @@ const cancelCheckIn = async (checkInId, staffId, force = false, staffName = null
 
   const now = new Date();
 
-  // 退回票券（黑卡/單次券/折扣卡/購卡入場/紅利）— 須與 cancelCheckin.js 的 restoreEntryCredits 一致
+  // 退回票券（黑卡/單次券/折扣卡/購卡入場/紅利）
   if (checkIn.entryType === 'black_card' && checkIn.blackCardId) {
     await refundBlackCard(checkIn.blackCardId); // legacyBlackCards：與扣點同源
   } else if (checkIn.entryType === 'bonus' && checkIn.bonusId) {
@@ -154,7 +155,7 @@ const cancelCheckIn = async (checkInId, staffId, force = false, staffName = null
   });
 
   // 入場費沖銷：原本 confirmCheckIn 對 amountPaid>0 記了一筆 checkin 交易，
-  // 取消時須記負向 refund 沖銷（對齊 cancelCheckin.js），否則營收報表（認列制）會多算已取消入場。
+  // 取消時須記負向 refund 沖銷，否則營收報表（認列制）會多算已取消入場。
   // （續約款已由 revertRenewal 沖銷；票券/卡退回不涉及金流交易，故只沖 amountPaid。）
   if (checkIn.amountPaid > 0) {
     const { recordTransaction } = require('../../utils/revenueLedger');

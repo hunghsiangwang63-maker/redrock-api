@@ -597,7 +597,7 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
 };
 
 // 取消入場時還原「續約附加」：復原票期/次數、作廢續約分期計畫、一次付清記負向沖銷。
-// 供 checkinService.cancelCheckIn 與 cancelCheckin.js 路由共用（兩條取消路徑一致）。
+// 供 checkinService.cancelCheckIn 使用（原本另供已移除的 cancelCheckin.js 路由共用，見該檔移除記錄）。
 const countByEntryType = (records) => ({
   pass: records.filter(x => x.entryType === 'pass').length,
   vip: records.filter(x => x.entryType === 'vip').length,

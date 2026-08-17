@@ -1305,7 +1305,9 @@ router.get('/registrations/:regId/invoices', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-router.post('/registrations/:regId/invoices', authenticate, requireManager, async (req, res) => {
+// 2026-08-17 放寬值班站台可開（原僅管理員，與入場/補租/租借三個發票流程對齊；金額實收覆蓋
+// PUT /registrations/:regId/received-amount 仍維持 requireManager，未一併放寬）。
+router.post('/registrations/:regId/invoices', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const db = getDb();
     const regDoc = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(req.params.regId).get();
@@ -1332,7 +1334,8 @@ router.post('/registrations/:regId/invoices', authenticate, requireManager, asyn
   }
 });
 
-router.post('/invoices/:id/void', authenticate, requireManager, async (req, res) => {
+// 2026-08-17 放寬值班站台可作廢（原僅管理員）
+router.post('/invoices/:id/void', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const db = getDb();
     const invoiceService = require('../services/invoiceService');

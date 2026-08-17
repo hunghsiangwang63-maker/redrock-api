@@ -801,7 +801,9 @@ router.get('/course-invoices', authenticate, async (req, res) => {
 });
 
 // 同一報名（enrollmentId）同時最多一張「已開立」發票——開立後若要修改/重開，須先「作廢」才能再開立新的一張。
-router.post('/course-invoices', authenticate, requireManager, async (req, res) => {
+// 2026-08-17 放寬值班站台可開（原僅管理員，與入場/補租/租借三個發票流程對齊；金額實收覆蓋
+// PUT /course-enrollments/:enrollmentId/received-amount 仍維持 requireManager，未一併放寬）。
+router.post('/course-invoices', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const db = getDb();
     const { enrollmentId, memberId, memberName, courseId, courseName, gymId, itemName, amount, taxId, note, issuedAt, track, number } = req.body;
@@ -822,8 +824,8 @@ router.post('/course-invoices', authenticate, requireManager, async (req, res) =
   }
 });
 
-// ── POST /members/course-invoices/:id/void - 作廢發票（沖銷當日加減項；作廢後可重新開立）──
-router.post('/course-invoices/:id/void', authenticate, requireManager, async (req, res) => {
+// ── POST /members/course-invoices/:id/void - 作廢發票（沖銷當日加減項；作廢後可重新開立）── 2026-08-17 放寬值班站台
+router.post('/course-invoices/:id/void', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const db = getDb();
     const invoiceService = require('../services/invoiceService');

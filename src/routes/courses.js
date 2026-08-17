@@ -236,6 +236,22 @@ router.get('/sessions', authenticateAny, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// GET /courses/makeup-candidates - 補課候選場次（會員「選擇補課場次」彈窗專用，輕量版，
+// 不掃描 courseEnrollments，見 courseService.getMakeupCandidateSessions 檔頭說明）
+router.get('/makeup-candidates', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const result = await courseService.getMakeupCandidateSessions(db, {
+      categoryId: req.query.categoryId || null,
+      gymId: req.query.gymId || null,
+      excludeCourseId: req.query.excludeCourseId || null,
+      fromDate: req.query.fromDate,
+      toDate: req.query.toDate,
+    });
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // GET /courses/trial-sessions - 開放試上的週課近期場次（會員「體驗課程」頁）
 router.get('/trial-sessions', authenticateAny, async (req, res) => {
   try {

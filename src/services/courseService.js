@@ -2112,6 +2112,84 @@ const getSessions = async (gymId, fromDate, toDate) => {
   });
 };
 
+// ── 補課候選場次（會員端「選擇補課場次」彈窗專用，輕量版）──────────────
+// ⚠️ 背景：原本此彈窗呼叫通用的 getCourses(全部課程)+getSessions(180天全館全課程)，
+// 兩者都會全表掃描 courseEnrollments 計算報名/候補人數（供列表頁顯示用，此彈窗根本
+// 不需要）——正式環境資料量成長後單次呼叫常 10~14 秒、超過前端 10 秒逾時，補課彈窗
+// 靜默失敗顯示「目前沒有可補課的場次」（實際上有場次，只是查詢逾時，2026-08-17 查獲
+// 王登第案例）。此函式改為：只查「補課類型相容的目標班別」底下的課程（依 categoryId
+// in 查詢直接縮小範圍），週課的 makeupTargetOpen 只需看 makeupTarget!=='off'（2026-08
+// 簡化後不再需要常態報名人數），完全不掃描 courseEnrollments，大幅縮小查詢量。
+const getMakeupCandidateSessions = async (db, { categoryId, gymId, excludeCourseId, fromDate, toDate }) => {
+  // 1) 找出「可補課去的類型」對應的目標班別（含來源班別本身）
+  const destCategoryIds = new Set([categoryId].filter(Boolean));
+  if (categoryId) {
+    const srcCatDoc = await db.collection(CATEGORY_COLLECTION).doc(categoryId).get();
+    const destTypes = srcCatDoc.exists ? (srcCatDoc.data().makeupTypeIds || []) : [];
+    if (destTypes.length) {
+      for (let i = 0; i < destTypes.length; i += 10) {
+        const chunk = destTypes.slice(i, i + 10);
+        const catSnap = await db.collection(CATEGORY_COLLECTION).where('makeupSelfType', 'in', chunk).get();
+        catSnap.docs.forEach(d => destCategoryIds.add(d.id));
+      }
+    }
+  }
+  if (destCategoryIds.size === 0) return { sessions: [] }; // 補課券未存 categoryId（極舊資料）→ 交由前端 fallback 全查
+
+  // 2) 該範圍內的課程（依 categoryId in + gymId，跳過工作坊/已取消）
+  const catIds = [...destCategoryIds];
+  const categoryNameById = {};
+  for (let i = 0; i < catIds.length; i += 10) {
+    const refs = catIds.slice(i, i + 10).map(id => db.collection(CATEGORY_COLLECTION).doc(id));
+    (await db.getAll(...refs)).forEach(d => { if (d.exists) categoryNameById[d.id] = d.data().name || ''; });
+  }
+  const courses = [];
+  for (let i = 0; i < catIds.length; i += 10) {
+    const chunk = catIds.slice(i, i + 10);
+    let ref = db.collection(COURSE_COLLECTION).where('categoryId', 'in', chunk).where('status', '==', 'active');
+    if (gymId) ref = ref.where('gymId', '==', gymId);
+    const snap = await ref.get();
+    snap.docs.forEach(d => {
+      const c = { id: d.id, ...d.data() };
+      if (c.type === 'workshop' || c.id === excludeCourseId) return;
+      // 週課補課場次開放：只看 makeupTarget!=='off'（2026-08 簡化，不需常態報名人數）
+      if ((c.makeupTarget || 'auto') === 'off') return;
+      courses.push(c);
+    });
+  }
+  if (courses.length === 0) return { sessions: [] };
+
+  // 3) 這些候選課程在日期範圍內的場次
+  const courseIds = courses.map(c => c.id);
+  const from = fromDate || taiwanToday();
+  const to = toDate || dayjs().add(180, 'day').format('YYYY-MM-DD');
+  const sessions = [];
+  for (let i = 0; i < courseIds.length; i += 10) {
+    const chunk = courseIds.slice(i, i + 10);
+    const snap = await db.collection(SESSION_COLLECTION)
+      .where('courseId', 'in', chunk).where('date', '>=', from).where('date', '<=', to).get();
+    snap.docs.forEach(d => {
+      const s = d.data();
+      if (s.status === 'cancelled') return;
+      sessions.push({ id: d.id, ...s });
+    });
+  }
+
+  const courseById = {};
+  courses.forEach(c => { courseById[c.id] = c; });
+  const enriched = sessions.map(s => {
+    const c = courseById[s.courseId] || {};
+    return {
+      ...s,
+      courseName: c.name || '',
+      categoryName: categoryNameById[c.categoryId] || '',
+      courseFirstDate: c.unlimitedPracticeStart || c.startDate || null,
+    };
+  }).sort((a, b) => a.date.localeCompare(b.date) || (a.startTime || '').localeCompare(b.startTime || ''));
+
+  return { sessions: enriched };
+};
+
 // ── 試上報名：將會員加入某場次名單（isTrial，佔名額）──────────────────
 // 輕量版（不含分期/插班費計算）；計入預計上課、佔名額；防止重複試上同一場。
 const enrollTrial = async ({ memberId, memberName, sessionId, gymId, trialFee, bookingId, staffId, paymentStatus = 'paid', paymentDeadline = null, maxWaitlist = null }) => {
@@ -2441,6 +2519,7 @@ module.exports = {
   getEffectiveTrialPrice,
   computeAlumniStatus,
   getSessions,
+  getMakeupCandidateSessions,
   getTrialSessions,
   enrollTrial,
   removeTrialEnrollment,

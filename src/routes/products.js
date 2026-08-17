@@ -370,6 +370,11 @@ router.post('/sales/:saleId/return', authenticate, checkPermission('products.sel
     const sale = saleDoc.data();
     if (sale.isReturn) return res.status(400).json({ error: 'IS_RETURN', message: '此為退貨紀錄，不可再退' });
     if (sale.returned) return res.status(400).json({ error: 'ALREADY_RETURNED', message: '此筆銷售已退貨' });
+    // 退貨限銷售後 7 天內，權威擋（前端按鈕同步隱藏，此為後端保險，不信任前端）
+    const soldAtMs = sale.soldAt?.seconds ? sale.soldAt.seconds * 1000 : sale.soldAt?._seconds ? sale.soldAt._seconds * 1000 : sale.soldAt;
+    if (soldAtMs && dayjs().diff(dayjs(soldAtMs), 'day') > 7) {
+      return res.status(400).json({ error: 'RETURN_WINDOW_EXPIRED', message: '此筆銷售已超過退貨期限（7天），無法退貨' });
+    }
     const now = new Date();
     const gymId = sale.gymId;
 

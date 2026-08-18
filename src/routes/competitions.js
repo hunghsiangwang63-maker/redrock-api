@@ -216,6 +216,7 @@ router.get('/_temp/comp-doc-sizes', authenticate, async (req, res) => {
               const subKeys = Object.keys(v);
               entry.subKeyCount = subKeys.length;
               if (subKeys.length) entry.avgSubEntrySize = Math.round(size / subKeys.length);
+              entry.allSubKeys = subKeys; // TEMP-DIAG：看實際 key 長怎樣，判斷是不是測試殘留
               // 再往下一層看一個樣本
               const sample = v[subKeys[0]];
               if (sample && typeof sample === 'object') entry.sampleSubKeys = Object.keys(sample).slice(0, 20);

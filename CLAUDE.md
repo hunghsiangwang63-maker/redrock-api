@@ -2847,6 +2847,21 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **`CompetitionActionModal.jsx` 順帶補齊兩個因「從未被觸發過」而沒被抓到的 UX 缺口**：①退費金額原本寫死預設 `'0'`，改預設帶入 `reg.paidAmount || reg.registrationFee`（多為全額退，仍可手動改成部分退款）②新增資訊卡顯示「已收金額」與「退費銀行帳號」（原本這些欄位只在即將關閉的詳情彈窗顯示，開始處理退費時完全看不到要匯去哪）——查證 `REGISTRATION_LIST_FIELDS` 欄位投影已含 `paidAmount`/`refundAccount`/`refundAccountName`/`refundBankCode`/`refundBankName`，無需改後端。
 - 📌 **金流備忘**：`/refund` 端點本身**不觸發任何銀行 API 轉帳**（沒有整合線上退款金流）——管理員仍需自行匯款，點「確認退費」純粹是系統記帳動作：標記 `paymentStatus:'refunded'`、沖銷已認列營收、若該館已開發票列印且此筆已開過發票則自動作廢（紙本仍在會員手上，modal 內有警示提醒取回）。
 
+## 目前進度（2026-08-19）— Google Cloud 帳單暴增排查：courseEnrollments 查詢全面補投影
+> 使用者問「Google Cloud費用是多少」→ 查出本月至今 NT$2,005（Firebase 付款帳戶，貨幣為 TWD 非 USD）、預估月底達 NT$2,732（較上月成長166%）。要求拆分細看後發現九成以上是 Firestore「資料傳輸流出」（492GB/17天），非讀寫次數（讀取次數反而減少55%）。要求「仔細檢查」後系統性掃過全後端，找到大量未加欄位投影（`.select()`）的 `courseEnrollments` 查詢——此集合每筆平均內嵌兩張簽名圖（`portraitSignature`/`guardianSignature`，base64 PNG，平均77KB、最大180KB）。後端 `/health` `3.323.0-course-enrollment-egress-audit`；commit `e2796d7`。已用正式資料逐一比對修改前後查詢筆數完全一致、部署後正式 API 煙霧測試通過。
+- 🔍 **帳單拆分（Google Cloud Billing → Firebase付款 → 報表 → SKU分組）**：`Cloud Firestore Internet Data Transfer Out from APAC to APAC`（341.72 GiB，$1,288.77，64%，↑200%）+ `Cloud Firestore Data Transfer to Google Services from APAC to APAC`（150.79 GiB，$547.00，27%，↑198%）＝91.5%；`Cloud Firestore Read Ops`僅 $169.49（8%，↓55%）、寫入 $0.00。→ 每筆讀取平均拉回的資料量變大，非查詢次數變多。
+- 🐞 **修復（延續 2026-08-18 對 `getCourses`/`getSessions` 的修復，這次系統性掃過全部 courseEnrollments 查詢）**：
+  - **`courseService.getTrialSessions()`**：完全無範圍限制的全系統 `status=='confirmed'` 掃描（實測 **1329 筆**），會員瀏覽「課程試上」頁觸發——找到的單一最大未防護查詢，補 `.select('courseId','memberId','isMakeup','isTrial')`（與已修過的 `getCourses` 同型）。
+  - **`courses.js GET /:courseId/enrollments`**：課程管理「報名名單」核心查詢，`courses.view` 權限開放全體員工、高頻呼叫，補 13 欄位投影。
+  - **`checkin.js getLastSessionCourseInvoiceData`**（今日課程學員/今日入場儀表板共用）：兩處查詢皆補投影。
+  - **`members.js /members/my/alerts`**：每次會員開首頁對本人+每位子女各查一次，補 6 欄位投影。
+  - **`courseService.computeAlumniStatus`**：`/quote` 端點（會員瀏覽課程詳情頁觸發），補 4 欄位投影。
+  - 另 8 處請假/補課/候補相關內部計數查詢一併補投影；其中 2 處純存在性檢查（workshop 報名去重、請假次數上限）改用 **`.count()` 聚合查詢**（完全不拉回文件資料，比 `.select()` 更省）。
+  - `courses.js` 兩個 CSV 匯出端點（`/attendance/download`、`/roster/download`）也補上（低頻但零成本修復）。
+- ⛔ **刻意跳過**：`getMemberEnrollments`（我的課程）／`getSessionRoster`（場次名單）——兩者皆用 `{...e}` 全欄位展開回應，前端消費欄位未窮舉驗證完整、風險偏高；且單次呼叫量天生受「每人每課只有一筆主報名帶簽名圖」上限限制，效益/風險比不如上述已修項目，暫不動。
+- ✅ **驗證**：本機用正式 SA 憑證比對「加 `.select()` 前後」同條件查詢筆數（`getTrialSessions` 1329=1329、`courses.js` 154筆課程=154筆、`sessionId in`+`select` 組合 6=6、`.count()` vs `.get().size` 2=2），確認投影不影響 WHERE 命中筆數、樣本文件確認不含簽名圖欄位；部署後打正式 API（`/courses/:id/enrollments` 真實課程 8堂已收款學員、`/checkin/today` 兩館統計）回應完整正常，無欄位遺漏。
+- 📌 **後續**：帳單數字本身有延遲（Google Cloud Billing 隔天才反映用量），無法當下確認 GB 數是否下降——下次查帳單時可比對這批修復上線後（8/19起）的日流量趨勢。
+
 - 會員端 UI 驗證：課程試上分頁 + 場次代班「（代班）」顯示（需會員帳號登入實測）
 - 「試上人數」目前僅由試上報名流程產生 `isTrial` 名單；如需員工手動加試上者，需另做 UI
 - 清理 dev Firebase 殘留測試會員：`【練習】…` 系列、`測試/測試API會員/管理員測試會員/Test1/Who` 等，以及測試用 `王大明`(0900222222)/子帳號 `小明明`；可用員工端「刪除會員」或 `DELETE /members/:id`（super_admin）清除（會一併刪子帳號、保留歷史紀錄）

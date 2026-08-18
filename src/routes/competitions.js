@@ -228,6 +228,7 @@ router.get('/_temp/comp-doc-sizes', authenticate, async (req, res) => {
       results.push({
         id: d.id, name: compData.eventName || '', compSize, scoresExists, scoresSize,
         athleteCount: compData.athletes ? Object.keys(compData.athletes).length : 0,
+        athleteIds: compData.athletes ? Object.keys(compData.athletes) : [],
         isActive: compData.isActive, createdAt: compData.createdAt,
         scoresFieldBreakdown,
       });

@@ -187,6 +187,37 @@ router.post('/:id/sync-scoring', authenticate, checkPermission('competitions.man
   }
 });
 
+// ⚠️ TEMP-CLEANUP-2026-08-18：清除「202608 紅石成人抱石賽」scores.ifsc 內 100% 確認孤兒的
+// 測試殘留成績（505 筆全數對不到現有 53 位真實選手，見診斷端點結果），執行一次即移除，不留存
+router.post('/_temp/comp-cleanup-orphan-scores', authenticate, async (req, res) => {
+  if (req.staff?.role !== 'super_admin') return res.status(403).json({ error: 'FORBIDDEN' });
+  try {
+    const { getCompDb } = require('../config/compFirebase');
+    const compDb = getCompDb();
+    if (!compDb) return res.status(503).json({ error: 'COMP_DB_UNAVAILABLE' });
+    const COMP_ID = 'EofnXQf4ArzTNgqNP2pR'; // 202608 紅石成人抱石賽（唯一確認 100% 孤兒的賽事，寫死避免誤刪他場）
+    const compDoc = await compDb.collection('competitions').doc(COMP_ID).get();
+    if (!compDoc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
+    const realIds = new Set(Object.keys(compDoc.data().athletes || {}));
+    const scoresRef = compDb.collection('competitions').doc(COMP_ID).collection('data').doc('scores');
+    const scoresDoc = await scoresRef.get();
+    if (!scoresDoc.exists) return res.status(404).json({ error: 'SCORES_NOT_FOUND' });
+    const ifsc = scoresDoc.data().ifsc || {};
+    const ifscIds = Object.keys(ifsc);
+    const orphanIds = ifscIds.filter(id => !realIds.has(id));
+    if (orphanIds.length !== ifscIds.length) {
+      // 安全防呆：只在「100% 全數孤兒」時才整組清空，否則走逐筆刪除避免誤傷真實資料
+      const admin = require('firebase-admin');
+      const upd = {};
+      orphanIds.forEach(id => { upd[`ifsc.${id}`] = admin.firestore.FieldValue.delete(); });
+      await scoresRef.update(upd);
+      return res.json({ mode: 'selective-delete', removed: orphanIds.length, kept: ifscIds.length - orphanIds.length });
+    }
+    await scoresRef.update({ ifsc: {} });
+    res.json({ mode: 'full-clear', removed: ifscIds.length, realAthleteCount: realIds.size });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ⚠️ TEMP-DIAG-2026-08-18：計分系統(redrock-comp)效能排查用唯讀診斷端點，量測完即移除，不留存
 router.get('/_temp/comp-doc-sizes', authenticate, async (req, res) => {
   if (req.staff?.role !== 'super_admin') return res.status(403).json({ error: 'FORBIDDEN' });

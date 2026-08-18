@@ -775,4 +775,5 @@ module.exports = {
   getCompetitionRegistrations, getMemberRegistrations,
   recordCompetitionRevenue, computeNetReceivedAmount,
   computeCompetitionAgeInfo, computeCompetitionFee,
+  REGISTRATION_LIST_FIELDS,
 };

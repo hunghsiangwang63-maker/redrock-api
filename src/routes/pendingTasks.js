@@ -4,6 +4,7 @@ const router = express.Router();
 const { authenticate } = require('../middleware/auth');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
+const { REGISTRATION_LIST_FIELDS: COMP_REG_FIELDS } = require('../services/competitionService');
 
 // 個人帳號（兼職／正職，未打卡值班）待辦頁權限收斂（2026-08-08 拍板，同日再擴及正職）：
 // 只看「今日提醒／預約」+ 我的近7日班表，墜落測驗待安排／需審核／待收款／近7天報名動態一律不回傳（非僅前端隱藏，後端直接不給資料）。
@@ -100,10 +101,14 @@ router.get('/', authenticate, async (req, res) => {
     } catch(e) {}
 
     // 4. 比賽報名待收款
+    // ⚠️ record:{...r} 整份丟給前端 CompetitionActionModal 使用，需要的欄位比純顯示查詢多——
+    // 沿用 competitionService.REGISTRATION_LIST_FIELDS（同一份已排除簽名圖的權威清單，見該檔註解）
+    // 而非另建一份，避免兩處欄位清單各自維護、日後漏同步。
     try {
       const snap = await db.collection('competitionRegistrations')
         .where('paymentStatus', '==', 'pending')
-        .where('status', '==', 'confirmed').get();
+        .where('status', '==', 'confirmed')
+        .select(...COMP_REG_FIELDS).get();
       snap.forEach(d => {
         const r = d.data();
         if (transferRefIds.has(d.id)) return; // 已有轉帳待確認 → 走轉帳確認段
@@ -123,7 +128,8 @@ router.get('/', authenticate, async (req, res) => {
     // 比賽退費待處理（會員取消報名且已收過款 → 需人工匯退款；員工按「退費已處理」後消失）
     try {
       const snap = await db.collection('competitionRegistrations')
-        .where('refundRequested', '==', true).get();
+        .where('refundRequested', '==', true)
+        .select(...COMP_REG_FIELDS).get();
       snap.forEach(d => {
         const r = d.data();
         if (r.status !== 'cancelled' || r.paymentStatus !== 'confirmed') return; // 未收款取消不需退；已退費(refunded)自然排除
@@ -201,9 +207,17 @@ router.get('/', authenticate, async (req, res) => {
     } catch(e) {}
 
     // 7. 體驗課程預約：待確認 + 已確認，從預約起一直顯示到體驗日（含當日）
+    // ⚠️ .select()——試上分支的體驗預約內嵌 consentSignatureUrl/guardianSignatureUrl；此查詢無狀態
+    // 篩選、僅選填 gymId，是待辦頁「體驗課程」分段最寬的一條查詢。欄位清單對照
+    // components/review/ExperienceDetailModal.jsx 實際讀取的 record.* 逐一枚舉（courseTypeName 為
+    // 伺服器端算好另外附加，非原始欄位，不用投影）。
+    const EXP_TASK_FIELDS = ['id', 'coachId', 'coachName', 'participants', 'contactName', 'contactPhone',
+      'contactEmail', 'bookingDate', 'bookingTime', 'courseType', 'numParticipants', 'totalFee', 'gymId',
+      'bankName', 'bankLastFive', 'paymentDate', 'facebookName', 'notes',
+      'status', 'ticketsIssued', 'createdAt'];
     try {
       let ref = gymId ? db.collection('experienceBookings').where('gymId', '==', gymId) : db.collection('experienceBookings');
-      const snap = await ref.get();
+      const snap = await ref.select(...EXP_TASK_FIELDS).get();
       snap.forEach(d => {
         const r = d.data();
         if (transferRefIds.has(d.id)) return; // 已有轉帳待確認 → 走轉帳確認段，避免雙列
@@ -393,7 +407,10 @@ router.get('/', authenticate, async (req, res) => {
     // 原本直接查 courseEnrollments 用「查到的第一筆」判斷 _needsCollect，Firestore 未下 orderBy、
     // 順序不保證是扛費用的那筆，理論上可能誤判成「不用收款」而漏進待辦。header 一筆一組，無此疑慮。）
     try {
-      const snap = await db.collection('courseRegistrations').where('createdAt', '>=', sevenDaysAgo).get();
+      // ⚠️ .select() 排除內嵌簽名圖（portraitSignature/guardianSignature，見 courseRegistrationService）——
+      // 待辦頁「近7天報名」是全站最常開的儀表板頁面之一，2026-08-19 帳單流量排查一併找到的同型缺口。
+      const snap = await db.collection('courseRegistrations').where('createdAt', '>=', sevenDaysAgo)
+        .select('status', 'gymId', 'memberName', 'courseName', 'sessionCount', 'createdAt', 'courseId').get();
       snap.docs.forEach(d => {
         const h = d.data();
         if (!['confirmed','waitlist'].includes(h.status)) return;
@@ -405,7 +422,10 @@ router.get('/', authenticate, async (req, res) => {
     } catch(e) {}
     // 比賽
     try {
-      const snap = await db.collection('competitionRegistrations').where('registeredAt', '>=', sevenDaysAgo).get();
+      // ⚠️ .select() 排除內嵌簽名圖（memberSignatureUrl/guardianSignatureUrl，見 competitionService），
+      // 同上——此查詢橫跨全部賽事、7天內任一次比賽報名都會進來，未範圍限制。
+      const snap = await db.collection('competitionRegistrations').where('registeredAt', '>=', sevenDaysAgo)
+        .select('status', 'memberName', 'competitionName', 'divisionName', 'registeredAt', 'competitionId').get();
       snap.docs.forEach(d => {
         const r = d.data();
         if (!['confirmed','waitlist'].includes(r.status)) return;
@@ -414,7 +434,9 @@ router.get('/', authenticate, async (req, res) => {
     } catch(e) {}
     // 體驗
     try {
-      const snap = await db.collection('experienceBookings').where('createdAt', '>=', sevenDaysAgo).get();
+      // ⚠️ .select()——試上分支的 experienceBookings 也內嵌 consentSignatureUrl/guardianSignatureUrl，同上原因補上。
+      const snap = await db.collection('experienceBookings').where('createdAt', '>=', sevenDaysAgo)
+        .select('gymId', 'participants', 'contactName', 'courseName', 'courseType', 'bookingDate', 'numParticipants', 'createdAt').get();
       snap.docs.forEach(d => {
         const b = d.data();
         if (gymId && b.gymId && b.gymId !== gymId) return;

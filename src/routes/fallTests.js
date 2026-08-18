@@ -268,6 +268,7 @@ router.post('/signature/:memberId/reset', authenticate, requireManagerOrStation,
 
     const snap = await db.collection('fallTestSignatures')
       .where('memberId', '==', memberId)
+      .select('signedAt')
       .get();
     if (snap.empty) return res.status(404).json({ error: 'NOT_FOUND', message: '此會員尚未簽署墜落測驗同意書' });
 

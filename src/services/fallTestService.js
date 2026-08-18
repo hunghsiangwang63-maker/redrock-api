@@ -39,7 +39,7 @@ async function recordFallTestResult({ memberId, result, notes, staffId, staffNam
   // 未簽署同意書不可登記通過
   if (result === 'passed') {
     const sigSnap = await db.collection('fallTestSignatures')
-      .where('memberId', '==', memberId).limit(1).get();
+      .where('memberId', '==', memberId).select().limit(1).get();
     if (sigSnap.empty) {
       const e = new Error('此會員尚未簽署墜落測驗同意書，無法登記為通過');
       e.status = 400; e.code = 'SIGNATURE_REQUIRED'; throw e;

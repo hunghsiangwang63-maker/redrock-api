@@ -69,7 +69,7 @@ const checkFallTest = async (memberId) => {
 // ── 是否已簽署墜落測驗同意書（與「是否通過」不同；體驗券入場僅需簽署）──
 const hasFallTestSignature = async (memberId) => {
   const db = getDb();
-  const snap = await db.collection('fallTestSignatures').where('memberId', '==', memberId).limit(1).get();
+  const snap = await db.collection('fallTestSignatures').where('memberId', '==', memberId).select().limit(1).get();
   return !snap.empty;
 };
 

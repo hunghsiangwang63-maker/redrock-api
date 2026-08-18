@@ -53,7 +53,7 @@ const findValue = async (db, memberId) => {
 const isOnboardingIncomplete = async (db, memberId) => {
   const w = await db.collection(COLLECTIONS.WAIVERS).doc(memberId).get();
   const waiverComplete = w.exists && w.data().isComplete === true;
-  const ft = await db.collection('fallTestSignatures').where('memberId', '==', memberId).limit(1).get();
+  const ft = await db.collection('fallTestSignatures').where('memberId', '==', memberId).select().limit(1).get();
   const consentSigned = !ft.empty;
   return !waiverComplete || !consentSigned;
 };
@@ -90,7 +90,7 @@ const sweepGhostAccounts = async ({ graceDays = DEFAULT_GRACE_DAYS, commit = tru
     if (commit) {
       await db.collection(COLLECTIONS.MEMBERS).doc(doc.id).delete();
       await db.collection(COLLECTIONS.WAIVERS).doc(doc.id).delete().catch(() => {});
-      const ftDocs = await db.collection('fallTestSignatures').where('memberId', '==', doc.id).get();
+      const ftDocs = await db.collection('fallTestSignatures').where('memberId', '==', doc.id).select().get();
       for (const d of ftDocs.docs) await d.ref.delete();
     }
     deleted.push({ id: doc.id, name: m.name || '', phone: m.phone || '', registeredAt: dayjs(created).format('YYYY-MM-DD') });

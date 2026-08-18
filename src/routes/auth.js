@@ -415,7 +415,8 @@ router.get('/waiver/parent/:token',
       // 一併載入該會員的墜落測驗同意書（本人已簽、待家長簽）供同頁簽署
       let fallTest = null;
       const ftSnap = await db.collection('fallTestSignatures')
-        .where('memberId', '==', waiver.memberId).get();
+        .where('memberId', '==', waiver.memberId)
+        .select('signedAt', 'contentSnapshot', 'parentRequired', 'guardianSignedAt').get();
       if (!ftSnap.empty) {
         const latest = ftSnap.docs
           .map(d => d.data())
@@ -485,7 +486,8 @@ router.post('/waiver/parent/:token',
       // 同一簽名一併套用到「墜落測驗同意書」（待家長簽的那份）→ 統一一次簽名兩份都完成
       try {
         const ftSnap = await db.collection('fallTestSignatures')
-          .where('memberId', '==', waiver.memberId).get();
+          .where('memberId', '==', waiver.memberId)
+          .select('signedAt', 'parentRequired', 'guardianSignedAt').get();
         if (!ftSnap.empty) {
           const target = ftSnap.docs
             .filter(d => d.data().parentRequired === true && !d.data().guardianSignedAt)

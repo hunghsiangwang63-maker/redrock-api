@@ -32,7 +32,7 @@ async function checkPrereq(db, memberId) {
     return { ok: false, code: 'WAIVER_INCOMPLETE', message: '請先完成風險安全聲明書簽署' };
   }
   const sig = await db.collection('fallTestSignatures')
-    .where('memberId', '==', memberId).limit(1).get();
+    .where('memberId', '==', memberId).select().limit(1).get();
   if (sig.empty) {
     return { ok: false, code: 'CONSENT_REQUIRED', message: '請先簽署墜落測驗同意書' };
   }

@@ -99,7 +99,7 @@ const maybeSendParentSignEmail = async (memberId) => {
   if (w.parentEmailSentAt) return { sent: false, reason: 'already_sent' }; // 冪等；提醒走 resend
 
   // 本人墜測同意書是否已簽（任一簽署紀錄存在即可）
-  const ftSnap = await db.collection('fallTestSignatures').where('memberId', '==', memberId).limit(1).get();
+  const ftSnap = await db.collection('fallTestSignatures').where('memberId', '==', memberId).select().limit(1).get();
   if (ftSnap.empty) return { sent: false, reason: 'consent_unsigned' };
 
   // 確保 token 存在

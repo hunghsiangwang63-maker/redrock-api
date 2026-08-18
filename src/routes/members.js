@@ -928,7 +928,7 @@ router.get('/:id',
         // 定期票：改單 where(memberId) + 記憶體過濾 endDate/status（避免 memberId+endDate+status 複合索引造成偶發 FAILED_PRECONDITION）
         db.collection(COLLECTIONS.MEMBER_PASSES).where('memberId', '==', req.params.id).get().catch(() => ({ docs: [] })),
         db.collection(COLLECTIONS.MEMBERS).where('parentMemberId', '==', req.params.id).get().catch(() => ({ docs: [] })),
-        db.collection('fallTestSignatures').where('memberId', '==', req.params.id).get().catch(() => ({ empty: true })),
+        db.collection('fallTestSignatures').where('memberId', '==', req.params.id).select().get().catch(() => ({ empty: true })),
         memberService.refreshBlockStatus(req.params.id).catch(() => []),
         // 各類有效票券摘要（沿用既有權威 getter，各自 catch 不阻斷）
         require('../services/discountCardService').getMemberDiscountCards(req.params.id).catch(() => []),

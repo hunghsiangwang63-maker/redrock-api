@@ -70,13 +70,7 @@ function creds(gymSettings) {
 }
 
 // 街口 API 統一回應格式：{ result, message, result_object }；result==='000' 才算成功。
-async function callApi(method, path, opts) {
-  return (await callApiRaw(method, path, opts)).data;
-}
-
-// 與 callApi 相同，但額外回傳實際送出的 request body 字串——供街口驗測腳本需要的
-// 「LOG request / LOG response」逐字記錄用（一般業務流程不需要，只有 callApi 走公開 exports）。
-async function callApiRaw(method, path, { apiKey, secret, bodyObj, queryStr }) {
+async function callApi(method, path, { apiKey, secret, bodyObj, queryStr }) {
   const isGet = method === 'GET';
   const payloadStr = isGet ? (queryStr || '') : JSON.stringify(bodyObj || {});
   const digest = sign(secret, payloadStr);
@@ -86,8 +80,7 @@ async function callApiRaw(method, path, { apiKey, secret, bodyObj, queryStr }) {
     headers: { 'Content-Type': 'application/json', 'api-key': apiKey, digest },
     body: isGet ? undefined : payloadStr,
   });
-  const data = await res.json();
-  return { data, requestBody: isGet ? queryStr : bodyObj, digest };
+  return res.json();
 }
 
 module.exports = {
@@ -177,9 +170,4 @@ module.exports = {
       raw: data,
     };
   },
-
-  // ── 診斷/驗測專用（非業務流程使用）：暴露 creds() 與帶 requestBody 回傳的 callApiRaw()，
-  //    供街口 UAT 驗測腳本需要的「逐字 LOG request / LOG response」擷取用。──────────────
-  _creds: creds,
-  _callApiRaw: callApiRaw,
 };

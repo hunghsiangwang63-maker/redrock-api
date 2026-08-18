@@ -187,6 +187,32 @@ router.post('/:id/sync-scoring', authenticate, checkPermission('competitions.man
   }
 });
 
+// ⚠️ TEMP-DIAG-2026-08-18：計分系統(redrock-comp)效能排查用唯讀診斷端點，量測完即移除，不留存
+router.get('/_temp/comp-doc-sizes', authenticate, async (req, res) => {
+  if (req.staff?.role !== 'super_admin') return res.status(403).json({ error: 'FORBIDDEN' });
+  try {
+    const { getCompDb } = require('../config/compFirebase');
+    const compDb = getCompDb();
+    if (!compDb) return res.status(503).json({ error: 'COMP_DB_UNAVAILABLE' });
+    const snap = await compDb.collection('competitions').get();
+    const results = [];
+    for (const d of snap.docs) {
+      const compData = d.data();
+      const compSize = Buffer.byteLength(JSON.stringify(compData), 'utf8');
+      let scoresSize = 0, scoresExists = false;
+      try {
+        const scoresDoc = await compDb.collection('competitions').doc(d.id).collection('data').doc('scores').get();
+        if (scoresDoc.exists) { scoresExists = true; scoresSize = Buffer.byteLength(JSON.stringify(scoresDoc.data()), 'utf8'); }
+      } catch (e) {}
+      results.push({
+        id: d.id, name: compData.name || compData.title || '', compSize, scoresExists, scoresSize,
+        athleteCount: compData.athletes ? Object.keys(compData.athletes).length : 0,
+      });
+    }
+    res.json({ competitions: results });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ══════════════════════════════════════════════════════
 // 公開報名（免登入、訪客，先轉帳；IP 限流見 index.js）
 // ══════════════════════════════════════════════════════

@@ -2831,6 +2831,22 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **清理（一次性資料操作，透過 redrock-api 臨時端點執行、確認後已移除）**：「202608」的 `scores.ifsc` 從 723,490 bytes → **35 bytes**（505 筆孤兒全清、53 位真實選手不受影響）；「20260614」的 131,692 bytes 前後逐 byte 一致（唯讀查證，確認真的沒被動到）。
 - 📌 **教訓／此次方法論**：跨專案（`redrock-comp` 用獨立 Firebase 專案）沒有本機可直接查的憑證時，善用 `redrock-api` 既有、已在生產環境驗證過的跨專案連線（`COMP_FIREBASE_SA`／`getCompDb()`）加**臨時**診斷/清理端點（`super_admin` 限定、明確標註 `TEMP-` 前綴、用完立刻整段移除重新部署），比起憑空猜測或什麼都不做更能給出精確結論；動任何「清除」前務必先做**精確差集比對**（不是估算），且只在「100% 確認孤兒」時才整組清空、否則自動退回逐筆刪除，避免誤傷真實資料。
 
+## 目前進度（2026-08-18 續3）— 街口支付（JKoPay）UAT sandbox 驗測完成 + Refund API 補上
+> 街口寄來 UAT 驗測腳本，要求提交「3 筆正向訂單 + 1 筆退款」的逐字 request/response log 才能過審。後端 `/health` `3.322.0-jkopay-refund-unredeem-temp-verify`。
+- ✅ **修真 bug：Entry API 漏帶 `unredeem:0`**（`jkopay.js`）：街口驗測腳本「注意事項」明確要求務必帶 0（非省略不帶）——此欄位設計是給法規不可行銷商品（如香菸）排除街口幣/街口券折抵用，漏帶會影響用戶的街口幣回饋資格。本專案商品皆可折抵，固定帶 0。
+- ✅ **新增 `refundPayment()`（訂單退款 Refund API）**：`POST /platform/refund`，支援全額/部分退款。**尚未掛進 `paymentService` 業務流程**（本專案線上金流退款目前一律走既有手動退費/加減項機制，此函式僅供街口驗測腳本與未來若要做「線上退款」使用者操作入口用）。
+- ✅ **臨時診斷路由 `_tempJkopayVerify.js`**（`super_admin` 限定、自包含硬編碼 sandbox 憑證，刻意不依賴 Railway 環境變數避免為了驗測動帳號設定）：三端點對應 Entry/Inquiry/Refund，供跑 UAT 腳本用。
+- ✅ **UAT sandbox 端到端驗測**（使用者手機安裝街口測試 App、實際付款）：3 筆正向訂單（Entry→掃碼付款→Inquiry 核對 `status===0`）+ 1 筆負向 Refund，全數成功；log 逐字擷取。
+- ✅ **驗測腳本 Excel 填寫+回信**：瀏覽器編輯 Excel Online 全面失效（純自動化層限制、非座標/技巧問題）→ 改本機下載→Python `openpyxl` 填寫（中途發現漏抓第 5 列「查詢訂單」Inquiry log，補齊）→ `file_upload` 重新附加 → 回信 Irene Wang（街口窗口）附完整填妥的驗測 Excel，等待審核/正式環境資訊。
+- ⚠️ **待清理**：`_tempJkopayVerify.js` **仍部署在正式環境**，待街口確認驗測通過或使用者明確要求才移除（見記憶 `[[payment-integration-project]]`）。
+
+## 目前進度（2026-08-18 續4）— 修：比賽退費申請完全沒有處理入口（真 bug，非僅顯示問題）
+> 使用者問「比賽申請退費之後，管理員要做什麼動作？」查證發現：後端 `POST /competitions/registrations/:regId/refund` 與 `CompetitionActionModal` 的 `action='refund'` 分支早已完整實作（含發票自動作廢警示），但**全站從未有任何按鈕呼叫它**——賽事管理頁 `CompetitionsPage.jsx` 的 `act()` 函式對 `status==='cancelled'`（退費申請的必然狀態）一律 `return null`；待辦頁 `competition_refund` 任務落到通用「前往處理」，點了只是導到賽事頁後仍然什麼按鈕都沒有。管理員完全無法在系統內把退費申請標記為已處理——這是 dead code（modal 完整、觸發永遠不存在），非顯示層小問題。純前端修復，已 build+deploy+commit+push。commit `eaaf51b`。
+- ✅ **`CompetitionsPage.jsx`**：`act()` 對「已收款後取消 + `refundRequested`」情境加「處理退費」按鈕（其餘 cancelled 狀態如純取消/駁回仍維持 `return null`，不誤增按鈕）。
+- ✅ **`PendingTasksPage.jsx`**：`competition_refund` 任務加對應 case，可直接從待辦頁開退費 modal（比照既有 `competition_payment` 開 `action='pay'` 的模式，新增 `kind:'competition-refund'`）。
+- ✅ **`CompetitionActionModal.jsx` 順帶補齊兩個因「從未被觸發過」而沒被抓到的 UX 缺口**：①退費金額原本寫死預設 `'0'`，改預設帶入 `reg.paidAmount || reg.registrationFee`（多為全額退，仍可手動改成部分退款）②新增資訊卡顯示「已收金額」與「退費銀行帳號」（原本這些欄位只在即將關閉的詳情彈窗顯示，開始處理退費時完全看不到要匯去哪）——查證 `REGISTRATION_LIST_FIELDS` 欄位投影已含 `paidAmount`/`refundAccount`/`refundAccountName`/`refundBankCode`/`refundBankName`，無需改後端。
+- 📌 **金流備忘**：`/refund` 端點本身**不觸發任何銀行 API 轉帳**（沒有整合線上退款金流）——管理員仍需自行匯款，點「確認退費」純粹是系統記帳動作：標記 `paymentStatus:'refunded'`、沖銷已認列營收、若該館已開發票列印且此筆已開過發票則自動作廢（紙本仍在會員手上，modal 內有警示提醒取回）。
+
 - 會員端 UI 驗證：課程試上分頁 + 場次代班「（代班）」顯示（需會員帳號登入實測）
 - 「試上人數」目前僅由試上報名流程產生 `isTrial` 名單；如需員工手動加試上者，需另做 UI
 - 清理 dev Firebase 殘留測試會員：`【練習】…` 系列、`測試/測試API會員/管理員測試會員/Test1/Who` 等，以及測試用 `王大明`(0900222222)/子帳號 `小明明`；可用員工端「刪除會員」或 `DELETE /members/:id`（super_admin）清除（會一併刪子帳號、保留歷史紀錄）

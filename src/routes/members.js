@@ -205,9 +205,12 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
     }
     // 週課候補自動遞補為正取（未完成付款 → 提醒；付款確認後自動消失，同課程只顯示一次）
     // 單一等值查詢＋記憶體過濾（避免 !=/複合索引，比照全站慣例）
+    // ⚠️ .select() 排除內嵌簽名圖等大欄位——此查詢在每次會員首頁載入時對本人+每位子女各跑一次，
+    // 2026-08-19 查獲流量異常時一併找到（見 courseService.getCourses 同型註解）。
     for (const id of ids) {
       const snap = await db.collection('courseEnrollments')
-        .where('memberId', '==', id).where('status', '==', 'confirmed').get();
+        .where('memberId', '==', id).where('status', '==', 'confirmed')
+        .select('courseId', 'courseName', 'promotedAt', 'paymentConfirmed', 'enrollmentFee', 'paymentMethod').get();
       const seenCourse = new Set();
       snap.docs.forEach(d => {
         const o = d.data();

@@ -322,7 +322,7 @@ const planRegenerate = async ({ db, course, existingSessions }) => {
   const sortedOrphans = [...orphanSessions].sort((a, b) => (a.date < b.date ? -1 : 1));
   for (const s of sortedOrphans) {
     const enrollSnap = await db.collection(ENROLLMENT_COLLECTION)
-      .where('sessionId', '==', s.id).get();
+      .where('sessionId', '==', s.id).select('status', 'memberName').get();
     const enrollments = enrollSnap.docs
       .map(d => ({ ref: d.ref, ...d.data() }))
       .filter(e => ['confirmed', 'waitlist', 'leave'].includes(e.status));
@@ -644,13 +644,13 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
 
   if (session.status === 'cancelled') throw { code: 'SESSION_CANCELLED', message: '此場次已取消' };
 
-  // 檢查是否已報名
-  const existingSnap = await db.collection(ENROLLMENT_COLLECTION)
+  // 檢查是否已報名（純存在性檢查，用 .count() 不拉回文件資料——避免內嵌簽名圖傳輸成本）
+  const existingCount = (await db.collection(ENROLLMENT_COLLECTION)
     .where('memberId', '==', memberId)
     .where('sessionId', '==', sessionId)
     .where('status', 'in', ['confirmed', 'waitlist'])
-    .get();
-  if (!existingSnap.empty) throw { code: 'ALREADY_ENROLLED', message: '您已報名此場次' };
+    .count().get()).data().count;
+  if (existingCount > 0) throw { code: 'ALREADY_ENROLLED', message: '您已報名此場次' };
 
   const isFull = session.enrolledCount >= session.maxStudents;
   const enrollmentId = uuidv4();
@@ -807,7 +807,8 @@ const reconcileMakeupEntitlement = async (db, memberId, courseId, rules = null, 
   if (!rules) rules = resolveRules(course, await getCategoryOf(db, course.categoryId));
 
   const enSnap = await db.collection(ENROLLMENT_COLLECTION)
-    .where('memberId', '==', memberId).where('courseId', '==', courseId).get();
+    .where('memberId', '==', memberId).where('courseId', '==', courseId)
+    .select('status', 'maxLeavesAllowed').get();
   const enDocs = enSnap.docs.map(d => d.data());
   const activeLeaves = enDocs.filter(e => e.status === 'leave').length;
   const capOverride = enrollment?.maxLeavesAllowed ?? enDocs.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed;
@@ -886,7 +887,7 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
     .where('memberId', '==', memberId)
     .where('courseId', '==', enrollment.courseId)
     .where('status', '==', 'leave')
-    .get().then(s => s.size);
+    .count().get().then(s => s.data().count);
   const overLimit = usedLeaves >= maxLeaves;
 
   const now = new Date();
@@ -976,7 +977,8 @@ const cancelLeave = async ({ enrollmentId, memberId }) => {
     const courseQ = courseDocQ.exists ? courseDocQ.data() : {};
     const rulesQ = resolveRules(courseQ, await getCategoryOf(db, courseQ.categoryId));
     const enSnapQ = await db.collection(ENROLLMENT_COLLECTION)
-      .where('memberId', '==', memberId).where('courseId', '==', enrollment.courseId).get();
+      .where('memberId', '==', memberId).where('courseId', '==', enrollment.courseId)
+      .select('status', 'maxLeavesAllowed').get();
     const enDocsQ = enSnapQ.docs.map(d => d.data());
     const activeLeavesQ = enDocsQ.filter(e => e.status === 'leave').length;
     const capQ = enDocsQ.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rulesQ.maxLeaves;
@@ -1052,7 +1054,8 @@ const precheckCancelLeave = async ({ enrollmentId, memberId }) => {
   const courseQ = courseDocQ.exists ? courseDocQ.data() : {};
   const rulesQ = resolveRules(courseQ, await getCategoryOf(db, courseQ.categoryId));
   const enSnapQ = await db.collection(ENROLLMENT_COLLECTION)
-    .where('memberId', '==', memberId).where('courseId', '==', enrollment.courseId).get();
+    .where('memberId', '==', memberId).where('courseId', '==', enrollment.courseId)
+    .select('status', 'maxLeavesAllowed').get();
   const enDocsQ = enSnapQ.docs.map(d => d.data());
   const activeLeavesQ = enDocsQ.filter(e => e.status === 'leave').length;
   const capQ = enDocsQ.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rulesQ.maxLeaves;
@@ -1071,7 +1074,8 @@ const precheckCancelLeave = async ({ enrollmentId, memberId }) => {
   if (usedQ > 0) {
     const rightIds = new Set(usedRights.map(d => d.id));
     const mkEnSnap = await db.collection(ENROLLMENT_COLLECTION)
-      .where('memberId', '==', memberId).where('isMakeup', '==', true).get();
+      .where('memberId', '==', memberId).where('isMakeup', '==', true)
+      .select('status', 'makeupId', 'courseName', 'date', 'startTime').get();
     const today = taiwanToday();
     result.bookedMakeups = mkEnSnap.docs
       .map(d => ({ id: d.id, ...d.data() }))
@@ -1259,7 +1263,8 @@ const promoteWaitlistForCourse = async (courseId) => {
 
   // 課程級容量：以「不重複常態學員數」計（比照 enroll-all 判定準則，補課/試上單堂佔位不算）
   const allSnap = await db.collection(ENROLLMENT_COLLECTION)
-    .where('courseId', '==', courseId).where('status', 'in', ['confirmed', 'waitlist']).get();
+    .where('courseId', '==', courseId).where('status', 'in', ['confirmed', 'waitlist'])
+    .select('status', 'memberId', 'isMakeup', 'isTrial').get();
   const confirmedMembers = new Set();
   allSnap.forEach(d => {
     const e = d.data();
@@ -1798,7 +1803,10 @@ const computeAlumniStatus = async (db, course, courseId, memberId) => {
   const alumni = { isAlumni: false, isFullTermRenewal: false };
   const need = course.fullTermRenewalDiscountEnabled || course.alumniDiscountEnabled || !!course.enrollOpenDate;
   if (!need || !memberId) return alumni;
-  const myEn = await db.collection(ENROLLMENT_COLLECTION).where('memberId', '==', memberId).get();
+  // ⚠️ .select() 排除內嵌簽名圖等大欄位——此函式讀「會員全部歷史報名」(/quote 端點常被會員瀏覽課程時觸發)，
+  // 見 getCourses/getSessions 同型註解（2026-08-18/19 查獲流量異常，courseEnrollments 全文件抓取為主因）。
+  const myEn = await db.collection(ENROLLMENT_COLLECTION).where('memberId', '==', memberId)
+    .select('courseId', 'isTrial', 'isMakeup', 'status').get();
   const byCourse = {};
   myEn.docs.forEach(d => {
     const e = d.data();
@@ -2402,7 +2410,11 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
   if (candidates.length === 0) return [];
   // 各候選課「常態報名不重複人數」（不含試上/補課）→ 供 trialTarget=auto 的達 2 人判定
   const regularByCourse = {};
-  const enrSnap = await db.collection(ENROLLMENT_COLLECTION).where('status', '==', 'confirmed').get();
+  // ⚠️ .select() 必要——此查詢無 courseId/memberId 範圍限制，讀「全系統」目前 confirmed 報名
+  // （2026-08-19 查獲：與 getCourses 同一份 status-only 全表掃描，卻漏了同一批修過的欄位投影，
+  // 是本次流量異常排查中找到的最大單一未防護查詢）。
+  const enrSnap = await db.collection(ENROLLMENT_COLLECTION).where('status', '==', 'confirmed')
+    .select('courseId', 'memberId', 'isMakeup', 'isTrial').get();
   enrSnap.docs.forEach(x => { const e = x.data(); if (e.isMakeup || e.isTrial) return; (regularByCourse[e.courseId] = regularByCourse[e.courseId] || new Set()).add(e.memberId); });
   const trialCourses = {};
   candidates.forEach(c => {

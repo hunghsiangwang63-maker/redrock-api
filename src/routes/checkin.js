@@ -495,9 +495,11 @@ async function getLastSessionCourseInvoiceData(db, gymId, today) {
   const courseIdChunks = [];
   for (let i = 0; i < courseIds.length; i += 30) courseIdChunks.push(courseIds.slice(i, i + 30));
 
+  // ⚠️ .select() 排除內嵌簽名圖等大欄位——今日結帳/入場儀表板熱路徑，見 courseService.getCourses 同型註解
   const [enrollSnaps, regSnaps] = await Promise.all([
     Promise.all(chunks.map(chunk => db.collection('courseEnrollments')
-      .where('sessionId', 'in', chunk).where('status', '==', 'confirmed').get())),
+      .where('sessionId', 'in', chunk).where('status', '==', 'confirmed')
+      .select('sessionId', 'memberId', 'isMakeup', 'isTrial', 'courseName').get())),
     courseIdChunks.length
       ? Promise.all(courseIdChunks.map(chunk => db.collection('courseRegistrations')
           .where('courseId', 'in', chunk).where('status', '==', 'confirmed').get()))
@@ -576,7 +578,8 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
     const todayStart = new Date(todayStr0 + 'T00:00:00+08:00');
     const [enrollSnaps, checkedInSnap, xmSnap] = await Promise.all([
       Promise.all(chunks.map(chunk => db.collection('courseEnrollments')
-        .where('sessionId', 'in', chunk).where('status', '==', 'confirmed').get())),
+        .where('sessionId', 'in', chunk).where('status', '==', 'confirmed')
+        .select('sessionId', 'memberId', 'memberName', 'isMakeup', 'isTrial', 'paymentStatus', 'courseName').get())),
       db.collection('checkIns')
         .where('gymId', '==', gymId).where('isCancelled', '==', false)
         .where('checkedInAt', '>=', todayStart).get(),

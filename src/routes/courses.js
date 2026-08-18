@@ -810,7 +810,8 @@ router.get('/:courseId/attendance/download',
 
       // 正取學員（去重 memberId）
       const enrollSnap = await db.collection('courseEnrollments')
-        .where('courseId', '==', courseId).where('status', '==', 'confirmed').get();
+        .where('courseId', '==', courseId).where('status', '==', 'confirmed')
+        .select('memberId').get();
       const memberIds = [...new Set(enrollSnap.docs.map(d => d.data().memberId).filter(Boolean))];
 
       // 姓名以 members 集合為權威補齊
@@ -879,7 +880,12 @@ router.get('/:courseId/roster/download',
       if (!courseDoc.exists) return res.status(404).json({ error: 'COURSE_NOT_FOUND', message: '找不到課程' });
 
       // 全部報名（不篩狀態——含正取/候補/請假/取消，才算「完整資料」），依日期→時段→報名時間排序
-      const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', courseId).get();
+      // ⚠️ .select() 排除內嵌簽名圖等大欄位，只投影此 CSV 實際用到的欄位（見下方 rows.push 使用的 e.*）
+      const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', courseId)
+        .select('isGuest', 'memberId', 'memberName', 'contactPhone', 'sessionId', 'date', 'startTime', 'endTime',
+          'status', 'paymentMethod', 'enrollmentFee', 'paymentDate', 'bankLastFive',
+          'enrollGender', 'enrollAge', 'healthNote', 'enrollNote', 'referralSource', 'createdAt', 'enrolledAt')
+        .get();
       const enrolls = enrollSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       const secOf = ts => ts?._seconds || (ts?.toDate ? Math.floor(ts.toDate().getTime() / 1000) : 0);
       enrolls.sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || '') || (secOf(a.createdAt) - secOf(b.createdAt)));
@@ -1612,8 +1618,13 @@ router.get('/:courseId/enrollments',
     try {
       const db = getDb();
       const { courseId } = req.params;
+      // ⚠️ .select() 排除內嵌簽名圖等大欄位——此為「課程管理→報名名單」核心查詢，courses.view 權限
+      // 開放全體員工、呼叫頻率高，2026-08-19 查獲是流量異常最大宗來源之一（見 getCourses 同型註解）。
       const snap = await db.collection('courseEnrollments')
         .where('courseId', '==', courseId)
+        .select('memberId', 'memberName', 'status', 'isMakeup', 'isTrial', 'waitlistPosition',
+          'maxLeavesAllowed', 'enrolledAt', 'createdAt', 'depositAmount',
+          'depositCollectedAdjDone', 'depositResolved', 'depositResolution')
         .get();
       // 課程層名單＝「常態學員」：confirmed/leave + 候補(waitlist)、排除已取消與補課/試上（單堂行為在場次名單看）
       // —— confirmed/leave 與課程列表人數（3.72.0）同口徑；候補另外附上供名單顯示，不計入正取人數

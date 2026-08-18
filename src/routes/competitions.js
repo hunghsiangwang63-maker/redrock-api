@@ -204,9 +204,31 @@ router.get('/_temp/comp-doc-sizes', authenticate, async (req, res) => {
         const scoresDoc = await compDb.collection('competitions').doc(d.id).collection('data').doc('scores').get();
         if (scoresDoc.exists) { scoresExists = true; scoresSize = Buffer.byteLength(JSON.stringify(scoresDoc.data()), 'utf8'); }
       } catch (e) {}
+      let scoresFieldBreakdown = {};
+      try {
+        const scoresDoc = await compDb.collection('competitions').doc(d.id).collection('data').doc('scores').get();
+        if (scoresDoc.exists) {
+          const sd = scoresDoc.data();
+          Object.entries(sd).forEach(([k, v]) => {
+            const size = Buffer.byteLength(JSON.stringify(v), 'utf8');
+            const entry = { size };
+            if (v && typeof v === 'object') {
+              const subKeys = Object.keys(v);
+              entry.subKeyCount = subKeys.length;
+              if (subKeys.length) entry.avgSubEntrySize = Math.round(size / subKeys.length);
+              // 再往下一層看一個樣本
+              const sample = v[subKeys[0]];
+              if (sample && typeof sample === 'object') entry.sampleSubKeys = Object.keys(sample).slice(0, 20);
+            }
+            scoresFieldBreakdown[k] = entry;
+          });
+        }
+      } catch (e) {}
       results.push({
-        id: d.id, name: compData.name || compData.title || '', compSize, scoresExists, scoresSize,
+        id: d.id, name: compData.eventName || '', compSize, scoresExists, scoresSize,
         athleteCount: compData.athletes ? Object.keys(compData.athletes).length : 0,
+        isActive: compData.isActive, createdAt: compData.createdAt,
+        scoresFieldBreakdown,
       });
     }
     res.json({ competitions: results });

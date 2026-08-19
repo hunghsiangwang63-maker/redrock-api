@@ -4,7 +4,7 @@
  * 對外 API 仍經 services/checkinService.js 門面 re-export。
  */
 const { taiwanToday } = require('../../utils/taiwanDate');
-const { getDb, COLLECTIONS } = require('../../config/firebase');
+const { getDb, COLLECTIONS, FieldPath } = require('../../config/firebase');
 const { getMember } = require('../memberService');
 const dayjs = require('dayjs');
 const { getMemberType } = require('./pricing');
@@ -130,11 +130,17 @@ const tryExtendFallTest = async (memberId, checkInId) => {
 };
 
 // ── waiver 檢查 ──────────────────────────────────────────────────
+// 入場閘門最高頻呼叫點之一（verifyEntry/createPendingCheckIn/phone 每次入場都會經過）——
+// 只需要 isComplete 一個布林欄位，waivers 文件平均 ~76KB（內嵌簽名 base64 圖），
+// 全欄位讀取會把整張圖也傳回來，加 .select() 只拉這一個欄位。
 const checkWaiver = async (memberId) => {
   const db = getDb();
-  const doc = await db.collection(COLLECTIONS.WAIVERS).doc(memberId).get();
-  if (!doc.exists) return { complete: false, reason: 'not_signed' };
-  const w = doc.data();
+  // DocumentReference 沒有 .select()（Admin SDK 12.x）——改用 collection query +
+  // documentId() 過濾才能做欄位投影，回傳 QuerySnapshot（用 .empty/.docs[0] 取代 .exists/.data()）。
+  const snap = await db.collection(COLLECTIONS.WAIVERS)
+    .where(FieldPath.documentId(), '==', memberId).select('isComplete').limit(1).get();
+  if (snap.empty) return { complete: false, reason: 'not_signed' };
+  const w = snap.docs[0].data();
   if (!w.isComplete) return { complete: false, reason: 'incomplete' };
   return { complete: true };
 };

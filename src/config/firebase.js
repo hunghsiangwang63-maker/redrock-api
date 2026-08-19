@@ -88,4 +88,9 @@ module.exports = {
   getStorage,
   getAuth,
   COLLECTIONS,
+  // 單一文件查詢要做欄位投影（.select()）時，DocumentReference 沒有 .select() 方法
+  // （這個 SDK 版本，Admin SDK 12.x）——正確寫法是改用 collection query +
+  // where(FieldPath.documentId(), '==', id) + .select(...)，回傳 QuerySnapshot
+  // （用 .empty / .docs[0]?.data() 取代 .exists / .data()）。
+  FieldPath: admin.firestore.FieldPath,
 };

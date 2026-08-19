@@ -11,7 +11,7 @@
  */
 const express = require('express');
 const router = express.Router();
-const { getDb, COLLECTIONS } = require('../config/firebase');
+const { getDb, COLLECTIONS, FieldPath } = require('../config/firebase');
 const { authenticate, authenticateMember, authenticateAny } = require('../middleware/auth');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { recordFallTestResult } = require('../services/fallTestService');
@@ -27,8 +27,10 @@ const chunk10 = (arr) => {
 
 // 排測前置：該會員須已完成 waiver + 已簽墜測同意書
 async function checkPrereq(db, memberId) {
-  const waiver = await db.collection(COLLECTIONS.WAIVERS).doc(memberId).get();
-  if (!waiver.exists || !waiver.data().isComplete) {
+  // DocumentReference 沒有 .select()——改用 collection query + documentId() 過濾
+  const waiverSnap = await db.collection(COLLECTIONS.WAIVERS)
+    .where(FieldPath.documentId(), '==', memberId).select('isComplete').limit(1).get();
+  if (waiverSnap.empty || !waiverSnap.docs[0].data().isComplete) {
     return { ok: false, code: 'WAIVER_INCOMPLETE', message: '請先完成風險安全聲明書簽署' };
   }
   const sig = await db.collection('fallTestSignatures')

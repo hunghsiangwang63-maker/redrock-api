@@ -1,7 +1,7 @@
 /**
  * Waiver Service
  */
-const { getDb, getStorage, COLLECTIONS } = require('../config/firebase');
+const { getDb, getStorage, COLLECTIONS, FieldPath } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
@@ -22,9 +22,11 @@ const uploadSignature = async (memberId, type, base64Data) => {
 const signWaiver = async ({ memberId, memberName, isMinor, isChildAccount, signatureData, parentEmail, parentName, parentPhone, parentRelation, staffId, ip }) => {
   const db = getDb();
 
-  // 檢查是否已簽（鎖定後不可修改）
-  const existing = await db.collection(COLLECTIONS.WAIVERS).doc(memberId).get();
-  if (existing.exists && existing.data().isComplete) {
+  // 檢查是否已簽（鎖定後不可修改）——只需要 isComplete 一個欄位；DocumentReference 沒有 .select()，
+  // 改用 collection query + documentId() 過濾（QuerySnapshot：.empty/.docs[0] 取代 .exists/.data()）
+  const existingSnap = await db.collection(COLLECTIONS.WAIVERS)
+    .where(FieldPath.documentId(), '==', memberId).select('isComplete').limit(1).get();
+  if (!existingSnap.empty && existingSnap.docs[0].data().isComplete) {
     throw { code: 'WAIVER_LOCKED', message: 'Waiver 已簽署完成，不可修改' };
   }
 
@@ -90,12 +92,18 @@ const signWaiver = async ({ memberId, memberName, isMinor, isChildAccount, signa
 // 才真正寄出（冪等，避免重複寄；提醒改用 resendParentWaiverLink）。
 const maybeSendParentSignEmail = async (memberId) => {
   const db = getDb();
-  const waiverDoc = await db.collection(COLLECTIONS.WAIVERS).doc(memberId).get();
-  if (!waiverDoc.exists) return { sent: false, reason: 'no_waiver' };
-  const w = waiverDoc.data();
+  // DocumentReference 沒有 .select()——改用 collection query + documentId() 過濾
+  // （QuerySnapshot：.empty/.docs[0] 取代 .exists/.data()，.docs[0].ref 取代原本的 waiverDoc.ref）
+  const waiverSnap = await db.collection(COLLECTIONS.WAIVERS)
+    .where(FieldPath.documentId(), '==', memberId)
+    .select('parentRequired', 'isComplete', 'parentSignedAt', 'parentEmail', 'memberSignedAt',
+      'parentEmailSentAt', 'parentSignToken', 'memberName', 'parentName').limit(1).get();
+  if (waiverSnap.empty) return { sent: false, reason: 'no_waiver' };
+  const waiverRef = waiverSnap.docs[0].ref;
+  const w = waiverSnap.docs[0].data();
   if (!w.parentRequired || w.isComplete || w.parentSignedAt) return { sent: false, reason: 'not_required_or_done' };
   if (!w.parentEmail) return { sent: false, reason: 'no_parent_email' };
-  if (!w.memberSignedAt && !w.memberSignatureUrl) return { sent: false, reason: 'member_waiver_unsigned' };
+  if (!w.memberSignedAt) return { sent: false, reason: 'member_waiver_unsigned' };
   if (w.parentEmailSentAt) return { sent: false, reason: 'already_sent' }; // 冪等；提醒走 resend
 
   // 本人墜測同意書是否已簽（任一簽署紀錄存在即可）
@@ -106,23 +114,27 @@ const maybeSendParentSignEmail = async (memberId) => {
   let token = w.parentSignToken;
   if (!token) {
     token = uuidv4();
-    await waiverDoc.ref.update({ parentSignToken: token, parentSignTokenExpiry: dayjs().add(72, 'hour').toDate() });
+    await waiverRef.update({ parentSignToken: token, parentSignTokenExpiry: dayjs().add(72, 'hour').toDate() });
   }
 
   const emailService = require('./emailService');
   await emailService.sendParentWaiverLink(memberId, w.memberName, w.parentEmail, w.parentName, token);
-  await waiverDoc.ref.update({ parentEmailSentAt: new Date() });
+  await waiverRef.update({ parentEmailSentAt: new Date() });
   return { sent: true };
 };
 
 // ── 重發家長簽名連結 ──────────────────────────────────────────────
 const resendParentWaiverLink = async (memberId, staffId) => {
   const db = getDb();
-  const waiverDoc = await db.collection(COLLECTIONS.WAIVERS).doc(memberId).get();
+  // DocumentReference 沒有 .select()——改用 collection query + documentId() 過濾
+  const waiverSnap = await db.collection(COLLECTIONS.WAIVERS)
+    .where(FieldPath.documentId(), '==', memberId)
+    .select('isComplete', 'parentRequired', 'memberName', 'parentEmail', 'parentName').limit(1).get();
 
-  if (!waiverDoc.exists) throw { code: 'WAIVER_NOT_FOUND' };
+  if (waiverSnap.empty) throw { code: 'WAIVER_NOT_FOUND' };
 
-  const waiver = waiverDoc.data();
+  const waiverRef = waiverSnap.docs[0].ref;
+  const waiver = waiverSnap.docs[0].data();
   if (waiver.isComplete) throw { code: 'WAIVER_LOCKED', message: '已完成簽署' };
   if (!waiver.parentRequired) throw { code: 'NO_PARENT_REQUIRED' };
 
@@ -130,7 +142,7 @@ const resendParentWaiverLink = async (memberId, staffId) => {
   const token = uuidv4();
   const expiry = dayjs().add(72, 'hour').toDate();
 
-  await waiverDoc.ref.update({
+  await waiverRef.update({
     parentSignToken: token,
     parentSignTokenExpiry: expiry,
   });

@@ -1,5 +1,5 @@
 const { taiwanToday } = require('../utils/taiwanDate');
-const { getDb, COLLECTIONS } = require('../config/firebase');
+const { getDb, COLLECTIONS, FieldPath } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const QRCode = require('qrcode');
 const dayjs = require('dayjs');
@@ -33,17 +33,23 @@ const getBlockReasons = async (memberId, memberData) => {
     reasons.push('email_unverified');
   }
 
-  // 2/3 waiver 與墜測查詢並行（原本序列兩次 round-trip）
-  const [waiverDoc, fallTests] = await Promise.all([
-    db.collection(COLLECTIONS.WAIVERS).doc(memberId).get(),
+  // 2/3 waiver 與墜測查詢並行（原本序列兩次 round-trip）；waiver 只需這三個小欄位判斷封鎖狀態，
+  // waivers 文件平均 ~76KB（內嵌簽名 base64 圖），此函式呼叫頻繁（會員詳情/登入等多處），加 .select()。
+  // DocumentReference 沒有 .select()——改用 collection query + documentId() 過濾
+  // （QuerySnapshot：.empty/.docs[0] 取代 .exists/.data()）。
+  const [waiverSnap, fallTests] = await Promise.all([
+    db.collection(COLLECTIONS.WAIVERS).where(FieldPath.documentId(), '==', memberId)
+      .select('isComplete', 'parentRequired', 'parentSignedAt').limit(1).get(),
     db.collection(COLLECTIONS.FALL_TESTS).where('memberId', '==', memberId).where('result', '==', 'passed').get(),
   ]);
+  const waiverExists = !waiverSnap.empty;
+  const waiverData = waiverExists ? waiverSnap.docs[0].data() : null;
 
   // 2. Waiver 未簽
-  if (!waiverDoc.exists || !waiverDoc.data().isComplete) {
-    if (!waiverDoc.exists) {
+  if (!waiverExists || !waiverData.isComplete) {
+    if (!waiverExists) {
       reasons.push('waiver_unsigned');
-    } else if (waiverDoc.data().parentRequired && !waiverDoc.data().parentSignedAt) {
+    } else if (waiverData.parentRequired && !waiverData.parentSignedAt) {
       reasons.push('parent_waiver_pending');
     } else {
       reasons.push('waiver_unsigned');

@@ -5,7 +5,7 @@ const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
-const { getDb, COLLECTIONS } = require('../config/firebase');
+const { getDb, COLLECTIONS, FieldPath } = require('../config/firebase');
 const memberService = require('../services/memberService');
 const { authenticate, authenticateMember, checkPermission } = require('../middleware/auth');
 const dayjs = require('dayjs');
@@ -313,9 +313,13 @@ router.get('/member/me', authenticateMember, async (req, res) => {
     if (!memberDoc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
     const member = memberDoc.data();
 
-    // 即時計算 blockReasons（不依賴快取欄位）
-    const waiverDoc = await db.collection('waivers').doc(memberId).get();
-    const waiverData = waiverDoc.exists ? waiverDoc.data() : null;
+    // 即時計算 blockReasons（不依賴快取欄位）——這是會員 App 最高頻的端點（每次開 App／切頁都會打），
+    // 只需要這三個小欄位判斷是否簽署完成，waivers 文件平均 ~76KB（內嵌簽名 base64 圖），
+    // 加 .select() 避免整張簽名圖被白白傳一次。DocumentReference 沒有 .select()——改用
+    // collection query + documentId() 過濾（QuerySnapshot：.empty/.docs[0] 取代 .exists/.data()）。
+    const waiverSnap = await db.collection('waivers').where(FieldPath.documentId(), '==', memberId)
+      .select('isComplete', 'parentRequired', 'parentSignedAt').limit(1).get();
+    const waiverData = !waiverSnap.empty ? waiverSnap.docs[0].data() : null;
     const blockReasons = [];
     if (!waiverData || !waiverData.isComplete) {
       if (!waiverData) blockReasons.push('waiver_unsigned');

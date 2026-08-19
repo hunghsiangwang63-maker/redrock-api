@@ -11,7 +11,7 @@
  *
  * 排程：掛每日 09:00（index.js）——寬限期 15 天、每天檢查（剛註冊者不會被誤刪）。
  */
-const { getDb, COLLECTIONS } = require('../config/firebase');
+const { getDb, COLLECTIONS, FieldPath } = require('../config/firebase');
 const dayjs = require('dayjs');
 
 const DEFAULT_GRACE_DAYS = 15;
@@ -51,8 +51,10 @@ const findValue = async (db, memberId) => {
 
 // 入場前置是否未完成（任一未完成即 true）
 const isOnboardingIncomplete = async (db, memberId) => {
-  const w = await db.collection(COLLECTIONS.WAIVERS).doc(memberId).get();
-  const waiverComplete = w.exists && w.data().isComplete === true;
+  // DocumentReference 沒有 .select()——改用 collection query + documentId() 過濾
+  const wSnap = await db.collection(COLLECTIONS.WAIVERS)
+    .where(FieldPath.documentId(), '==', memberId).select('isComplete').limit(1).get();
+  const waiverComplete = !wSnap.empty && wSnap.docs[0].data().isComplete === true;
   const ft = await db.collection('fallTestSignatures').where('memberId', '==', memberId).select().limit(1).get();
   const consentSigned = !ft.empty;
   return !waiverComplete || !consentSigned;

@@ -6,7 +6,7 @@ const { authenticate, authenticateAny, checkPermission, requireSameGym, auditLog
 const memberService = require('../services/memberService');
 const waiverService = require('../services/waiverService');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
-const { getDb, COLLECTIONS } = require('../config/firebase');
+const { getDb, COLLECTIONS, FieldPath } = require('../config/firebase');
 const dayjs = require('dayjs');
 const XLSX = require('xlsx');
 const { sanitizeSheet } = require('../utils/xlsxSafe');
@@ -938,8 +938,18 @@ router.get('/:id',
       const today = dayjs().format('YYYY-MM-DD');
 
       // 獨立查詢一次並行（原本逐項序列 await ~2s）；查詢失敗個別退回空、不阻斷整體
-      const [waiverDoc, ftSnap, passesSnap, childrenSnap, fallTestSigSnap, blockReasons, discCards, legacyDiscCards, blackCards, singleTickets, bonuses] = await Promise.all([
-        db.collection(COLLECTIONS.WAIVERS).doc(req.params.id).get(),
+      const [waiverSnap, ftSnap, passesSnap, childrenSnap, fallTestSigSnap, blockReasons, discCards, legacyDiscCards, blackCards, singleTickets, bonuses] = await Promise.all([
+        // 2026-07-15 的「strip 簽名圖」只有刪 HTTP 回應欄位（省前端 payload），Firestore 讀取當下
+        // 仍整份撈回（含 ~66KB 簽名圖），完全沒省到 Firestore 傳輸費——這裡才是真正的省法：
+        // 直接在查詢層只選這頁會用到的欄位（=waiverOut 最終保留的欄位，逐字對齊，勿漏掉新欄位）。
+        // DocumentReference 沒有 .select()——改用 collection query + documentId() 過濾
+        // （QuerySnapshot：.empty/.docs[0] 取代 .exists/.data()）。
+        db.collection(COLLECTIONS.WAIVERS).where(FieldPath.documentId(), '==', req.params.id).select(
+          'contentSnapshot', 'createdAt', 'isComplete', 'lockedAt', 'memberId', 'memberName',
+          'memberSignedAt', 'memberSignedBy', 'memberSignedIp', 'parentEmail', 'parentEmailSentAt',
+          'parentName', 'parentPhone', 'parentRelation', 'parentRequired', 'parentSignToken',
+          'parentSignTokenExpiry', 'parentSignedAt', 'parentSignedIp', 'source',
+        ).limit(1).get(),
         db.collection(COLLECTIONS.FALL_TESTS).where('memberId', '==', req.params.id).get().catch(() => ({ empty: true, docs: [] })),
         // 定期票：改單 where(memberId) + 記憶體過濾 endDate/status（避免 memberId+endDate+status 複合索引造成偶發 FAILED_PRECONDITION）
         db.collection(COLLECTIONS.MEMBER_PASSES).where('memberId', '==', req.params.id).get().catch(() => ({ docs: [] })),
@@ -981,7 +991,8 @@ router.get('/:id',
       const activeBonuses = (bonuses || []).map(b => ({ id: b.id, expiresAt: b.expiresAtFormatted || null }));
 
       // waiver 簽署狀態（供顯示）
-      const waiverData = waiverDoc.exists ? waiverDoc.data() : null;
+      const waiverExists = !waiverSnap.empty;
+      const waiverData = waiverExists ? waiverSnap.docs[0].data() : null;
       const liveWaiverSigned = !!(waiverData && waiverData.isComplete);
       member.waiverSigned = liveWaiverSigned;
       member.blockReasons = blockReasons;
@@ -992,10 +1003,10 @@ router.get('/:id',
 
       // 詳情頁只用 waiver 的狀態布林（isComplete/parentRequired/parentSignedAt…）；
       // 66KB 的簽名 base64 圖只在「查看副本/列印」modal 才需要（另打 GET /members/:id/waiver）。
-      // → strip 簽名圖欄位（省 ~66KB payload＋跳過 signFields 網路簽章）。
+      // 查詢層已用 .select() 排除簽名欄位，這裡的 delete 純防呆保留（欄位本就不存在，no-op）。
       let waiverOut = null;
-      if (waiverDoc.exists) {
-        const w = { ...waiverDoc.data() };
+      if (waiverExists) {
+        const w = { ...waiverData };
         delete w.memberSignatureUrl; delete w.parentSignatureUrl;
         delete w.memberSignatureData; delete w.parentSignatureData;
         waiverOut = w;

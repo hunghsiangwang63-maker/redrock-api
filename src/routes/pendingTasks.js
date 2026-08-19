@@ -6,6 +6,15 @@ const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
 const { REGISTRATION_LIST_FIELDS: COMP_REG_FIELDS } = require('../services/competitionService');
 
+// 日期補星期幾（體驗課程日期在通知／近7天報名列表帶星期幾，方便不用另外查日曆；
+// 格式對齊前端既有慣例，如 PendingTasksPage.jsx 排班區塊 `MM/DD（週X）`）
+const WEEKDAY_ZH = ['日', '一', '二', '三', '四', '五', '六'];
+const dateWithWeekday = (dateStr) => {
+  if (!dateStr) return dateStr;
+  const wd = WEEKDAY_ZH[dayjs(dateStr).day()];
+  return wd ? `${dateStr}（週${wd}）` : dateStr;
+};
+
 // 個人帳號（兼職／正職，未打卡值班）待辦頁權限收斂（2026-08-08 拍板，同日再擴及正職）：
 // 只看「今日提醒／預約」+ 我的近7日班表，墜落測驗待安排／需審核／待收款／近7天報名動態一律不回傳（非僅前端隱藏，後端直接不給資料）。
 // 值班中（operator）與管理員（super_admin/gym_manager）不受此限——仍走既有 COUNTER_PERMS / 管理權限。
@@ -234,7 +243,7 @@ router.get('/', authenticate, async (req, res) => {
           title: confirmed
             ? (ticketsIssued > 0 ? '體驗預約（已確認）（已發放入場券）' : '體驗預約（已確認）')
             : '體驗課程預約申請',
-          desc: `${displayName} — ${r.bookingDate} ${r.bookingTime || ''} · ${r.numParticipants}人 NT$${r.totalFee}`,
+          desc: `${displayName} — ${dateWithWeekday(r.bookingDate)} ${r.bookingTime || ''} · ${r.numParticipants}人 NT$${r.totalFee}`,
           date: r.bookingDate || (r.createdAt?._seconds ? new Date(r.createdAt._seconds*1000).toISOString().slice(0,10) : today),
           bookingTime: r.bookingTime || '', // 供前端「今日提醒／預約」依時間排序用
           createdAt: r.createdAt?._seconds || 0,
@@ -443,7 +452,7 @@ router.get('/', authenticate, async (req, res) => {
         const singleParticipant = (b.participants || []).length === 1 ? b.participants[0]?.name : null;
         const displayName = singleParticipant && singleParticipant !== b.contactName
           ? `${singleParticipant}（${b.contactName}代訂）` : (b.contactName || '');
-        registrations.push({ id:`reg_exp_${d.id}`, regType:'experience', memberName:displayName, name:b.courseName || ctLabelMap[b.courseType] || '體驗課程', detail:`${b.bookingDate||''}${b.numParticipants?` · ${b.numParticipants}人`:''}`.trim(), createdAt: secOf(b.createdAt), dateStr: dayOf(b.createdAt), gymId:b.gymId, link:`/staff/experience?booking=${d.id}` });
+        registrations.push({ id:`reg_exp_${d.id}`, regType:'experience', memberName:displayName, name:b.courseName || ctLabelMap[b.courseType] || '體驗課程', detail:`${dateWithWeekday(b.bookingDate)}${b.numParticipants?` · ${b.numParticipants}人`:''}`.trim(), createdAt: secOf(b.createdAt), dateStr: dayOf(b.createdAt), gymId:b.gymId, link:`/staff/experience?booking=${d.id}` });
       });
     } catch(e) {}
     registrations.sort((a, b) => b.createdAt - a.createdAt);

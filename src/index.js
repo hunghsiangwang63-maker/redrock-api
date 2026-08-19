@@ -134,11 +134,17 @@ setInterval(async () => {
     const admin = require('firebase-admin');
     const { getDb } = require('./config/firebase');
     const db = getDb();
+    // ⚠ 用巢狀物件（非 'member.count' 這種點號字串 key）——點號字串 key 只有 .update() 才會
+    //   解析成欄位路徑，.set(...,{merge:true}) 會把它當成字面上帶點的欄位名稱直接存成扁平
+    //   key（曾實測踩雷：Firestore 真的存出 "member.count" 這個奇怪的欄位名，巢狀物件才會被
+    //   正確合併進 member:{count,bytes}）。
     const update = {};
     Object.entries(snapshot).forEach(([bucket, v]) => {
       if (v.count > 0) {
-        update[`${bucket}.count`] = admin.firestore.FieldValue.increment(v.count);
-        update[`${bucket}.bytes`] = admin.firestore.FieldValue.increment(v.bytes);
+        update[bucket] = {
+          count: admin.firestore.FieldValue.increment(v.count),
+          bytes: admin.firestore.FieldValue.increment(v.bytes),
+        };
       }
     });
     await db.collection('apiUsageStats').doc(taiwanToday()).set(update, { merge: true });
@@ -200,7 +206,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.328.0-usage-stats-tracking',
+    version: '3.329.0-usage-stats-nested-merge-fix',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),

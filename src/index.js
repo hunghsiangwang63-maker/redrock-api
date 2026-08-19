@@ -107,6 +107,44 @@ app.use('/stations/shift/clockin', authLimiter);
 app.use('/auth/member/forgot-password', forgotLimiter);
 app.use('/comp-auth/login', authLimiter); // 計分系統密碼驗證，防暴力破解
 
+// ── 會員端／員工端流量拆分統計（2026-08-20）──────────────────────────
+// GCP 帳單本身只到 SKU/服務層級，看不出「這筆流量是哪邊 App 打的」。前端 client.js／
+// memberClient.js 各自送 X-Client-App: staff／member 標頭，這裡統計請求數與回應位元組數。
+// ⚠ 不對每個請求各寫一次 Firestore（會自己變成新的寫入費用來源）——先累積在記憶體，
+// 每分鐘 flush 一次（FieldValue.increment 累加，不覆蓋），單日最多 ~1440 次寫入、遠低於免費額度。
+// Railway 重啟會遺失當下未 flush 的緩衝（至多 1 分鐘資料），可接受。
+const usageBuffer = { member: { count: 0, bytes: 0 }, staff: { count: 0, bytes: 0 }, unknown: { count: 0, bytes: 0 } };
+app.use((req, res, next) => {
+  const hdr = String(req.headers['x-client-app'] || '').toLowerCase();
+  const bucket = (hdr === 'member' || hdr === 'staff') ? hdr : 'unknown';
+  res.on('finish', () => {
+    const bytes = Number(res.getHeader('content-length')) || 0;
+    usageBuffer[bucket].count += 1;
+    usageBuffer[bucket].bytes += bytes;
+  });
+  next();
+});
+setInterval(async () => {
+  const snapshot = { member: { ...usageBuffer.member }, staff: { ...usageBuffer.staff }, unknown: { ...usageBuffer.unknown } };
+  if (!snapshot.member.count && !snapshot.staff.count && !snapshot.unknown.count) return;
+  usageBuffer.member = { count: 0, bytes: 0 };
+  usageBuffer.staff = { count: 0, bytes: 0 };
+  usageBuffer.unknown = { count: 0, bytes: 0 };
+  try {
+    const admin = require('firebase-admin');
+    const { getDb } = require('./config/firebase');
+    const db = getDb();
+    const update = {};
+    Object.entries(snapshot).forEach(([bucket, v]) => {
+      if (v.count > 0) {
+        update[`${bucket}.count`] = admin.firestore.FieldValue.increment(v.count);
+        update[`${bucket}.bytes`] = admin.firestore.FieldValue.increment(v.bytes);
+      }
+    });
+    await db.collection('apiUsageStats').doc(taiwanToday()).set(update, { merge: true });
+  } catch (e) { console.error('[usage-stats flush]', e.message); }
+}, 60 * 1000);
+
 // ── Routes ────────────────────────────────────────────────────────
 app.use('/auth',         require('./routes/auth'));
 app.use('/members',      require('./routes/members'));
@@ -162,7 +200,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.327.0-waivers-egress-audit',
+    version: '3.328.0-usage-stats-tracking',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),

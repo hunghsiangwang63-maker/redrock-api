@@ -520,4 +520,43 @@ router.put('/team-fees', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /settings/usage-stats?days=N - 會員端／員工端流量拆分統計（super_admin，技術診斷用）──
+// 讀 index.js 全域中介層每分鐘 flush 的 apiUsageStats/{date} 逐日彙總；用來回答
+// 「流量/傳輸費用大概是會員端還是員工端在用」，不用每次都手動查腳本。
+router.get('/usage-stats', authenticate, async (req, res) => {
+  if (req.staff?.role !== 'super_admin') return res.status(403).json({ error: 'FORBIDDEN', message: '僅系統管理員可查看' });
+  try {
+    const db = getDb();
+    const dayjs = require('dayjs');
+    const days = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 60);
+    const dates = Array.from({ length: days }, (_, i) => dayjs().subtract(days - 1 - i, 'day').format('YYYY-MM-DD'));
+    const docs = await db.getAll(...dates.map(d => db.collection('apiUsageStats').doc(d)));
+    const daily = docs.map((doc, i) => {
+      const d = doc.exists ? doc.data() : {};
+      return {
+        date: dates[i],
+        member: { count: d.member?.count || 0, bytes: d.member?.bytes || 0 },
+        staff: { count: d.staff?.count || 0, bytes: d.staff?.bytes || 0 },
+        unknown: { count: d.unknown?.count || 0, bytes: d.unknown?.bytes || 0 },
+      };
+    });
+    const total = daily.reduce((acc, d) => {
+      ['member', 'staff', 'unknown'].forEach(k => { acc[k].count += d[k].count; acc[k].bytes += d[k].bytes; });
+      return acc;
+    }, { member: { count: 0, bytes: 0 }, staff: { count: 0, bytes: 0 }, unknown: { count: 0, bytes: 0 } });
+    const totalBytes = total.member.bytes + total.staff.bytes + total.unknown.bytes;
+    const pct = (b) => totalBytes > 0 ? Math.round(b / totalBytes * 1000) / 10 : 0;
+    res.json({
+      daily,
+      total,
+      summary: {
+        memberBytesPct: pct(total.member.bytes),
+        staffBytesPct: pct(total.staff.bytes),
+        unknownBytesPct: pct(total.unknown.bytes),
+        note: 'unknown＝尚未帶 X-Client-App 標頭的呼叫（多為部署前的舊前端快取），會隨時間降到接近0。此為回應給前端的位元組數，非 Firestore 本身讀取的位元組數（兩者高度相關但非完全相同）。',
+      },
+    });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 module.exports = router;

@@ -164,6 +164,19 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
             });
           }
         }
+        // 退費已完成（近 14 天，資訊性通知；可手動按「知道了」關閉）
+        if (o.paymentStatus === 'refunded' && !o.refundAlertDismissed) {
+          const sec = o.refundedAt?._seconds || o.refundedAt?.seconds || 0;
+          if (!sec || (Date.now() / 1000 - sec) < 14 * 86400) {
+            alerts.push({
+              type: 'competition_refund_done', kind: 'refund_done', regId: d.id,
+              label: '比賽報名', link: '/member/competitions?tab=my',
+              name: o.competitionName || '比賽',
+              reason: `已退費 NT$${o.refundAmount || 0} 至留存帳號，如有疑問請洽館方`,
+              memberName: kidName,
+            });
+          }
+        }
       });
     }
     // 試上/體驗因場次取消（近 14 天，資訊性通知：請洽櫃檯改期或退費）

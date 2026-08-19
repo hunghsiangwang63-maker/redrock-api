@@ -822,6 +822,21 @@ router.post('/registrations/:regId/dismiss-rejection', authenticateAny, async (r
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── POST /competitions/registrations/:regId/dismiss-refund-alert - 會員手動關閉「退費已完成」首頁通知 ──
+router.post('/registrations/:regId/dismiss-refund-alert', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations').doc(req.params.regId);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
+    const reg = doc.data();
+    const deny = await checkMemberOwnership(req.member, reg.memberId, { onMissing: 403, message: '只能關閉自己或子會員的通知' });
+    if (deny) return res.status(deny.status).json(deny.body);
+    await ref.update({ refundAlertDismissed: true, updatedAt: new Date() });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── POST /competitions/registrations/:regId/return-form - 管理員退回報名表給會員修改（保留名額、可修改重送）──
 // reason 必填（會員看得到＋Email）；不釋出名額（會員修正後重送）。與「退回繳費」不同：這是整張報名表資料有誤。
 router.post('/registrations/:regId/return-form',
@@ -1113,6 +1128,8 @@ router.post('/registrations/:regId/refund',
         refundedAt: new Date(),
         refundedBy: req.staff.id,
         status: 'cancelled',
+        refundRequested: false, // 退費已完成→清旗標（原本永遠不清，會員端「退費申請中」提示會卡死不消失）
+        refundAlertDismissed: false, // 保留給會員手動關閉首頁「退費已完成」通知用（見 dismiss-refund-alert）
         updatedAt: new Date(),
       });
       // 記負向交易（退費，認列在比賽前一天）

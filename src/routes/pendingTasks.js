@@ -22,19 +22,59 @@ const REMIND_TYPES = ['rental_pickup', 'rental_return', 'experience'];
 const isRestrictedPersonalStaff = (staff) => staff?.type === 'staff' && ['part_time', 'full_time'].includes(staff?.role);
 
 // ── GET /pending-tasks - 彙整所有待處理事項 ──────────────────────────
+// 體驗課程預約段落回傳給前端的欄位（.select() 投影，排除簽名圖大欄位）
+const EXP_TASK_FIELDS = ['id', 'coachId', 'coachName', 'participants', 'contactName', 'contactPhone',
+  'contactEmail', 'bookingDate', 'bookingTime', 'courseType', 'numParticipants', 'totalFee', 'gymId',
+  'bankName', 'bankLastFive', 'paymentDate', 'facebookName', 'notes',
+  'status', 'ticketsIssued', 'createdAt'];
+
 router.get('/', authenticate, async (req, res) => {
   try {
     const db = getDb();
     const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
     const today = taiwanToday();
+    const sevenDaysAgo = new Date(Date.now() - 7*86400000);
+    const withGym = (query) => gymId ? query.where('gymId', '==', gymId) : query;
 
     const tasks = [];
 
-    // 體驗課程類型標籤對照（一次查詢，供下方通知/待辦顯示用；避免原本 record.courseType/b.courseType
+    // ── 一次性平行發出全部互相獨立的 Firestore 查詢 ──────────────────────
+    // 原本這 15+ 條查詢逐一 await（每條等前一條回來才發下一條），是待辦頁「重新整理」
+    // 偏慢的主因（單條查詢本身不慢，疊加起來才慢）；改成全部立刻發出、平行等待，
+    // 總耗時由「最慢的一條」決定，而非全部加總。下方每個 try/catch 區塊的業務邏輯
+    // （欄位篩選/組 task/錯誤處理）完全不動，只是把「發查詢」跟「處理結果」拆開成
+    // 兩個階段——查詢在最上面就先發出去，處理仍照原本的先後順序進行（部分區塊如
+    // transferRefIds／ctLabelMap 的計算順序需要維持，才不會被後面依賴它們的區塊
+    // 讀到還沒算好的值；這裡「處理順序」跟原本完全一樣，只有「查詢起跑時間」提前）。
+    const ORDER_COLL = { course:'courseEnrollments', experience:'experienceBookings', competition:'competitionRegistrations', rental:'equipmentRentals', team_member:'teamApplications' };
+    const ctDocPromise = db.collection('systemSettings').doc('experienceCourses').get();
+    const trSnapPromise = db.collection('transferRecords').where('status', '==', 'pending').get();
+    const rentalPendingPromise = withGym(db.collection('equipmentRentals').where('status', '==', 'pending')).get();
+    const courseAdjPromise = db.collection('courseAdjustmentRequests').where('status', '==', 'pending').get();
+    const passReqPromise = db.collection('passRequests').where('status', '==', 'pending').get();
+    const compPaymentPromise = db.collection('competitionRegistrations')
+      .where('paymentStatus', '==', 'pending').where('status', '==', 'confirmed').select(...COMP_REG_FIELDS).get();
+    const compRefundPromise = db.collection('competitionRegistrations').where('refundRequested', '==', true).select(...COMP_REG_FIELDS).get();
+    const teamPendingPromise = db.collection('teamMembers').where('status', '==', 'pending').get();
+    const rentalPickupPromise = withGym(db.collection('equipmentRentals').where('status', '==', 'confirmed')).get();
+    const rentalReturnPromise = withGym(db.collection('equipmentRentals').where('status', '==', 'active')).get();
+    const expTaskPromise = withGym(db.collection('experienceBookings')).select(...EXP_TASK_FIELDS).get();
+    const transferConfirmPromise = withGym(db.collection('transferRecords').where('status', '==', 'pending')).get();
+    const ticketApprovalPromise = withGym(db.collection('singleEntryTickets').where('status', '==', 'pending_approval')).get();
+    const fallTestPromise = withGym(db.collection('fallTestBookings').where('status', '==', 'pending')).get();
+    const installmentPromise = db.collection('installmentPlans').where('status', 'in', ['active', 'overdue']).get();
+    const courseRegPromise = db.collection('courseRegistrations').where('createdAt', '>=', sevenDaysAgo)
+      .select('status', 'gymId', 'memberName', 'courseName', 'sessionCount', 'createdAt', 'courseId').get();
+    const compRegPromise = db.collection('competitionRegistrations').where('registeredAt', '>=', sevenDaysAgo)
+      .select('status', 'memberName', 'competitionName', 'divisionName', 'registeredAt', 'competitionId').get();
+    const expRegPromise = db.collection('experienceBookings').where('createdAt', '>=', sevenDaysAgo)
+      .select('gymId', 'participants', 'contactName', 'courseName', 'courseType', 'bookingDate', 'numParticipants', 'createdAt').get();
+
+    // 體驗課程類型標籤對照（供下方通知/待辦顯示用；避免原本 record.courseType/b.courseType
     // 直接顯示原始 id（如 'general'）——courseType 目前只剩 general，但保留通用查表寫法。
     let ctLabelMap = {};
     try {
-      const ctDoc = await db.collection('systemSettings').doc('experienceCourses').get();
+      const ctDoc = await ctDocPromise;
       const ctList = (ctDoc.exists ? ctDoc.data().courseTypes : null) || require('../services/experienceService').defaultSettings().courseTypes;
       ctLabelMap = Object.fromEntries((ctList || []).map(c => [c.id, c.label]));
     } catch (e) {}
@@ -43,15 +83,13 @@ router.get('/', authenticate, async (req, res) => {
     // 其各自待辦任務(租借/比賽/體驗…)以 refId 排除，避免雙列。
     const transferRefIds = new Set();
     try {
-      const trSnap = await db.collection('transferRecords').where('status', '==', 'pending').get();
+      const trSnap = await trSnapPromise;
       trSnap.forEach(d => { const r = d.data(); if (r.refId) transferRefIds.add(r.refId); });
     } catch(e) {}
 
     // 1. 器材租借 - 待確認
     try {
-      let ref = db.collection('equipmentRentals').where('status', '==', 'pending');
-      if (gymId) ref = ref.where('gymId', '==', gymId);
-      const snap = await ref.get();
+      const snap = await rentalPendingPromise;
       snap.forEach(d => {
         const r = d.data();
         if (transferRefIds.has(d.id)) return; // 已有轉帳待確認 → 走轉帳確認段
@@ -70,7 +108,7 @@ router.get('/', authenticate, async (req, res) => {
 
     // 2. 課程退費/暫停申請
     try {
-      const snap = await db.collection('courseAdjustmentRequests').where('status', '==', 'pending').get();
+      const snap = await courseAdjPromise;
       snap.forEach(d => {
         const r = d.data();
         if (gymId && r.gymId && r.gymId !== gymId) return;
@@ -89,7 +127,7 @@ router.get('/', authenticate, async (req, res) => {
 
     // 3. 票券展延/退費申請
     try {
-      const snap = await db.collection('passRequests').where('status', '==', 'pending').get();
+      const snap = await passReqPromise;
       snap.forEach(d => {
         const r = d.data();
         if (gymId && r.gymId && r.gymId !== gymId) return;
@@ -114,10 +152,7 @@ router.get('/', authenticate, async (req, res) => {
     // 沿用 competitionService.REGISTRATION_LIST_FIELDS（同一份已排除簽名圖的權威清單，見該檔註解）
     // 而非另建一份，避免兩處欄位清單各自維護、日後漏同步。
     try {
-      const snap = await db.collection('competitionRegistrations')
-        .where('paymentStatus', '==', 'pending')
-        .where('status', '==', 'confirmed')
-        .select(...COMP_REG_FIELDS).get();
+      const snap = await compPaymentPromise;
       snap.forEach(d => {
         const r = d.data();
         if (transferRefIds.has(d.id)) return; // 已有轉帳待確認 → 走轉帳確認段
@@ -136,9 +171,7 @@ router.get('/', authenticate, async (req, res) => {
 
     // 比賽退費待處理（會員取消報名且已收過款 → 需人工匯退款；員工按「退費已處理」後消失）
     try {
-      const snap = await db.collection('competitionRegistrations')
-        .where('refundRequested', '==', true)
-        .select(...COMP_REG_FIELDS).get();
+      const snap = await compRefundPromise;
       snap.forEach(d => {
         const r = d.data();
         if (r.status !== 'cancelled' || r.paymentStatus !== 'confirmed') return; // 未收款取消不需退；已退費(refunded)自然排除
@@ -157,7 +190,7 @@ router.get('/', authenticate, async (req, res) => {
 
     // 5. 攀岩隊申請待確認
     try {
-      const snap = await db.collection('teamMembers').where('status', '==', 'pending').get();
+      const snap = await teamPendingPromise;
       snap.forEach(d => {
         const r = d.data();
         if (transferRefIds.has(d.id)) return; // 已有轉帳待確認 → 走轉帳確認段
@@ -175,9 +208,7 @@ router.get('/', authenticate, async (req, res) => {
 
     // 6. 器材租借今日取件/今日歸還
     try {
-      let ref2 = db.collection('equipmentRentals').where('status', '==', 'confirmed');
-      if (gymId) ref2 = ref2.where('gymId', '==', gymId);
-      const snap2 = await ref2.get();
+      const snap2 = await rentalPickupPromise;
       snap2.forEach(d => {
         const r = d.data();
         // 從訂單確認起一直顯示到取件日（含當日）
@@ -195,9 +226,7 @@ router.get('/', authenticate, async (req, res) => {
     } catch(e) {}
 
     try {
-      let ref3 = db.collection('equipmentRentals').where('status', '==', 'active');
-      if (gymId) ref3 = ref3.where('gymId', '==', gymId);
-      const snap3 = await ref3.get();
+      const snap3 = await rentalReturnPromise;
       snap3.forEach(d => {
         const r = d.data();
         // 從取件後一直顯示到歸還日（含當日）
@@ -219,14 +248,9 @@ router.get('/', authenticate, async (req, res) => {
     // ⚠️ .select()——試上分支的體驗預約內嵌 consentSignatureUrl/guardianSignatureUrl；此查詢無狀態
     // 篩選、僅選填 gymId，是待辦頁「體驗課程」分段最寬的一條查詢。欄位清單對照
     // components/review/ExperienceDetailModal.jsx 實際讀取的 record.* 逐一枚舉（courseTypeName 為
-    // 伺服器端算好另外附加，非原始欄位，不用投影）。
-    const EXP_TASK_FIELDS = ['id', 'coachId', 'coachName', 'participants', 'contactName', 'contactPhone',
-      'contactEmail', 'bookingDate', 'bookingTime', 'courseType', 'numParticipants', 'totalFee', 'gymId',
-      'bankName', 'bankLastFive', 'paymentDate', 'facebookName', 'notes',
-      'status', 'ticketsIssued', 'createdAt'];
+    // 伺服器端算好另外附加，非原始欄位，不用投影；EXP_TASK_FIELDS 常數見檔案頂部）。
     try {
-      let ref = gymId ? db.collection('experienceBookings').where('gymId', '==', gymId) : db.collection('experienceBookings');
-      const snap = await ref.select(...EXP_TASK_FIELDS).get();
+      const snap = await expTaskPromise;
       snap.forEach(d => {
         const r = d.data();
         if (transferRefIds.has(d.id)) return; // 已有轉帳待確認 → 走轉帳確認段，避免雙列
@@ -264,18 +288,31 @@ router.get('/', authenticate, async (req, res) => {
     // 9b. 轉帳待確認（transferRecords：截圖或填末五碼皆可，單一來源）
     //     連動訂單已取消（駁回/取消/退費）者不列入待收款——避免作廢報名的轉帳單殘留在待辦。
     try {
-      const ORDER_COLL = { course:'courseEnrollments', experience:'experienceBookings', competition:'competitionRegistrations', rental:'equipmentRentals', team_member:'teamApplications' };
-      let ref = db.collection('transferRecords').where('status', '==', 'pending');
-      if (gymId) ref = ref.where('gymId', '==', gymId);
-      const snap = await ref.get();
+      const snap = await transferConfirmPromise;
+      // 原本這裡是 for...of 迴圈內逐筆 await 查訂單文件（N+1：pending 轉帳單有幾筆就發幾次
+      // 序列查詢），是待辦頁偏慢的另一主因。改兩階段：先蒐集需要查的訂單文件參照，用
+      // db.getAll() 一次批次取回，再照原本邏輯逐筆處理（處理邏輯本身完全不動）。
+      const orderRefs = [];
+      const orderRefIndexByTrId = new Map();
+      snap.docs.forEach(d => {
+        const t = d.data();
+        if (t.orderType && t.refId && ORDER_COLL[t.orderType]) {
+          orderRefIndexByTrId.set(d.id, orderRefs.length);
+          orderRefs.push(db.collection(ORDER_COLL[t.orderType]).doc(t.refId));
+        }
+      });
+      let orderDocsResult = [];
+      if (orderRefs.length) {
+        try { orderDocsResult = await db.getAll(...orderRefs); } catch (e) { orderDocsResult = []; }
+      }
       for (const d of snap.docs) {
         const t = d.data();
         let orderDoc = null;
-        if (t.orderType && t.refId && ORDER_COLL[t.orderType]) {
-          try {
-            orderDoc = (await db.collection(ORDER_COLL[t.orderType]).doc(t.refId).get()).data();
-            if (orderDoc && (orderDoc.status === 'cancelled' || orderDoc.paymentStatus === 'refunded')) continue; // 訂單已取消/退費 → 跳過
-          } catch (e) {}
+        const idx = orderRefIndexByTrId.get(d.id);
+        if (idx != null) {
+          const docSnap = orderDocsResult[idx];
+          orderDoc = (docSnap && docSnap.exists) ? docSnap.data() : null;
+          if (orderDoc && (orderDoc.status === 'cancelled' || orderDoc.paymentStatus === 'refunded')) continue; // 訂單已取消/退費 → 跳過
         }
         const isCash = t.paymentMethod === 'cash';
         // transferRecords.memberName 因防偽造安全機制固定是登入會員本人（付款人／家長）——
@@ -320,9 +357,7 @@ router.get('/', authenticate, async (req, res) => {
     // 10. 單次入場券待審核（票券審核）——同一批次（batchId，一次發放多張）合併成一筆待辦，
     // 避免一次發 12 張灌爆待辦清單；批次以 batchId 當 targetId，前端據此走批次審核/拒絕端點。
     try {
-      let ref = db.collection('singleEntryTickets').where('status', '==', 'pending_approval');
-      if (gymId) ref = ref.where('gymId', '==', gymId);
-      const snap = await ref.get();
+      const snap = await ticketApprovalPromise;
       const singles = [];
       const batches = new Map();
       snap.forEach(d => {
@@ -363,9 +398,7 @@ router.get('/', authenticate, async (req, res) => {
 
     // 11. 墜落測驗排測 - 待安排（會員自助排測 → 站台現場測驗）
     try {
-      let ref = db.collection('fallTestBookings').where('status', '==', 'pending');
-      if (gymId) ref = ref.where('gymId', '==', gymId);
-      const snap = await ref.get();
+      const snap = await fallTestPromise;
       snap.forEach(d => {
         const b = d.data();
         tasks.push({
@@ -384,7 +417,7 @@ router.get('/', authenticate, async (req, res) => {
     // 12. 分期付款待收款（會員自助分期首期原本無人接手、也接不到既有 transferRecords 待收款佇列；
     //     一併涵蓋各計畫「已到期還沒繳的最早一期」，不限首期，讓分期收款也有一個持續的待辦入口）
     try {
-      const snap = await db.collection('installmentPlans').where('status', 'in', ['active', 'overdue']).get();
+      const snap = await installmentPromise;
       snap.forEach(d => {
         const p = d.data();
         if (gymId && p.gymId && p.gymId !== gymId) return;
@@ -408,7 +441,6 @@ router.get('/', authenticate, async (req, res) => {
     tasks.sort((a, b) => b.createdAt - a.createdAt);
 
     // ── 新報名通知（近 7 天，分項：課程 / 比賽 / 體驗；資訊性，不計入待辦 badge）──
-    const sevenDaysAgo = new Date(Date.now() - 7*86400000);
     const registrations = [];
     const secOf = ts => ts?._seconds || (ts?.toDate ? Math.floor(ts.toDate().getTime()/1000) : 0);
     const dayOf = ts => { const s = secOf(ts); return s ? new Date(s*1000 + 8*3600000).toISOString().slice(0,10) : today; };
@@ -418,8 +450,7 @@ router.get('/', authenticate, async (req, res) => {
     try {
       // ⚠️ .select() 排除內嵌簽名圖（portraitSignature/guardianSignature，見 courseRegistrationService）——
       // 待辦頁「近7天報名」是全站最常開的儀表板頁面之一，2026-08-19 帳單流量排查一併找到的同型缺口。
-      const snap = await db.collection('courseRegistrations').where('createdAt', '>=', sevenDaysAgo)
-        .select('status', 'gymId', 'memberName', 'courseName', 'sessionCount', 'createdAt', 'courseId').get();
+      const snap = await courseRegPromise;
       snap.docs.forEach(d => {
         const h = d.data();
         if (!['confirmed','waitlist'].includes(h.status)) return;
@@ -433,8 +464,7 @@ router.get('/', authenticate, async (req, res) => {
     try {
       // ⚠️ .select() 排除內嵌簽名圖（memberSignatureUrl/guardianSignatureUrl，見 competitionService），
       // 同上——此查詢橫跨全部賽事、7天內任一次比賽報名都會進來，未範圍限制。
-      const snap = await db.collection('competitionRegistrations').where('registeredAt', '>=', sevenDaysAgo)
-        .select('status', 'memberName', 'competitionName', 'divisionName', 'registeredAt', 'competitionId').get();
+      const snap = await compRegPromise;
       snap.docs.forEach(d => {
         const r = d.data();
         if (!['confirmed','waitlist'].includes(r.status)) return;
@@ -444,8 +474,7 @@ router.get('/', authenticate, async (req, res) => {
     // 體驗
     try {
       // ⚠️ .select()——試上分支的 experienceBookings 也內嵌 consentSignatureUrl/guardianSignatureUrl，同上原因補上。
-      const snap = await db.collection('experienceBookings').where('createdAt', '>=', sevenDaysAgo)
-        .select('gymId', 'participants', 'contactName', 'courseName', 'courseType', 'bookingDate', 'numParticipants', 'createdAt').get();
+      const snap = await expRegPromise;
       snap.docs.forEach(d => {
         const b = d.data();
         if (gymId && b.gymId && b.gymId !== gymId) return;

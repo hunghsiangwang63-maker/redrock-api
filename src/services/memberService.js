@@ -109,35 +109,24 @@ const claimLegacyFallTest = async (db, memberId, member) => {
       return exp && exp >= today;                                     // 仍在效期內
     });
     if (!hit) return null;
+    const exp = String(hit.data().fallTestExpiresAt).slice(0, 10);
     const now = new Date();
-    // 認領時自動依「測驗日」（=認領當下 testedAt）延長效期，讀 systemSettings/fallTest.validYears
-    // （與現場登記通過 fallTestService.recordFallTestResult 同一套規則，預設 1 年）——
-    // 不再沿用舊系統原始效期（原效期可能只剩幾週甚至已逼近到期，形同「免重測換來一張快過期的票」）。
-    // 刻意在此 inline 讀取設定、不 require('./fallTestService')：該檔已 require memberService，
-    // 互相引用會造成循環依賴。
-    let validYears = 1;
-    try {
-      const ftSettingsDoc = await db.collection('systemSettings').doc('fallTest').get();
-      if (ftSettingsDoc.exists && ftSettingsDoc.data().validYears) validYears = ftSettingsDoc.data().validYears;
-    } catch (e) { /* 讀取失敗維持預設 1 年 */ }
-    const expiresAtDate = dayjs(now).add(validYears, 'year').toDate();
-    const expLabel = dayjs(expiresAtDate).format('YYYY-MM-DD');
     const ftId = uuidv4();
     await db.collection('fallTests').doc(ftId).set({
       id: ftId, memberId, result: 'passed',
       testedBy: 'migration', testedByName: '舊系統轉移',
       testedAt: now,
-      expiresAt: expiresAtDate,
+      expiresAt: new Date(exp + 'T00:00:00+08:00'),
       source: 'climbio-migrated', migratedFrom: hit.id,
-      notes: '舊系統墜測效期轉移（免重測，效期依認領日自動延長）',
+      notes: '舊系統墜測效期轉移（免重測）',
       createdAt: now, updatedAt: now,
     });
     await db.collection(COLLECTIONS.MEMBERS).doc(memberId).update({
-      fallTestPassed: true, fallTestExpiresAt: expiresAtDate, updatedAt: now,
+      fallTestPassed: true, fallTestExpiresAt: new Date(exp + 'T00:00:00+08:00'), updatedAt: now,
     });
     await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now });
-    console.log(`[墜測遷移] ${name}/${phone} 認領並依測驗日延長效期至 ${expLabel}`);
-    return { fallTestId: ftId, expiresAt: expLabel };
+    console.log(`[墜測遷移] ${name}/${phone} 認領舊效期至 ${exp}`);
+    return { fallTestId: ftId, expiresAt: exp };
   } catch (e) { console.error('claimLegacyFallTest 失敗', e.message); return null; }
 };
 

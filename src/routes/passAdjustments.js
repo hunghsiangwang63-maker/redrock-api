@@ -315,14 +315,17 @@ router.get('/analytics', authenticate, requireManagerOrStation, async (req, res)
     const blacks = blackSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     const blackStats = cardStats(blacks, 12);
 
-    // 單日券
+    // 單日券（實際狀態值只有 pending_approval/active/used/cancelled，無 valid/expired 字串；
+    // 「有效」＝status=active 且未過期、「已過期」＝status=active 但 expiresAt 已過，皆需以日期即時判斷）
     const tickets = ticketSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const ticketExpired = (t) => !!t.expiresAt && t.expiresAt < today;
     const ticketStats = {
       total: tickets.length,
-      valid: tickets.filter(t => t.status === 'valid').length,
+      valid: tickets.filter(t => t.status === 'active' && !ticketExpired(t)).length,
       used: tickets.filter(t => t.status === 'used').length,
-      expired: tickets.filter(t => t.status === 'expired').length,
-      pending: tickets.filter(t => t.status === 'pending').length,
+      expired: tickets.filter(t => t.status === 'active' && ticketExpired(t)).length,
+      cancelled: tickets.filter(t => t.status === 'cancelled').length,
+      pending: tickets.filter(t => t.status === 'pending_approval').length,
     };
 
     // 紅利（discountBonuses：優惠卡用完送「一次免費入場」；一次性、非天數制）
@@ -408,7 +411,12 @@ router.get('/analytics/download', authenticate, requireManager, async (req, res)
       headers = ['序號','會員姓名','狀態','有效期限','使用日期','核發人','核發館別'];
       rows = snap.docs.map((d,i) => {
         const t = d.data();
-        return [i+1, `"${t.memberName||''}"`, t.status||'', t.expiryDate||'', t.usedAt?._seconds?new Date(t.usedAt._seconds*1000).toLocaleDateString('zh-TW'):'', `"${t.issuedByName||''}"`, t.gymId||''].join(',');
+        const ticketStatus = t.status === 'used' ? '已使用'
+          : t.status === 'cancelled' ? '已取消'
+          : t.status === 'pending_approval' ? '待審核'
+          : (t.status === 'active' && t.expiresAt && t.expiresAt < today) ? '已過期'
+          : t.status === 'active' ? '有效' : (t.status || '');
+        return [i+1, `"${t.memberName||''}"`, ticketStatus, t.expiresAt||'', t.usedAt?._seconds?new Date(t.usedAt._seconds*1000).toLocaleDateString('zh-TW'):'', `"${t.issuedByName||''}"`, t.gymId||''].join(',');
       });
     } else if (type === 'bonuses') {
       // 現行紅利 discountBonuses（一次免費入場）：持有人 ownerMemberId、原購買者 originalOwnerMemberId 反查姓名

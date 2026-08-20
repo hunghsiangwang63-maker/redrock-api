@@ -814,21 +814,21 @@ router.get('/history',
       const gymId = isMemberToken ? null : (req.staff?.role === 'super_admin' ? req.query.gymId : req.staff?.gymId);
       const { ticketId, ticketType, dateFrom, dateTo, limit = 50 } = req.query;
 
-      // 避免複合索引：查詢端只放單一條件（有日期→日期範圍；否則→memberId/gymId 等值），其餘記憶體過濾
+      // 2026-08-21 改用複合查詢（gymId/memberId 擇一 + 日期範圍 + orderBy 對齊既有索引方向）——
+      // firestore.indexes.json 早已部署 checkIns 的 gymId+checkedInAt DESC、memberId+checkedInAt
+      // DESC 複合索引且皆已啟用，原本「只放單一條件、其餘記憶體過濾」是多餘的舊寫法：查詢洞察資料
+      // 實測「歷史入場」帶館別+日期時，平均每次撈回 2271 筆（兩館全撈）卻多數被記憶體篩掉，單日這
+      // 條查詢吃掉 33 萬+次讀取（全站當日讀取量最大宗）。改直接在查詢端套用館別/會員條件，讀取量
+      // 可對半（甚至更多）下降；⚠ orderBy 方向須與既有索引一致（DESC），否則會變成「需要新索引」
+      // 錯誤（實測過 ASC 預設方向不吃現有索引）。
       let ref = db.collection(COLLECTIONS.CHECK_INS);
-      if (dateFrom || dateTo) {
-        if (dateFrom) ref = ref.where('checkedInAt', '>=', new Date(dateFrom));
-        if (dateTo) ref = ref.where('checkedInAt', '<=', new Date(dateTo));
-      } else if (scopedMemberId) {
-        ref = ref.where('memberId', '==', scopedMemberId);
-      } else if (gymId) {
-        ref = ref.where('gymId', '==', gymId);
-      }
+      if (scopedMemberId) ref = ref.where('memberId', '==', scopedMemberId);
+      else if (gymId) ref = ref.where('gymId', '==', gymId);
+      if (dateFrom) ref = ref.where('checkedInAt', '>=', new Date(dateFrom));
+      if (dateTo) ref = ref.where('checkedInAt', '<=', new Date(dateTo));
       const cap = (dateFrom || dateTo) ? 10000 : 2000; // 區間查詢放寬上限
-      const snapshot = await ref.limit(cap).get();
+      const snapshot = await ref.orderBy('checkedInAt', 'desc').limit(cap).get();
       let checkIns = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-      if (gymId) checkIns = checkIns.filter(c => c.gymId === gymId);
-      if (scopedMemberId) checkIns = checkIns.filter(c => c.memberId === scopedMemberId);
       // checkIn 文件無 ticketId/ticketType 欄位；票券使用實記在各自 id 欄位
       // （discountCardId / blackCardId / singleEntryTicketId / bonusId / passId，UUID 不會撞）
       // → 有帶 ticketId 就比對任一票券 id 欄位（ticketType 不再拿來過濾，checkIn 沒這欄位否則恆空）
@@ -841,9 +841,8 @@ router.get('/history',
           c.passId === ticketId
         );
       }
-      checkIns = checkIns
-        .sort((a, b) => (b.checkedInAt?._seconds||0) - (a.checkedInAt?._seconds||0))
-        .slice(0, parseInt(limit));
+      // 已由 orderBy('checkedInAt','desc') 保證由 Firestore 端排序，僅需截斷至 limit
+      checkIns = checkIns.slice(0, parseInt(limit));
       // records：會員端 MemberPassesPage 讀此 key；checkIns：員工端歷史入場讀此 key（同一份陣列）
       res.json({ records: checkIns, checkIns, count: checkIns.length });
     } catch (err) {

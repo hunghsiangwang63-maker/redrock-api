@@ -748,6 +748,11 @@ const sanitizeMemberForList = (m) => {
   return out;
 };
 
+// 搜尋清單投影欄位：搜尋比對用（name/phone/email）＋ MembersPage.jsx 清單列顯示用
+// （isChildAccount/memberType/waiverSigned/fallTestPassed/createdAt）。點進去看詳情走
+// 另一支單筆 getMember()（不受此投影影響），故清單本身不需要 qrCode/密碼雜湊等其他欄位。
+const SEARCH_LIST_FIELDS = ['name', 'phone', 'email', 'isChildAccount', 'memberType', 'waiverSigned', 'fallTestPassed', 'createdAt'];
+
 // ── 搜尋會員 ─────────────────────────────────────────────────────
 const searchMembers = async ({ query, gymId, role, limit = 20, cursor }) => {
   const db = getDb();
@@ -762,7 +767,11 @@ const searchMembers = async ({ query, gymId, role, limit = 20, cursor }) => {
     // 的問題）。2026-08-11 發現：真實案例（會員數來到 1031 筆時，一位 7/13 建立的會員突然搜不到）。
     // 目前會員規模（一千餘筆）全表掃描成本仍低，改為掃全部——之後真的成長到影響效能/成本再接
     // 專用搜尋服務，不要重新加一個「只看最近 N 筆」這種會隨規模再度默默失效的上限。
-    snapshot = await ref.get();
+    // ⚠️ 2026-08-21 加 .select()：會員文件平均 5.3KB，其中 qrCode（靜態 base64 QR 圖，前端清單
+    // 全無人讀）就佔 4.4KB（82%）；全表掃描每次搜尋原本會把這些完全用不到的 bytes 也整批讀進來，
+    // 與稍早 courseEnrollments 簽名圖是同一種浪費。投影後只讀取真正會用到的 8 個欄位，讀取「筆數」
+    // 不變（Firestore 讀取計費看筆數、非投影後省的欄位），但傳輸量大幅下降。
+    snapshot = await ref.select(...SEARCH_LIST_FIELDS).get();
     const all = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
     return all.filter(m =>
       m.name?.includes(query) ||
@@ -771,7 +780,7 @@ const searchMembers = async ({ query, gymId, role, limit = 20, cursor }) => {
     ).slice(0, limit).map(sanitizeMemberForList);
   }
 
-  snapshot = await ref.orderBy('createdAt', 'desc').limit(limit).get();
+  snapshot = await ref.orderBy('createdAt', 'desc').select(...SEARCH_LIST_FIELDS).limit(limit).get();
   return snapshot.docs.map(d => sanitizeMemberForList({ id: d.id, ...d.data() }));
 };
 

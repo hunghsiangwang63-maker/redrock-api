@@ -1096,6 +1096,28 @@ const precheckCancelLeave = async ({ enrollmentId, memberId }) => {
 // ── 休館停課（員工）：場次取消＋該堂正取自動發「豁免補課券」（不佔請假配額）──
 // 補課學員→報名取消+原券還原；試上學員→報名取消（費用/退費由櫃檯另處理，回報 trialAffected）。
 // 場次 cancelled → 退費公式自動不計此堂（total/held 皆排除）。
+// ── 防止「payEnrollmentId 地雷」：某堂（非補課/試上）場次休館取消時，若剛好是這位會員報名
+// header 的 payEnrollmentId（報名建立時通常＝第一堂），改指向另一筆仍有效的場次，避免之後任何
+// 依 payEnrollmentId 判斷「整筆報名是否有效」的邏輯（如發票開立），誤讀到這筆被單獨取消的場次
+// 狀態當成整筆報名已取消（2026-08-21 真實案例：廖彥澄「小蜘蛛人初級班」颱風休館連動課程發票被
+// 誤判自動作廢，見 checkStillValidForInvoice 修正）。查無其他有效場次可頂替（整筆報名已無場次可
+// 依附，屬更罕見的邊界情況）則維持原樣不動，不影響取消本身。
+const repointPayEnrollmentIfNeeded = async (db, memberId, courseId, cancelledEnrollmentId) => {
+  try {
+    const headerSnap = await db.collection('courseRegistrations')
+      .where('memberId', '==', memberId).where('courseId', '==', courseId)
+      .where('status', 'in', ['confirmed', 'waitlist']).limit(1).get();
+    if (headerSnap.empty) return;
+    const header = headerSnap.docs[0];
+    if (header.data().payEnrollmentId !== cancelledEnrollmentId) return;
+    const altSnap = await db.collection(ENROLLMENT_COLLECTION)
+      .where('memberId', '==', memberId).where('courseId', '==', courseId)
+      .where('status', 'in', ['confirmed', 'leave', 'waitlist']).get();
+    const alt = altSnap.docs.find(d => d.id !== cancelledEnrollmentId && !d.data().isMakeup && !d.data().isTrial);
+    if (alt) await header.ref.update({ payEnrollmentId: alt.id, updatedAt: new Date() });
+  } catch (e) { console.error('[repointPayEnrollmentIfNeeded]', e.message); }
+};
+
 const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) => {
   const db = getDb();
   const sDoc = await db.collection(SESSION_COLLECTION).doc(sessionId).get();
@@ -1153,6 +1175,8 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
     if (e.status !== 'confirmed') {
       await d.ref.update({ status: 'cancelled', cancelReason: 'closure', cancelledAt: now, updatedAt: now });
     }
+    // 這筆場次剛好是這位會員報名 header 的 payEnrollmentId → 頂替到另一筆仍有效的場次（見上方說明）
+    await repointPayEnrollmentIfNeeded(db, e.memberId, session.courseId, d.id);
   }
   await sDoc.ref.update({
     status: 'cancelled', cancelReason: reason || '休館停課', closureCancelledBy: staffName || staffId || null,

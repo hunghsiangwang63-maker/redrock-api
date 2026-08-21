@@ -2451,11 +2451,23 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
 };
 
 // ── 查詢會員報名紀錄 ──────────────────────────────────────────────
+// 投影欄位：已逐一核對三個消費者（會員「我的課程」／會員「我的紀錄」／員工查會員課程紀錄）
+// 實際讀取的欄位＋伺服器端 leaveLimit 計算需要的 maxLeavesAllowed。
+// ⚠️ 排除的正是 courseEnrollments 平均 77KB／最大 180KB 文件裡佔絕大部分的
+// portraitSignature/guardianSignature 兩張簽名圖 base64；此端點是「我的課程」頁觸發點最多的
+// 載入函式（10+ 個報名/請假/補課/退費動作完成後都會重新整批載入），故影響顯著。
+const MEMBER_ENROLLMENT_FIELDS = [
+  'courseId', 'courseName', 'gymId', 'memberId', 'memberName', 'sessionId', 'date',
+  'startTime', 'endTime', 'status', 'cancelReason', 'isMakeup', 'waitlistPosition',
+  'leaveReason', 'maxLeavesAllowed', 'refundPending', 'enrollmentFee', 'paymentMethod',
+  'paymentStatus', 'paymentConfirmed', 'paymentDeadline', 'paymentRejectReason', 'promotedAt',
+];
 const getMemberEnrollments = async (memberId) => {
   const db = getDb();
   const snap = await db.collection(ENROLLMENT_COLLECTION)
     .where('memberId', '==', memberId)
     .orderBy('date', 'desc')
+    .select(...MEMBER_ENROLLMENT_FIELDS)
     .get();
   const enrollments = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 

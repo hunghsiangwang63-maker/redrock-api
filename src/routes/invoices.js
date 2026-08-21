@@ -80,8 +80,22 @@ async function checkStillValidForInvoice(db, sourceType, refId) {
       const doc = await db.collection('equipmentRentals').doc(refId).get();
       if (doc.exists && doc.data().status === 'cancelled') return { valid: false, reason: '租借已取消' };
     } else if (sourceType === 'course') {
-      const doc = await db.collection('courseEnrollments').doc(refId).get();
-      if (doc.exists && doc.data().status === 'cancelled') return { valid: false, reason: '課程報名已取消' };
+      // ⚠️ 2026-08-21 修正：refId 是 courseRegistrations.payEnrollmentId（報名建立時通常＝第一堂的
+      // courseEnrollments doc id）。週課每堂各一筆 courseEnrollments，若「剛好那一堂」因休館/颱風
+      // 單獨被取消（cancelReason:'closure' 等，只影響那一場，不影響整期報名——見 closureCancelSession/
+      // updateSession 的單堂取消，皆不會連動整筆退課），原本直接查這筆 enrollment doc 的 status 會誤判
+      // 「整筆課程報名已取消」，即使其餘場次與整筆報名本身都仍正常有效（真實案例：廖彥澄「小蜘蛛人
+      // 初級班」8堂，僅第2堂颱風休館被取消，payEnrollmentId 剛好指向那一堂，其餘7堂與 header 皆
+      // confirmed，卻導致當期課程發票被誤判失效自動作廢）。改查 courseRegistrations header（整筆報名
+      // 層級的權威狀態，取消整筆報名/駁回退費等才會動到）——查無對應 header（雙寫前的舊資料）才退回
+      // 原本直接查該筆 enrollment doc 的邏輯。
+      const headerSnap = await db.collection('courseRegistrations').where('payEnrollmentId', '==', refId).limit(1).get();
+      if (!headerSnap.empty) {
+        if (headerSnap.docs[0].data().status === 'cancelled') return { valid: false, reason: '課程報名已取消' };
+      } else {
+        const doc = await db.collection('courseEnrollments').doc(refId).get();
+        if (doc.exists && doc.data().status === 'cancelled') return { valid: false, reason: '課程報名已取消' };
+      }
     } else if (sourceType === 'competition') {
       const doc = await db.collection('competitionRegistrations').doc(refId).get();
       if (doc.exists && doc.data().status === 'cancelled') return { valid: false, reason: '比賽報名已取消' };

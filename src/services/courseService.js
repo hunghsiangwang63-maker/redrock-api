@@ -1102,6 +1102,10 @@ const precheckCancelLeave = async ({ enrollmentId, memberId }) => {
 // 狀態當成整筆報名已取消（2026-08-21 真實案例：廖彥澄「小蜘蛛人初級班」颱風休館連動課程發票被
 // 誤判自動作廢，見 checkStillValidForInvoice 修正）。查無其他有效場次可頂替（整筆報名已無場次可
 // 依附，屬更罕見的邊界情況）則維持原樣不動，不影響取消本身。
+// ⚠️ 2026-08-21 補：若這筆已經開過發票（invoices.sourceType='course', refId=被取消的這筆），
+// 一併把發票的 refId 同步改成新的 payEnrollmentId——否則發票本身沒問題，但「今日課程學員」清單
+// 等處查「這個 refId 開過發票沒」會用新的 payEnrollmentId 去查，找不到已經開過的那張（真實案例：
+// 廖彥澄的發票 CD34659095 在此修正前就是這樣憑空「消失」於清單）。
 const repointPayEnrollmentIfNeeded = async (db, memberId, courseId, cancelledEnrollmentId) => {
   try {
     const headerSnap = await db.collection('courseRegistrations')
@@ -1114,7 +1118,15 @@ const repointPayEnrollmentIfNeeded = async (db, memberId, courseId, cancelledEnr
       .where('memberId', '==', memberId).where('courseId', '==', courseId)
       .where('status', 'in', ['confirmed', 'leave', 'waitlist']).get();
     const alt = altSnap.docs.find(d => d.id !== cancelledEnrollmentId && !d.data().isMakeup && !d.data().isTrial);
-    if (alt) await header.ref.update({ payEnrollmentId: alt.id, updatedAt: new Date() });
+    if (!alt) return;
+    await header.ref.update({ payEnrollmentId: alt.id, updatedAt: new Date() });
+    const invSnap = await db.collection('invoices')
+      .where('sourceType', '==', 'course').where('refId', '==', cancelledEnrollmentId).get();
+    if (!invSnap.empty) {
+      const batch = db.batch();
+      invSnap.docs.forEach(d => batch.update(d.ref, { refId: alt.id, updatedAt: new Date() }));
+      await batch.commit();
+    }
   } catch (e) { console.error('[repointPayEnrollmentIfNeeded]', e.message); }
 };
 

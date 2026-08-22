@@ -62,7 +62,7 @@ const manualIncomeTotal = (income, im) => im
 // 依字軌分段（同日內若因換捲換字軌，依出現順序拆成多段，對齊既有 invoiceSegments 多段 UI 概念）；
 // 作廢號碼/作廢總金額直接取 invoices 的 status:'void' 紀錄，不再由店員手動輸入。
 async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
-  const result = { printingEnabled: false, segments: [], voidNumbers: [], voidTotalAmount: 0, actualTotal: 0, count: 0, voidCount: 0, bySourceType: {}, amountModifiedList: [], noSourceByMethod: {} };
+  const result = { printingEnabled: false, segments: [], voidNumbers: [], voidTotalAmount: 0, actualTotal: 0, count: 0, voidCount: 0, bySourceType: {}, amountModifiedList: [], noSourceByMethod: {}, byMethod: {} };
   try {
     const gymDoc = await db.collection('gyms').doc(gymId).get();
     result.printingEnabled = !!(gymDoc.exists && gymDoc.data().invoicePrintingEnabled === true);
@@ -126,6 +126,19 @@ async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
     issued.filter(i => !i.sourceType).forEach(i => {
       const m = i.paymentMethod || 'cash';
       result.noSourceByMethod[m] = (result.noSourceByMethod[m] || 0) + (Number(i.amount) || 0);
+    });
+    // 2026-08-22：發票開立日（issuedAt）與課程/體驗營收認列日（recognitionDate，通常＝最後一堂課）
+    // 是兩個不同的日期基準——真實案例：新竹某日補記一批課程舊生名單認領交易，recognitionDate 落在
+    // 當天，但這些課程的發票是「更早的某一天」才開立的（課程/比賽發票延後開立，開立日常晚於服務認列
+    // 日，也可能相反、提早開立但服務認列在未來），導致當日結帳「發票總金額－依 recognitionDate 統計
+    // 的線上支付合計」兩者其實統計的不是同一批事件，算出的現金落差可能是幾千甚至上萬元的計算假象而非
+    // 真的現金短少。改為：真列印館別的付款方式統計全面依「今天開立的發票」為準（依 paymentMethod
+    // 分組，涵蓋所有 sourceType，不限無來源發票），與 income 的課程/體驗收入（已於上方改依發票金額）
+    // 使用同一個日期基準、同一批事件，兩者才會互相一致。定期票(pass)購買目前無對應真列印發票，此類
+    // 收入的付款方式統計仍只能沿用 transactions(recognitionDate) 這條路（見 GET /today 呼叫端）。
+    issued.forEach(i => {
+      const m = i.paymentMethod || 'cash';
+      result.byMethod[m] = (result.byMethod[m] || 0) + (Number(i.amount) || 0);
     });
     // 列印當下金額被人工改過（見 invoices.js /print-record 的 amountModified 判斷）的清單——
     // 讓結帳頁自動看得到這類異動、不用另外去翻發票紀錄；備註在列印當下已強制必填。
@@ -243,7 +256,10 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       const rentalAmt = (data.shoesPrice || 0) + (data.chalkPrice || 0);
       const entryAmt = Math.max(0, amount - rentalAmt);
       shoeRentalIncome += rentalAmt;
-      if (amount) checkinFallback.set(d.id, { amount, paymentMethod: data.paymentMethod });
+      // 真列印館別：付款方式一律改由下方「今日已開立發票」依 paymentMethod 分組取代（見 invAuth.byMethod
+      // 合併處），不再倚賴這裡的 checkIns/transactions（recognitionDate 對入場本身雖無影響，但為了讓
+      // 整組付款方式統計單一日期基準、好排查，一併統一改走發票）——故不建立 fallback，避免重複計入。
+      if (amount && !invAuth.printingEnabled) checkinFallback.set(d.id, { amount, paymentMethod: data.paymentMethod });
       if (data.entryType === 'buy_pass') {
         // 入場購買定期票：票款歸「定期票」大項（賣票收入統一一處；分期時 entryAmt=0 首期由分期計畫記）
         if (entryAmt > 0) { const k = data.buyPassTypeId || '_unknown'; buyPassAmounts[k] = (buyPassAmounts[k] || 0) + entryAmt; }
@@ -263,7 +279,8 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     salesSnap.docs.forEach(d => {
       const data = d.data();
       productIncome += data.totalAmount || 0;
-      addPay(data.paymentMethod, data.totalAmount || 0);
+      // 真列印館別：付款方式改由今日已開立發票統計（見下方 invAuth.byMethod 合併），此處只算收入金額
+      if (!invAuth.printingEnabled) addPay(data.paymentMethod, data.totalAmount || 0);
     });
 
     // 課程／定期票收入：統一從 transactions 撈今日已完成交易，再依type分類
@@ -284,10 +301,13 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       const amount = data.totalAmount || 0;
       if (data.type === 'rental') {
         equipmentRentalIncome += amount;
-        addPay(data.paymentMethod, amount);
+        // 真列印館別：付款方式改由今日已開立發票統計（見下方 invAuth.byMethod 合併）
+        if (!invAuth.printingEnabled) addPay(data.paymentMethod, amount);
       } else if (data.type === 'course') {
         courseIncome += amount;
-        addPay(data.paymentMethod, amount);   // 含轉帳/LinePay/街口/台灣Pay（原本只算現金）
+        // 真列印館別：付款方式改由今日已開立發票統計，不再用 recognitionDate 認列日——這正是本次
+        // 修復的核心（課程/體驗發票開立日與 recognitionDate 常不同天，兩基準混用會算出假的現金落差）
+        if (!invAuth.printingEnabled) addPay(data.paymentMethod, amount);   // 含轉帳/LinePay/街口/台灣Pay（原本只算現金）
       } else if (data.type === 'pass') {
         passIncome += amount;
         addPay(data.paymentMethod, amount);
@@ -334,11 +354,16 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     // 這類發票金額整筆消失於「課程」項目。一併加回。
     if (invAuth.printingEnabled) courseIncome = (invAuth.bySourceType.course || 0) + (invAuth.bySourceType.experience || 0);
 
-    // 「無來源手動發票」的付款方式併入 payByMethod（2026-08-15 新增，見 invoices.js print-record
-    // 同一批改動的說明）——這類發票沒有 checkIns/productSales/transactions 記錄可依循，是目前
-    // payByMethod 唯一漏掉的收入來源；併入後 LinePay/街口/台灣Pay/轉帳合計才會正確涵蓋，effectiveCash
-    // （＝發票總金額－線上支付合計，見下方/POST）才不會把這類電子支付誤算成現金。
-    Object.entries(invAuth.noSourceByMethod).forEach(([m, amt]) => addPay(m, amt));
+    // 真列印館別：付款方式統計改以「今日已開立發票」為單一權威來源（2026-08-22 取代原本逐項從
+    // checkIns/productSales/transactions 湊出來的 payByMethod）——invAuth.byMethod 已涵蓋入場/商品/
+    // 課程/體驗/租借/比賽等所有走真列印的來源（含原本「無來源手動發票」noSourceByMethod 那個子集，
+    // 一併涵蓋不用再另外合併），跟 income 的課程/體驗收入（上方已改依發票金額）用同一個日期基準
+    // （issuedAt，非 recognitionDate），兩者才會互相一致、不會再算出「發票開了但認列日不同天」的假現金落差。
+    // 定期票(pass)目前無對應真列印發票，其付款方式仍只能靠上方 txnSnap（recognitionDate）那條路，
+    // 已在對應分支維持無條件 addPay，故這裡疊加發票總表不會漏算定期票、也不會跟其他來源重複計算
+    // （byMethod 的來源 invoices 集合本就不含 pass 的 sourceType）。非真列印館別 invAuth.byMethod 恆空、
+    // 此行為 no-op，不影響既有行為。
+    Object.entries(invAuth.byMethod).forEach(([m, amt]) => addPay(m, amt));
 
     const totalIncome = entryIncome + shoeRentalIncome + productIncome + courseIncome + passIncome + equipmentRentalIncome;
     const totalCash = payByMethod.cash || 0;

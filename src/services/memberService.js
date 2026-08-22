@@ -751,7 +751,7 @@ const sanitizeMemberForList = (m) => {
 // 搜尋清單投影欄位：搜尋比對用（name/phone/email）＋ MembersPage.jsx 清單列顯示用
 // （isChildAccount/memberType/waiverSigned/fallTestPassed/createdAt）。點進去看詳情走
 // 另一支單筆 getMember()（不受此投影影響），故清單本身不需要 qrCode/密碼雜湊等其他欄位。
-const SEARCH_LIST_FIELDS = ['name', 'phone', 'email', 'isChildAccount', 'memberType', 'waiverSigned', 'fallTestPassed', 'createdAt'];
+const SEARCH_LIST_FIELDS = ['name', 'phone', 'email', 'isChildAccount', 'memberType', 'waiverSigned', 'fallTestPassed', 'createdAt', 'isTeamMember', 'teamMemberSince', 'teamMemberUntil'];
 
 // ── 搜尋會員 ─────────────────────────────────────────────────────
 const searchMembers = async ({ query, gymId, role, limit = 20, cursor }) => {

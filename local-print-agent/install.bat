@@ -3,46 +3,55 @@ setlocal
 set SCRIPT_DIR=%~dp0
 cd /d "%SCRIPT_DIR%"
 
+REM NOTE: This file is intentionally English-only. Traditional Chinese Windows
+REM defaults cmd.exe to the Big5 (CP950) code page, but this file is saved as
+REM UTF-8 -- cmd would misread Chinese text (comments, echo, etc.) as garbled
+REM bytes and try to run them as commands, producing endless
+REM "not recognized as an internal or external command" errors. Keep this
+REM file free of any non-ASCII characters so it runs correctly on any PC
+REM regardless of its code page setting (this tool gets deployed to multiple
+REM store computers).
+
 if not exist ".env" (
   copy ".env.example" ".env" >nul
-  echo 已建立 .env 設定檔（等一下要記得改 COM 埠編號，見下方說明）
+  echo Created .env config file (remember to set the COM port below)
   echo.
 )
 
 if exist "nodejs-portable\node.exe" (
   set "PATH=%SCRIPT_DIR%nodejs-portable;%PATH%"
-  echo 使用隨附的免安裝版 Node.js
+  echo Using bundled portable Node.js
 ) else (
   where node >nul 2>nul
   if errorlevel 1 (
-    echo [錯誤] 找不到 Node.js。
+    echo [ERROR] Node.js not found.
     echo.
-    echo 請到 https://nodejs.org/en/download 下載「Windows Binary (.zip)」版本，
-    echo 解壓縮後，把裡面那個資料夾（裡面應該要看得到 node.exe）整個改名為
+    echo Please download the "Windows Binary (.zip)" from https://nodejs.org/en/download
+    echo Unzip it, rename the folder inside (the one containing node.exe) to
     echo   nodejs-portable
-    echo 然後搬到跟這個 install.bat 同一層資料夾裡，再重新執行一次這個檔案。
+    echo then move it next to this install.bat, and run this file again.
     echo.
     pause
     exit /b 1
   )
-  echo 使用系統已安裝的 Node.js
+  echo Using system-installed Node.js
 )
 
 echo.
-echo 正在安裝套件，請稍候（第一次可能要一兩分鐘）...
+echo Installing packages, please wait (first run may take a minute or two)...
 call npm install
 if errorlevel 1 (
   echo.
-  echo [錯誤] 安裝失敗，請把這個視窗的內容截圖回報。
+  echo [ERROR] Install failed. Please screenshot this window and report it.
   pause
   exit /b 1
 )
 
 echo.
 echo ================================================
-echo 安裝完成！接下來：
-echo   1. 用記事本打開這個資料夾裡的 .env 檔案
-echo   2. 把 SERIAL_PORT 改成正確的 COM 埠編號（去「裝置管理員」查）
-echo   3. 存檔後，雙擊 start.bat 啟動
+echo Install complete! Next steps:
+echo   1. Open the .env file in this folder with Notepad
+echo   2. Set SERIAL_PORT to the correct COM port (check Device Manager)
+echo   3. Save, then double-click start.bat to launch
 echo ================================================
 pause

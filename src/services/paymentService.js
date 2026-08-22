@@ -58,6 +58,21 @@ const orderHandlers = {
       paidVia: payment.provider, paidAmount: payment.amount, paidAt: new Date(),
       paymentId: payment.id, updatedAt: new Date(),
     });
+    // 雙寫（Phase 1）：連動更新 courseRegistrations header 的 paymentStatus（比照 transfers.js
+    // 轉帳確認收款那條路徑，2026-08-22 補上——此前線上付款成功只更新場次副本，header 永遠卡在
+    // pending，任一 provider 真的開通前必須補齊，見 [[payment-integration-project]] 記錄的已知缺口）
+    try {
+      const enDoc = await db.collection('courseEnrollments').doc(id).get();
+      if (enDoc.exists) {
+        const en = enDoc.data();
+        if (en.memberId && en.courseId) {
+          const { updateRegistrationStatusByCourseMember } = require('./courseRegistrationService');
+          await updateRegistrationStatusByCourseMember(db, en.memberId, en.courseId, {
+            paymentStatus: 'confirmed', paymentConfirmed: true,
+          });
+        }
+      }
+    } catch (e2) { console.error('[雙寫] header 線上付款確認更新失敗（不影響付款本身）:', e2.message); }
     return { relatedId: id };
   },
   pass: async (db, payment) => {

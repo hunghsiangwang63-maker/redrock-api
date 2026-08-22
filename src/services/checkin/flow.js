@@ -302,6 +302,20 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     if (mpDoc.exists) usePassInfo = { passTypeName: mpDoc.data().passTypeName || '定期票' };
   }
 
+  // 使用單次入場券入場：若此券當初是線上付款（街口等）購買，解析原始付款方式+金額
+  // 供櫃檯掃碼確認時標示「已線上付款，免再收費」（避免現場誤以為要重複收現金）。
+  // 現場店員直接發放的贈券 paymentMethod 為 null/cash，不顯示此標示。
+  let onlineTicketInfo = null;
+  if (pending.entryType === 'single_entry_ticket' && pending.singleEntryTicketId) {
+    const tDoc = await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(pending.singleEntryTicketId).get();
+    if (tDoc.exists) {
+      const tk = tDoc.data();
+      if (tk.paymentMethod && tk.paymentMethod !== 'cash') {
+        onlineTicketInfo = { paymentMethod: tk.paymentMethod, amount: tk.amount || 0 };
+      }
+    }
+  }
+
   return {
     qrToken,
     memberId: pending.memberId,
@@ -315,6 +329,7 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     originalAmount: pending.originalAmount,
     buyPass: buyPassInfo,                        // 購買定期票：票種名稱 + 金額（供掃碼標示）
     usePass: usePassInfo,                         // 使用既有定期票入場：所用票種名稱
+    onlineTicket: onlineTicketInfo,                // 使用單次入場券：若此券為線上付款購買，原始付款方式 + 金額
     isTeamDiscount: pending.isTeamDiscount,
     legacyDiscount: pending.legacyDiscount || false,
     partnerVendor: pending.partnerVendor === true,   // 特約廠商優惠 → 員工端提示出示證件

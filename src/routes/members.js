@@ -987,7 +987,12 @@ router.get('/:id',
         ...(legacyDiscCards || []).map(c => ({ kind: 'legacy', id: c.id, remainingCredits: c.remainingCredits ?? 0, source: c.source || 'legacy', expiresAt: c.expiresAtFormatted || null })),
         ...(blackCards || []).map(c => ({ kind: 'black', id: c.id, remainingCredits: c.remainingCredits ?? 0, source: c.source || null, expiresAt: c.expiresAtFormatted || null })),
       ];
-      const activeSingleTickets = (singleTickets || []).map(t => ({ id: t.id, ticketType: t.ticketType || 'single', validDate: t.validDate || null, expiresAt: t.expiresAt || null }));
+      // paymentId/paymentMethod/amount 供員工端判斷「是否為線上付款預購票券、可否一鍵真實退款」（見
+      // POST /passes/single-entry/:id/refund，2026-08-22）；非線上付款票券 paymentId 恆為 undefined。
+      const activeSingleTickets = (singleTickets || []).map(t => ({
+        id: t.id, ticketType: t.ticketType || 'single', validDate: t.validDate || null, expiresAt: t.expiresAt || null,
+        paymentId: t.paymentId || null, paymentMethod: t.paymentMethod || null, amount: t.amount || 0,
+      }));
       const activeBonuses = (bonuses || []).map(b => ({ id: b.id, expiresAt: b.expiresAtFormatted || null }));
 
       // waiver 簽署狀態（供顯示）

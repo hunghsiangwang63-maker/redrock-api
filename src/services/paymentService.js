@@ -145,7 +145,7 @@ const orderHandlers = {
       transferHistory: [],
       usedAt: null, usedCheckInId: null,
       amount: payment.amount, paymentMethod: payment.provider, paymentId: payment.id,
-      source: 'linepay-entry',
+      source: 'online-entry', // 2026-08-22 由 'linepay-entry' 改中性命名（此路徑現由 jkopay 亦共用，非僅 linepay；write-only 欄位，前後端皆無讀取者，改名安全）
       notes: '會員線上付款預購入場',
       createdAt: new Date(), updatedAt: new Date(),
     };
@@ -446,4 +446,57 @@ async function handleCallback(provider, req) {
   return result;
 }
 
-module.exports = { createPayment, getPayment, handleCallback, getAvailableMethods, PROVIDERS };
+// ── 退款「線上付費預購入場」單次入場券（2026-08-22，見 docs/payment-integration-plan.md §10）──
+// 僅限 orderHandlers.entry 開出、尚未使用（status==='active'）的票——直接呼叫原付款 provider 的
+// refundPayment 真的退錢回會員的支付帳戶，而非既有「只做內部帳務沖銷」的手動退費模式
+// （見 checkin/cancel.js、passes.js /single-entry/:id/reject 兩處既有 refund：那兩處都只是內部
+// 帳上沖銷，從未真的呼叫金流退款 API）。目前僅 jkopay adapter 有 refundPayment 實作，其餘 provider
+// 會擋 REFUND_NOT_SUPPORTED（非硬編死 provider 名單，未來 linepay/taiwanpay 補上 refundPayment 即自動可用）。
+async function refundEntryTicket(ticketId, { staffId = null, staffName = null, reason = '' } = {}) {
+  const db = getDb();
+  const ticketRef = db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(ticketId);
+  const ticketDoc = await ticketRef.get();
+  if (!ticketDoc.exists) throw { code: 'TICKET_NOT_FOUND', message: '找不到入場券' };
+  const ticket = ticketDoc.data();
+  if (ticket.status !== 'active') throw { code: 'TICKET_NOT_ACTIVE', message: `此票券狀態為 ${ticket.status}，無法線上退款` };
+  if (!ticket.paymentId) throw { code: 'NOT_ONLINE_PAYMENT', message: '此票券非線上付款購買，無法自動退款' };
+
+  const paymentDoc = await db.collection('payments').doc(ticket.paymentId).get();
+  if (!paymentDoc.exists) throw { code: 'PAYMENT_NOT_FOUND', message: '找不到原始付款紀錄' };
+  const payment = paymentDoc.data();
+  if (payment.status !== 'paid') throw { code: 'PAYMENT_NOT_PAID', message: `原始付款狀態為 ${payment.status}，無法退款` };
+
+  const adapter = adapters[payment.provider];
+  if (!adapter || typeof adapter.refundPayment !== 'function') {
+    throw { code: 'REFUND_NOT_SUPPORTED', message: `${PROVIDER_META[payment.provider]?.label || payment.provider} 尚未支援自動線上退款` };
+  }
+
+  const gymSettings = await loadGymPaymentSettings(db, payment.gymId);
+  const refundResult = await adapter.refundPayment({
+    platformOrderId: payment.id, // 對齊 createPayment：建立付款當下 platform_order_id 送的就是我方 payments/{id}
+    refundOrderId: `refund-${ticketId}`,
+    refundAmount: payment.amount,
+    gymSettings,
+  });
+
+  const now = new Date();
+  await ticketRef.update({
+    status: 'cancelled',
+    cancelledAt: now, cancelledBy: staffId,
+    cancelReason: reason || '線上退款',
+    refundedAt: now, refundProviderTxnId: refundResult.refundTradeNo || null,
+    updatedAt: now,
+  });
+  await db.collection('payments').doc(ticket.paymentId).update({ status: 'refunded', updatedAt: now });
+
+  await recordTransaction(db, {
+    gymId: ticket.gymId, type: 'refund', totalAmount: -Number(payment.amount),
+    paymentMethod: payment.provider, memberId: ticket.memberId, memberName: ticket.memberName,
+    relatedId: ticketId, notes: `線上付款入場券退款（${payment.provider}）${reason ? '：' + reason : ''}`,
+    staffId, staffName: staffName || '',
+  });
+
+  return { ticketId, provider: payment.provider, amount: payment.amount, refundTradeNo: refundResult.refundTradeNo || null };
+}
+
+module.exports = { createPayment, getPayment, handleCallback, getAvailableMethods, refundEntryTicket, PROVIDERS };

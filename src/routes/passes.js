@@ -724,6 +724,29 @@ router.post('/single-entry/batch/:batchId/reject',
   }
 );
 
+// ── POST /passes/single-entry/:id/refund - 線上付款票券真實退款 ──────
+// 僅限「線上付款預購入場」（POST /payments 的 entry orderType）開出、尚未使用的票——真的呼叫
+// 原付款 provider（目前僅街口 jkopay）的退款 API，把錢退回會員支付帳戶；非本流程開出的票
+// （store 現場發放的贈券/櫃檯代收款票券）一律回 NOT_ONLINE_PAYMENT，不影響既有 /reject（那是
+// 內部帳務沖銷，非本端點取代對象）。
+router.post('/single-entry/:id/refund',
+  authenticate, checkPermission('passes.approve'),
+  async (req, res) => {
+    try {
+      const paymentService = require('../services/paymentService');
+      const result = await paymentService.refundEntryTicket(req.params.id, {
+        staffId: req.staff.id, staffName: req.staff.name, reason: req.body.reason || '',
+      });
+      res.json({ message: '已退款，票券已作廢', ...result });
+    } catch (err) {
+      if (err.code === 'TICKET_NOT_FOUND' || err.code === 'PAYMENT_NOT_FOUND') return res.status(404).json(err);
+      const known = ['TICKET_NOT_ACTIVE', 'NOT_ONLINE_PAYMENT', 'PAYMENT_NOT_PAID', 'REFUND_NOT_SUPPORTED'];
+      if (known.includes(err.code)) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // ── POST /passes/single-entry/:id/transfer - 轉移 ───────────────
 router.post('/single-entry/:id/transfer',
   authenticate, checkPermission('passes.create'),

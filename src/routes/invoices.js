@@ -557,3 +557,4 @@ module.exports = router;
 module.exports.voidRealInvoiceIfIssued = voidRealInvoiceIfIssued;
 module.exports.isInvoicePrintingEnabled = isInvoicePrintingEnabled;
 module.exports.checkInvoiceIssuanceTiming = checkInvoiceIssuanceTiming;
+module.exports.getActiveRealInvoice = getActiveRealInvoice;

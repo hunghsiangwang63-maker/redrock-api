@@ -781,8 +781,27 @@ const confirmRentalAddon = async (token, staffId, staffName, staffGymId = null, 
   // sourceType:'rental_addon' 的 refId——刻意不沿用原入場的 checkInId 當 refId，因為原入場
   // 可能早就已經開過一張發票了（同一組 sourceType+refId 只能有一張作用中發票，見 invoices.js
   // getActiveRealInvoice），補租這筆錢要能獨立再開一張，不能被那張擋住。
+  //
+  // ⚠️ 2026-08-23 修正重複開發票（真實案例：同一筆入場的補租金額被開了兩張紙本——一張走這裡的
+  // rental_addon 觸發、一張是店員後來從「今日入場」清單另外幫這筆入場開票）：關鍵在於「原入場此刻
+  // 是否已經開過發票」——已開過（先開了入場費才補租）→ 這筆補租金額本就沒被涵蓋，維持獨立開票
+  // 合理；還沒開過（本案例：先補租、原入場自己都還沒開票）→ addRentalToCheckIn 已經把補租費用
+  // 併進 checkIn.amountPaid，之後店員若從入場清單開票，金額會自動包含這次補租，此時若還讓這裡
+  // 也開一張獨立的補租發票，同一筆錢就會被印兩次紙本。故補算 checkinAlreadyInvoiced 旗標交給
+  // 前端判斷是否要渲染這個獨立開票入口（true 才顯示；false 則提示店員改用入場自己的發票鍵）。
+  let checkinAlreadyInvoiced = false;
+  try {
+    const { isInvoicePrintingEnabled, getActiveRealInvoice } = require('../../routes/invoices');
+    if (await isInvoicePrintingEnabled(db, p.gymId)) {
+      checkinAlreadyInvoiced = !!(await getActiveRealInvoice(db, 'checkin', p.checkInId));
+    } else {
+      const { getActiveInvoice } = require('../invoiceService');
+      checkinAlreadyInvoiced = !!(await getActiveInvoice(db, 'checkin', p.checkInId));
+    }
+  } catch (e) { console.error('[confirmRentalAddon] 檢查原入場發票狀態失敗', e.message); }
   return { ...result, addonId: token, memberId: p.memberId, memberName: p.memberName, gymId: p.gymId,
-    cost: p.cost, paymentMethod: p.paymentMethod, addShoes: p.addShoes, addChalk: p.addChalk };
+    cost: p.cost, paymentMethod: p.paymentMethod, addShoes: p.addShoes, addChalk: p.addChalk,
+    checkinAlreadyInvoiced };
 };
 
 module.exports = {

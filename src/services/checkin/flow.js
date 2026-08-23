@@ -662,6 +662,13 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
       const tk = tDoc.data();
       if (tk.paymentMethod && tk.paymentMethod !== 'cash') {
         onlineTicketInfo = { paymentMethod: tk.paymentMethod, amount: tk.amount || 0, rentShoes: !!tk.rentShoes, rentChalk: !!tk.rentChalk };
+        // 2026-08-24：此券線上購買的其實是「優惠折扣券」或「定期票」——供前端開立發票時正確顯示
+        // 品項名稱（否則 checkIn.entryType 恆為 'single_entry_ticket'，發票會誤標成「單次入場券」）。
+        if (tk.grantsDiscountCard) onlineTicketInfo.grantsDiscountCard = true;
+        if (tk.grantsPassTypeId) {
+          const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(tk.grantsPassTypeId).get();
+          onlineTicketInfo.grantsPassTypeName = ptDoc.exists ? (ptDoc.data().name || '定期票') : '定期票';
+        }
       }
     }
   }

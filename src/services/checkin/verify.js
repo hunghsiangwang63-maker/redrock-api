@@ -197,7 +197,8 @@ const verifyEntry = async (memberId, gymId) => {
         available: singleEntryTickets.length > 0,
         // rentShoes/rentChalk：2026-08-23 供「線上付款當下已一併預繳租借費用」的票券使用——會員
         // App 從付款導轉回來會整頁重載、原本勾選的租借狀態已被重置，改由這裡（伺服器權威）帶回。
-        tickets: singleEntryTickets.map(t => ({ id: t.id, expiresAt: t.expiresAt, rentShoes: !!t.rentShoes, rentChalk: !!t.rentChalk })),
+        // partnerVendor/partnerGymMember：2026-08-24 同理，供線上付款當下已套用的優惠旗標帶回顯示。
+        tickets: singleEntryTickets.map(t => ({ id: t.id, expiresAt: t.expiresAt, rentShoes: !!t.rentShoes, rentChalk: !!t.rentChalk, partnerVendor: !!t.partnerVendor, partnerGymMember: !!t.partnerGymMember })),
       },
       // 兒童不適用折扣券 → 不提供「購買」選項
       buyDiscountCard: { available: memberType !== 'child', price: withTeam(PRICES.discount_card), originalPrice: PRICES.discount_card },

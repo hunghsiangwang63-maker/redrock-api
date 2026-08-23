@@ -60,6 +60,7 @@ const createPendingCheckIn = async ({
     }
   }
 
+  let ticketPartnerVendor = false, ticketPartnerGymMember = false;
   if (entryType === 'single_entry_ticket' && singleEntryTicketId) {
     const ticketDoc = await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(singleEntryTicketId).get();
     if (!ticketDoc.exists || ticketDoc.data().status !== 'active') {
@@ -81,6 +82,11 @@ const createPendingCheckIn = async ({
     // 一律視為已收（金額 0），避免確認入場時 confirmCheckIn 的 amountPaid 又重複收一次。
     if (ticketData.rentShoes) { rentShoes = true; shoesPrice = 0; }
     if (ticketData.rentChalk) { rentChalk = true; chalkPrice = 0; }
+    // 2026-08-24：此券若在線上付款當下已套用友館隊員/特約廠商優惠——先記下來，redeem 不重算折扣
+    // （錢已照付款當下算好的折後金額收了），僅在下方 finalPartnerVendor/finalPartnerGymMember
+    // 覆寫供掃碼提示員工核對證件（金額不受影響）。
+    if (ticketData.partnerVendor) ticketPartnerVendor = true;
+    if (ticketData.partnerGymMember) ticketPartnerGymMember = true;
   }
 
   // 後端權威：依 entryTypes 設定重算入場金額（防止前端竄改）。
@@ -110,6 +116,10 @@ const createPendingCheckIn = async ({
       finalPartnerGymMember = !!computed.partnerGymMember;   // 後端權威：友館隊員 9 折
     }
   }
+  // 線上付款預購票（single_entry_ticket）覆寫：computePaidEntryAmount 對此 entryType 無對應
+  // entryTypes 設定、上方 if(computed) 不會觸發，故獨立在此覆寫（見上方 ticketPartnerVendor 註解）。
+  if (ticketPartnerVendor) finalPartnerVendor = true;
+  if (ticketPartnerGymMember) finalPartnerGymMember = true;
 
   // 後端權威：使用優惠折扣券 = 所選身分(baseEntryType)原價 8 折；有效隊員再疊加隊員 9 折。
   if (entryType === 'discount_card') {

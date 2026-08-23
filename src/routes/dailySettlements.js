@@ -536,11 +536,20 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
     }, 0);
     // 轉換期手動輸入模式（incomeManual 有帶才算，比照前端只在 settlementManualInput 開啟時才送這欄位）：
     // 現金＝手動發票總金額（依 income/incomeManual 逐項算）－線上支付合計——現金不再靠店員另外獨立填一次。
-    // 已開真列印的館別優先權威：現金＝今日實際列印發票總金額（invoices 集合）－線上支付合計，
-    // 不再需要／不再信任 incomeManual 手動輸入（前端此時亦不會顯示手動欄位、不會送出 incomeManual）。
     const isManualMode = incomeManual != null;
+    // ⚠️ 2026-08-23 修正真實案例（新竹單日誤差 -4200，逐筆核對後找到）：已開真列印的館別原本用
+    // 「今日實際列印發票總金額（invAuth.actualTotal）－線上支付合計（onlineTotal，只認
+    // linePay/jko/taiwanPay/transfer 四種已知電子方式）」推算現金——這個「總額扣掉已知電子方式、
+    // 剩下的都當現金」的假設，遇到 paymentMethod 不是「cash」也不是那四種已知電子方式的發票（真實
+    // 案例：一筆課程發票 paymentMethod='roster-claim'，來自課程名單認領機制、非店員實際收款）就會
+    // 出錯——這 4200 元既不是現金也不是那四種電子支付，卻因為「剩下的」邏輯被誤算進現金，導致
+    // 應有現金比實際點鈔多出整整 4200 元（其餘案例逐筆核對皆吻合，唯獨此項有落差）。
+    // 已開真列印的館別本就有「精確依 paymentMethod==='cash' 逐筆加總」算出的 payment.cash（見
+    // GET /today 的 totalCash，此處 payment 就是前端原封不動送回同一份預覽值）——改直接採用它，
+    // 不再用「總額減電子支付」這種容易被未知付款方式污染的推算法，與下方非真列印/非手動模式分支
+    // （payment?.cash）用同一套邏輯一致。
     const effectiveCash = invAuth.printingEnabled
-      ? invAuth.actualTotal - onlineTotal
+      ? (payment?.cash || 0)
       : isManualMode
         ? (manualIncomeTotal(income, incomeManual) || 0) - onlineTotal
         : (payment?.cash || 0);

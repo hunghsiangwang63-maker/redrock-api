@@ -65,16 +65,22 @@ const createPendingCheckIn = async ({
     if (!ticketDoc.exists || ticketDoc.data().status !== 'active') {
       throw { code: 'TICKET_INVALID', message: '單次入場券無效' };
     }
+    const ticketData = ticketDoc.data();
     // 擁有權：券必須屬於入場者本人（家長代子時 memberId 已解析為子會員；轉贈後
     // memberId 已更新為受贈者，故仍成立）。防止帶他人的有效券入場。
-    if (ticketDoc.data().memberId && ticketDoc.data().memberId !== memberId) {
+    if (ticketData.memberId && ticketData.memberId !== memberId) {
       throw { code: 'TICKET_NOT_OWNED', message: '此單次入場券不屬於此會員' };
     }
     // expiresAt 為日期字串(YYYY-MM-DD)；過期＝台灣今天已超過該日（比日期，非 datetime，
     // 否則當天午夜後的 dayjs() 會晚於 dayjs(expiresAt=當天00:00) 被誤判過期）
-    if (ticketDoc.data().expiresAt && taiwanToday() > String(ticketDoc.data().expiresAt)) {
+    if (ticketData.expiresAt && taiwanToday() > String(ticketData.expiresAt)) {
       throw { code: 'TICKET_EXPIRED', message: '單次入場券已過期' };
     }
+    // 2026-08-23：此券若在線上付款當下已一併預繳租借費用（見 paymentService.js orderHandlers.entry），
+    // 後端權威覆寫租借旗標/金額——不論呼叫端（會員 App 剛付款導回，自動產生 QR）送了什麼，租借費用
+    // 一律視為已收（金額 0），避免確認入場時 confirmCheckIn 的 amountPaid 又重複收一次。
+    if (ticketData.rentShoes) { rentShoes = true; shoesPrice = 0; }
+    if (ticketData.rentChalk) { rentChalk = true; chalkPrice = 0; }
   }
 
   // 後端權威：依 entryTypes 設定重算入場金額（防止前端竄改）。
@@ -215,9 +221,13 @@ const createPendingCheckIn = async ({
     partnerVendor: finalPartnerVendor,   // 特約廠商優惠（−20，掃碼提示出示證件）
     partnerGymMember: finalPartnerGymMember,   // 友館隊員優惠（9折，掃碼提示出示證件）
     rentShoes: rentShoes || false,
-    shoesPrice: rentShoes ? (shoesPrice || PRICES.shoes_rental) : 0,
+    // ⚠️ 2026-08-23 修正：這裡原本用 `shoesPrice || PRICES.shoes_rental`——當上方「已線上預繳」覆寫把
+    // shoesPrice 明確設為 0 時，`0 || 100` 在 JS 會被判定成 falsy 而掉回預設 100，導致租借費用被悄悄
+    // 加回來重複收費（E2E 測試抓到）。改用 `!= null` 判斷，只有「完全沒帶這個欄位」才落回預設值，
+    // 明確傳入的 0（代表已付款、無需再收費）會被正確保留。
+    shoesPrice: rentShoes ? (shoesPrice != null ? shoesPrice : PRICES.shoes_rental) : 0,
     rentChalk: rentChalk || false,
-    chalkPrice: rentChalk ? (chalkPrice || 50) : 0,
+    chalkPrice: rentChalk ? (chalkPrice != null ? chalkPrice : 50) : 0,
     status: 'pending',
     createdAt: now,
     expiresAt,
@@ -608,7 +618,22 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     await db.collection(COLLECTIONS.CHECK_INS).doc(checkInId).update({ transactionId: txn.id });
   }
 
-  return { checkIn };
+  // 使用單次入場券入場：若此券當初是線上付款（街口等）購買，把原始付款方式/全額（含租借）一併
+  // 回傳給前端——2026-08-23：此類入場的 checkIn.amountPaid 會是 0（租借費用已在線上付款當下收取，
+  // 見 createPendingCheckIn 的權威覆寫），店員端「開立發票」原本只在 amountPaid>0 才顯示會被藏起來，
+  // 需要這份資訊才能改用線上已付的全額+品項開票（見 CheckinPage.jsx confirmedCheckIn 用法）。
+  let onlineTicketInfo = null;
+  if (pending.entryType === 'single_entry_ticket' && pending.singleEntryTicketId) {
+    const tDoc = await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(pending.singleEntryTicketId).get();
+    if (tDoc.exists) {
+      const tk = tDoc.data();
+      if (tk.paymentMethod && tk.paymentMethod !== 'cash') {
+        onlineTicketInfo = { paymentMethod: tk.paymentMethod, amount: tk.amount || 0, rentShoes: !!tk.rentShoes, rentChalk: !!tk.rentChalk };
+      }
+    }
+  }
+
+  return { checkIn: { ...checkIn, onlineTicket: onlineTicketInfo } };
 };
 
 // 取消入場時還原「續約附加」：復原票期/次數、作廢續約分期計畫、一次付清記負向沖銷。

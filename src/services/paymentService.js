@@ -119,7 +119,7 @@ const orderHandlers = {
   // （跟 checkin orderType 不同——checkin 是更新既有 checkIns 文件，entry 是全新的 pay-first 流程），
   // 改直接開一張單次入場券（30 天內任一天可用，validDate 不設 → 不受「限當天」限制，見 §12 修正說明）。
   entry: async (db, payment) => {
-    const { gymId, entryType } = payment.orderRef || {};
+    const { gymId, entryType, rentShoes, rentChalk } = payment.orderRef || {};
     const memberId = payment.memberId;
     if (!memberId || !gymId || !entryType) return { ok: false };
 
@@ -145,6 +145,10 @@ const orderHandlers = {
       transferHistory: [],
       usedAt: null, usedCheckInId: null,
       amount: payment.amount, paymentMethod: payment.provider, paymentId: payment.id,
+      // 2026-08-23：付款當下一併選了租借器材（金額已在 orderResolvers.entry 併入 payment.amount）——
+      // 記在票上供 redeem（checkin/flow.js createPendingCheckIn）時權威判斷「租借已預繳、不再收費」，
+      // 也讓自動產生 QR 那一步（會員 App 導回、React state 已因整頁重載被重置）知道要帶入哪些租借項目。
+      rentShoes: !!rentShoes, rentChalk: !!rentChalk,
       source: 'online-entry', // 2026-08-22 由 'linepay-entry' 改中性命名（此路徑現由 jkopay 亦共用，非僅 linepay；write-only 欄位，前後端皆無讀取者，改名安全）
       notes: '會員線上付款預購入場',
       createdAt: new Date(), updatedAt: new Date(),
@@ -229,7 +233,7 @@ const orderResolvers = {
   // 入場 pay-first：付款前沒有既有紀錄可查，orderRef 直接帶 { gymId, entryType }（會員自選館別+入館身份）；
   // memberId 一律信任 createPayment 呼叫端傳入的認證身份（見下方 createPayment 呼叫處第三參數），不信 orderRef。
   entry: async (db, orderRef, memberId) => {
-    const { gymId, entryType } = orderRef || {};
+    const { gymId, entryType, rentShoes, rentChalk } = orderRef || {};
     if (!memberId) throw { code: 'INVALID_ORDER', message: '缺少會員身份' };
     if (!gymId || !entryType) throw { code: 'INVALID_ORDER', message: '缺少場館或入館身份' };
     // 僅開放「單純付費入館」三種身份——卡/券/免費資格等本就有自己的（免費）入場路徑，不需要線上付款。
@@ -251,7 +255,13 @@ const orderResolvers = {
     const computed = await computePaidEntryAmount(entryType, member);
     if (!computed || !(computed.amount > 0)) throw { code: 'INVALID_ENTRY_TYPE', message: '此入館身份無法線上付款' };
 
-    return { amount: computed.amount, gymId, memberId, memberName: member.name || '' };
+    // 2026-08-23 修正真實漏收案例：租借器材（岩鞋/粉袋）若在付款前已勾選，須併入線上付款總額——
+    // 前端「租借器材」步驟本就在「選擇付款方式」之前，選完全部資訊才走到這裡，故 orderRef 帶來的
+    // rentShoes/rentChalk 就是會員最終確認的選擇；後端權威加總金額（不信前端算好的 amount），
+    // 與現金/其他方式的 handleGenerateQR 用同一組固定費率（岩鞋/粉袋，見 checkin/flow.js PRICES）。
+    const { PRICES } = require('./checkin/pricing');
+    const rentalAmount = (rentShoes ? (PRICES.shoes_rental || 100) : 0) + (rentChalk ? 50 : 0);
+    return { amount: computed.amount + rentalAmount, gymId, memberId, memberName: member.name || '' };
   },
 };
 

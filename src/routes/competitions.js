@@ -674,6 +674,10 @@ router.post('/registrations/:regId/confirm-payment',
             amount: Number(req.body.amount) || reg.registrationFee || 0,
             note: `${reg.memberName || ''} ${reg.competitionName || ''}`.trim(),
           });
+          // 2026-08-23：比賽發票開立時機刻意延後（見 invoices.js checkInvoiceIssuanceTiming，須賽事前
+          // 3 天才能開票）——現金今天已經記進抽屜（上面這筆+現金補入），但發票通常是更晚才開立，屆時
+          // payment.cash（發票日為準）會把同一筆現金再算一次。標記旗標供 /print-record 開票時據以沖銷。
+          await regRef.update({ cashAdjustedForInvoice: true });
         } catch (e) { console.error('比賽現金寫入結帳加減項失敗', e.message); }
       }
       // 記營收（預收，認列在比賽前一天）

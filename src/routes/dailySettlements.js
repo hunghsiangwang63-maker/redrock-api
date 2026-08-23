@@ -33,6 +33,38 @@ const entryOrderSort = (a, b) => {
   return ((ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)) || String(a).localeCompare(String(b));
 };
 
+// ── 線上預付單次入場券的入場費/租借費還原（2026-08-23，真實案例：街口 pay-first 入場）──────────
+// 會員線上付款（entry orderType，見 paymentService.js）當下就已經把入場費＋租借費一次收清、記進
+// singleEntryTickets 這張票；之後會員用這張票 redeem（產生 QR→掃碼→確認入場）走的是「免費入場」
+// 分支，該次 checkIn 的 amountPaid/entryFee/shoesPrice/chalkPrice 全部是 0（錢不是這次收的）。
+// 若不還原，入場費/租借費統計（結帳今日收入六分類、月銷售 Excel）看不到這筆早就收過的真實收入，
+// 整筆從報表消失。orderResolvers.entry 限定只接受 single_ticket/student_free/child_free 三種
+// entryType 線上付款，故不會誤觸優惠券/隊員折扣分類（那兩者本就不支援線上付款）。
+const resolveOnlineTicketMap = async (db, checkinDataList) => {
+  const ticketIds = [...new Set(checkinDataList
+    .filter(c => c.entryType === 'single_entry_ticket' && c.singleEntryTicketId)
+    .map(c => c.singleEntryTicketId))];
+  const map = {};
+  if (!ticketIds.length) return map;
+  const docs = await db.getAll(...ticketIds.map(id => db.collection('singleEntryTickets').doc(id)));
+  docs.forEach(d => { if (d.exists) map[d.id] = d.data(); });
+  return map;
+};
+// 給定一筆 checkIn（onlineTicketMap 由上面批次查好）：命中「線上付款且金額>0」的票券才還原真實
+// 金額/分類，其餘（一般現金/現場付款/免費贈券等）維持原本 checkIn 欄位計算，行為不變。
+const resolveEntryRental = (data, onlineTicketMap) => {
+  const ticket = data.singleEntryTicketId ? onlineTicketMap[data.singleEntryTicketId] : null;
+  if (ticket && ticket.paymentMethod && ticket.paymentMethod !== 'cash' && Number(ticket.amount) > 0) {
+    const rentalAmt = (ticket.rentShoes ? 100 : 0) + (ticket.rentChalk ? 50 : 0);
+    const entryAmt = Math.max(0, Number(ticket.amount) - rentalAmt);
+    const cat = ENTRY_LABEL[ticket.baseEntryType] || ticket.baseEntryType || '其他入場';
+    return { entryAmt, rentalAmt, cat, paymentMethod: ticket.paymentMethod };
+  }
+  const rentalAmt = (data.shoesPrice || 0) + (data.chalkPrice || 0);
+  const entryAmt = Math.max(0, (data.amountPaid || 0) - rentalAmt);
+  return { entryAmt, rentalAmt, cat: entryCategory(data), paymentMethod: data.paymentMethod };
+};
+
 // ── 轉換期手動輸入「發票總金額」計算（與前端 DailySettlementPage.jsx 的同名函式逐字對齊，
 //    勿只改一邊——這是「現金」推算的權威來源，後端獨立算一次、不信任前端傳來的手動現金值）──
 const ENTRY_CATS = ['成人', '學生', '兒童', '成人使用優惠券', '學生使用優惠券', '隊員折扣', '隊員＋優惠券'];
@@ -232,6 +264,8 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       .where('isCancelled', '==', false)
       .where('checkedInAt', '>=', todayStart)
       .where('checkedInAt', '<=', todayEnd).get();
+    // 線上預付單次入場券還原（見模組頂 resolveOnlineTicketMap 說明）——批次一次查完，避免逐筆查詢
+    const onlineTicketMap = await resolveOnlineTicketMap(db, checkinSnap.docs.map(d => d.data()));
 
     let entryIncome = 0, shoeRentalIncome = 0;
     const entryByType = {};   // 入場收入細項（依折扣分類，見模組頂 entryCategory）
@@ -250,23 +284,22 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     const checkinAccountedFor = new Map(); // checkInId → 已由 type:'checkin' 交易記錄歸類的金額
     checkinSnap.docs.forEach(d => {
       const data = d.data();
-      const amount = data.amountPaid || 0;
       // 連帶岩鞋/粉袋一律歸「出租」、不算入場（不管哪種入場）。checkIn 分開存 shoesPrice/chalkPrice，
-      // 直接 租借＝岩鞋+粉袋、入場＝amountPaid−租借（entryFee 對 buy_pass 未存、故不倚賴）。
-      const rentalAmt = (data.shoesPrice || 0) + (data.chalkPrice || 0);
-      const entryAmt = Math.max(0, amount - rentalAmt);
+      // 直接 租借＝岩鞋+粉袋、入場＝amountPaid−租借（entryFee 對 buy_pass 未存、故不倚賴）——線上預付
+      // 票券的這幾個欄位皆為 0（錢已在線上付款當下收取），resolveEntryRental 命中時改用票券真實金額。
+      const { entryAmt, rentalAmt, cat, paymentMethod: effPayMethod } = resolveEntryRental(data, onlineTicketMap);
+      const amount = entryAmt + rentalAmt;
       shoeRentalIncome += rentalAmt;
       // 真列印館別：付款方式一律改由下方「今日已開立發票」依 paymentMethod 分組取代（見 invAuth.byMethod
       // 合併處），不再倚賴這裡的 checkIns/transactions（recognitionDate 對入場本身雖無影響，但為了讓
       // 整組付款方式統計單一日期基準、好排查，一併統一改走發票）——故不建立 fallback，避免重複計入。
-      if (amount && !invAuth.printingEnabled) checkinFallback.set(d.id, { amount, paymentMethod: data.paymentMethod });
+      if (amount && !invAuth.printingEnabled) checkinFallback.set(d.id, { amount, paymentMethod: effPayMethod });
       if (data.entryType === 'buy_pass') {
         // 入場購買定期票：票款歸「定期票」大項（賣票收入統一一處；分期時 entryAmt=0 首期由分期計畫記）
         if (entryAmt > 0) { const k = data.buyPassTypeId || '_unknown'; buyPassAmounts[k] = (buyPassAmounts[k] || 0) + entryAmt; }
         return;
       }
       entryIncome += entryAmt;
-      const cat = entryCategory(data);
       entryByType[cat] = (entryByType[cat] || 0) + entryAmt;
     });
 
@@ -720,6 +753,10 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
     const ciSnap = await db.collection('checkIns')
       .where('checkedInAt', '>=', new Date(`${start}T00:00:00+08:00`))
       .where('checkedInAt', '<=', new Date(`${end}T23:59:59+08:00`)).get();
+    // 線上預付單次入場券還原（見模組頂 resolveOnlineTicketMap 說明）——這份月報表的入場費是獨立從
+    // checkIns 重新彙整（非讀取已存的 income.entryItems），故此處也要同樣套用，否則整月的線上預付
+    // 入場（含租借）會在此表徹底消失，即使結帳頁本身已經正確顯示。
+    const onlineTicketMapMonth = await resolveOnlineTicketMap(db, ciSnap.docs.map(d => d.data()).filter(c => !c.isCancelled && (!gymId || c.gymId === gymId)));
     const entryGroups = {}; // category -> { label, byDate }
     ciSnap.docs.forEach(d => {
       const c = d.data();
@@ -728,11 +765,9 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
       if (!c.checkedInAt) return;
       if (c.entryType === 'buy_pass') return; // 入場購定期票票款歸「定期票」列（結帳存檔 passItems），不列入場費
       const dt = new Date(c.checkedInAt.toDate().getTime() + 8 * 3600000).toISOString().slice(0, 10);
-      const cat = entryCategory(c);
-      // entryFee 未存（早期 QR/直接入場的 checkIn 文件）時，用 amountPaid 扣掉租借（岩鞋+粉袋），與即時結帳一致，避免把租借灌進入場費
-      const fee = (c.entryFee ?? Math.max(0, (c.amountPaid || 0) - (c.shoesPrice || 0) - (c.chalkPrice || 0)));
+      const { entryAmt, cat } = resolveEntryRental(c, onlineTicketMapMonth);
       if (!entryGroups[cat]) entryGroups[cat] = { label: cat, byDate: {} };
-      entryGroups[cat].byDate[dt] = (entryGroups[cat].byDate[dt] || 0) + fee;
+      entryGroups[cat].byDate[dt] = (entryGroups[cat].byDate[dt] || 0) + entryAmt;
     });
     // 只列有金額的分類（比照結帳摘要 value>0）；固定六分類序在前、其餘 fallback 依名稱
     const entryKeys = Object.keys(entryGroups)

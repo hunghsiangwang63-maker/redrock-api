@@ -1723,12 +1723,27 @@ const markTodayCourseAttendanceOnEntry = async ({ memberId, gymId, staffId }) =>
 };
 
 // ── 查詢場次學員名單 ──────────────────────────────────────────────
+// 投影欄位：已逐一核對唯一消費者（員工端 CoursesPage.jsx 場次名單）實際讀取的欄位。
+// ⚠️ 排除的正是 courseEnrollments 文件裡的 portraitSignature/guardianSignature 兩張簽名圖
+// base64——2026-08-19 修 courseEnrollments egress 時本已發現這兩張圖平均 77KB/最大 180KB，
+// 當時評估此函式「單次呼叫量天生受場次人數上限」風險較低而跳過；2026-08-23 重新用真實資料
+// 測量才發現「idx0-only 簽名」的 2026-08-11 修復只擋住新資料、沒回填舊資料——全庫 458 個場次
+// 裡有 222 個(48%)仍把簽名複製到每一堂場次文件（非僅第一堂），最大單一場次的原始 payload
+// 高達 1MB（7人），實測投影後降到 1.8KB（-99.8%）。courseId 為內部查 courseRegistrations
+// header fallback 用（enrollGender/enrollAge/enrollNote/healthNote/referralSource 非第一堂
+// 場次會是 null），非畫面直接顯示，勿漏。
+const SESSION_ROSTER_FIELDS = [
+  'memberId', 'memberName', 'courseId', 'status', 'isMakeup',
+  'enrollGender', 'enrollAge', 'enrollNote', 'healthNote', 'referralSource',
+  'paymentStatus', 'leaveReason',
+];
 const getSessionRoster = async (sessionId) => {
   const db = getDb();
   const snap = await db.collection(ENROLLMENT_COLLECTION)
     .where('sessionId', '==', sessionId)
     .where('status', 'in', ['confirmed', 'waitlist', 'leave'])
     .orderBy('enrolledAt', 'asc')
+    .select(...SESSION_ROSTER_FIELDS)
     .get();
 
   const attendanceSnap = await db.collection(ATTENDANCE_COLLECTION)

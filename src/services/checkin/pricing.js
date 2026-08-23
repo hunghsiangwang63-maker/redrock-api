@@ -126,7 +126,39 @@ const computePaidEntryAmount = async (entryType, member, opts = {}) => {
   };
 };
 
+// ── 購買優惠折扣券入場：固定券價 + 有效隊員 9 折（不信前端傳值）───────────────
+// 抽出供 checkin/flow.js createPendingCheckIn（現金/櫃檯）與 paymentService.js
+// orderResolvers.entry（線上付款）共用，避免同段定價邏輯各自維護一份、日後改動漏同步。
+const computeBuyDiscountCardAmount = (member) => {
+  const originalAmount = PRICES.discount_card;
+  const isTeam = isActiveTeamMember(member);
+  const teamEligible = isTeam && originalAmount >= TEAM_DISCOUNT_MIN_AMOUNT;
+  return {
+    amount: teamEligible ? Math.round(originalAmount * PRICES.team_discount_rate) : originalAmount,
+    originalAmount, isTeamDiscount: teamEligible,
+  };
+};
+
+// ── 購買新定期票入場：票種原價 + 單館票限購館別 + 有效隊員 9 折（不信前端傳值）───
+// 同上，抽出供兩處共用；驗證失敗的錯誤碼與訊息與既有行為逐字一致（沿用既有呼叫端相容）。
+const computeBuyPassAmount = async (db, buyPassTypeId, gymId, member) => {
+  if (!buyPassTypeId) throw { code: 'PASS_TYPE_REQUIRED', message: '請選擇要購買的定期票種' };
+  const ptDoc = await db.collection('passTypes').doc(buyPassTypeId).get();
+  if (!ptDoc.exists || ptDoc.data().isActive === false) throw { code: 'PASS_TYPE_INVALID', message: '定期票種無效或已停用' };
+  const pt = ptDoc.data();
+  if (pt.scope !== 'shared' && (pt.targetGymId || pt.gymId) !== gymId) {
+    throw { code: 'PASS_GYM_MISMATCH', message: '此為單館定期票，僅限適用場館購買入場' };
+  }
+  const isTeam = isActiveTeamMember(member);
+  const teamEligible = isTeam && pt.price >= TEAM_DISCOUNT_MIN_AMOUNT;
+  return {
+    passType: pt,
+    amount: teamEligible ? Math.round(pt.price * PRICES.team_discount_rate) : pt.price,
+    originalAmount: pt.price, isTeamDiscount: teamEligible,
+  };
+};
+
 // ── 取得有效定期票 ───────────────────────────────────────────────
 // endDate 改用「補償後到期日」（臨時休館延長票期，公休不補）→ 不在 Firestore 端以 endDate 預篩，
 // 改抓全部 active 後在程式碼用 effectiveEndDate 判斷（會員 active 票很少，成本可忽略）。
-module.exports = { PRICES, DISCOUNT_CARD_RATE, PARTNER_VENDOR_DISCOUNT, PARTNER_GYM_MEMBER_RATE, getPartnerVendorConfig, getPartnerGymMemberConfig, getOriginalEntryPrice, getMemberType, isFreeEntry, getEntryTypePrice, computePaidEntryAmount };
+module.exports = { PRICES, DISCOUNT_CARD_RATE, PARTNER_VENDOR_DISCOUNT, PARTNER_GYM_MEMBER_RATE, getPartnerVendorConfig, getPartnerGymMemberConfig, getOriginalEntryPrice, getMemberType, isFreeEntry, getEntryTypePrice, computePaidEntryAmount, computeBuyDiscountCardAmount, computeBuyPassAmount };

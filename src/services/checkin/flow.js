@@ -11,7 +11,7 @@ const { isActiveTeamMember, TEAM_DISCOUNT_MIN_AMOUNT } = require('../teamMemberS
 const { isChild } = require('../../utils/age');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
-const { DISCOUNT_CARD_RATE, PRICES, computePaidEntryAmount, getEntryTypePrice, getMemberType, getOriginalEntryPrice } = require('./pricing');
+const { DISCOUNT_CARD_RATE, PRICES, computePaidEntryAmount, getEntryTypePrice, getMemberType, getOriginalEntryPrice, computeBuyDiscountCardAmount, computeBuyPassAmount } = require('./pricing');
 const { getRenewalInfo } = require('./eligibility');
 const { runEntryGates, tryExtendFallTest } = require('./gates');
 
@@ -148,38 +148,21 @@ const createPendingCheckIn = async ({
     finalTeam = false;
   }
   // 後端權威：購買優惠折扣券入場——固定券價；有效隊員 9 折（不信前端傳值）
+  // 定價邏輯抽至 pricing.js computeBuyDiscountCardAmount，與 paymentService.js
+  // orderResolvers.entry（線上付款）共用同一份，避免各自維護。
   if (entryType === 'buy_discount_card') {
-    const base = PRICES.discount_card;
-    finalOriginal = base;
-    const isTeamBuy = isActiveTeamMember(member);
-    if (isTeamBuy && base >= TEAM_DISCOUNT_MIN_AMOUNT) {
-      finalAmount = Math.round(base * PRICES.team_discount_rate);
-      finalTeam = true;
-    } else {
-      finalAmount = base;
-      finalTeam = false;
-    }
+    const r = computeBuyDiscountCardAmount(member);
+    finalOriginal = r.originalAmount;
+    finalAmount = r.amount;
+    finalTeam = r.isTeamDiscount;
   }
   // 後端權威：購買新定期票入場——金額取票種原價、單館票僅限該館（不信前端傳值）
+  // 定價邏輯抽至 pricing.js computeBuyPassAmount，同上共用。
   if (entryType === 'buy_pass') {
-    if (!buyPassTypeId) throw { code: 'PASS_TYPE_REQUIRED', message: '請選擇要購買的定期票種' };
-    const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(buyPassTypeId).get();
-    if (!ptDoc.exists || ptDoc.data().isActive === false) throw { code: 'PASS_TYPE_INVALID', message: '定期票種無效或已停用' };
-    const pt = ptDoc.data();
-    // 場館限制：單館票（scope!=='shared'）只能在其目標館購買入場；雙館 shared 不限
-    if (pt.scope !== 'shared' && (pt.targetGymId || pt.gymId) !== gymId) {
-      throw { code: 'PASS_GYM_MISMATCH', message: '此為單館定期票，僅限適用場館購買入場' };
-    }
-    finalOriginal = pt.price;
-    // 有效隊員購買定期票 9 折
-    const isTeamBuyPass = isActiveTeamMember(member);
-    if (isTeamBuyPass && pt.price >= TEAM_DISCOUNT_MIN_AMOUNT) {
-      finalAmount = Math.round(pt.price * PRICES.team_discount_rate);
-      finalTeam = true;
-    } else {
-      finalAmount = pt.price;
-      finalTeam = false;
-    }
+    const r = await computeBuyPassAmount(db, buyPassTypeId, gymId, member);
+    finalOriginal = r.originalAmount;
+    finalAmount = r.amount;
+    finalTeam = r.isTeamDiscount;
   }
 
   // 後端權威：續約附加（到期前 14 天）——驗票屬本人 / 到期窗 / 場館，快照折後價與新到期日
@@ -332,6 +315,12 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
       const tk = tDoc.data();
       if (tk.paymentMethod && tk.paymentMethod !== 'cash') {
         onlineTicketInfo = { paymentMethod: tk.paymentMethod, amount: tk.amount || 0 };
+        // 2026-08-24：此券若線上購買的其實是優惠折扣券/定期票，供掃碼預覽提示店員「確認後將開通」
+        if (tk.grantsDiscountCard) onlineTicketInfo.grantsDiscountCard = true;
+        if (tk.grantsPassTypeId) {
+          const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(tk.grantsPassTypeId).get();
+          onlineTicketInfo.grantsPassTypeName = ptDoc.exists ? (ptDoc.data().name || '定期票') : '定期票';
+        }
       }
     }
   }
@@ -470,10 +459,44 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     if (!ticketDoc.exists || ticketDoc.data().status !== 'active') {
       throw { code: 'TICKET_INVALID', message: '單次入場券無效或已使用' };
     }
-    if (ticketDoc.data().expiresAt && taiwanToday() > String(ticketDoc.data().expiresAt)) {
+    const ticketData = ticketDoc.data();
+    if (ticketData.expiresAt && taiwanToday() > String(ticketData.expiresAt)) {
       throw { code: 'TICKET_EXPIRED', message: '單次入場券已過期' };
     }
     await ticketRef.update({ status: 'used', usedAt: now, usedCheckInId: checkInId, updatedAt: now });
+    // 2026-08-24：此券若在線上付款當下購買的其實是「優惠折扣券」或「定期票」（非單純付費入場，
+    // 見 paymentService.js orderHandlers.entry 的 grantsDiscountCard/grantsPassTypeId）——於此
+    // （實際入場/確認那一刻）才建立卡/票，比照現金流程既有的建立時機（confirmCheckIn 當下，
+    // 非付款/發券當下），維持起訖日/序號等以實際入場當天為準的既有語意一致。金額已由線上付款
+    // 當下收妥（此券本身 amount 即為已收金額），故只傳給卡片自身的「已付金額」記錄用，不會
+    // 被下方統一營收記帳重複計算（checkIn.amountPaid 對此券恆為 0，見下方 amountPaid 組成）。
+    // ⚠️ 僅支援一次付清（分期購買仍走櫃檯既有流程），故定期票分支不建 installmentPlanId。
+    if (ticketData.grantsDiscountCard) {
+      const { purchaseDiscountCard } = require('../discountCardService');
+      await purchaseDiscountCard({ memberId: pending.memberId, gymId: pending.gymId, staffId, price: ticketData.amount || 0, paymentId: checkInId });
+    } else if (ticketData.grantsPassTypeId) {
+      const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(ticketData.grantsPassTypeId).get();
+      if (ptDoc.exists) {
+        const pt = ptDoc.data();
+        const startDate = taiwanToday();
+        const endDate = pt.durationMonths
+          ? dayjs(startDate).add(pt.durationMonths, 'month').format('YYYY-MM-DD')
+          : dayjs(startDate).add(pt.durationDays || 0, 'day').format('YYYY-MM-DD');
+        const newPassId = uuidv4();
+        await db.collection(COLLECTIONS.MEMBER_PASSES).doc(newPassId).set({
+          id: newPassId, memberId: pending.memberId, gymId: pending.gymId,
+          passTypeId: ticketData.grantsPassTypeId, passTypeName: pt.name, scope: pt.scope,
+          targetGymId: pt.targetGymId || null,
+          startDate, endDate,
+          credits: pt.credits ?? null, originalCredits: pt.credits ?? null,
+          status: 'active', paymentId: checkInId, paymentStatus: 'confirmed',
+          installmentPlanId: null,
+          soldByStaffId: staffId || null, notes: '線上付款購買（入場時開通）', createdAt: now, updatedAt: now,
+        });
+        try { await require('../passOverlapService').applyCourseOverlapForMember(pending.memberId); }
+        catch (e) { console.error('課程重疊補償失敗（票已開立）:', e.message); }
+      }
+    }
   } else if (pending.entryType === 'bonus' && pending.bonusId) {
     await require('../bonusService').useBonus(pending.bonusId, pending.gymId);
   }

@@ -119,7 +119,7 @@ const orderHandlers = {
   // （跟 checkin orderType 不同——checkin 是更新既有 checkIns 文件，entry 是全新的 pay-first 流程），
   // 改直接開一張單次入場券（30 天內任一天可用，validDate 不設 → 不受「限當天」限制，見 §12 修正說明）。
   entry: async (db, payment) => {
-    const { gymId, entryType, rentShoes, rentChalk, partnerVendor, partnerGymMember } = payment.orderRef || {};
+    const { gymId, entryType, rentShoes, rentChalk, partnerVendor, partnerGymMember, buyPassTypeId } = payment.orderRef || {};
     const memberId = payment.memberId;
     if (!memberId || !gymId || !entryType) return { ok: false };
 
@@ -154,6 +154,10 @@ const orderHandlers = {
       // 掃碼提示旗標（金額不受影響，錢已照當初申報+折後金額收了；核對時機延後到櫃檯掃碼確認，
       // 與現金/pending-checkin 既有的「自行申報→櫃檯核對」信任模型一致）。
       partnerVendor: !!partnerVendor, partnerGymMember: !!partnerGymMember,
+      // 2026-08-24：線上購買的其實是「優惠折扣券」或「定期票」（僅一次付清；分期仍走櫃檯既有流程）
+      // ——記在票上，redeem（checkin/flow.js confirmCheckIn）當下才實際建卡/建票，見該處註解。
+      grantsDiscountCard: entryType === 'buy_discount_card',
+      grantsPassTypeId: entryType === 'buy_pass' ? (buyPassTypeId || null) : null,
       source: 'online-entry', // 2026-08-22 由 'linepay-entry' 改中性命名（此路徑現由 jkopay 亦共用，非僅 linepay；write-only 欄位，前後端皆無讀取者，改名安全）
       notes: '會員線上付款預購入場',
       createdAt: new Date(), updatedAt: new Date(),
@@ -238,11 +242,13 @@ const orderResolvers = {
   // 入場 pay-first：付款前沒有既有紀錄可查，orderRef 直接帶 { gymId, entryType }（會員自選館別+入館身份）；
   // memberId 一律信任 createPayment 呼叫端傳入的認證身份（見下方 createPayment 呼叫處第三參數），不信 orderRef。
   entry: async (db, orderRef, memberId) => {
-    const { gymId, entryType, rentShoes, rentChalk, partnerVendor, partnerGymMember } = orderRef || {};
+    const { gymId, entryType, rentShoes, rentChalk, partnerVendor, partnerGymMember, buyPassTypeId } = orderRef || {};
     if (!memberId) throw { code: 'INVALID_ORDER', message: '缺少會員身份' };
     if (!gymId || !entryType) throw { code: 'INVALID_ORDER', message: '缺少場館或入館身份' };
-    // 僅開放「單純付費入館」三種身份——卡/券/免費資格等本就有自己的（免費）入場路徑，不需要線上付款。
-    if (!['single_ticket', 'student_free', 'child_free'].includes(entryType))
+    // 開放身份：單純付費入館三種＋購買優惠折扣券入場＋購買定期票入場（僅一次付清，2026-08-24
+    // 拍板：分期購買仍走既有櫃檯流程，不接線上）——卡/券/免費資格等本就有自己的（免費）入場路徑，
+    // 不需要線上付款，不在此列。
+    if (!['single_ticket', 'student_free', 'child_free', 'buy_discount_card', 'buy_pass'].includes(entryType))
       throw { code: 'INVALID_ENTRY_TYPE', message: '此入館身份不支援線上付款預購' };
 
     const memberService = require('./memberService');
@@ -255,23 +261,35 @@ const orderResolvers = {
     const gate = await runEntryGates(memberId, gymId);
     if (gate.blocked) throw { code: gate.code, message: gate.message };
 
-    // 後端權威金額（含有效隊員 9 折 + 舊卡8折不適用線上；友館隊員(9折)/特約廠商(−N) 為會員自行申報，
-    // 2026-08-24 起線上付款亦支援——與現金/pending-checkin 走同一套 computePaidEntryAmount opts，
-    // 核對證件延後到櫃檯掃碼確認才做（而非付款當下），與其餘系統一貫的「自行申報→櫃檯視覺核對」
-    // 信任模型一致，非因線上付款就跳過核對）
-    const { computePaidEntryAmount } = require('./checkin/pricing');
-    const computed = await computePaidEntryAmount(entryType, member, {
-      partnerVendor: !!partnerVendor, partnerGymMember: !!partnerGymMember,
-    });
-    if (!computed || !(computed.amount > 0)) throw { code: 'INVALID_ENTRY_TYPE', message: '此入館身份無法線上付款' };
+    const { PRICES, computePaidEntryAmount, computeBuyDiscountCardAmount, computeBuyPassAmount } = require('./checkin/pricing');
+    let amount;
+    if (entryType === 'buy_discount_card') {
+      // 兒童不適用折扣券（後端權威，與現金流程 createPendingCheckIn 同一擋）
+      const { isChild } = require('../utils/age');
+      if (isChild(member)) throw { code: 'CHILD_NO_DISCOUNT_CARD', message: '兒童不適用折扣券，無法購買' };
+      amount = computeBuyDiscountCardAmount(member).amount;
+    } else if (entryType === 'buy_pass') {
+      const { isChild } = require('../utils/age');
+      if (isChild(member)) throw { code: 'CHILD_NO_PASS', message: '未滿 13 歲無法購買定期票' };
+      amount = (await computeBuyPassAmount(db, buyPassTypeId, gymId, member)).amount;
+    } else {
+      // 後端權威金額（含有效隊員 9 折 + 舊卡8折不適用線上；友館隊員(9折)/特約廠商(−N) 為會員自行申報，
+      // 2026-08-24 起線上付款亦支援——與現金/pending-checkin 走同一套 computePaidEntryAmount opts，
+      // 核對證件延後到櫃檯掃碼確認才做（而非付款當下），與其餘系統一貫的「自行申報→櫃檯視覺核對」
+      // 信任模型一致，非因線上付款就跳過核對）
+      const computed = await computePaidEntryAmount(entryType, member, {
+        partnerVendor: !!partnerVendor, partnerGymMember: !!partnerGymMember,
+      });
+      if (!computed || !(computed.amount > 0)) throw { code: 'INVALID_ENTRY_TYPE', message: '此入館身份無法線上付款' };
+      amount = computed.amount;
+    }
 
     // 2026-08-23 修正真實漏收案例：租借器材（岩鞋/粉袋）若在付款前已勾選，須併入線上付款總額——
     // 前端「租借器材」步驟本就在「選擇付款方式」之前，選完全部資訊才走到這裡，故 orderRef 帶來的
     // rentShoes/rentChalk 就是會員最終確認的選擇；後端權威加總金額（不信前端算好的 amount），
     // 與現金/其他方式的 handleGenerateQR 用同一組固定費率（岩鞋/粉袋，見 checkin/flow.js PRICES）。
-    const { PRICES } = require('./checkin/pricing');
     const rentalAmount = (rentShoes ? (PRICES.shoes_rental || 100) : 0) + (rentChalk ? 50 : 0);
-    return { amount: computed.amount + rentalAmount, gymId, memberId, memberName: member.name || '' };
+    return { amount: amount + rentalAmount, gymId, memberId, memberName: member.name || '' };
   },
 };
 

@@ -389,18 +389,26 @@ const practiceEndOf = (c) => c.unlimitedPracticeEnd
 // claimPendingCourseEnrollment 建立（見 courseRegistrationService.js），補課/試上（原本用 isMakeup/
 // isTrial 過濾）從不建立 header，故不需要額外過濾這兩個旗標。pauseStatus 由 courseAdjustments.js
 // 暫停核准/恢復兩處同步寫入 header（updateHeaderPauseStatus），維持與舊版相同的排除語意。
+// 退費核准會把 courseRegistrations header 標成 status:'cancelled'，cancelReason 開頭固定是
+// 這串文字（見 routes/courseAdjustments.js 的 cancelCourseEnrollments 呼叫）——用來跟「其他原因」
+// 的一般取消（駁回報名表／課程本身取消等）區分，只有「因退費而取消」才視為已退費、保留在名單中顯示。
+const REFUND_CANCEL_PREFIX = '退費申請核准';
 const buildCourseMemberList = async (db, c) => {
   const hSnap = await db.collection('courseRegistrations').where('courseId', '==', c.id).get();
   const seen = new Map();
   const payMap = {};
   hSnap.docs.forEach(d => {
     const h = d.data();
-    if (!['confirmed', 'waitlist'].includes(h.status)) return;
+    const isRefunded = h.status === 'cancelled' && String(h.cancelReason || '').startsWith(REFUND_CANCEL_PREFIX);
+    if (!['confirmed', 'waitlist'].includes(h.status) && !isRefunded) return;
     if (h.status === 'confirmed' && h.pauseStatus === 'paused') return;
     if (seen.has(h.memberId)) return; // 罕見重複 header（見 [[course-enrollment-duplicate-groups]]）：採第一筆
     seen.set(h.memberId, {
       memberId: h.memberId, memberName: h.memberName || '',
       isWaitlist: h.status === 'waitlist', waitlistPosition: h.waitlistPosition ?? null,
+      // 已退費：報名資料保留在名單中供查詢，僅標註、不計入「有效人數」（呼叫端另以 !refunded 篩選 count）
+      refunded: isRefunded, refundedAt: isRefunded ? (h.cancelledAt || null) : null,
+      refundReason: isRefunded ? (h.cancelReason || null) : null,
     });
     payMap[h.memberId] = {
       enrollmentId: h.payEnrollmentId,
@@ -501,7 +509,8 @@ const buildActiveCourseStudents = async (gymId) => {
         courseId: c.id, courseName: c.name, gymId: c.gymId,
         practiceStart: c.unlimitedPracticeStart || c.startDate || null,
         practiceEnd: practiceEndOf(c),
-        count: members.length, members,
+        // count＝有效人數（不含已退費，僅保留在 members 陣列供查詢／標註）
+        count: members.filter(m => !m.refunded).length, members,
       });
     }
   });
@@ -533,7 +542,7 @@ const buildFutureCourseStudents = async (gymId) => {
         courseId: c.id, courseName: c.name, gymId: c.gymId,
         practiceStart: c.unlimitedPracticeStart || c.startDate || null,
         practiceEnd: practiceEndOf(c),
-        count: members.length, members,
+        count: members.filter(m => !m.refunded).length, members,
       });
     }
   });
@@ -556,7 +565,7 @@ const buildCourseStudentRows = (filtered) => {
         '課程名稱': c.courseName || '',
         '效期起': c.practiceStart || '',
         '效期迄': c.practiceEnd || '',
-        '狀態': m.isWaitlist ? `候補・第${m.waitlistPosition ?? '?'}位` : '正取',
+        '狀態': m.isWaitlist ? `候補・第${m.waitlistPosition ?? '?'}位` : m.refunded ? '已退費' : '正取',
         '姓名': m.memberName || '',
         '電話': m.memberPhone || '',
         '費用': m.fee ?? '',
@@ -662,7 +671,7 @@ const buildHistoricalCourseDetail = async (gymId, courseId) => {
     courseId: c.id, courseName: c.name, gymId: c.gymId,
     practiceStart: c.unlimitedPracticeStart || c.startDate || null,
     practiceEnd: practiceEndOf(c),
-    count: members.length, members,
+    count: members.filter(m => !m.refunded).length, members,
   }];
   await attachReceivedAmounts(db, out);
   await attachInvoiceStatus(db, out);

@@ -301,8 +301,11 @@ router.post('/renewal-invoice/:id/void', authenticate, requireManagerOrStation, 
   try {
     const db = getDb();
     const invoiceService = require('../services/invoiceService');
+    // ⚠️ createInvoice 的 meta 參數是直接 spread 進記錄頂層（見 invoiceService.js `...(meta || {})`），
+    // 不是巢狀的 record.meta.passId——建立時傳 meta:{passId} 實際存成 record.passId（頂層），
+    // 這裡要讀對地方，否則 passId 恆 undefined、下面的 invoicePending 恢復永遠不會執行。
     const recDoc = await db.collection('invoiceRecords').doc(req.params.id).get();
-    const passId = recDoc.exists ? recDoc.data().meta?.passId || null : null;
+    const passId = recDoc.exists ? recDoc.data().passId || null : null;
     await invoiceService.voidInvoice(db, req.params.id, req.staff.id, req.staff.name, req.body.voidReason, { skipCashAdjustment: true });
     // 作廢代表這張紙本其實沒開成——恢復 invoicePending 讓下次入場再次提示補開，避免真的漏開。
     if (passId) {

@@ -2862,6 +2862,18 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **驗證**：本機用正式 SA 憑證比對「加 `.select()` 前後」同條件查詢筆數（`getTrialSessions` 1329=1329、`courses.js` 154筆課程=154筆、`sessionId in`+`select` 組合 6=6、`.count()` vs `.get().size` 2=2），確認投影不影響 WHERE 命中筆數、樣本文件確認不含簽名圖欄位；部署後打正式 API（`/courses/:id/enrollments` 真實課程 8堂已收款學員、`/checkin/today` 兩館統計）回應完整正常，無欄位遺漏。
 - 📌 **後續**：帳單數字本身有延遲（Google Cloud Billing 隔天才反映用量），無法當下確認 GB 數是否下降——下次查帳單時可比對這批修復上線後（8/19起）的日流量趨勢。
 
+## 目前進度（2026-08-24）— 入場線上付款（JKoPay）擴大涵蓋範圍 + 比賽賽前通知 + 名單管理三項改善
+> 一連串連續需求。後端 `/health` `3.350.0`→`3.354.0`；前端各項皆已 build+deploy。
+- ✅ **修：入場線上付款漏擋友館隊員/特約廠商優惠**（`3.350.0-online-entry-partner-vendor-gym-member-support`，commit `fc6a6b6`）：回報「選了特約廠商優惠再按街口付款，跳不到金流」。根因＝`orderResolvers.entry` 呼叫 `computePaidEntryAmount` 從不帶 `opts`，`partnerVendor`/`partnerGymMember` 兩個折扣完全没被線上付款路徑看到——不是「跳不到」，是**金額算法忽略了這兩個優惠、與前端顯示的折扣價對不上而被擋**。改傳入 `opts`，與電話入場/QR現金路徑算法一致。
+- ✅ **入場線上付款擴及購買優惠折扣券／購買定期票**（`3.351.0-online-entry-buy-discount-card-buy-pass-support`，commit `785e87a`）：回報「選街口支付不會跳轉」。抽出共用純函式 `computeBuyDiscountCardAmount(member)`／`computeBuyPassAmount(db, buyPassTypeId, gymId, member)`（`checkin/pricing.js`），供 `checkin/flow.js`（現金/櫃檯路徑，原本邏輯改呼叫此函式）與 `paymentService.js orderResolvers.entry`（線上付款，新增支援）共用，避免重複維護。**線上購買定期票 AskUserQuestion 拍板只支援一次付清**（不支援分期，分期維持既有現金/轉帳流程）。付款成功時的「延後動作」模式：`singleEntryTickets` 票券標記 `grantsDiscountCard`/`grantsPassTypeId`，實際建立優惠卡/定期票物件延到**兌換時**（`confirmCheckIn`）才做——維持既有「起算日＝實際到館日」語意，與現金流程一致。
+- ✅ **修：線上購買優惠折扣券/定期票兌換後，發票品項名稱誤標成「單次入場券」**（`3.352.0-online-entry-invoice-item-name-fix`，commit `f5e00f8`）：`confirmCheckIn` 回傳的 `onlineTicket`（供發票/確認畫面顯示用）漏補 `grantsDiscountCard`/`grantsPassTypeName`，`scanQrCode` 的 `onlineTicketInfo` 同步補齊。
+- ✅ **比賽賽前通知（手動草稿→編輯→發送，非自動排程）**（`3.353.0`→`3.353.1`，commit `b9027ac`+`106682c`）：使用者原提問「賽前3天通知怎麼處理」，AskUserQuestion 被使用者拒絕（改文字澄清）後給出明確規格：「給我一個信件草稿準備按鈕，櫃檯可編輯草稿直接發 email」。新增 `getParticipantEmails`/`sendCompetitionNotice`（BCC 批次寄送、`to` 用該館 `gyms.email` 自寄避免洩漏會員信箱；每批上限 40 位 BCC）+ 兩路由 `GET /:id/participant-emails`／`POST /:id/send-notice`；前端「📧 賽前通知」按鈕+可編輯主旨/內文 Modal。**踩雷**：E2E 測試用 `@example.com` 信箱被 Resend 拒絕（需用官方測試信箱 `delivered@resend.dev`），過程中順手把寄送失敗原因從「只有成功/失敗筆數」改成**回傳實際錯誤訊息**（`SEND_FAILED` 帶 Resend 原始錯誤），永久改善此功能未來的可觀測性。
+- ✅ **比賽名單管理三項改善**（`3.354.0-competition-list-xlsx-invoice-guard-waitlist-promote`，commit `42ddb75`+`e726986`；E2E 17/17）：
+  - **隱藏已取消/申請退費的開票鍵**：報名列表 `canInvoice` 加擋 `r.status!=='cancelled' && !r.refundRequested`。
+  - **下載名單改多分頁 xlsx**：`GET /:id/registrations/download` 由單一 CSV 改用 `exceljs` 產出——依賽事設定組別各自一頁（排除已取消）、「其他組別」防呆頁（組別不在目前設定清單）、「已取消」「申請退費」各一頁，分類邏輯與畫面上 `regTab` 四分頁定義完全一致、三者互斥。
+  - **組別參賽名額增加自動遞補候補**：`updateCompetition` 比對更新前後每個組別 `maxParticipants`，名額增加時依增加量迴圈呼叫既有 `promoteNextWaitlist`（每次遞補一位、候補不足提早結束），回傳 `promotedCount` 供前端顯示「賽事已更新，並自動遞補 N 位候補為正取」；名額減少不處理、不會自動取消任何正取。
+  - **E2E（打正式 API，17/17）**：xlsx 分頁名稱/內容/分類正確；候補遞補——1→2 名額遞補1位（waitlistPosition 最小者優先，其餘候補位次遞移）、2→4 名額（僅1位候補可遞補）正確 `promotedCount:1` 且不因候補不足報錯。fixtures 全清。
+
 - 會員端 UI 驗證：課程試上分頁 + 場次代班「（代班）」顯示（需會員帳號登入實測）
 - 「試上人數」目前僅由試上報名流程產生 `isTrial` 名單；如需員工手動加試上者，需另做 UI
 - 清理 dev Firebase 殘留測試會員：`【練習】…` 系列、`測試/測試API會員/管理員測試會員/Test1/Who` 等，以及測試用 `王大明`(0900222222)/子帳號 `小明明`；可用員工端「刪除會員」或 `DELETE /members/:id`（super_admin）清除（會一併刪子帳號、保留歷史紀錄）

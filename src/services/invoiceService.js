@@ -71,7 +71,11 @@ const createInvoice = async (db, {
   return record;
 };
 
-const voidInvoice = async (db, id, staffId, staffName, voidReason) => {
+// skipCashAdjustment：對稱 createInvoice 同名參數——這筆發票當初開立時若也 skip 了「+發票開立」
+// 加減項（例如 pass_renewal：付款當下已透過 recordTransaction 正確記為電子支付，非現金），作廢時
+// 就不能無條件補一筆「－發票作廢」（會平白扣到當天現金，這筆錢本來就沒被算進現金過）。既有呼叫端
+// （course/competition/checkin/rental_addon）皆未傳此參數，預設 false，行為完全不變。
+const voidInvoice = async (db, id, staffId, staffName, voidReason, { skipCashAdjustment = false } = {}) => {
   const ref = db.collection(COLL).doc(id);
   const doc = await ref.get();
   if (!doc.exists) { const e = new Error('找不到此發票紀錄'); e.code = 'NOT_FOUND'; throw e; }
@@ -83,12 +87,14 @@ const voidInvoice = async (db, id, staffId, staffName, voidReason) => {
     voidReason: voidReason ? String(voidReason).trim() : '', updatedAt: now,
   });
   // 沖銷當日結帳加減項（負向、與開立時對稱；不刪改原始開立紀錄，保留稽核軌跡）
-  try {
-    await require('./settlementService').addCashAdjustment({
-      gymId: inv.gymId || null, amount: inv.amount, sign: '-', type: '發票作廢',
-      note: `發票作廢：${inv.invoiceNo || ''}・${inv.memberName || ''}・${inv.itemName || '費用'}（原發票 NT$${inv.amount}）`,
-    });
-  } catch (e) { console.error('[發票作廢加減項]', e.message); }
+  if (!skipCashAdjustment) {
+    try {
+      await require('./settlementService').addCashAdjustment({
+        gymId: inv.gymId || null, amount: inv.amount, sign: '-', type: '發票作廢',
+        note: `發票作廢：${inv.invoiceNo || ''}・${inv.memberName || ''}・${inv.itemName || '費用'}（原發票 NT$${inv.amount}）`,
+      });
+    } catch (e) { console.error('[發票作廢加減項]', e.message); }
+  }
   return { ...inv, status: 'voided' };
 };
 

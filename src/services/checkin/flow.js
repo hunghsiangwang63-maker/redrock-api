@@ -298,6 +298,11 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
   // 購買定期票分期時，本次入場應收以首期為準（pending.amount 存的是全額）
   const entryDueNow = buyPassInfo ? buyPassInfo.dueNow : pending.amount;
 
+  // 定期票「在家線上續約」後尚未開立發票——獨立於本次入場類型（不論這次用什麼方式入場，都可能
+  // 命中，因為續約與入場是完全獨立的兩件事），提示櫃檯順便開立紙本發票（見 paymentService.js
+  // orderHandlers.pass_renewal、checkin/eligibility.js getPendingRenewalInvoiceHint）。
+  const pendingRenewalInvoice = await require('./eligibility').getPendingRenewalInvoiceHint(pending.memberId);
+
   // 使用既有定期票入場：解析所用票種名稱（供櫃檯掃碼確認時標示）
   let usePassInfo = null;
   if (pending.entryType === 'pass' && pending.passId) {
@@ -339,6 +344,7 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     buyPass: buyPassInfo,                        // 購買定期票：票種名稱 + 金額（供掃碼標示）
     usePass: usePassInfo,                         // 使用既有定期票入場：所用票種名稱
     onlineTicket: onlineTicketInfo,                // 使用單次入場券：若此券為線上付款購買，原始付款方式 + 金額
+    pendingRenewalInvoice,                         // 定期票線上續約後尚未開發票（獨立於本次入場類型）
     isTeamDiscount: pending.isTeamDiscount,
     legacyDiscount: pending.legacyDiscount || false,
     partnerVendor: pending.partnerVendor === true,   // 特約廠商優惠 → 員工端提示出示證件
@@ -673,7 +679,10 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     }
   }
 
-  return { checkIn: { ...checkIn, onlineTicket: onlineTicketInfo } };
+  // 定期票線上續約後尚未開發票——確認入場成功畫面同樣提示（見 scanQrCode 同款欄位說明）。
+  const pendingRenewalInvoice = await require('./eligibility').getPendingRenewalInvoiceHint(pending.memberId);
+
+  return { checkIn: { ...checkIn, onlineTicket: onlineTicketInfo, pendingRenewalInvoice } };
 };
 
 // 取消入場時還原「續約附加」：復原票期/次數、作廢續約分期計畫、一次付清記負向沖銷。

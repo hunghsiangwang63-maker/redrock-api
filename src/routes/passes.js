@@ -233,8 +233,86 @@ router.get('/member/:memberId', authenticateAny, async (req, res) => {
     const withEff = await require('../services/passExpiryService').attachEffectiveEndDates(
       snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
     );
-    res.json({ passes: withEff.map(p => ({ ...p, baseEndDate: p.endDate, endDate: p.effectiveEndDate || p.endDate })) });
+    // 續約資訊（到期前 14 天內才有值）——供會員端「我的票券」顯示線上續約入口/折後價，
+    // 與入場時的續約提示（checkin/verify.js）共用同一套權威計算，不重複維護一份。
+    const { getRenewalInfo } = require('../services/checkin/eligibility');
+    const passes = await Promise.all(withEff.map(async p => {
+      const renewalInfo = p.status === 'active' ? await getRenewalInfo(p) : null;
+      return { ...p, baseEndDate: p.endDate, endDate: p.effectiveEndDate || p.endDate, renewalInfo };
+    }));
+    res.json({ passes });
   } catch (err) {
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+// ── 定期票「在家線上續約」開立發票（手動記帳版；館別未開真列印時使用，比照 /members/course-invoices、
+// /checkin/:id/invoices 同一套 invoiceService+invoiceRecords 慣例——真列印版另走通用 routes/invoices.js
+// 的 invoices 集合，兩邊各自獨立，見 invoiceService.js 檔頭說明）。
+// sourceType:'pass_renewal'，refId 用「這次續約付款」的 payments 文件 id（非 passId）——同一張票日後
+// 可能再續約多次，用 paymentId 才不會讓上一次續約的已開發票擋住下一次續約的開票（見
+// paymentService.js orderResolvers/orderHandlers.pass_renewal、routes/invoices.js print-record 同款理由）。
+router.get('/renewal-invoice/:paymentId', authenticate, async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('invoiceRecords')
+      .where('sourceType', '==', 'pass_renewal').where('refId', '==', req.params.paymentId).get();
+    const invoices = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.issuedAt?._seconds || 0) - (a.issuedAt?._seconds || 0));
+    res.json({ invoices });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+router.post('/renewal-invoice/:paymentId', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const paymentId = req.params.paymentId;
+    const payDoc = await db.collection('payments').doc(paymentId).get();
+    if (!payDoc.exists) return res.status(404).json({ error: 'PAYMENT_NOT_FOUND', message: '找不到此筆續約付款紀錄' });
+    const pay = payDoc.data();
+    const passId = pay.orderRef?.passId || null;
+    const { itemName, amount, taxId, note, issuedAt, track, number } = req.body;
+    const invoiceService = require('../services/invoiceService');
+    const record = await invoiceService.createInvoice(db, {
+      sourceType: 'pass_renewal', refId: paymentId, memberId: pay.memberId, memberName: pay.memberName,
+      itemName: itemName || '定期票續約', amount, taxId, note, gymId: pay.gymId, issuedAt, track, number,
+      staffId: req.staff.id, staffName: req.staff.name || '',
+      meta: { passId },
+      // 續約款已在付款成功當下由 paymentService.handleCallback 記為電子支付（jkopay 等）收入，
+      // 非現金——不能再讓 createInvoice 預設的「+發票開立」加減項把同一筆錢算進今日現金一次。
+      skipCashAdjustment: true,
+    });
+    if (passId) {
+      try {
+        await db.collection('memberPasses').doc(passId).update({
+          'lastOnlineRenewal.invoicePending': false, 'lastOnlineRenewal.invoicedAt': new Date(),
+        });
+      } catch (e) { console.error('[定期票續約手動開票後清除待開票旗標失敗]', e.message); }
+    }
+    res.json({ success: true, invoice: record });
+  } catch (err) {
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400, INVALID_TAX_ID: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+router.post('/renewal-invoice/:id/void', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const invoiceService = require('../services/invoiceService');
+    const recDoc = await db.collection('invoiceRecords').doc(req.params.id).get();
+    const passId = recDoc.exists ? recDoc.data().meta?.passId || null : null;
+    await invoiceService.voidInvoice(db, req.params.id, req.staff.id, req.staff.name, req.body.voidReason, { skipCashAdjustment: true });
+    // 作廢代表這張紙本其實沒開成——恢復 invoicePending 讓下次入場再次提示補開，避免真的漏開。
+    if (passId) {
+      try { await db.collection('memberPasses').doc(passId).update({ 'lastOnlineRenewal.invoicePending': true }); }
+      catch (e) { console.error('[定期票續約手動發票作廢後恢復待開票旗標失敗]', e.message); }
+    }
+    res.json({ success: true });
+  } catch (err) {
+    const map = { NOT_FOUND: 404, ALREADY_VOIDED: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }
 });

@@ -296,6 +296,23 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
       } catch (e) { console.error('[開票沖銷已預收現金失敗]', e.message); }
     }
 
+    // 定期票「在家線上續約」——refId 是那筆 payments 文件 id（見 paymentService.js
+    // orderResolvers/orderHandlers.pass_renewal 說明：用付款事件自己的 id 當 refId，避免同一張票
+    // 多次續約時撞到前一次已開立的發票、被誤判「已開過」）。開立成功後查回這筆付款對應的 passId，
+    // 清除該票的 invoicePending 旗標——之後櫃檯掃碼/確認入場就不會再提示「尚未開發票」。
+    if (sourceType === 'pass_renewal' && refId) {
+      try {
+        const payDoc = await db.collection('payments').doc(refId).get();
+        const passId = payDoc.exists ? payDoc.data().orderRef?.passId : null;
+        if (passId) {
+          await db.collection('memberPasses').doc(passId).update({
+            'lastOnlineRenewal.invoicePending': false,
+            'lastOnlineRenewal.invoicedAt': new Date(),
+          });
+        }
+      } catch (e) { console.error('[定期票續約開票後清除待開票旗標失敗]', e.message); }
+    }
+
     // 配號後的紙捲剩餘狀態（僅該館設過紙捲張數時才有意義）——供前端在列印成功畫面同步跳出
     // 「即將用完」醒目警語，不用等下次開設定頁才看到。
     res.json({
@@ -453,6 +470,15 @@ router.post('/:id/void', authenticate, requireManagerOrStation, async (req, res)
       }
     }
     const inv = await voidRealInvoice(db, req.params.id, req.staff.id, req.staff.name, req.body.voidReason);
+    // 定期票續約發票唯一的作廢入口就是這條手動路由（未接自動連動作廢，續約無退款/取消機制）——
+    // 作廢後代表這張紙本其實沒開成，恢復 invoicePending 讓下次入場再次提示補開，避免真的漏開。
+    if (inv.sourceType === 'pass_renewal' && inv.refId) {
+      try {
+        const payDoc = await db.collection('payments').doc(inv.refId).get();
+        const passId = payDoc.exists ? payDoc.data().orderRef?.passId : null;
+        if (passId) await db.collection('memberPasses').doc(passId).update({ 'lastOnlineRenewal.invoicePending': true });
+      } catch (e) { console.error('[定期票續約發票作廢後恢復待開票旗標失敗]', e.message); }
+    }
     res.json({ success: true, invoice: inv });
   } catch (err) {
     const map = { NOT_FOUND: 404, ALREADY_VOID: 400 };

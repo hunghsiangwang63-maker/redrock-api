@@ -107,6 +107,30 @@ const getRenewalInfo = async (memberPass) => {
   };
 };
 
+// 定期票「在家線上續約」（見 docs/payment-integration-plan.md §11 pass_renewal）成功付款後，
+// paymentService.orderHandlers.pass_renewal 會在該票寫入 lastOnlineRenewal.invoicePending=true——
+// 此函式供掃碼/確認入場時查詢會員名下有無這類「已續約、尚未開發票」的票，提示櫃檯順便開立紙本
+// 發票；開立後 routes/invoices.js 清除該旗標。查詢沿用 getValidPasses 同一組合式索引
+// （memberId+status，已有現成索引），不受此票是否仍在有效期內影響（即使剛好又快到期也要提醒）。
+const getPendingRenewalInvoiceHint = async (memberId) => {
+  const db = getDb();
+  const snap = await db.collection(COLLECTIONS.MEMBER_PASSES)
+    .where('memberId', '==', memberId).where('status', '==', 'active').get();
+  for (const doc of snap.docs) {
+    const p = doc.data();
+    if (p.lastOnlineRenewal?.invoicePending === true) {
+      return {
+        passId: doc.id,
+        passTypeName: p.passTypeName || '定期票',
+        paymentId: p.lastOnlineRenewal.paymentId || null,
+        provider: p.lastOnlineRenewal.provider || null,
+        amount: p.lastOnlineRenewal.amount || 0,
+      };
+    }
+  }
+  return null;
+};
+
 // ── 取得課程入館權益 ─────────────────────────────────────────────
 const getCourseAccess = async (memberId) => {
   const db = getDb();
@@ -210,4 +234,4 @@ const getValidSingleEntryTickets = async (memberId) => {
 };
 
 // ── 墜落測驗：查詢 + 遞延邏輯 ───────────────────────────────────
-module.exports = { getValidPasses, getBuyablePassTypes, RENEWAL_WINDOW_DAYS, computeRenewalPrice, computeRenewedEndDate, getRenewalInfo, getCourseAccess, checkVip, getValidSingleEntryTickets };
+module.exports = { getValidPasses, getBuyablePassTypes, RENEWAL_WINDOW_DAYS, computeRenewalPrice, computeRenewedEndDate, getRenewalInfo, getPendingRenewalInvoiceHint, getCourseAccess, checkVip, getValidSingleEntryTickets };

@@ -85,6 +85,38 @@ const orderHandlers = {
     });
     return { relatedId: id };
   },
+  // 定期票「在家線上續約」（2026-08-24，見 docs/payment-integration-plan.md §11）：與 pass（購買全新
+  // 定期票）不同——這裡是延長一張既有生效中的票，不需要入場/產生 QR。付款成功當下直接延長票期
+  // （比照 checkin/flow.js confirmCheckIn 續約分支的延票邏輯，唯一差異是這裡沒有 checkIn 文件可附掛
+  // 「待開發票」提示，改寫在票本身：lastOnlineRenewal.invoicePending=true，供下次掃碼/確認入場時
+  // 提醒櫃檯補開紙本發票（見 checkin/eligibility.js getPendingRenewalInvoiceHint、
+  // checkin/flow.js scanQrCode/confirmCheckIn、routes/invoices.js 開票後清除該旗標）。
+  // 記帳交易由 handleCallback 通用段落處理（TYPE_MAP.pass_renewal → 'pass'），此處不重複記帳。
+  pass_renewal: async (db, payment) => {
+    const id = payment.orderRef?.passId;
+    if (!id) return { ok: false };
+    const passRef = db.collection('memberPasses').doc(id);
+    const passDoc = await passRef.get();
+    if (!passDoc.exists) return { ok: false };
+    const cur = passDoc.data();
+    const ptDoc = await db.collection('passTypes').doc(cur.passTypeId).get();
+    const pt = ptDoc.exists ? ptDoc.data() : {};
+    const { computeRenewedEndDate } = require('./checkin/eligibility');
+    const newEndDate = computeRenewedEndDate(cur.endDate, pt);
+    const before = { endDate: cur.endDate, credits: cur.credits ?? null, originalCredits: cur.originalCredits ?? null };
+    await passRef.update({
+      endDate: newEndDate,
+      status: 'active',
+      credits: pt.credits ?? cur.credits ?? null,
+      originalCredits: pt.credits ?? cur.originalCredits ?? null,
+      lastRenewedAt: new Date(), updatedAt: new Date(),
+      lastOnlineRenewal: {
+        paymentId: payment.id, provider: payment.provider, amount: payment.amount,
+        renewedAt: new Date(), invoicePending: true, before,
+      },
+    });
+    return { relatedId: id };
+  },
   installment: async (db, payment) => {
     const { planId, seq } = payment.orderRef || {};
     if (!planId || seq == null) return { ok: false };
@@ -210,6 +242,26 @@ const orderResolvers = {
     try { const t = await db.collection('passTypes').doc(p.passTypeId).get(); if (t.exists) price = t.data().price || 0; } catch (e) {}
     return { amount: price, gymId: p.gymId || null, memberId: p.memberId || null, memberName: p.memberName || '' };
   },
+  // 定期票續約（見 orderHandlers.pass_renewal 說明）——金額＝後端權威續約折後價（沿用既有會員自助
+  // 續約同一套計算，checkin/eligibility.js getRenewalInfo，14 天續約窗口/續約折扣皆與現場續約一致）。
+  // memberId/memberName 採票的擁有者（非呼叫端 caller），比照 pass/course/experience/rental 既有
+  // resolvers 不驗證呼叫端與資源擁有權關係的模式——天然支援家長代子女續約（子會員的票由家長帳號
+  // 呼叫，最終付款記錄仍正確歸屬子會員）。
+  pass_renewal: async (db, orderRef) => {
+    const id = orderRef?.passId;
+    if (!id) throw { code: 'INVALID_ORDER', message: '缺少定期票 id' };
+    const doc = await db.collection('memberPasses').doc(id).get();
+    if (!doc.exists) throw { code: 'PASS_NOT_FOUND', message: '找不到定期票' };
+    const p = doc.data();
+    if (p.status !== 'active') throw { code: 'RENEW_PASS_INACTIVE', message: '此定期票非有效狀態，無法續約' };
+    const { attachEffectiveEndDates } = require('./passExpiryService');
+    const [withEff] = await attachEffectiveEndDates([{ id: doc.id, ...p }]);
+    const { getRenewalInfo } = require('./checkin/eligibility');
+    const info = await getRenewalInfo(withEff);
+    if (!info) throw { code: 'RENEW_NOT_OPEN', message: '尚未到可續約時間（到期前14天內），或此票種不支援續約' };
+    if (!(info.renewalPrice > 0)) throw { code: 'INVALID_AMOUNT', message: '此票種續約金額為 0，無需線上付款' };
+    return { amount: info.renewalPrice, gymId: p.gymId || p.targetGymId || null, memberId: p.memberId || null, memberName: p.memberName || '' };
+  },
   installment: async (db, orderRef) => {
     const { planId, seq } = orderRef || {};
     if (!planId || seq == null) throw { code: 'INVALID_ORDER', message: '缺少分期計畫/期數' };
@@ -300,6 +352,7 @@ const TYPE_MAP = {
   experience: 'product',
   course: 'course',
   pass: 'pass',
+  pass_renewal: 'pass',
   installment: 'pass',
   rental: 'product',
   checkin: 'checkin',

@@ -128,6 +128,9 @@ const createCourse = async ({ gymId, staffId, data }) => {
     // 工作坊保證金（僅 workshop 用；0/null＝不收保證金。免費工作坊仍可收保證金，報到後由店員退還/沒收；
     // 提前取消時比照 refundTiers 同一套時間分級比例部分退還，見 computeWorkshopRefund 呼叫端）
     depositAmount: data.depositAmount != null && data.depositAmount !== '' ? Number(data.depositAmount) || 0 : 0,
+    // 課程層可限定付款方式（如運動按摩僅接受現場現金，不論隊員或非隊員）：null＝預設現金+轉帳皆可；
+    // 陣列且不含 'transfer' 時，前端隱藏轉帳選項、後端 /transfers/upload 權威擋下轉帳提交
+    paymentMethods: Array.isArray(data.paymentMethods) && data.paymentMethods.length ? data.paymentMethods : null,
     // 續報/舊生優惠（比率折扣，各自開關；週課專用）：續報＝前一期整期報名（插班不算）；舊生＝曾報名過或插班生
     fullTermRenewalDiscountEnabled: data.fullTermRenewalDiscountEnabled === true,
     fullTermRenewalDiscountRate: data.fullTermRenewalDiscountRate != null ? Number(data.fullTermRenewalDiscountRate) : 0.9,

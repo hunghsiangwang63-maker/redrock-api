@@ -61,6 +61,16 @@ router.post('/upload', authenticateAny, upload.single('screenshot'), async (req,
       }
     }
 
+    // 課程層可限定付款方式（如運動按摩僅接受現場現金，不論隊員或非隊員）——前端只是隱藏轉帳選項，
+    // 這裡才是權威把關：課程明確設定 paymentMethods 且不含 transfer 時，一律擋下轉帳提交。
+    if (resolvedOrderType === 'course' && linkedOrder?.courseId) {
+      const courseDoc = await db.collection('courses').doc(linkedOrder.courseId).get();
+      const allowedMethods = courseDoc.exists ? courseDoc.data().paymentMethods : null;
+      if (Array.isArray(allowedMethods) && allowedMethods.length && !allowedMethods.includes('transfer')) {
+        return res.status(400).json({ error: 'TRANSFER_NOT_ALLOWED', message: '此課程僅接受現場現金繳納，不接受轉帳' });
+      }
+    }
+
     // 有截圖才上傳到 Firebase Storage
     let url = null, fileName = null;
     if (req.file) {

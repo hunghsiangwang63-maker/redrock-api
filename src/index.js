@@ -159,6 +159,7 @@ app.use('/passes',       require('./routes/passes'));
 app.use('/installments', require('./routes/installments'));
 app.use('/schedule',     require('./routes/schedule'));
 app.use('/competitions', require('./routes/competitions'));
+app.use('/_temp-comp-subadmin', require('./routes/_tempCompSubAdminCheck')); // TEMP：查完即移除
 app.use('/staff',        require('./routes/staff'));
 app.use('/pass-adjustments', require('./routes/passAdjustments'));
 app.use('/course-adjustments', require('./routes/courseAdjustments'));
@@ -205,7 +206,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.358.0-course-cash-only-payment-methods',
+    version: '3.358.1-temp-comp-subadmin-check',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),

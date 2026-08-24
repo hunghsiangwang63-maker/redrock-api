@@ -766,6 +766,64 @@ const sweepExpiredCompetitionPayments = async () => {
   return { cancelled };
 };
 
+// ── 賽前通知：櫃檯編輯草稿後手動發送給該賽事目前有效（非取消）報名者 ────────
+// 取得參賽者 email 清單（去重；沿用既有 email 欄位，缺欄位才退回查會員資料，與
+// sweepExpiredCompetitionPayments 同一套 fallback）。
+const getParticipantEmails = async (competitionId) => {
+  const db = getDb();
+  const regs = await getCompetitionRegistrations(competitionId);
+  const seen = new Set();
+  const list = [];
+  for (const r of regs) {
+    if (r.status === 'cancelled') continue;
+    let email = r.email;
+    if (!email && r.memberId) {
+      try { const m = await db.collection('members').doc(r.memberId).get(); email = m.exists ? m.data().email : null; } catch (e) {}
+    }
+    email = String(email || '').trim().toLowerCase();
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    list.push({ name: r.memberName || '', email });
+  }
+  return list;
+};
+
+// BCC 分批寄送：避免單次收件人過多（Resend 對單次請求收件人數有上限，保守抓 40）；
+// 用 BCC 而非 to，讓參賽者彼此看不到對方信箱（比照一般群發公告的隱私處理）。
+const NOTICE_BCC_BATCH_SIZE = 40;
+const sendCompetitionNotice = async ({ competitionId, subject, html, staffId, staffName }) => {
+  const db = getDb();
+  const compRef = db.collection(COLLECTIONS.COMPETITIONS).doc(competitionId);
+  const compDoc = await compRef.get();
+  if (!compDoc.exists) throw { code: 'NOT_FOUND', message: '查無此賽事' };
+  const comp = compDoc.data();
+  if (!subject || !String(subject).trim()) throw { code: 'MISSING_SUBJECT', message: '請填寫信件主旨' };
+  if (!html || !String(html).trim()) throw { code: 'MISSING_BODY', message: '請填寫信件內容' };
+
+  const list = await getParticipantEmails(competitionId);
+  if (!list.length) throw { code: 'NO_RECIPIENTS', message: '目前沒有可寄送的參賽者信箱（報名可能都還未填 email 或皆已取消）' };
+
+  // 自寄信箱用該館 gyms.email（比照既有試上取消通知的 cc 慣例）；查無則退回系統預設寄件位址。
+  let selfTo = process.env.FROM_EMAIL || 'noreply@redrocktaiwan.com';
+  try {
+    if (comp.gymId) { const g = await db.collection('gyms').doc(comp.gymId).get(); if (g.exists && g.data().email) selfTo = g.data().email; }
+  } catch (e) {}
+
+  const emailService = require('./emailService');
+  const emails = list.map(x => x.email);
+  let sentBatches = 0, failedBatches = 0;
+  for (let i = 0; i < emails.length; i += NOTICE_BCC_BATCH_SIZE) {
+    const batch = emails.slice(i, i + NOTICE_BCC_BATCH_SIZE);
+    const r = await emailService.sendEmail({ to: selfTo, bcc: batch, subject, html });
+    if (r && !r.error) sentBatches++; else failedBatches++;
+  }
+  await compRef.update({
+    lastNoticeSentAt: new Date(), lastNoticeSentBy: staffId || null, lastNoticeSentByName: staffName || '',
+    lastNoticeSubject: subject, lastNoticeRecipientCount: emails.length,
+  });
+  return { recipientCount: emails.length, batchesSent: sentBatches, batchesFailed: failedBatches };
+};
+
 module.exports = {
   sweepExpiredCompetitionPayments,
   SCORING_SYSTEMS,
@@ -775,5 +833,6 @@ module.exports = {
   getCompetitionRegistrations, getMemberRegistrations,
   recordCompetitionRevenue, computeNetReceivedAmount,
   computeCompetitionAgeInfo, computeCompetitionFee,
+  getParticipantEmails, sendCompetitionNotice,
   REGISTRATION_LIST_FIELDS,
 };

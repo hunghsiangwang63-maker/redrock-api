@@ -187,6 +187,32 @@ router.post('/:id/sync-scoring', authenticate, checkPermission('competitions.man
   }
 });
 
+// ── GET /competitions/:id/participant-emails - 賽前通知用：目前有效報名者 email 清單 ──
+router.get('/:id/participant-emails', authenticate, checkPermission('competitions.manage'), async (req, res) => {
+  try {
+    const list = await competitionService.getParticipantEmails(req.params.id);
+    res.json({ recipients: list, count: list.length });
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+// ── POST /competitions/:id/send-notice - 賽前通知：櫃檯編輯草稿後發送給全部有效報名者（BCC）──
+router.post('/:id/send-notice', authenticate, checkPermission('competitions.manage'), async (req, res) => {
+  try {
+    const { subject, body } = req.body;
+    const result = await competitionService.sendCompetitionNotice({
+      competitionId: req.params.id, subject, html: body,
+      staffId: req.staff.id, staffName: req.staff.name,
+    });
+    res.json({ ...result, message: `已寄出給 ${result.recipientCount} 位參賽者` });
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 // ══════════════════════════════════════════════════════
 // 公開報名（免登入、訪客，先轉帳；IP 限流見 index.js）
 // ══════════════════════════════════════════════════════

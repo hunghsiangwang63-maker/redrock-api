@@ -2874,6 +2874,17 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **組別參賽名額增加自動遞補候補**：`updateCompetition` 比對更新前後每個組別 `maxParticipants`，名額增加時依增加量迴圈呼叫既有 `promoteNextWaitlist`（每次遞補一位、候補不足提早結束），回傳 `promotedCount` 供前端顯示「賽事已更新，並自動遞補 N 位候補為正取」；名額減少不處理、不會自動取消任何正取。
   - **E2E（打正式 API，17/17）**：xlsx 分頁名稱/內容/分類正確；候補遞補——1→2 名額遞補1位（waitlistPosition 最小者優先，其餘候補位次遞移）、2→4 名額（僅1位候補可遞補）正確 `promotedCount:1` 且不因候補不足報錯。fixtures 全清。
 
+## 目前進度（2026-08-24 續）— 定期票「在家線上續約」（pass_renewal，承街口啟用後續）
+> 系統設定頁「線上支付設定」的「定期票」開關原標 `status:'pending'`（前端尚未接、開啟無效果）。查證後發現此開關語意混淆：入場時購買定期票（`buy_pass`）早已於 8/24 併入「入場」開關上線；真正沒接的是「續約」——原本唯一的續約管道是產生入場QR時順便勾選，付款方式雖含街口但只是自行申報標籤（到櫃檯付現/掃立牌），完全沒接金流。使用者拍板改法：續約不用產生入場QR，會員在家直接線上付款，系統收到成功通知即刻延長票期；下次到館入場時提示櫃檯補開紙本發票。後端 `/health` `3.360.0`→`3.360.1`；commit 後端 `2101a26`+`b175488`、前端 `26e1b88`。
+- ✅ **新 orderType `pass_renewal`**（`paymentService.js`）：`orderResolvers` 沿用既有會員自助續約同一套權威計算（`checkin/eligibility.js getRenewalInfo`，14天續約窗口/續約折扣皆與現場續約一致，未套用隊員折——與既有政策一致「續約不疊隊員折」）；`orderHandlers` 付款成功當下直接延長票期（比照 `checkin/flow.js confirmCheckIn` 續約分支的延票邏輯），並在票上寫 `lastOnlineRenewal.invoicePending=true` 供下次入場提示。`memberId`/`memberName` 採**票的擁有者**（非呼叫端）——天然支援家長代子女續約，不需額外的擁有權檢查（比照既有 `pass`/`course`/`experience`/`rental` resolvers 皆不驗證呼叫端與資源擁有權關係的既定模式）。**僅支援一次付清**（不支援分期，分期仍走既有「產生入場QR」流程，比照 8/24 `buy_pass` 線上付款同一決策）。
+- ✅ **待開發票提示**：`checkin/eligibility.js` 新增 `getPendingRenewalInvoiceHint(memberId)`，`checkin/flow.js` `scanQrCode`/`confirmCheckIn` 皆帶出（獨立於本次入場類型——不論這次用什麼方式入場都可能命中，因為續約與入場是兩件獨立的事）。
+- ✅ **發票開立/作廢分兩套**（比照既有五流程慣例，各自獨立、互不影響，見 `invoiceService.js` 檔頭說明）：
+  - **真列印版**：通用 `routes/invoices.js`（`invoices` 集合）已支援 `sourceType:'pass_renewal'`（未知 sourceType 天生安全 fallback），補上開票/作廢時連動清除/恢復 `invoicePending`。`refId` 刻意用「這次續約付款」的 `payments` 文件 id（非 `passId`）——避免同一張票日後再續約時，上一次已開的發票擋住下一次開票。
+  - **手動記帳版**：`routes/passes.js` 新增 `GET/POST /renewal-invoice/:paymentId` + `POST /renewal-invoice/:id/void` 三端點，改用 `invoiceService.js`（`invoiceRecords` 集合）。續約款已在付款成功當下記為電子支付收入（非現金）——`createInvoice`/`voidInvoice` 皆傳 `skipCashAdjustment:true` 避免與現金重複計算（順手替 `voidInvoice` 補上此參數，對稱 `createInvoice` 既有設計，不影響其餘既有呼叫端行為）。
+- ✅ **前端**：我的票券頁每張到期前14天內的定期票加續約區塊（折後價/新到期日 + 線上續約按鈕，本人與家庭成員票券皆可），沿用共用 `PaymentFlow` 元件。員工端入場頁掃碼預覽/確認入場成功畫面新增「此會員定期票已線上續約付款、尚未開發票」提示，沿用 `InvoiceButtonAuto`/`InvoiceIssuer` 共用元件。系統設定頁「定期票」開關改 `status:'live'`，說明文字更新為準確範圍（僅在家線上續約，非新購；新購走「入場」開關）。
+- **驗證（兩階段）**：①直接呼叫真實 service 函式（mock provider，正式環境 Firestore，throwaway 資料）31/31 全過——續約折扣正確計算、家長代子女續約歸屬正確、窗口外/已取消票正確擋下、付款成功正確延票+記帳、待開票提示正確產生/消失、`skipCashAdjustment` 正確生效無現金重複計算 ②部署後打正式 HTTP API 覆蓋 `GET /passes/member/:id`（`renewalInfo`）、`POST /payments`（`pass_renewal`）、新三個發票端點——**HTTP 實測抓到一個真 bug**：`routes/passes.js` 的 void 端點讀 `recDoc.data().meta?.passId`，但 `invoiceService.createInvoice` 的 `meta` 參數是直接 spread 進記錄**頂層**（非巢狀），恆讀到 `undefined`、導致作廢後 `invoicePending` 永遠不會恢復——已修正為讀 `recDoc.data().passId`，重新部署後二次實測確認修復生效。兩輪測試資料（含 notifications 集合全面掃描）測後皆已清乾淨，並補做一次跨全部測試回合的最終總掃描確認 0 殘留。
+- 📋 **範圍**：只做 QR 掃碼/確認入場的提示（`checkin/eligibility.js`/`checkin/flow.js`），未擴及電話搜尋入場（`/checkin/phone`）——比照既有 `onlineTicket` 提示同樣的既定範圍，非遺漏。
+
 - 會員端 UI 驗證：課程試上分頁 + 場次代班「（代班）」顯示（需會員帳號登入實測）
 - 「試上人數」目前僅由試上報名流程產生 `isTrial` 名單；如需員工手動加試上者，需另做 UI
 - 清理 dev Firebase 殘留測試會員：`【練習】…` 系列、`測試/測試API會員/管理員測試會員/Test1/Who` 等，以及測試用 `王大明`(0900222222)/子帳號 `小明明`；可用員工端「刪除會員」或 `DELETE /members/:id`（super_admin）清除（會一併刪子帳號、保留歷史紀錄）

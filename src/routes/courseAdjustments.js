@@ -289,11 +289,13 @@ router.post('/requests/:id/approve',
         if (!hasActive) {
           return res.status(400).json({ error: 'NO_ACTIVE_ENROLLMENT', message: '此會員於本課程已無有效報名（可能已退費或取消），不可重複核准退費' });
         }
-        // 取消該會員此課程「所有」有效報名，釋放名額並遞補候補
+        // 取消該會員此課程「未來」報名，釋放名額並遞補候補——onlyFutureSessions:true，已過去（已實際
+        // 上課）的場次維持原狀不動，與退款金額只算「剩餘未上課堂數」的計算基礎一致（見上方 remainingSessions）
         const cancelled = await courseService.cancelCourseEnrollments({
           courseId: request.courseId,
           memberId: request.memberId,
           reason: `退費申請核准（退款 NT$${finalRefund}）`,
+          onlyFutureSessions: true,
         });
         // 課程退費 → 還原定期票「此課程」重疊補償延長（政策 2026-07-17；不阻斷）
         try { await require('../services/passOverlapService').revertCourseOverlapExtension({ memberId: request.memberId, courseId: request.courseId }); }

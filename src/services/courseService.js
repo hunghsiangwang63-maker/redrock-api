@@ -1393,7 +1393,12 @@ const promoteWaitlistForCourse = async (courseId) => {
 };
 
 // ── 退費：取消某會員某課程所有有效報名並釋放名額 ──────────────────
-const cancelCourseEnrollments = async ({ courseId, memberId, reason }) => {
+// onlyFutureSessions：true 時只取消「今天（含）以後」的場次報名，已過去的場次（已實際上課）維持原狀不動
+// ——退費核准（courseAdjustments.js）用這個模式：退費金額本就只算「剩餘未上課堂數」，取消動作應與此一致，
+// 不該把已經上過的課回溯標成取消（曾發生：8 堂課已上 7 堂，退費核准後 7 堂全被標 cancelled，
+// 場次人數也跟著被錯誤扣減，對應歷史場次名單/出缺席因此顯示錯誤）。其餘呼叫端（如逾期未繳費取消）
+// 維持預設 false（全部取消），不受影響。
+const cancelCourseEnrollments = async ({ courseId, memberId, reason, onlyFutureSessions = false }) => {
   const db = getDb();
   const now = new Date();
   const today = taiwanToday(); // 台灣日期
@@ -1406,6 +1411,7 @@ const cancelCourseEnrollments = async ({ courseId, memberId, reason }) => {
   let freedAnyFutureSeat = false;
   for (const d of snap.docs) {
     const e = d.data();
+    if (onlyFutureSessions && e.date && e.date < today) continue; // 已過去的場次不動
     const prevStatus = e.status;
     await d.ref.update({ status: 'cancelled', cancelledAt: now, cancelReason: reason || '退費取消', updatedAt: now });
     const sDoc = await db.collection(SESSION_COLLECTION).doc(e.sessionId).get();

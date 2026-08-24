@@ -143,6 +143,14 @@ router.post('/enrollments/:enrollmentId/refund-request',
       // 建議退費佔已繳金額比例（供審核 modal 顯示「建議 NT$X，Y%」；週課/工作坊通用）
       const suggestedPercentage = paidAmount > 0 ? Math.round((suggestedRefund / paidAmount) * 100) : 0;
 
+      // 退款指定帳戶（2026-08-24 新增，比照比賽退費）：已有實收金額才要求填寫，否則無款可退、不強制。
+      // 帳戶可能與當初匯款付款的帳戶不同（會員可指定要退到哪個帳戶），故獨立收集、不沿用付款時的 bankLastFive/bankName。
+      const refundBankCode = String(req.body.refundBankCode || '').trim();
+      const refundAccount = String(req.body.refundAccount || '').trim();
+      if (actuallyPaid > 0 && (!refundBankCode || !refundAccount)) {
+        return res.status(400).json({ error: 'MISSING_REFUND_ACCOUNT', message: '申請退費需填寫退款銀行代碼與帳號' });
+      }
+
       const reqId = `crefund_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
       await db.collection('courseAdjustmentRequests').doc(reqId).set({
         id: reqId,
@@ -157,6 +165,10 @@ router.post('/enrollments/:enrollmentId/refund-request',
         actuallyPaid, installmentPlanId, // 2026-08-09：分期退款上限依據，approve 時作廢分期計畫用
         suggestedRefund,
         suggestedPercentage,
+        refundBankCode: actuallyPaid > 0 ? refundBankCode : null,
+        refundBankName: actuallyPaid > 0 ? (String(req.body.refundBankName || '').trim() || null) : null,
+        refundAccount: actuallyPaid > 0 ? refundAccount : null,
+        refundAccountName: actuallyPaid > 0 ? (String(req.body.refundAccountName || '').trim() || null) : null,
         refundNote,
         depositAmount, suggestedDepositRefund, // 保證金（僅工作坊；depositAmount=0 代表無保證金或已處理過）
         courseType: course?.type || 'weekly', // 供審核端知道套用哪套公式（週課/工作坊），供稽核

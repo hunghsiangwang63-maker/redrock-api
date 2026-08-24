@@ -488,67 +488,91 @@ router.post('/waiver/parent/:token',
   }
 );
 
-// ── GET /competitions/:id/registrations/download - 下載名單 CSV ──
+// ── GET /competitions/:id/registrations/download - 下載名單（xlsx，依組別/已取消/申請退費分頁）──
+// 分類邏輯與畫面上的分頁（regTab）定義一致：申請退費＝refundRequested；已取消＝cancelled 且未申請退費；
+// 各組別分頁只含未取消（含候補）——三者互斥、與畫面上「全部/各組別/申請退費/已取消」四個分頁一一對應
+// （全部＝其餘三種聯集，此處不需要另建一份「全部」分頁）。
 router.get('/:id/registrations/download',
   authenticate, checkPermission('competitions.manage'),
   async (req, res) => {
     try {
       const db = getDb();
+      const compDoc = await db.collection(COLLECTIONS.COMPETITIONS || 'competitions').doc(req.params.id).get();
+      const comp = compDoc.exists ? compDoc.data() : {};
       const snap = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations')
         .where('competitionId', '==', req.params.id)
         .get();
-      const rows = snap.docs.map(d => d.data()).sort((a, b) => {
+      const all = snap.docs.map(d => d.data()).sort((a, b) => {
         const ta = a.registeredAt?._seconds || 0;
         const tb = b.registeredAt?._seconds || 0;
         return ta - tb;
       });
 
-      const headers = [
+      const HEADERS = [
         '序號','姓名','性別','生日','手機','Email',
         '身分證/護照','緊急聯絡人','緊急聯絡人關係','緊急聯絡人手機',
         '身高','臂展','組別','榮譽參賽','友館折扣','報名費',
         '付款狀態','匯款銀行','匯款/繳款日期','匯款末五碼',
-        '簽署狀態','是否候補','備註','員工備註','報名時間'
+        '簽署狀態','是否候補','備註','員工備註','報名時間',
       ];
-
-      const csvRows = [headers.join(',')];
-      rows.forEach((r, i) => {
+      const rowOf = (r, i) => {
         const paid = r.paymentStatus === 'confirmed' ? '已確認' : r.paymentStatus === 'refunded' ? '已退費' : '待確認';
         const signed = r.isComplete ? '已完成' : r.parentRequired ? '待法定代理人簽名' : '未完成';
-        const cols = [
-          i + 1,
-          `"${r.memberName || ''}"`,
-          r.gender || '',
-          r.birthday || '',
-          r.phone || '',
-          r.email || '',
-          `"${r.idNumber || ''}"`,
-          `"${r.emergencyContact || ''}"`,
-          `"${r.emergencyRelation || ''}"`,
-          r.emergencyPhone || '',
-          r.height || '',
-          r.armSpan || '',
-          `"${r.divisionName || ''}"`,
-          r.isHonorary ? '是' : '否',
-          `"${r.isPartnerGymDiscount ? `${r.partnerGym || '友館'}${r.partnerGymPending ? '(待核對)' : ''}` : ''}"`,
-          r.registrationFee || '',
-          paid,
-          r.paymentMethod === 'cash' ? '臨櫃繳款' : `"${r.bankName || ''}"`,
-          r.paymentDate || '',
-          r.paymentMethod === 'cash' ? '' : (r.bankLastFive || ''),
-          signed,
-          r.status === 'waitlist' ? '是' : '否',
-          `"${(r.memberNote || r.customFieldValues?.notes || '').replace(/"/g, '""')}"`,
-          `"${(r.staffNote || '').replace(/"/g, '""')}"`,
+        return [
+          i + 1, r.memberName || '', r.gender || '', r.birthday || '', r.phone || '', r.email || '',
+          r.idNumber || '', r.emergencyContact || '', r.emergencyRelation || '', r.emergencyPhone || '',
+          r.height || '', r.armSpan || '', r.divisionName || '', r.isHonorary ? '是' : '否',
+          r.isPartnerGymDiscount ? `${r.partnerGym || '友館'}${r.partnerGymPending ? '(待核對)' : ''}` : '',
+          r.registrationFee || '', paid,
+          r.paymentMethod === 'cash' ? '臨櫃繳款' : (r.bankName || ''),
+          r.paymentDate || '', r.paymentMethod === 'cash' ? '' : (r.bankLastFive || ''),
+          signed, r.status === 'waitlist' ? '是' : '否',
+          r.memberNote || r.customFieldValues?.notes || '', r.staffNote || '',
           r.registeredAt?._seconds ? new Date(r.registeredAt._seconds * 1000).toLocaleString('zh-TW') : '',
         ];
-        csvRows.push(cols.join(','));
-      });
+      };
 
-      const csv = '\uFEFF' + csvRows.join('\n'); // BOM for Excel UTF-8
-      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="competition_registrations_${req.params.id}.csv"`);
-      res.send(csv);
+      const ExcelJS = require('exceljs');
+      const workbook = new ExcelJS.Workbook();
+      const usedSheetNames = new Set();
+      // Excel 分頁名稱限制：≤31字、不可含 \/?*[]:；重名加序號避免撞名報錯
+      const sanitizeSheetName = (name) => {
+        let base = String(name || '未命名').replace(/[\\/?*[\]:]/g, '_').slice(0, 31) || '未命名';
+        let candidate = base, n = 1;
+        while (usedSheetNames.has(candidate)) candidate = `${base.slice(0, 28)}_${n++}`;
+        usedSheetNames.add(candidate);
+        return candidate;
+      };
+      const writeSheet = (name, rows) => {
+        const ws = workbook.addWorksheet(sanitizeSheetName(name));
+        const headerRow = ws.addRow(HEADERS);
+        headerRow.eachCell(c => { c.font = { bold: true }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } }; });
+        rows.forEach((r, i) => ws.addRow(rowOf(r, i)));
+        ws.columns.forEach(col => { col.width = 13; });
+        ws.getColumn(2).width = 12;  // 姓名
+        ws.getColumn(6).width = 22;  // Email
+        ws.getColumn(23).width = 22; // 備註
+        ws.getColumn(24).width = 22; // 員工備註
+        ws.getColumn(25).width = 18; // 報名時間
+      };
+
+      // 各組別（依賽事設定順序；只含未取消，含候補）
+      const knownDivIds = new Set();
+      (comp.divisions || []).forEach(d => {
+        knownDivIds.add(d.id);
+        writeSheet(d.name || d.id, all.filter(r => r.divisionId === d.id && r.status !== 'cancelled'));
+      });
+      // 防呆：報名記錄的組別不在賽事目前設定的組別清單中（理論上不該發生，例如組別事後被刪）
+      const orphanRows = all.filter(r => r.status !== 'cancelled' && !knownDivIds.has(r.divisionId));
+      if (orphanRows.length) writeSheet('其他組別', orphanRows);
+      // 已取消 / 申請退費（與畫面上分頁定義一致，見上方註解）
+      writeSheet('已取消', all.filter(r => r.status === 'cancelled' && !r.refundRequested));
+      writeSheet('申請退費', all.filter(r => r.refundRequested));
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="competition_registrations_${req.params.id}.xlsx"`);
+      res.send(buffer);
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );

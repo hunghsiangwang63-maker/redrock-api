@@ -173,6 +173,7 @@ const updateCompetition = async (competitionId, updates) => {
     throw { code: 'INVALID_SCORING_SYSTEM', message: 'scoringSystem 不正確' };
   }
 
+  const oldDivisions = doc.data().divisions || [];
   const allowed = ['name', 'description', 'gymId', 'registrationStart', 'registrationEnd', 'earlyBirdDeadline', 'eventDate',
     'divisions', 'customFields', 'waiverContent', 'scoringSystem', 'webhookUrl', 'status', 'fees', 'refundPolicies', 'paymentDeadlineDays'];
   const payload = { updatedAt: new Date() };
@@ -188,6 +189,27 @@ const updateCompetition = async (competitionId, updates) => {
     try { const { syncCompEvent } = require('./competitionSyncService'); await syncCompEvent(merged); }
     catch (e) { console.error('[計分系統] 更新賽事名失敗', e.message); }
   }
+
+  // 組別參賽名額增加 → 依候補順位自動遞補為正取（每個組別各自獨立比對新舊 maxParticipants；
+  // 名額減少不處理，不會自動取消任何已正取的人）。promoteNextWaitlist 每次只補一位，
+  // 故按增加的名額數迴圈呼叫；候補人數不足時該函式回傳 falsy，提早結束迴圈。
+  let promotedCount = 0;
+  if (Array.isArray(updates.divisions)) {
+    for (const nd of updates.divisions) {
+      const od = oldDivisions.find(d => d.id === nd.id);
+      const oldMax = od ? (Number(od.maxParticipants) || 0) : 0;
+      const newMax = Number(nd.maxParticipants) || 0;
+      const increase = newMax - oldMax;
+      for (let i = 0; i < increase; i++) {
+        try {
+          const promoted = await promoteNextWaitlist(competitionId, nd.id);
+          if (!promoted) break;
+          promotedCount++;
+        } catch (e) { console.error('組別名額增加、候補遞補失敗', nd.id, e.message); break; }
+      }
+    }
+  }
+  merged.promotedCount = promotedCount;
   return merged;
 };
 

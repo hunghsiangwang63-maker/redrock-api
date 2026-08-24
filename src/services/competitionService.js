@@ -812,15 +812,17 @@ const sendCompetitionNotice = async ({ competitionId, subject, html, staffId, st
   const emailService = require('./emailService');
   const emails = list.map(x => x.email);
   let sentBatches = 0, failedBatches = 0;
+  const errors = [];
   for (let i = 0; i < emails.length; i += NOTICE_BCC_BATCH_SIZE) {
     const batch = emails.slice(i, i + NOTICE_BCC_BATCH_SIZE);
     const r = await emailService.sendEmail({ to: selfTo, bcc: batch, subject, html });
-    if (r && !r.error) sentBatches++; else failedBatches++;
+    if (r && !r.error) sentBatches++; else { failedBatches++; errors.push(r?.error || 'unknown error'); }
   }
   await compRef.update({
     lastNoticeSentAt: new Date(), lastNoticeSentBy: staffId || null, lastNoticeSentByName: staffName || '',
     lastNoticeSubject: subject, lastNoticeRecipientCount: emails.length,
   });
+  if (failedBatches > 0) throw { code: 'SEND_FAILED', message: `寄送失敗：${errors.join('; ')}`, recipientCount: emails.length, batchesSent: sentBatches, batchesFailed: failedBatches };
   return { recipientCount: emails.length, batchesSent: sentBatches, batchesFailed: failedBatches };
 };
 

@@ -2,7 +2,7 @@
  * 會員首頁自訂提醒 Service
  *
  * 需求：員工可針對特定會員（或某場比賽的全部正取報名者）手動新增/編輯/刪除一則
- * 顯示在會員 App 首頁「課程活動提醒」清單裡的自訂卡片（標題/副標/圖示/連結/顯示期間），
+ * 顯示在會員 App 首頁「課程活動提醒」清單裡的自訂卡片（標題/副標/圖示/圖片/連結/顯示期間），
  * 與系統自動產生的課程/體驗提醒混在同一份清單中、依日期排序顯示。
  *
  * 與課程/體驗提醒不同：這裡完全是店員手動維護的內容，系統不會自動產生或更新。
@@ -14,7 +14,7 @@ const { v4: uuidv4 } = require('uuid');
 const COLLECTION = 'memberHomeReminders';
 
 // 建立一則提醒
-async function createReminder({ memberId, title, subtitle, icon, link, showFrom, showUntil, staffId, staffName }) {
+async function createReminder({ memberId, title, subtitle, icon, link, imageUrl, showFrom, showUntil, staffId, staffName }) {
   const db = getDb();
   const id = uuidv4();
   const now = new Date();
@@ -24,6 +24,7 @@ async function createReminder({ memberId, title, subtitle, icon, link, showFrom,
     subtitle: (subtitle || '').trim() || null,
     icon: (icon || '').trim() || '📣',
     link: (link || '').trim() || null,
+    imageUrl: (imageUrl || '').trim() || null,
     showFrom: showFrom || null,
     showUntil: showUntil || null,
     createdBy: staffId || null,
@@ -36,7 +37,7 @@ async function createReminder({ memberId, title, subtitle, icon, link, showFrom,
 }
 
 // 更新一則提醒（僅允許改內容/顯示期間，不改 memberId）
-async function updateReminder(id, { title, subtitle, icon, link, showFrom, showUntil, staffId, staffName }) {
+async function updateReminder(id, { title, subtitle, icon, link, imageUrl, showFrom, showUntil, staffId, staffName }) {
   const db = getDb();
   const ref = db.collection(COLLECTION).doc(id);
   const doc = await ref.get();
@@ -48,6 +49,7 @@ async function updateReminder(id, { title, subtitle, icon, link, showFrom, showU
   if (subtitle !== undefined) updates.subtitle = (subtitle || '').trim() || null;
   if (icon !== undefined) updates.icon = (icon || '').trim() || '📣';
   if (link !== undefined) updates.link = (link || '').trim() || null;
+  if (imageUrl !== undefined) updates.imageUrl = (imageUrl || '').trim() || null; // 空字串＝移除圖片
   if (showFrom !== undefined) updates.showFrom = showFrom || null;
   if (showUntil !== undefined) updates.showUntil = showUntil || null;
   await ref.update(updates);
@@ -91,6 +93,7 @@ async function batchCreateForMembers(memberIds, payload, staff, sourceType, sour
       subtitle: (payload.subtitle || '').trim() || null,
       icon: (payload.icon || '').trim() || defaultIcon,
       link: (payload.link || '').trim() || null,
+      imageUrl: (payload.imageUrl || '').trim() || null,
       showFrom: payload.showFrom || null,
       showUntil: payload.showUntil || null,
       sourceType,

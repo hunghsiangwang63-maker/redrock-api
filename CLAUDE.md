@@ -2840,7 +2840,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **臨時診斷路由 `_tempJkopayVerify.js`**（`super_admin` 限定、自包含硬編碼 sandbox 憑證，刻意不依賴 Railway 環境變數避免為了驗測動帳號設定）：三端點對應 Entry/Inquiry/Refund，供跑 UAT 腳本用。
 - ✅ **UAT sandbox 端到端驗測**（使用者手機安裝街口測試 App、實際付款）：3 筆正向訂單（Entry→掃碼付款→Inquiry 核對 `status===0`）+ 1 筆負向 Refund，全數成功；log 逐字擷取。
 - ✅ **驗測腳本 Excel 填寫+回信**：瀏覽器編輯 Excel Online 全面失效（純自動化層限制、非座標/技巧問題）→ 改本機下載→Python `openpyxl` 填寫（中途發現漏抓第 5 列「查詢訂單」Inquiry log，補齊）→ `file_upload` 重新附加 → 回信 Irene Wang（街口窗口）附完整填妥的驗測 Excel，等待審核/正式環境資訊。
-- ⚠️ **待清理**：`_tempJkopayVerify.js` **仍部署在正式環境**，待街口確認驗測通過或使用者明確要求才移除（見記憶 `[[payment-integration-project]]`）。
+- ✅ **臨時路由已清除**（2026-08-22 commit `30e26e0`，街口正式環境上線準備時一併移除檔案＋`index.js` 掛載；2026-08-27 驗證正式環境 `/_temp/jkopay-verify/inquiry` 回 404 確認乾淨）。同 commit 已填兩館街口正式金鑰。
 
 ## 目前進度（2026-08-18 續4）— 修：比賽退費申請完全沒有處理入口（真 bug，非僅顯示問題）
 > 使用者問「比賽申請退費之後，管理員要做什麼動作？」查證發現：後端 `POST /competitions/registrations/:regId/refund` 與 `CompetitionActionModal` 的 `action='refund'` 分支早已完整實作（含發票自動作廢警示），但**全站從未有任何按鈕呼叫它**——賽事管理頁 `CompetitionsPage.jsx` 的 `act()` 函式對 `status==='cancelled'`（退費申請的必然狀態）一律 `return null`；待辦頁 `competition_refund` 任務落到通用「前往處理」，點了只是導到賽事頁後仍然什麼按鈕都沒有。管理員完全無法在系統內把退費申請標記為已處理——這是 dead code（modal 完整、觸發永遠不存在），非顯示層小問題。純前端修復，已 build+deploy+commit+push。commit `eaaf51b`。

@@ -11,7 +11,7 @@ const { isActiveTeamMember, TEAM_DISCOUNT_MIN_AMOUNT } = require('../teamMemberS
 const { isChild } = require('../../utils/age');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
-const { DISCOUNT_CARD_RATE, PRICES, computePaidEntryAmount, getEntryTypePrice, getMemberType, getOriginalEntryPrice, computeBuyDiscountCardAmount, computeBuyPassAmount } = require('./pricing');
+const { DISCOUNT_CARD_RATE, PRICES, computePaidEntryAmount, getEntryTypePrice, getMemberType, getOriginalEntryPrice, computeBuyDiscountCardAmount, computeUseDiscountCardAmount, computeBuyPassAmount } = require('./pricing');
 const { getRenewalInfo } = require('./eligibility');
 const { runEntryGates, tryExtendFallTest } = require('./gates');
 
@@ -122,24 +122,13 @@ const createPendingCheckIn = async ({
   if (ticketPartnerGymMember) finalPartnerGymMember = true;
 
   // 後端權威：使用優惠折扣券 = 所選身分(baseEntryType)原價 8 折；有效隊員再疊加隊員 9 折。
+  // 定價邏輯抽至 pricing.js computeUseDiscountCardAmount（2026-08-27），與 paymentService.js
+  // orderResolvers.entry（線上付款）共用同一份，避免各自維護。
   if (entryType === 'discount_card') {
-    let base;
-    if (baseEntryType) {
-      const fb = baseEntryType === 'student_free' ? 250 : baseEntryType === 'child_free' ? 100 : PRICES.single_general;
-      base = await getEntryTypePrice(baseEntryType, fb);
-    } else {
-      base = await getOriginalEntryPrice(memberType);
-    }
-    finalOriginal = base;
-    let amt = Math.round(base * DISCOUNT_CARD_RATE);            // 優惠券 8 折
-    const isTeam = isActiveTeamMember(member);
-    if (isTeam && base >= TEAM_DISCOUNT_MIN_AMOUNT) {
-      amt = Math.round(amt * PRICES.team_discount_rate);        // 再疊加隊員 9 折
-      finalTeam = true;
-    } else {
-      finalTeam = false;
-    }
-    finalAmount = amt;
+    const r = await computeUseDiscountCardAmount(member, baseEntryType);
+    finalOriginal = r.originalAmount;
+    finalAmount = r.amount;
+    finalTeam = r.isTeamDiscount;
   }
   // 紅利入場為免費
   if (entryType === 'bonus') {
@@ -322,6 +311,7 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
         onlineTicketInfo = { paymentMethod: tk.paymentMethod, amount: tk.amount || 0 };
         // 2026-08-24：此券若線上購買的其實是優惠折扣券/定期票，供掃碼預覽提示店員「確認後將開通」
         if (tk.grantsDiscountCard) onlineTicketInfo.grantsDiscountCard = true;
+        if (tk.usesDiscountCardId) onlineTicketInfo.usesDiscountCard = true;   // 2026-08-27：線上刷已持有的優惠折扣券入場
         if (tk.grantsPassTypeId) {
           const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(tk.grantsPassTypeId).get();
           onlineTicketInfo.grantsPassTypeName = ptDoc.exists ? (ptDoc.data().name || '定期票') : '定期票';
@@ -502,6 +492,14 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
         try { await require('../passOverlapService').applyCourseOverlapForMember(pending.memberId); }
         catch (e) { console.error('課程重疊補償失敗（票已開立）:', e.message); }
       }
+    } else if (ticketData.usesDiscountCardId) {
+      // 2026-08-27：線上付款「使用（已持有的）優惠折扣券」入場——與 grantsDiscountCard（線上購買
+      // 一張全新的券）不同，這裡付款當下刷的是會員既有的某張券；比照現金流程既有時機，扣點延到
+      // 實際入場/確認這一刻才做（呼叫與現場入場同一支 useDiscountCard，含完整驗證：卡存在/未停用/
+      // 未過期/仍有次數）。若付款後、入場前這張卡的次數被別的管道用掉（如同一張卡在別處被刷），
+      // 這裡會擲出既有的 CARD_NO_CREDITS 等錯誤、擋下這次入場——與其他票券失效情境（如上方
+      // TICKET_EXPIRED）一致，不會悄悄放行卻不真的扣點。
+      await useDiscountCard(ticketData.usesDiscountCardId, pending.gymId);
     }
   } else if (pending.entryType === 'bonus' && pending.bonusId) {
     await require('../bonusService').useBonus(pending.bonusId, pending.gymId);
@@ -671,6 +669,7 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
         // 2026-08-24：此券線上購買的其實是「優惠折扣券」或「定期票」——供前端開立發票時正確顯示
         // 品項名稱（否則 checkIn.entryType 恆為 'single_entry_ticket'，發票會誤標成「單次入場券」）。
         if (tk.grantsDiscountCard) onlineTicketInfo.grantsDiscountCard = true;
+        if (tk.usesDiscountCardId) onlineTicketInfo.usesDiscountCard = true;   // 2026-08-27：線上刷已持有的優惠折扣券入場
         if (tk.grantsPassTypeId) {
           const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(tk.grantsPassTypeId).get();
           onlineTicketInfo.grantsPassTypeName = ptDoc.exists ? (ptDoc.data().name || '定期票') : '定期票';

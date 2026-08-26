@@ -151,7 +151,7 @@ const orderHandlers = {
   // （跟 checkin orderType 不同——checkin 是更新既有 checkIns 文件，entry 是全新的 pay-first 流程），
   // 改直接開一張單次入場券（30 天內任一天可用，validDate 不設 → 不受「限當天」限制，見 §12 修正說明）。
   entry: async (db, payment) => {
-    const { gymId, entryType, rentShoes, rentChalk, partnerVendor, partnerGymMember, buyPassTypeId } = payment.orderRef || {};
+    const { gymId, entryType, rentShoes, rentChalk, partnerVendor, partnerGymMember, buyPassTypeId, discountCardId } = payment.orderRef || {};
     const memberId = payment.memberId;
     if (!memberId || !gymId || !entryType) return { ok: false };
 
@@ -190,6 +190,10 @@ const orderHandlers = {
       // ——記在票上，redeem（checkin/flow.js confirmCheckIn）當下才實際建卡/建票，見該處註解。
       grantsDiscountCard: entryType === 'buy_discount_card',
       grantsPassTypeId: entryType === 'buy_pass' ? (buyPassTypeId || null) : null,
+      // 2026-08-27：線上使用（已持有的）優惠折扣券入場——記在票上，redeem
+      // （checkin/flow.js confirmCheckIn）當下才實際扣券（見該處 usesDiscountCardId 分支），
+      // 避免付款當下就扣、萬一入場前又取消或這張卡在別處被用掉。
+      usesDiscountCardId: entryType === 'discount_card' ? (discountCardId || null) : null,
       source: 'online-entry', // 2026-08-22 由 'linepay-entry' 改中性命名（此路徑現由 jkopay 亦共用，非僅 linepay；write-only 欄位，前後端皆無讀取者，改名安全）
       notes: '會員線上付款預購入場',
       createdAt: new Date(), updatedAt: new Date(),
@@ -294,13 +298,13 @@ const orderResolvers = {
   // 入場 pay-first：付款前沒有既有紀錄可查，orderRef 直接帶 { gymId, entryType }（會員自選館別+入館身份）；
   // memberId 一律信任 createPayment 呼叫端傳入的認證身份（見下方 createPayment 呼叫處第三參數），不信 orderRef。
   entry: async (db, orderRef, memberId) => {
-    const { gymId, entryType, rentShoes, rentChalk, partnerVendor, partnerGymMember, buyPassTypeId } = orderRef || {};
+    const { gymId, entryType, rentShoes, rentChalk, partnerVendor, partnerGymMember, buyPassTypeId, discountCardId, baseEntryType } = orderRef || {};
     if (!memberId) throw { code: 'INVALID_ORDER', message: '缺少會員身份' };
     if (!gymId || !entryType) throw { code: 'INVALID_ORDER', message: '缺少場館或入館身份' };
-    // 開放身份：單純付費入館三種＋購買優惠折扣券入場＋購買定期票入場（僅一次付清，2026-08-24
-    // 拍板：分期購買仍走既有櫃檯流程，不接線上）——卡/券/免費資格等本就有自己的（免費）入場路徑，
-    // 不需要線上付款，不在此列。
-    if (!['single_ticket', 'student_free', 'child_free', 'buy_discount_card', 'buy_pass'].includes(entryType))
+    // 開放身份：單純付費入館三種＋購買優惠折扣券入場＋購買定期票入場＋使用（已持有的）優惠折扣券
+    // 入場（2026-08-27 補；僅一次付清，2026-08-24 拍板：分期購買仍走既有櫃檯流程，不接線上）——
+    // 黑卡/紅利/免費資格等本就有自己的（免費）入場路徑，不需要線上付款，不在此列。
+    if (!['single_ticket', 'student_free', 'child_free', 'buy_discount_card', 'buy_pass', 'discount_card'].includes(entryType))
       throw { code: 'INVALID_ENTRY_TYPE', message: '此入館身份不支援線上付款預購' };
 
     const memberService = require('./memberService');
@@ -313,9 +317,19 @@ const orderResolvers = {
     const gate = await runEntryGates(memberId, gymId);
     if (gate.blocked) throw { code: gate.code, message: gate.message };
 
-    const { PRICES, computePaidEntryAmount, computeBuyDiscountCardAmount, computeBuyPassAmount } = require('./checkin/pricing');
+    const { PRICES, computePaidEntryAmount, computeBuyDiscountCardAmount, computeUseDiscountCardAmount, computeBuyPassAmount } = require('./checkin/pricing');
     let amount;
-    if (entryType === 'buy_discount_card') {
+    if (entryType === 'discount_card') {
+      // 使用（已持有的）優惠折扣券入場——付款前先驗證這張券真的屬於此會員、目前仍有效（未停用/
+      // 未過期/仍有次數），與現場入場（checkin/flow.js createPendingCheckIn）同一套驗證來源
+      // （getValidDiscountCards），扣點延到實際入場/確認那一刻才做（見 confirmCheckIn 的
+      // usesDiscountCardId 分支），避免付款當下就扣掉、萬一入場前又被取消或這張卡在別處被用掉。
+      if (!discountCardId) throw { code: 'DISCOUNT_CARD_REQUIRED', message: '請選擇要使用的優惠折扣券' };
+      const { getValidDiscountCards } = require('./discountCardService');
+      const cards = await getValidDiscountCards(memberId);
+      if (!cards.some(c => c.id === discountCardId)) throw { code: 'DISCOUNT_CARD_INVALID', message: '此優惠折扣券無效、已用完或不屬於此會員' };
+      amount = (await computeUseDiscountCardAmount(member, baseEntryType)).amount;
+    } else if (entryType === 'buy_discount_card') {
       // 兒童不適用折扣券（後端權威，與現金流程 createPendingCheckIn 同一擋）
       const { isChild } = require('../utils/age');
       if (isChild(member)) throw { code: 'CHILD_NO_DISCOUNT_CARD', message: '兒童不適用折扣券，無法購買' };

@@ -139,6 +139,27 @@ const computeBuyDiscountCardAmount = (member) => {
   };
 };
 
+// ── 使用（已持有的）優惠折扣券入場：所選身分(baseEntryType)原價 8 折 + 有效隊員再疊 9 折──
+// 與 computeBuyDiscountCardAmount（購買一張全新的券，固定券價）不同——這裡是刷已經持有的
+// 券，價格隨 baseEntryType（成人/學生/兒童）浮動。原本只內嵌在 checkin/flow.js
+// createPendingCheckIn（現金/櫃檯）裡，2026-08-27 抽出供線上付款（paymentService.js
+// orderResolvers.entry）共用，避免同段定價邏輯各自維護一份、日後改動漏同步。
+const computeUseDiscountCardAmount = async (member, baseEntryType) => {
+  const memberType = getMemberType(member);
+  let base;
+  if (baseEntryType) {
+    const fb = baseEntryType === 'student_free' ? 250 : baseEntryType === 'child_free' ? 100 : PRICES.single_general;
+    base = await getEntryTypePrice(baseEntryType, fb);
+  } else {
+    base = await getOriginalEntryPrice(memberType);
+  }
+  let amount = Math.round(base * DISCOUNT_CARD_RATE);
+  const isTeam = isActiveTeamMember(member);
+  const isTeamDiscount = isTeam && base >= TEAM_DISCOUNT_MIN_AMOUNT;
+  if (isTeamDiscount) amount = Math.round(amount * PRICES.team_discount_rate);
+  return { originalAmount: base, amount, isTeamDiscount };
+};
+
 // ── 購買新定期票入場：票種原價 + 單館票限購館別 + 有效隊員 9 折（不信前端傳值）───
 // 同上，抽出供兩處共用；驗證失敗的錯誤碼與訊息與既有行為逐字一致（沿用既有呼叫端相容）。
 const computeBuyPassAmount = async (db, buyPassTypeId, gymId, member) => {
@@ -161,4 +182,4 @@ const computeBuyPassAmount = async (db, buyPassTypeId, gymId, member) => {
 // ── 取得有效定期票 ───────────────────────────────────────────────
 // endDate 改用「補償後到期日」（臨時休館延長票期，公休不補）→ 不在 Firestore 端以 endDate 預篩，
 // 改抓全部 active 後在程式碼用 effectiveEndDate 判斷（會員 active 票很少，成本可忽略）。
-module.exports = { PRICES, DISCOUNT_CARD_RATE, PARTNER_VENDOR_DISCOUNT, PARTNER_GYM_MEMBER_RATE, getPartnerVendorConfig, getPartnerGymMemberConfig, getOriginalEntryPrice, getMemberType, isFreeEntry, getEntryTypePrice, computePaidEntryAmount, computeBuyDiscountCardAmount, computeBuyPassAmount };
+module.exports = { PRICES, DISCOUNT_CARD_RATE, PARTNER_VENDOR_DISCOUNT, PARTNER_GYM_MEMBER_RATE, getPartnerVendorConfig, getPartnerGymMemberConfig, getOriginalEntryPrice, getMemberType, isFreeEntry, getEntryTypePrice, computePaidEntryAmount, computeBuyDiscountCardAmount, computeUseDiscountCardAmount, computeBuyPassAmount };

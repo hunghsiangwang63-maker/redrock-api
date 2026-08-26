@@ -158,6 +158,12 @@ router.get('/:id/registrations', authenticate, checkPermission('competitions.man
     const registrations = await competitionService.getCompetitionRegistrations(req.params.id);
     // 附加「實收金額」（管理員編修 > 匯款確認金額-保費 > 應繳費用-保費），供名單/開發票 modal 顯示與預填
     registrations.forEach(r => { r.receivedAmount = competitionService.computeNetReceivedAmount(r); });
+    // 2026-08-26 補：competitionRegistrations 文件本身從未存 gymId（只有母賽事文件有）——「開立發票」
+    // modal 靠這個欄位判斷該館真列印開關（見 InvoiceIssuer.jsx），漏了會讓真列印已開的館別誤判成
+    // 未開、悄悄退回§9手動記帳版（不是真的沒開真列印，是這裡從沒把 gymId 傳給前端）。從母賽事帶入。
+    const compDoc = await getDb().collection(COLLECTIONS.COMPETITIONS).doc(req.params.id).get();
+    const compGymId = compDoc.exists ? compDoc.data().gymId : null;
+    registrations.forEach(r => { if (!r.gymId) r.gymId = compGymId; });
     await attachInvoiceStatus(getDb(), registrations);
     res.json({ registrations });
   } catch (err) {

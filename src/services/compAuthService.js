@@ -142,7 +142,14 @@ const verifyAndMintToken = async ({ role, password, email, compId }) => {
     if (!compId) return { ok: false, message: '請先進入一場比賽' };
     const snap = await compDb.collection('competitions').doc(compId).get();
     if (!snap.exists) return { ok: false, message: '比賽不存在' };
-    const accounts = (snap.data() || {}).judgeAccounts || {};
+    const compData = snap.data() || {};
+    // 2026-08-26：已結束的比賽（獨立的 ended 欄位，設定頁「此賽事已結束」勾選，管理員手動標記；
+    // ⚠️ 刻意不沿用 isActive——實測發現 isActive===false 涵蓋「尚未開始」與「已結束」兩種狀態
+    // （賽前/賽後都是 false，只有現場即時計分時才 true），若拿它當「已結束」判斷會誤鎖還沒開賽
+    // 的賽事）裁判不再能登入——直接擋在核發 token 之前（比只做 UI 灰階更可靠，即使有人繞過前端
+    // 直接打這支登入 API 也擋得住）。
+    if (compData.ended === true) return { ok: false, message: '此賽事已結束，無法登入計分' };
+    const accounts = compData.judgeAccounts || {};
     const hash = hashPw(password);
     const found = Object.keys(accounts).some((k) => {
       const acc = accounts[k];

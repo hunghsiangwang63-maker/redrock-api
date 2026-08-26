@@ -19,6 +19,11 @@
  *
  * ⚠️ judge 分支的雜湊演算法必須與 redrock-comp/public/index.html 的 hashPw() 逐字一致
  * （SHA-256 + 固定鹽），否則既有裁判密碼全部失效——改動任一邊務必同步。
+ *
+ * 2026-08-26 續：新增 SSO 進入點（見 ssoMintToken）——員工已在紅石員工系統（redrock-web）用自己
+ * 的帳密登入、握有效 JWT，此時不需要再輸入一次 email+密碼：直接憑這個已驗證的員工身分核發
+ * comp 系統的 custom token。super_admin／sub_admin 的「決定核發哪種 claims」邏輯與密碼版
+ * 完全共用（抽出 mintSuperAdminTokenFor／mintSubAdminTokenFor），只是省略密碼比對這一步。
  */
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
@@ -57,6 +62,45 @@ const verifyStaffSuperAdmin = async (email, password) => {
   return { staffId: snap.docs[0].id, name: staff.name || email };
 };
 
+// 給定「已確認為 super_admin」的員工資料 { staffId, name } → 核發 super_admin claims token。
+// 密碼版（verifyAndMintToken）與 SSO 版（ssoMintToken）共用這一段。
+const mintSuperAdminTokenFor = async (staff) => {
+  const auth = getCompAuth();
+  const uid = 'comp-super-admin-' + shortHash(staff.staffId);
+  const claims = { role: 'super_admin' };
+  await ensureUserWithClaims(auth, uid, claims);
+  const token = await auth.createCustomToken(uid, claims);
+  return { ok: true, token, name: staff.name };
+};
+
+// 掃描各比賽 subAdmins 名單，找出這個 email 被指派管哪些比賽 → 核發 sub_admin claims token
+// （compIds 為空代表這個員工帳號沒有被指派到任何一場比賽的單場管理員）。密碼版與 SSO 版共用。
+const mintSubAdminTokenFor = async (em, fallbackName) => {
+  const compDb = getCompDb();
+  const auth = getCompAuth();
+  const compsSnap = await compDb.collection('competitions').get();
+  const matched = [];
+  let matchedName = fallbackName;
+  compsSnap.forEach((d) => {
+    const subs = (d.data() || {}).subAdmins || {};
+    Object.keys(subs).forEach((k) => {
+      const acc = subs[k];
+      if (acc && acc.email && String(acc.email).trim().toLowerCase() === em && matched.indexOf(d.id) === -1) {
+        matched.push(d.id);
+        if (acc.name) matchedName = acc.name;
+      }
+    });
+  });
+  if (!matched.length) return { ok: false, message: '此員工帳號尚未被指派為任何一場比賽的單場管理員' };
+  const uid = 'comp-subadmin-' + shortHash(em);
+  // name 一併放進 claims（非授權依據，純供 redrock-comp 前端顯示用——SSO 進入點沒有另外的 HTTP
+  // 回應可讀，只能靠 token 本身的 claims 帶出顯示名稱）。
+  const claims = { role: 'sub_admin', compIds: matched, name: matchedName };
+  await ensureUserWithClaims(auth, uid, claims);
+  const token = await auth.createCustomToken(uid, claims);
+  return { ok: true, token, compIds: matched, name: matchedName };
+};
+
 // role: 'super_admin' | 'sub_admin' | 'judge'
 // super_admin/sub_admin 的 password 現在是「員工帳號密碼」；judge 的 password 仍是 redrock-comp
 // 自己那組獨立密碼（見檔頭說明）。回傳 { ok:true, token } 或 { ok:false, message }
@@ -71,11 +115,7 @@ const verifyAndMintToken = async ({ role, password, email, compId }) => {
     if (!em) return { ok: false, message: '請輸入員工帳號 Email' };
     const staff = await verifyStaffSuperAdmin(em, password);
     if (!staff) return { ok: false, message: '帳號或密碼錯誤，或此帳號非系統管理員' };
-    const uid = 'comp-super-admin-' + shortHash(staff.staffId);
-    const claims = { role: 'super_admin' };
-    await ensureUserWithClaims(auth, uid, claims);
-    const token = await auth.createCustomToken(uid, claims);
-    return { ok: true, token, name: staff.name };
+    return mintSuperAdminTokenFor(staff);
   }
 
   if (role === 'sub_admin') {
@@ -91,27 +131,8 @@ const verifyAndMintToken = async ({ role, password, email, compId }) => {
     if (!staff.passwordHash || !(await bcrypt.compare(password, staff.passwordHash))) {
       return { ok: false, message: '帳號或密碼錯誤' };
     }
-    // 掃描各比賽的 subAdmins 名單找出這個 email 被指派管哪些比賽（指派時只需填 email，
-    // 不再需要另外設一組密碼——密碼一律驗證員工帳號本身）
-    const compsSnap = await compDb.collection('competitions').get();
-    const matched = [];
-    let matchedName = staff.name || em;
-    compsSnap.forEach((d) => {
-      const subs = (d.data() || {}).subAdmins || {};
-      Object.keys(subs).forEach((k) => {
-        const acc = subs[k];
-        if (acc && acc.email && String(acc.email).trim().toLowerCase() === em && matched.indexOf(d.id) === -1) {
-          matched.push(d.id);
-          if (acc.name) matchedName = acc.name;
-        }
-      });
-    });
-    if (!matched.length) return { ok: false, message: '此員工帳號尚未被指派為任何一場比賽的單場管理員' };
-    const uid = 'comp-subadmin-' + shortHash(em);
-    const claims = { role: 'sub_admin', compIds: matched };
-    await ensureUserWithClaims(auth, uid, claims);
-    const token = await auth.createCustomToken(uid, claims);
-    return { ok: true, token, compIds: matched, name: matchedName };
+    // 指派時只需填 email，不再需要另外設一組密碼——密碼一律驗證員工帳號本身
+    return mintSubAdminTokenFor(em, staff.name || em);
   }
 
   if (role === 'judge') {
@@ -138,4 +159,26 @@ const verifyAndMintToken = async ({ role, password, email, compId }) => {
   return { ok: false, message: '未知的登入類型' };
 };
 
-module.exports = { verifyAndMintToken, hashPw };
+// SSO：員工在紅石員工系統（redrock-web）已用自己的帳密登入、持有效 JWT（authenticate 中介層
+// 已驗證），不需要再輸入一次密碼——直接依這個已驗證的 staffId 決定核發哪種 claims：
+// staff.role==='super_admin' → 直接給 super_admin token（等同總管理者登入）；
+// 其餘角色 → 掃描是否被指派為某些比賽的單場管理員，是則給 sub_admin token；
+// 兩者皆非 → 回錯誤（此帳號本來就登不進計分系統，跟密碼版行為一致）。
+const ssoMintToken = async (staffId) => {
+  const compDb = getCompDb();
+  const auth = getCompAuth();
+  if (!compDb || !auth) return { ok: false, message: '計分系統未設定金鑰（COMP_FIREBASE_SA）' };
+  const db = getDb();
+  const doc = await db.collection(COLLECTIONS.STAFF).doc(staffId).get();
+  if (!doc.exists) return { ok: false, message: '找不到員工帳號' };
+  const staff = doc.data();
+  if (!staff.isActive) return { ok: false, message: '帳號已停用' };
+  if (staff.role === 'super_admin') {
+    return mintSuperAdminTokenFor({ staffId: doc.id, name: staff.name || staff.email });
+  }
+  const em = String(staff.email || '').trim().toLowerCase();
+  if (!em) return { ok: false, message: '此帳號無 Email，無法比對單場管理員指派' };
+  return mintSubAdminTokenFor(em, staff.name || em);
+};
+
+module.exports = { verifyAndMintToken, ssoMintToken, hashPw };

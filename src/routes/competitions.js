@@ -1387,7 +1387,7 @@ router.post('/registrations/:regId/invoices', authenticate, requireManagerOrStat
     const compDoc = await db.collection(COLLECTIONS.COMPETITIONS).doc(reg.competitionId).get();
     const comp = compDoc.exists ? compDoc.data() : {};
     const { itemName, amount, taxId, note, issuedAt, track, number } = req.body;
-    await require('./invoices').checkInvoiceIssuanceTiming(db, 'competition', req.params.regId); // 須賽事前3天起才能開票
+    await require('./invoices').checkInvoiceIssuanceTiming(db, 'competition', req.params.regId); // 須賽事前一週起才能開票
     const invoiceService = require('../services/invoiceService');
     const record = await invoiceService.createInvoice(db, {
       sourceType: 'competition', refId: req.params.regId,

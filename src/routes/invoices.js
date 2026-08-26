@@ -42,9 +42,9 @@ async function checkInvoiceIssuanceTiming(db, sourceType, refId) {
     const compDoc = await db.collection('competitions').doc(regDoc.data().competitionId).get();
     const eventDate = compDoc.exists ? compDoc.data().eventDate : null;
     if (eventDate) {
-      const openFrom = dayjs(eventDate).subtract(3, 'day').format('YYYY-MM-DD');
+      const openFrom = dayjs(eventDate).subtract(7, 'day').format('YYYY-MM-DD');
       if (today < openFrom) {
-        const e = new Error(`此賽事為 ${eventDate}，須賽事前 3 天（${openFrom}）起才能開立發票`);
+        const e = new Error(`此賽事為 ${eventDate}，須賽事前一週（${openFrom}）起才能開立發票`);
         e.code = 'INVOICE_TOO_EARLY'; throw e;
       }
     }
@@ -278,7 +278,7 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
     // 一大坨裡被扣出來歸類，現金則不用另外處理（本來就正確落在「發票總金額－電子支付」剩下的那份）。
 
     // ⚠️ 2026-08-23 補：課程/比賽兩種 sourceType 是「延後開票」（checkInvoiceIssuanceTiming——課程須
-    // 等最後一堂、比賽須等賽事前 3 天），現金收款通常「確認當下」（早於開票日，可能是幾週/幾個月前）
+    // 等最後一堂、比賽須等賽事前一週），現金收款通常「確認當下」（早於開票日，可能是幾週/幾個月前）
     // 就已經走 transfers.js /:id/confirm 或 competitions.js /confirm-payment 記過一筆「+現金補入」——
     // 若這張發票的 paymentMethod 也是 cash，今天 payment.cash（發票日為準）會把同一筆現金重複算一次。
     // 用 cashAdjustedForInvoice 旗標（confirm 收款當下標記）判斷是否為這種「已預收」情境，是的話在

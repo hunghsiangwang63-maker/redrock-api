@@ -84,7 +84,7 @@ const entryManualTotal = (income, im) => {
   return (im?.entry !== '' && im?.entry != null) ? (Number(im.entry) || 0) : (income?.entry || 0);
 };
 const manualIncomeTotal = (income, im) => im
-  ? entryManualTotal(income, im) + ['shoeRental', 'equipmentRental', 'product', 'course', 'pass']
+  ? entryManualTotal(income, im) + ['shoeRental', 'equipmentRental', 'product', 'course', 'pass', 'competition']
       .reduce((s, k) => s + ((im[k] !== '' && im[k] != null) ? (Number(im[k]) || 0) : (income?.[k] || 0)), 0)
   : null;
 
@@ -327,6 +327,13 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     let courseIncome = 0;
     let passIncome = 0;
     let equipmentRentalIncome = 0;   // 器材租借租金（/rentals，type:'rental' 交易；不含押金）
+    // 比賽報名收入（type:'competition'）——2026-08-26 補：原本此迴圈完全沒有 competition 分支，
+    // 比賽報名的認列金額從未被計進任何一項今日收入，但其發票（sourceType:'competition'）付款方式
+    // 卻透過下方 invAuth.byMethod 無條件併入 payByMethod，導致「付款方式」比「收入」多算了整批比賽
+    // 報名的錢——真實案例：新竹一次補開 31 張舊比賽發票，income.total 完全沒反映這 NT$22,008，
+    // 但 payment.transfer 卻已經算進去。獨立一項，比照課程／體驗（真列印館別改用發票金額，見下方
+    // invAuth.bySourceType.competition 覆寫）。
+    let competitionIncome = 0;
     const passByType = {};   // 定期票收入細項（依票種，從 notes「定期票購買：xxx」取名）
     txnSnap.docs.forEach(d => {
       const data = d.data();
@@ -335,6 +342,12 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
       if (data.type === 'rental') {
         equipmentRentalIncome += amount;
         // 真列印館別：付款方式改由今日已開立發票統計（見下方 invAuth.byMethod 合併）
+        if (!invAuth.printingEnabled) addPay(data.paymentMethod, amount);
+      } else if (data.type === 'competition') {
+        competitionIncome += amount;
+        // 真列印館別：付款方式改由今日已開立發票統計（見下方 invAuth.byMethod 合併）；比賽 recognitionDate
+        // 常落在賽事前一天（可能是未來日期，見 competitionService.recordCompetitionRevenue），非真列印
+        // 館別才需要這裡的 fallback。
         if (!invAuth.printingEnabled) addPay(data.paymentMethod, amount);
       } else if (data.type === 'course') {
         courseIncome += amount;
@@ -386,6 +399,10 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     // invoices 集合存的 sourceType 是 'experience' 非 'course'——只加 bySourceType.course 會漏算，
     // 這類發票金額整筆消失於「課程」項目。一併加回。
     if (invAuth.printingEnabled) courseIncome = (invAuth.bySourceType.course || 0) + (invAuth.bySourceType.experience || 0);
+    // 比賽：與課程同理，真列印館別改以「今日實際開立發票金額」為準（比賽發票同樣延後開立，見
+    // checkInvoiceIssuanceTiming 賽前一週才可開），不再依賴 recognitionDate（該日期常是未來的賽事
+    // 前一天，非真列印館別才需要上方迴圈的 fallback）。
+    if (invAuth.printingEnabled) competitionIncome = invAuth.bySourceType.competition || 0;
 
     // 真列印館別：付款方式統計改以「今日已開立發票」為單一權威來源（2026-08-22 取代原本逐項從
     // checkIns/productSales/transactions 湊出來的 payByMethod）——invAuth.byMethod 已涵蓋入場/商品/
@@ -398,10 +415,17 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
     // 此行為 no-op，不影響既有行為。
     Object.entries(invAuth.byMethod).forEach(([m, amt]) => addPay(m, amt));
 
-    const totalIncome = entryIncome + shoeRentalIncome + productIncome + courseIncome + passIncome + equipmentRentalIncome;
+    const totalIncome = entryIncome + shoeRentalIncome + productIncome + courseIncome + passIncome + equipmentRentalIncome + competitionIncome;
     const totalCash = payByMethod.cash || 0;
     const totalElectronic = (payByMethod.linepay || 0) + (payByMethod.jkopay || 0) + (payByMethod.taiwanpay || 0);
     const totalTransfer = payByMethod.transfer || 0;
+    // 「其他」：非現金/轉帳/LinePay/街口/台灣Pay 五種已知付款方式的發票（真實案例：課程發票
+    // paymentMethod='migration'／'roster-claim'，來自舊資料轉檔／課程名單認領，並非店員實際收款）——
+    // 2026-08-26 修：這筆錢原本完全沒有任何欄位可以裝，就從「付款方式」統計裡憑空消失（income.total
+    // 有算、payment 卻找不到），現在獨立歸「其他」，不再無故遺漏。之後若出現更多非標準付款方式字串，
+    // 一律自動歸這裡，不會再重演同樣的問題。
+    const KNOWN_METHODS = new Set(['cash', 'linepay', 'jkopay', 'taiwanpay', 'transfer']);
+    const totalOther = Object.entries(payByMethod).reduce((s, [k, v]) => s + (KNOWN_METHODS.has(k) ? 0 : (v || 0)), 0);
 
     const settlement = {
       date: today,
@@ -415,6 +439,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
         course: courseIncome,
         pass: passIncome,
         equipmentRental: equipmentRentalIncome,   // 器材租借（抱石墊/岩盔/吊帶等）
+        competition: competitionIncome,   // 比賽報名費（2026-08-26 獨立一項，原本從未計入任何收入分類）
         total: totalIncome,
         // 細項
         entryItems: Object.entries(entryByType).filter(([, v]) => v > 0)
@@ -429,6 +454,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
         taiwanPay: payByMethod.taiwanpay || 0,
         transfer: totalTransfer,
         electronic: totalElectronic,
+        other: totalOther,   // 非五種已知付款方式（如舊資料轉檔/名單認領標記），2026-08-26 新增，見上方註解
       },
       deductions: [],
       expectedCashBalance: prevBalance + totalCash,
@@ -799,7 +825,9 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
     aoa.push(R('行動支付', '台灣Pay', '', s => s.payment?.taiwanPay));
     aoa.push(R('', 'Line Pay', '', s => s.payment?.linePay));
     aoa.push(R('', '街口', '', s => s.payment?.jko));
+    aoa.push(R('', '轉帳', '', s => s.payment?.transfer));
     aoa.push(R('', '現金', '', s => s.payment?.cash));
+    aoa.push(R('', '其他', '', s => s.payment?.other));
     aoa.push(R('收銀機應有餘額', '', '', s => s.expectedCashBalance));
     aoa.push(['現金清點', '面額', '']);
     [['1', 'd1'], ['5', 'd5'], ['10', 'd10'], ['50', 'd50'], ['100', 'd100'], ['500', 'd500'], ['1000', 'd1000']]
@@ -814,6 +842,7 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
     aoa.push(R('商品販售', '商品', '', s => s.income?.product));
     passLabels.forEach(lb => aoa.push(R('定期票', lb, '', s => itemVal(s, 'passItems', lb))));
     aoa.push(R('教學費', '課程', '', s => s.income?.course));
+    aoa.push(R('比賽報名', '', '', s => s.income?.competition));
     aoa.push(R('總計', '', '', s => invoiceGrandTotal(s)));
 
     // ── 手動輸入金額（轉換期 settlementManualInput 逐項手動值；當月任一天有填才輸出此區）──
@@ -835,7 +864,7 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
       } else {
         entrySum = (im.entry !== '' && im.entry != null) ? (Number(im.entry) || 0) : (income.entry || 0);
       }
-      return entrySum + ['shoeRental', 'equipmentRental', 'product', 'course', 'pass']
+      return entrySum + ['shoeRental', 'equipmentRental', 'product', 'course', 'pass', 'competition']
         .reduce((sum, k) => sum + ((im[k] !== '' && im[k] != null) ? (Number(im[k]) || 0) : (income[k] || 0)), 0);
     };
     const anyManual = dates.some(dt => byDate[dt]?.incomeManual && typeof byDate[dt].incomeManual === 'object');
@@ -855,6 +884,7 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
       aoa.push(R('商品販售(手動)', '商品', '', st => manVal(st, 'product')));
       aoa.push(R('定期票(手動)', '', '', st => manVal(st, 'pass')));
       aoa.push(R('教學費(手動)', '課程', '', st => manVal(st, 'course')));
+      aoa.push(R('比賽報名(手動)', '', '', st => manVal(st, 'competition')));
       aoa.push(R('手計總額', '', '', st => { const v = manualTotalOf(st); return v === '' ? '' : v - (st.voidInvoiceAmount || 0); }));
     }
 

@@ -16,10 +16,11 @@ const ageOf = (birthday) => {
   return dayjs().diff(d, 'year');
 };
 
-// birthday 存在且 <5（未滿 5 歲）
-const isUnder5 = (memberOrBirthday) => {
+// birthday 存在且 <4（未滿 4 歲）——2026-08-26 由 5 歲下修為 4 歲（會員註冊/課程報名/體驗試上
+// 共用同一道門檻；比賽報名的年齡下限是前端獨立、無後端把關的舊碼，不受此改動影響）。
+const isUnder4 = (memberOrBirthday) => {
   const age = ageOf(memberOrBirthday);
-  return age !== null && age < 5;
+  return age !== null && age < 4;
 };
 
 // 兒童：birthday 存在且 <13。刻意用「出生日期年齡」而非 getMemberType，
@@ -35,4 +36,4 @@ const isMinor = (memberOrBirthday) => {
   return age !== null && age < 18;
 };
 
-module.exports = { ageOf, isUnder5, isChild, isMinor };
+module.exports = { ageOf, isUnder4, isChild, isMinor };

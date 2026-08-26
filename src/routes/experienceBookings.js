@@ -16,7 +16,7 @@ const { COURSE_TYPES, parseBookingTime, courseTypeLabel, addExperienceToCourseAn
         updateExperienceSchedule,
         cleanupExperienceCourseAndSchedule, syncExperienceTickets, voidExperienceTickets, buildInsuranceXlsBuffer,
         defaultSettings, recordExperienceRevenue, reverseExperienceRevenue } = require('../services/experienceService');
-const { isUnder5, isMinor } = require('../utils/age');
+const { isUnder4, isMinor } = require('../utils/age');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { notifyRoleInGym } = require('../services/notificationService');
 
@@ -46,7 +46,7 @@ async function handleTrialBooking(req, res, db, memberId) {
     if (!guestName || !String(guestName).trim()) return res.status(400).json({ code:'MISSING_CONTACT', message:'請填寫姓名' });
     if (!guestPhone || !String(guestPhone).trim()) return res.status(400).json({ code:'MISSING_PHONE', message:'請填寫聯絡電話' });
     if (!guestBirthday) return res.status(400).json({ code:'MISSING_BIRTHDAY', message:'請填寫生日' });
-    if (isUnder5(guestBirthday)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
+    if (isUnder4(guestBirthday)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 4 歲無法報名課程/體驗' });
     // 防呆：小蜘蛛人／青少年（班別大類 group==='youth'）限未滿18歲試上
     if (category?.group === 'youth' && !isMinor(guestBirthday)) return res.status(400).json({ code:'YOUTH_COURSE_AGE_LIMIT', message:'此課程限未滿 18 歲學員報名，請確認生日是否填寫正確' });
     if (!signatureData) return res.status(400).json({ code:'CONSENT_REQUIRED', message:'請先完成簽名' });
@@ -80,9 +80,9 @@ async function handleTrialBooking(req, res, db, memberId) {
       trialPhone = contactPhone || child.phone || req.member?.phone || '';
     }
 
-    // 後端權威：未滿 5 歲無法報名試上（實際參加者＝trialMemberId，家長代子時為子會員）
+    // 後端權威：未滿 4 歲無法報名試上（實際參加者＝trialMemberId，家長代子時為子會員）
     const _trialMember = await memberService.getMember(trialMemberId).catch(() => null);
-    if (isUnder5(_trialMember)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
+    if (isUnder4(_trialMember)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 4 歲無法報名課程/體驗' });
     // 防呆：小蜘蛛人／青少年限未滿18歲試上——避免家長忘記選子女、用自己身分報名（同 handleEnrollAll 邏輯）
     if (category?.group === 'youth' && !isMinor(_trialMember)) {
       return res.status(400).json({ code:'YOUTH_COURSE_AGE_LIMIT', message:'此課程限未滿 18 歲學員報名，請確認報名對象是否正確選擇子女／生日是否填寫正確' });
@@ -161,11 +161,11 @@ router.post('/', authenticateAny, async (req, res) => {
     if (!bookingDate) return res.status(400).json({ code:'MISSING_DATE', message:'請填寫體驗日期' });
     if (!participants?.length) return res.status(400).json({ code:'MISSING_PARTICIPANTS', message:'請填寫參加人員資料' });
 
-    // 後端權威：未滿 5 歲無法報名體驗。解析參加者——
+    // 後端權威：未滿 4 歲無法報名體驗。解析參加者——
     //  1) 若帶 childMemberId → 該子會員；否則登入會員本人（memberId）。
-    //  2) 參加者名單 participants 各自帶 birthday（含非會員 walk-in）→ 任一未滿 5 歲亦擋。
+    //  2) 參加者名單 participants 各自帶 birthday（含非會員 walk-in）→ 任一未滿 4 歲亦擋。
     //     參加者生日為前端民國格式（如 "920110"＝民國92年）；也相容 ISO YYYY-MM-DD。
-    const _partUnder5 = (s) => {
+    const _partUnder4 = (s) => {
       if (!s) return false;
       const str = String(s).trim();
       let d;
@@ -177,15 +177,15 @@ router.post('/', authenticateAny, async (req, res) => {
         const mmdd = digits.slice(-4);
         d = dayjs(`${year}-${mmdd.slice(0, 2)}-${mmdd.slice(2, 4)}`);
       }
-      return d.isValid() && dayjs().diff(d, 'year') < 5;
+      return d.isValid() && dayjs().diff(d, 'year') < 4;
     };
     const _bookerId = req.body.childMemberId || memberId;
     if (_bookerId) {
       const _bookerMember = await memberService.getMember(_bookerId).catch(() => null);
-      if (isUnder5(_bookerMember)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
+      if (isUnder4(_bookerMember)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 4 歲無法報名課程/體驗' });
     }
-    if ((participants || []).some(p => _partUnder5(p?.birthday))) {
-      return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程/體驗' });
+    if ((participants || []).some(p => _partUnder4(p?.birthday))) {
+      return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 4 歲無法報名課程/體驗' });
     }
 
     // 後端權威計算費用（不信任前端傳入的 totalFee）：用與前端相同的設定來源
@@ -278,9 +278,9 @@ router.post('/public', async (req, res) => {
     if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code:'MISSING_TRANSFER', message:'請填寫匯款帳號末五碼' });
     if (agreedTerms !== true) return res.status(400).json({ code:'TERMS_REQUIRED', message:'請閱讀並同意注意事項' });
 
-    // 未滿 5 歲擋（參加者生日；公開頁送 ISO 西元 YYYY-MM-DD）
-    const _under5 = (s) => { const d = s ? require('dayjs')(String(s)) : null; return d && d.isValid() && require('dayjs')().diff(d, 'year') < 5; };
-    if ((participants || []).some(p => _under5(p?.birthday))) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名體驗' });
+    // 未滿 4 歲擋（參加者生日；公開頁送 ISO 西元 YYYY-MM-DD）
+    const _under4 = (s) => { const d = s ? require('dayjs')(String(s)) : null; return d && d.isValid() && require('dayjs')().diff(d, 'year') < 4; };
+    if ((participants || []).some(p => _under4(p?.birthday))) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 4 歲無法報名體驗' });
 
     // 後端權威計費（同會員預約邏輯）
     const _sDoc = await db.collection('systemSettings').doc('experienceCourses').get();

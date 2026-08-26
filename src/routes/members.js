@@ -1198,7 +1198,7 @@ router.post('/self-register',
       const bcrypt = require('bcryptjs');
       const passwordHash = await bcrypt.hash(req.body.password, 10);
 
-      // 建立會員（未滿 5 歲會於 createMember throw AGE_UNDER_5）
+      // 建立會員（未滿 4 歲會於 createMember throw AGE_UNDER_5）
       const member = await memberService.createMember({
         ...req.body,
         registeredBy: 'self',

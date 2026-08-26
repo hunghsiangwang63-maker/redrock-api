@@ -3,7 +3,7 @@ const { getDb, COLLECTIONS, FieldPath } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const QRCode = require('qrcode');
 const dayjs = require('dayjs');
-const { ageOf, isUnder5 } = require('../utils/age');
+const { ageOf, isUnder4 } = require('../utils/age');
 
 // ── QR Code 產生 ──────────────────────────────────────────────────
 const generateQRCode = async (memberId, memberPhone) => {
@@ -630,9 +630,9 @@ const createMember = async (memberData, staffId, options = {}) => {
   const db = getDb();
   const memberId = uuidv4();
 
-  // 後端權威：未滿 5 歲無法成為會員（含子會員）。birthday 選填 → 有填才判斷。
-  if (isUnder5(memberData.birthday)) {
-    throw { code: 'AGE_UNDER_5', message: '未滿 5 歲無法成為會員' };
+  // 後端權威：未滿 4 歲無法成為會員（含子會員）。birthday 選填 → 有填才判斷。
+  if (isUnder4(memberData.birthday)) {
+    throw { code: 'AGE_UNDER_5', message: '未滿 4 歲無法成為會員' };
   }
 
   // 後端權威：子會員（家庭成員）僅限未滿 18 歲（滿 18 歲應註冊正式會員）。

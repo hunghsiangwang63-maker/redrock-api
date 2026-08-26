@@ -19,7 +19,7 @@ const { checkMemberOwnership } = require('../utils/memberOwnership');
 const courseService = require('../services/courseService');
 const { createWeeklySessions, updateSession } = courseService;
 const memberService = require('../services/memberService');
-const { isUnder5, isMinor } = require('../utils/age');
+const { isUnder4, isMinor } = require('../utils/age');
 const { getDb, getStorage, COLLECTIONS } = require('../config/firebase');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
@@ -357,9 +357,9 @@ router.post('/sessions/:sessionId/enroll',
       // 驗證：會員只能為自己或子會員報名
       const deny = await checkMemberOwnership(req.member, req.body.memberId, { onMissing: 404 });
       if (deny) return res.status(deny.status).json(deny.body);
-      // 後端權威：未滿 5 歲無法報名課程（實際上課者＝req.body.memberId，家長代子時已解析為子會員）
+      // 後端權威：未滿 4 歲無法報名課程（實際上課者＝req.body.memberId，家長代子時已解析為子會員）
       const _attendee = await memberService.getMember(req.body.memberId).catch(() => null);
-      if (isUnder5(_attendee)) return res.status(400).json({ code: 'AGE_UNDER_5', message: '未滿 5 歲無法報名課程' });
+      if (isUnder4(_attendee)) return res.status(400).json({ code: 'AGE_UNDER_5', message: '未滿 4 歲無法報名課程' });
       // 🧪 模擬報名：短路，不建真實報名（不佔名額）
       if (_attendee?.isSimulation) return res.json(await require('../services/simulationService').handleSimulatedRegistration(getDb(), { type: 'course', member: _attendee, targetId: null, payload: { ...req.body, sessionId: req.params.sessionId } }));
       const result = await courseService.enrollCourse({
@@ -500,7 +500,7 @@ router.post('/public/sessions/:sessionId/enroll', async (req, res) => {
     if (!guestName || !String(guestName).trim()) return res.status(400).json({ code:'MISSING_CONTACT', message:'請填寫姓名' });
     if (!guestPhone || !String(guestPhone).trim()) return res.status(400).json({ code:'MISSING_PHONE', message:'請填寫聯絡電話' });
     if (!guestBirthday) return res.status(400).json({ code:'MISSING_BIRTHDAY', message:'請填寫生日' });
-    if (isUnder5(guestBirthday)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 5 歲無法報名課程' });
+    if (isUnder4(guestBirthday)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 4 歲無法報名課程' });
     if (!portraitSignature) return res.status(400).json({ code:'CONSENT_REQUIRED', message:'請先完成簽名' });
     if (isMinor(guestBirthday) && !guardianSignature) return res.status(400).json({ code:'GUARDIAN_SIGNATURE_REQUIRED', message:'未滿 18 歲需法定代理人簽名' });
     if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code:'MISSING_TRANSFER', message:'請填寫匯款帳號末五碼' });
@@ -1853,8 +1853,8 @@ async function handleEnrollAll(req, res) {
       if (!memberId) return res.status(400).json({ error: 'MISSING_MEMBER' });
 
       if (isGuestEnroll) {
-        // 訪客：未滿 5 歲擋（無會員文件可讀，用送出的生日直接判）；未成年（<18）一律要求本人+法定代理人皆已線上簽名
-        if (isUnder5(req.body._guestBirthday)) return res.status(400).json({ code: 'AGE_UNDER_5', message: '未滿 5 歲無法報名課程' });
+        // 訪客：未滿 4 歲擋（無會員文件可讀，用送出的生日直接判）；未成年（<18）一律要求本人+法定代理人皆已線上簽名
+        if (isUnder4(req.body._guestBirthday)) return res.status(400).json({ code: 'AGE_UNDER_5', message: '未滿 4 歲無法報名課程' });
         if (!req.body.portraitSignature) return res.status(400).json({ code: 'CONSENT_REQUIRED', message: '請先完成簽名' });
         if (isMinor(req.body._guestBirthday) && !req.body.guardianSignature) return res.status(400).json({ code: 'GUARDIAN_SIGNATURE_REQUIRED', message: '未滿 18 歲需法定代理人簽名' });
       } else {
@@ -1862,9 +1862,9 @@ async function handleEnrollAll(req, res) {
         const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
         if (deny) return res.status(deny.status).json(deny.body);
       }
-      // 後端權威：未滿 5 歲無法報名課程（實際上課者＝memberId，家長代子時已解析為子會員；訪客無會員文件、上面已另外擋過）
+      // 後端權威：未滿 4 歲無法報名課程（實際上課者＝memberId，家長代子時已解析為子會員；訪客無會員文件、上面已另外擋過）
       const _attendee = isGuestEnroll ? null : await memberService.getMember(memberId).catch(() => null);
-      if (isUnder5(_attendee)) return res.status(400).json({ code: 'AGE_UNDER_5', message: '未滿 5 歲無法報名課程' });
+      if (isUnder4(_attendee)) return res.status(400).json({ code: 'AGE_UNDER_5', message: '未滿 4 歲無法報名課程' });
       // 🧪 模擬報名：短路，不建真實報名（不佔名額）
       if (_attendee?.isSimulation) return res.json(await require('../services/simulationService').handleSimulatedRegistration(db, { type: 'course', member: _attendee, targetId: courseId, payload: req.body }));
 

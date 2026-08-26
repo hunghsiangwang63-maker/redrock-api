@@ -741,10 +741,9 @@ router.post('/registrations/:regId/confirm-payment',
             amount: Number(req.body.amount) || reg.registrationFee || 0,
             note: `${reg.memberName || ''} ${reg.competitionName || ''}`.trim(),
           });
-          // 2026-08-23：比賽發票開立時機刻意延後（見 invoices.js checkInvoiceIssuanceTiming，須賽事前
-          // 3 天才能開票）——現金今天已經記進抽屜（上面這筆+現金補入），但發票通常是更晚才開立，屆時
-          // payment.cash（發票日為準）會把同一筆現金再算一次。標記旗標供 /print-record 開票時據以沖銷。
-          await regRef.update({ cashAdjustedForInvoice: true });
+          // 2026-08-27：抽屜現金由上面這筆「+現金補入」唯一負責——比賽發票（延後開立）的非轉帳付款
+          // 方式在結帳付款統計「無條件」歸「其他」（見 dailySettlements.js computeTodayInvoiceAuthority），
+          // 開票日不會再算進 payment.cash，原本（2026-08-23）的 cashAdjustedForInvoice 旗標＋沖銷機制已移除。
         } catch (e) { console.error('比賽現金寫入結帳加減項失敗', e.message); }
       }
       // 記營收（預收，認列在比賽前一天）

@@ -277,24 +277,12 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
     // 分組，併入 GET /today 的 payByMethod）——LinePay/街口/台灣Pay/轉帳都會正確從「發票總金額」那
     // 一大坨裡被扣出來歸類，現金則不用另外處理（本來就正確落在「發票總金額－電子支付」剩下的那份）。
 
-    // ⚠️ 2026-08-23 補：課程/比賽兩種 sourceType 是「延後開票」（checkInvoiceIssuanceTiming——課程須
-    // 等最後一堂、比賽須等賽事前一週），現金收款通常「確認當下」（早於開票日，可能是幾週/幾個月前）
-    // 就已經走 transfers.js /:id/confirm 或 competitions.js /confirm-payment 記過一筆「+現金補入」——
-    // 若這張發票的 paymentMethod 也是 cash，今天 payment.cash（發票日為準）會把同一筆現金重複算一次。
-    // 用 cashAdjustedForInvoice 旗標（confirm 收款當下標記）判斷是否為這種「已預收」情境，是的話在
-    // 開票當天補一筆「－現金補入沖銷」抵銷掉，讓當天現金核對不會誤把這筆早就在抽屜裡的舊錢當成新錢。
-    if (paymentMethod === 'cash' && ['course', 'competition'].includes(sourceType) && refId) {
-      try {
-        const srcColl = sourceType === 'course' ? 'courseEnrollments' : 'competitionRegistrations';
-        const srcDoc = await db.collection(srcColl).doc(refId).get();
-        if (srcDoc.exists && srcDoc.data().cashAdjustedForInvoice === true) {
-          await require('../services/settlementService').addCashAdjustment({
-            gymId, sign: '-', type: '現金補入沖銷', amount: amt,
-            note: `${memberName || ''}（${itemName || ''}・已於收款確認時預收，避免重複計入）`.trim(),
-          });
-        }
-      } catch (e) { console.error('[開票沖銷已預收現金失敗]', e.message); }
-    }
+    // ⚠️ 2026-08-27：移除原本（2026-08-23 加的）「開票當天補一筆－現金補入沖銷」的做法——課程/比賽
+    // 的臨櫃現金在收款確認當下已寫「+現金補入」加減項（transfers.js /:id/confirm、competitions.js
+    // /confirm-payment），而這兩類發票的非轉帳付款方式現在於結帳付款統計「無條件」歸「其他」（見
+    // dailySettlements.js computeTodayInvoiceAuthority），開票日的 payment.cash 根本不會再算到這筆錢，
+    // 沒有東西需要沖銷；若保留沖銷，「移出 cash」＋「－沖銷加減項」會疊加、讓開票當天的應有現金被
+    // 雙重扣除（實際點鈔比預期多、出現假的正向差異）。
 
     // 定期票「在家線上續約」——refId 是那筆 payments 文件 id（見 paymentService.js
     // orderResolvers/orderHandlers.pass_renewal 說明：用付款事件自己的 id 當 refId，避免同一張票

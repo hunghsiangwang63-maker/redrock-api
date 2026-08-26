@@ -328,14 +328,10 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
             gymId: t.gymId, amount: t.amount,
             note: `${t.memberName || ''} ${t.orderName || t.courseName || (t.orderType === 'team_member' ? '入隊隊費' : '')}`.trim(),
           });
-          // 2026-08-23：課程/比賽發票開立時機刻意延後（見 invoices.js checkInvoiceIssuanceTiming，須等
-          // 最後一堂／賽事前一週才能開票）——現金在「今天」（確認收款當下）就已經記進抽屜（上面這筆
-          // +現金補入），但發票通常是「更晚的某一天」才開立，屆時 payment.cash（發票日為準）會把
-          // 同一筆現金再算一次。標記此旗標，供 invoices.js /print-record 開票當下據以沖銷，避免
-          // 同一筆現金在兩個不同日期各被算一次（team_member 目前無對應發票機制，不需標記）。
-          if (['course', 'competition'].includes(t.orderType) && t.refId) {
-            await db.collection(ORDER_COLL[t.orderType]).doc(t.refId).update({ cashAdjustedForInvoice: true });
-          }
+          // 2026-08-27：抽屜現金由上面這筆「+現金補入」唯一負責——課程/比賽發票（延後開立，見
+          // invoices.js checkInvoiceIssuanceTiming）的非轉帳付款方式在結帳付款統計「無條件」歸「其他」
+          // （見 dailySettlements.js computeTodayInvoiceAuthority），開票日不會再把同一筆錢算進
+          // payment.cash，也不再需要原本（2026-08-23）的 cashAdjustedForInvoice 旗標＋開票日沖銷機制。
         } catch (e) { console.error('現金收款寫入結帳加減項失敗', e.message); }
       }
     } catch (e) { console.error('transfer confirm side-effect:', e.message); }

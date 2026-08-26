@@ -180,7 +180,7 @@ async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
       result.byMethod[m] = (result.byMethod[m] || 0) + (Number(i.amount) || 0);
     });
     // ── 預收款（延後開立發票代表的舊款）併入「其他」（2026-08-27 拍板：轉帳金額維持不動，
-    //    現金/LinePay/街口/台灣Pay 若查出是補開的舊款，改歸「其他」，不獨立一項）──────────────
+    //    現金/LinePay/街口/台灣Pay 補開的舊款改歸「其他」，不獨立一項）────────────────────────
     // 課程/體驗/比賽發票延後開立（見 checkInvoiceIssuanceTiming）——底層報名/預約當初實際收款的那
     // 天，早就已經在那天結算過了；但因為發票是「今天」才補印，上面的 byMethod 會把這筆錢當成「今天
     // 收的」再算一次。現金部分會讓今天的應有現金餘額被灌水（今天抽屜裡本來就不會有這筆錢，點鈔對
@@ -190,36 +190,35 @@ async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
     // 真實案例：新竹某日補印一筆體驗課程發票(現金NT$1,400，實際收款於3個月前)＋兩筆比賽報名發票
     // (現金各NT$721，實際收款於一個月前)，導致當天現金差異從真正的-420被灌到-3,262；另一天補印一筆
     // 體驗課程發票(LinePay NT$2,600，實際收款於3週前)，導致當天 LinePay 總額與商家後台對不起來。
-    // 判斷依據：底層記錄的建立日（registeredAt/createdAt，非發票印製日）與結帳當日不同天 → 從對應
-    // 的 byMethod[方式] 移出、併入 byMethod.other（其他）；查無底層記錄或缺時間戳時保守視為
-    // 「就是當天」（不誤標，避免金額被錯誤扣掉）。
-    const PREPAID_SOURCE_COLL = { course: 'courseEnrollments', experience: 'experienceBookings', competition: 'competitionRegistrations' };
-    const prepaidCandidates = issued.filter(i => i.refId && i.paymentMethod !== 'transfer' && PREPAID_SOURCE_COLL[i.sourceType]);
+    const moveToOther = (i) => {
+      const amt = Number(i.amount) || 0;
+      const m = i.paymentMethod || 'cash';
+      result.byMethod[m] = (result.byMethod[m] || 0) - amt;
+      result.byMethod.other = (result.byMethod.other || 0) + amt;
+    };
+    // 課程/比賽：一律視為預收款、「無條件」歸「其他」（2026-08-27 再拍板，取代原本「底層記錄建立日
+    // ≠ 今天才移」的日期判斷）——這兩類的臨櫃現金在「收款確認當下」就已寫過一筆「+現金補入」加減項
+    // （transfers.js / competitions.js confirm，2.77.0 起一律如此），抽屜現金由那筆加減項唯一負責；
+    // 發票日的付款方式若還留在 cash，同日「報名+收現+開票」的情境會與加減項重複計算（原日期判斷會
+    // 誤認為「今天收的」而保留在 cash）。開票當天也不再另寫沖銷加減項（原 invoices.js print-record 的
+    // 「－現金補入沖銷」已一併移除——不同日情境下它與這裡的移出 cash 疊加，反而讓應有現金被雙重扣除）。
+    issued.filter(i => i.paymentMethod !== 'transfer' && ['course', 'competition'].includes(i.sourceType)).forEach(moveToOther);
+    // 體驗：維持「底層預約建立日 ≠ 今天才移」的日期判斷——體驗現金沒有收款當日寫加減項的機制
+    // （2.77.0 只涵蓋課程/比賽/入隊），同日收現+開票時發票的 cash 是這筆錢唯一被計入現金的地方，
+    // 無條件移出會讓當天抽屜現金少算。查無底層記錄或缺時間戳時保守視為「就是當天」（不誤標）。
+    const prepaidCandidates = issued.filter(i => i.refId && i.paymentMethod !== 'transfer' && i.sourceType === 'experience');
     if (prepaidCandidates.length) {
-      const idsByColl = {};
-      prepaidCandidates.forEach(i => {
-        const coll = PREPAID_SOURCE_COLL[i.sourceType];
-        (idsByColl[coll] = idsByColl[coll] || new Set()).add(i.refId);
-      });
+      const ids = [...new Set(prepaidCandidates.map(i => i.refId))];
       const recordMap = {};
-      for (const [coll, idSet] of Object.entries(idsByColl)) {
-        const ids = [...idSet];
-        const docs = await db.getAll(...ids.map(id => db.collection(coll).doc(id)));
-        docs.forEach(d => { if (d.exists) recordMap[`${coll}|${d.id}`] = d.data(); });
-      }
+      const docs = await db.getAll(...ids.map(id => db.collection('experienceBookings').doc(id)));
+      docs.forEach(d => { if (d.exists) recordMap[d.id] = d.data(); });
       const todayStr = dayjs(todayStart).format('YYYY-MM-DD');
       prepaidCandidates.forEach(i => {
-        const coll = PREPAID_SOURCE_COLL[i.sourceType];
-        const rec = recordMap[`${coll}|${i.refId}`];
+        const rec = recordMap[i.refId];
         if (!rec) return;
         const createdTs = tsOf(rec.registeredAt) || tsOf(rec.createdAt);
         if (!createdTs) return;
-        if (dayjs(createdTs).format('YYYY-MM-DD') !== todayStr) {
-          const amt = Number(i.amount) || 0;
-          const m = i.paymentMethod || 'cash';
-          result.byMethod[m] = (result.byMethod[m] || 0) - amt;
-          result.byMethod.other = (result.byMethod.other || 0) + amt;
-        }
+        if (dayjs(createdTs).format('YYYY-MM-DD') !== todayStr) moveToOther(i);
       });
     }
     // 列印當下金額被人工改過（見 invoices.js /print-record 的 amountModified 判斷）的清單——
@@ -504,7 +503,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
         taiwanPay: payByMethod.taiwanpay || 0,
         transfer: totalTransfer,
         electronic: totalElectronic,
-        other: totalOther,   // 非五種已知付款方式（如舊資料轉檔/名單認領標記）＋補開的舊款現金/LinePay/街口/台灣Pay（轉帳除外），見上方 computeTodayInvoiceAuthority 註解
+        other: totalOther,   // 非五種已知付款方式（如舊資料轉檔/名單認領標記）＋課程/比賽發票的非轉帳預收款（一律歸此）＋體驗補開舊款（轉帳除外），見上方 computeTodayInvoiceAuthority 註解
       },
       deductions: [],
       expectedCashBalance: prevBalance + totalCash,

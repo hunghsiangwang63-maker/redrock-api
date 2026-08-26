@@ -40,13 +40,15 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 背景程序（Railway 部署、firebase、`loop-test.js`、Claude session）是共用的，切裝置後仍在跑。
 - Mac mini 保持開機 + 遠端登入（sshd）；連線建議走 **Tailscale**（免公網 IP / 免開 port，比 port forwarding 安全）。
 
-### 遠端接手正在跑的工作（screen / tmux）
-- SSH 是**另一個 session**，看不到 Mac 螢幕上那個 Terminal 的即時畫面；只看得到結果（`git status`/`git diff`、commit、log 檔、`ps aux | grep node`）。
-- 想遠端看到**即時進度並無縫接手**：一律在終端多工器裡工作（Claude Code 本身也跑在裡面）。
-- **目前 Mac mini 未裝 tmux / Homebrew → 先用內建 `screen`（`/usr/bin/screen`，零安裝）：**
-  - Mac 開始：`screen -S work`；離開（背景續跑）：`Ctrl-a` 放開再按 `d`；直接關 Terminal 也 OK。
-  - iPad SSH 進來接手：`screen -r work`（卡住就 `screen -d -r work` 強制搶回）；列清單 `screen -ls`。
-- **（可選）改用 tmux**：先裝 Homebrew（互動式、需登入密碼，自行執行）再 `brew install tmux`；之後 `tmux new -s work` / `Ctrl-b` `d` / `tmux attach -t work`。
+### 遠端接手正在跑的工作（tmux，2026-08-27 更新）
+- SSH 是**另一個 session**，看不到 Mac 螢幕上那個 Terminal 的即時畫面；想遠端看到**即時進度並無縫接手**：一律在終端多工器裡工作（Claude Code 本身也跑在裡面）。
+- **tmux 已裝好**（`/opt/homebrew/bin/tmux`，Homebrew 已裝；早期「未裝 tmux 先用 screen」的段落已作廢）；日常工作 session 名稱＝**`main`**。
+- **手機/iPad 接手步驟**（2026-08-27 實查驗證：Mac mini 遠端登入 SSH 已開、Tailscale IP `100.103.195.66`／機器名 `s-mac-mini`）：
+  1. 手機裝 **Tailscale**（登入同帳號）＋ SSH 客戶端（如 **Termius**）。
+  2. `ssh wanghongxiang@100.103.195.66`（密碼＝Mac 登入密碼）。
+  3. `tmux attach -d -t main` —— **`-d` 必加**：把 Mac 端連線先踢掉，否則畫面被鎖成兩邊較小的螢幕尺寸；回到 Mac 再 `tmux attach -t main` 搶回，工作不中斷。
+  4. 離開手機時**不要打 `exit`**：直接關 App 或 `Ctrl-b` 放開再按 `d`（detach），session 繼續在 Mac mini 跑。
+- 列清單 `tmux ls`；新開 session `tmux new -s <名稱>`。
 - ⚠️ **背景工作只在 Mac 醒著時繼續**：Mac mini 設「插電不睡」，或跑之前加 `caffeinate`（例：`caffeinate -s node scripts/loop-test.js`），避免睡眠中斷 node 程序。
 
 ## 目前進度（2026-06）

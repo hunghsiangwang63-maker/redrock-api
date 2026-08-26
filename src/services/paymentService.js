@@ -151,7 +151,7 @@ const orderHandlers = {
   // （跟 checkin orderType 不同——checkin 是更新既有 checkIns 文件，entry 是全新的 pay-first 流程），
   // 改直接開一張單次入場券（30 天內任一天可用，validDate 不設 → 不受「限當天」限制，見 §12 修正說明）。
   entry: async (db, payment) => {
-    const { gymId, entryType, rentShoes, rentChalk, partnerVendor, partnerGymMember, buyPassTypeId, discountCardId } = payment.orderRef || {};
+    const { gymId, entryType, rentShoes, rentChalk, partnerVendor, partnerGymMember, buyPassTypeId, discountCardId, baseEntryType } = payment.orderRef || {};
     const memberId = payment.memberId;
     if (!memberId || !gymId || !entryType) return { ok: false };
 
@@ -194,6 +194,11 @@ const orderHandlers = {
       // （checkin/flow.js confirmCheckIn）當下才實際扣券（見該處 usesDiscountCardId 分支），
       // 避免付款當下就扣、萬一入場前又取消或這張卡在別處被用掉。
       usesDiscountCardId: entryType === 'discount_card' ? (discountCardId || null) : null,
+      // ⚠️ 與上面既有的 baseEntryType（頂層 entryType='discount_card'，供追蹤用）不是同一件事——
+      // 這裡存的是「所選身分」（成人/學生/兒童，決定8折基準價）本身，供 dailySettlements.js
+      // resolveEntryRental 還原settlement分類時正確歸「成人使用優惠券」/「學生使用優惠券」
+      // （而非落回 ENTRY_LABEL['discount_card'] 這個沒有身分區分的籠統分類）。
+      discountCardBaseEntryType: entryType === 'discount_card' ? (baseEntryType || null) : null,
       source: 'online-entry', // 2026-08-22 由 'linepay-entry' 改中性命名（此路徑現由 jkopay 亦共用，非僅 linepay；write-only 欄位，前後端皆無讀取者，改名安全）
       notes: '會員線上付款預購入場',
       createdAt: new Date(), updatedAt: new Date(),

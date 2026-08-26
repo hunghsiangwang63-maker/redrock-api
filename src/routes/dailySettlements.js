@@ -38,8 +38,10 @@ const entryOrderSort = (a, b) => {
 // singleEntryTickets 這張票；之後會員用這張票 redeem（產生 QR→掃碼→確認入場）走的是「免費入場」
 // 分支，該次 checkIn 的 amountPaid/entryFee/shoesPrice/chalkPrice 全部是 0（錢不是這次收的）。
 // 若不還原，入場費/租借費統計（結帳今日收入六分類、月銷售 Excel）看不到這筆早就收過的真實收入，
-// 整筆從報表消失。orderResolvers.entry 限定只接受 single_ticket/student_free/child_free 三種
-// entryType 線上付款，故不會誤觸優惠券/隊員折扣分類（那兩者本就不支援線上付款）。
+// 整筆從報表消失。orderResolvers.entry 現已擴及 buy_discount_card/buy_pass/discount_card
+// （購買或使用優惠折扣券、購買定期票），下方 resolveEntryRental 依 ticket.baseEntryType /
+// usesDiscountCardId 各自還原正確分類（購買優惠折扣券/購買定期票/成人・學生使用優惠券），
+// 尚不含隊員折扣（線上付款目前不記 isTeamDiscount 到票上，與現場既有的同一項限制一致）。
 const resolveOnlineTicketMap = async (db, checkinDataList) => {
   const ticketIds = [...new Set(checkinDataList
     .filter(c => c.entryType === 'single_entry_ticket' && c.singleEntryTicketId)
@@ -57,7 +59,12 @@ const resolveEntryRental = (data, onlineTicketMap) => {
   if (ticket && ticket.paymentMethod && ticket.paymentMethod !== 'cash' && Number(ticket.amount) > 0) {
     const rentalAmt = (ticket.rentShoes ? 100 : 0) + (ticket.rentChalk ? 50 : 0);
     const entryAmt = Math.max(0, Number(ticket.amount) - rentalAmt);
-    const cat = ENTRY_LABEL[ticket.baseEntryType] || ticket.baseEntryType || '其他入場';
+    // 2026-08-27：使用（已持有的）優惠折扣券——ticket.baseEntryType 恆為頂層 'discount_card'
+    // （供追蹤用、非身分），改走 entryCategory() 同一套 coupon 分類邏輯（成人/學生使用優惠券），
+    // 與現場（非線上）discount_card 入場分類一致；真正身分存在 discountCardBaseEntryType。
+    const cat = ticket.usesDiscountCardId
+      ? entryCategory({ entryType: 'discount_card', baseEntryType: ticket.discountCardBaseEntryType })
+      : (ENTRY_LABEL[ticket.baseEntryType] || ticket.baseEntryType || '其他入場');
     return { entryAmt, rentalAmt, cat, paymentMethod: ticket.paymentMethod };
   }
   const rentalAmt = (data.shoesPrice || 0) + (data.chalkPrice || 0);

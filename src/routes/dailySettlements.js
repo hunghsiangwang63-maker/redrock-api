@@ -94,7 +94,7 @@ const manualIncomeTotal = (income, im) => im
 // 依字軌分段（同日內若因換捲換字軌，依出現順序拆成多段，對齊既有 invoiceSegments 多段 UI 概念）；
 // 作廢號碼/作廢總金額直接取 invoices 的 status:'void' 紀錄，不再由店員手動輸入。
 async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
-  const result = { printingEnabled: false, segments: [], voidNumbers: [], voidTotalAmount: 0, actualTotal: 0, count: 0, voidCount: 0, bySourceType: {}, amountModifiedList: [], noSourceByMethod: {}, byMethod: {} };
+  const result = { printingEnabled: false, segments: [], voidNumbers: [], voidTotalAmount: 0, actualTotal: 0, count: 0, voidCount: 0, bySourceType: {}, amountModifiedList: [], noSourceByMethod: {}, byMethod: {}, prepaidCash: 0 };
   try {
     const gymDoc = await db.collection('gyms').doc(gymId).get();
     result.printingEnabled = !!(gymDoc.exists && gymDoc.data().invoicePrintingEnabled === true);
@@ -172,6 +172,48 @@ async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
       const m = i.paymentMethod || 'cash';
       result.byMethod[m] = (result.byMethod[m] || 0) + (Number(i.amount) || 0);
     });
+    // ── 預收款入帳（2026-08-27 拍板獨立一項，不試圖隱藏；同日再擴充涵蓋所有付款方式）──────
+    // 課程/體驗/比賽發票延後開立（見 checkInvoiceIssuanceTiming）——底層報名/預約當初實際收款的那
+    // 天，早就已經在那天結算過了；但因為發票是「今天」才補印，上面的 byMethod 會把這筆錢當成「今天
+    // 收的」再算一次。現金部分會讓今天的應有現金餘額被灌水（今天抽屜裡本來就不會有這筆錢，點鈔對
+    // 不起來是預期中的事、不是現金短少）；非現金部分（轉帳/LinePay/街口/台灣Pay）雖不影響抽屜現金，
+    // 但若拿系統數字去對當日的 LinePay/銀行商家後台對帳單，一樣會兜不起來（那筆錢商家後台記在真正
+    // 收款那天，不是今天）——故不限現金，所有付款方式皆比照處理。
+    // 真實案例：新竹某日補印一筆體驗課程發票(現金NT$1,400，實際收款於3個月前)＋兩筆比賽報名發票
+    // (現金各NT$721，實際收款於一個月前)，導致當天現金差異從真正的-420被灌到-3,262；另一天補印一筆
+    // 體驗課程發票(LinePay NT$2,600，實際收款於3週前)，導致當天 LinePay 總額與商家後台對不起來。
+    // 判斷依據：底層記錄的建立日（registeredAt/createdAt，非發票印製日）與結帳當日不同天 → 視為
+    // 預收款，從對應的 byMethod[方式] 移出、另計 prepaidCash（各付款方式統計因此準確反映當天實際
+    // 收到的部分）；查無底層記錄或缺時間戳時保守視為「就是當天」（不誤標，避免金額被錯誤扣掉）。
+    const PREPAID_SOURCE_COLL = { course: 'courseEnrollments', experience: 'experienceBookings', competition: 'competitionRegistrations' };
+    const prepaidCandidates = issued.filter(i => i.refId && PREPAID_SOURCE_COLL[i.sourceType]);
+    if (prepaidCandidates.length) {
+      const idsByColl = {};
+      prepaidCandidates.forEach(i => {
+        const coll = PREPAID_SOURCE_COLL[i.sourceType];
+        (idsByColl[coll] = idsByColl[coll] || new Set()).add(i.refId);
+      });
+      const recordMap = {};
+      for (const [coll, idSet] of Object.entries(idsByColl)) {
+        const ids = [...idSet];
+        const docs = await db.getAll(...ids.map(id => db.collection(coll).doc(id)));
+        docs.forEach(d => { if (d.exists) recordMap[`${coll}|${d.id}`] = d.data(); });
+      }
+      const todayStr = dayjs(todayStart).format('YYYY-MM-DD');
+      prepaidCandidates.forEach(i => {
+        const coll = PREPAID_SOURCE_COLL[i.sourceType];
+        const rec = recordMap[`${coll}|${i.refId}`];
+        if (!rec) return;
+        const createdTs = tsOf(rec.registeredAt) || tsOf(rec.createdAt);
+        if (!createdTs) return;
+        if (dayjs(createdTs).format('YYYY-MM-DD') !== todayStr) {
+          const amt = Number(i.amount) || 0;
+          const m = i.paymentMethod || 'cash';
+          result.prepaidCash += amt;
+          result.byMethod[m] = (result.byMethod[m] || 0) - amt;
+        }
+      });
+    }
     // 列印當下金額被人工改過（見 invoices.js /print-record 的 amountModified 判斷）的清單——
     // 讓結帳頁自動看得到這類異動、不用另外去翻發票紀錄；備註在列印當下已強制必填。
     result.amountModifiedList = issued.filter(i => i.amountModified === true).map(i => ({
@@ -455,6 +497,7 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
         transfer: totalTransfer,
         electronic: totalElectronic,
         other: totalOther,   // 非五種已知付款方式（如舊資料轉檔/名單認領標記），2026-08-26 新增，見上方註解
+        prepaid: invAuth.prepaidCash || 0,   // 預收款入帳（延後開立的課程/體驗/比賽現金發票，實際收款早於今天），2026-08-27 新增，見上方 computeTodayInvoiceAuthority 註解
       },
       deductions: [],
       expectedCashBalance: prevBalance + totalCash,
@@ -828,6 +871,7 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
     aoa.push(R('', '轉帳', '', s => s.payment?.transfer));
     aoa.push(R('', '現金', '', s => s.payment?.cash));
     aoa.push(R('', '其他', '', s => s.payment?.other));
+    aoa.push(R('', '預收款入帳', '', s => s.payment?.prepaid));
     aoa.push(R('收銀機應有餘額', '', '', s => s.expectedCashBalance));
     aoa.push(['現金清點', '面額', '']);
     [['1', 'd1'], ['5', 'd5'], ['10', 'd10'], ['50', 'd50'], ['100', 'd100'], ['500', 'd500'], ['1000', 'd1000']]

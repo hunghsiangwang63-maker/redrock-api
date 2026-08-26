@@ -163,6 +163,35 @@ const startScoringSync = async (competitionId) => {
   return { compDocId, synced: res.synced, failed: res.failed, totalConfirmed: confirmed.length };
 };
 
+// 賽事已結束、計分系統已回寫成績（見 competitionSyncService.pullFinalResults）→ 拉回 RedRock
+// 自己的報名紀錄（result 欄位：組別名次/參賽人數），供會員「我的紀錄」查看。批次讀+批次寫；
+// 用 competitionId 二次核對每筆報名，理論上不會不符（origId 本就來自本場報名 id），純防呆。
+const syncFinalResults = async (competitionId) => {
+  const db = getDb();
+  const { pullFinalResults, isCompScoring } = require('./competitionSyncService');
+  const ref = db.collection(COLLECTIONS.COMPETITIONS).doc(competitionId);
+  const doc = await ref.get();
+  if (!doc.exists) throw { code: 'NOT_FOUND', message: '找不到此賽事' };
+  const competition = { id: competitionId, ...doc.data() };
+  if (!isCompScoring(competition)) throw { code: 'NOT_COMP_SCORING', message: '此賽事的計分系統不是「紅石賽事管理 V2」，無法拉取成績' };
+  const pull = await pullFinalResults(competition);
+  if (pull.error) throw { code: 'PULL_FAILED', message: pull.error };
+  const ids = Object.keys(pull.results);
+  if (!ids.length) return { updated: 0, skipped: 0 };
+  const regDocs = await db.getAll(...ids.map(id => db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(id)));
+  const now = new Date();
+  const batch = db.batch();
+  let updated = 0, skipped = 0;
+  regDocs.forEach(rd => {
+    if (!rd.exists || rd.data().competitionId !== competitionId) { skipped++; return; }
+    const r = pull.results[rd.id];
+    batch.update(rd.ref, { result: { rank: r.rank, participantCount: r.participantCount, categoryName: r.categoryName, syncedAt: now } });
+    updated++;
+  });
+  if (updated) await batch.commit();
+  return { updated, skipped };
+};
+
 const updateCompetition = async (competitionId, updates) => {
   const db = getDb();
   const ref = db.collection(COLLECTIONS.COMPETITIONS).doc(competitionId);
@@ -853,7 +882,7 @@ module.exports = {
   SCORING_SYSTEMS,
   createCompetition, updateCompetition, getCompetitions, getCompetition,
   registerForCompetition, signParentCompetitionWaiver,
-  sendWebhook, retryWebhook, promoteNextWaitlist, startScoringSync,
+  sendWebhook, retryWebhook, promoteNextWaitlist, startScoringSync, syncFinalResults,
   getCompetitionRegistrations, getMemberRegistrations,
   recordCompetitionRevenue, computeNetReceivedAmount,
   computeCompetitionAgeInfo, computeCompetitionFee,

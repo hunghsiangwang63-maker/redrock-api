@@ -156,4 +156,39 @@ const removeCompAthlete = async (competition, registrationId) => {
   } catch (e) { console.error('[計分系統] 移除選手失敗', e.message); }
 };
 
-module.exports = { COMP_SCORING, isCompScoring, syncCompEvent, syncCompAthlete, syncAllAthletes, removeCompAthlete };
+// ── 賽事結束後拉回最終成績（與上面的推送方向相反）─────────────────────────────
+// 2026-08-27：計分系統總管理者確認「此賽事已結束」後，在計分系統按「回寫成績至會員紀錄」——
+// 計分系統那邊算好每個組別的最終名次（含未晉級決賽者，見 redrock-comp
+// computeFinalStandings()），存進賽事文件的 finalStandings 欄位（key=組別索引）。這裡只負責
+// 讀出來、依 origId（＝RedRock 報名 id，見 mapAthlete）比對整理成「報名 id → 名次/參賽人數」，
+// 名次計算的唯一權威在計分系統那邊算好（單一計算來源，不在這裡重算），呼叫端（competitionService.js
+// syncFinalResults）負責寫回 RedRock 自己的 competitionRegistrations。
+// 現場手動加的選手（origId 不對應任何真實報名）自然找不到 regMap 對應項，略過不寫。
+const pullFinalResults = async (competition) => {
+  if (!isCompScoring(competition)) return { updated: 0, error: '非計分系統賽事' };
+  const cdb = getCompDb();
+  if (!cdb) return { updated: 0, error: '計分系統未設定金鑰（COMP_FIREBASE_SA）' };
+  if (!competition.compDocId) return { updated: 0, error: '計分系統賽事尚未建立（請先開始對接）' };
+  let doc;
+  try { doc = await cdb.collection('competitions').doc(competition.compDocId).get(); }
+  catch (e) { return { updated: 0, error: e.message }; }
+  if (!doc.exists) return { updated: 0, error: '找不到計分系統賽事文件' };
+  const finalStandings = doc.data().finalStandings;
+  if (!finalStandings || !Object.keys(finalStandings).length) {
+    return { updated: 0, error: '計分系統尚未回寫成績（請先在計分系統確認「此賽事已結束」並按下「回寫成績至會員紀錄」）' };
+  }
+  const results = {}; // registrationId → { rank, participantCount, categoryName }
+  Object.keys(finalStandings).forEach(catIdxStr => {
+    const cat = finalStandings[catIdxStr];
+    if (!cat || !Array.isArray(cat.results)) return;
+    const catIdx = Number(catIdxStr);
+    const categoryName = (competition.divisions || [])[catIdx]?.name || null;
+    cat.results.forEach(r => {
+      if (!r.origId) return;
+      results[r.origId] = { rank: r.rank, participantCount: cat.participantCount, categoryName };
+    });
+  });
+  return { updated: Object.keys(results).length, results };
+};
+
+module.exports = { COMP_SCORING, isCompScoring, syncCompEvent, syncCompAthlete, syncAllAthletes, removeCompAthlete, pullFinalResults };

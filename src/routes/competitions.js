@@ -193,6 +193,17 @@ router.post('/:id/sync-scoring', authenticate, checkPermission('competitions.man
   }
 });
 
+// ── POST /competitions/:id/pull-results - 管理員拉取計分系統回寫的最終成績（賽事已結束後）──
+router.post('/:id/pull-results', authenticate, checkPermission('competitions.manage'), async (req, res) => {
+  try {
+    const result = await competitionService.syncFinalResults(req.params.id);
+    res.json({ ...result, message: `已寫回 ${result.updated} 筆報名紀錄${result.skipped ? `（${result.skipped} 筆略過）` : ''}` });
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 // ── GET /competitions/:id/participant-emails - 賽前通知用：目前有效報名者 email 清單 ──
 router.get('/:id/participant-emails', authenticate, checkPermission('competitions.manage'), async (req, res) => {
   try {

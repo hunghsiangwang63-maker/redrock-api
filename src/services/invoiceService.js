@@ -38,8 +38,13 @@ const createInvoice = async (db, {
   if (!sourceType || !refId) { const e = new Error('缺少必要資訊'); e.code = 'MISSING_FIELDS'; throw e; }
   const trackVal = String(track || '').trim().toUpperCase();
   const numberVal = String(number || '').trim();
-  if (!TRACK_RE.test(trackVal)) { const e = new Error('發票字軌須為 2 碼英文字母'); e.code = 'INVALID_TRACK'; throw e; }
-  if (!NUMBER_RE.test(numberVal)) { const e = new Error('發票號碼須為 8 碼數字'); e.code = 'INVALID_NUMBER'; throw e; }
+  // 2026-08-26：比賽報名不需要對應實體發票號碼（這套§9手動記帳版本就「預先建立、尚未串接發票機」，
+  // track/number 純屬佔位標記——見上方檔頭說明，無真正序號配發/查重）——空值就跳過驗證，其餘四個
+  // sourceType（course/checkin/rental/rental_addon/product 等）維持原本嚴格要求 2碼英文+8碼數字。
+  if (!(sourceType === 'competition' && !trackVal && !numberVal)) {
+    if (!TRACK_RE.test(trackVal)) { const e = new Error('發票字軌須為 2 碼英文字母'); e.code = 'INVALID_TRACK'; throw e; }
+    if (!NUMBER_RE.test(numberVal)) { const e = new Error('發票號碼須為 8 碼數字'); e.code = 'INVALID_NUMBER'; throw e; }
+  }
   const taxIdVal = taxId ? String(taxId).trim() : '';
   if (taxIdVal && !isValidTaiwanTaxId(taxIdVal)) { const e = new Error('統一編號檢查碼錯誤，請確認號碼是否正確'); e.code = 'INVALID_TAX_ID'; throw e; }
   const existing = await getActiveInvoice(db, sourceType, refId);
@@ -62,9 +67,10 @@ const createInvoice = async (db, {
   // 計入當日營收（結帳加減項；不動原本認列的營收交易）——skipCashAdjustment 見上方參數說明
   if (!skipCashAdjustment) {
     try {
+      const invNoLabel = (trackVal || numberVal) ? `${trackVal}${numberVal}・` : '';
       await require('./settlementService').addCashAdjustment({
         gymId: gymId || null, amount: amt, sign: '+', type: '發票開立',
-        note: `發票開立：${trackVal}${numberVal}・${memberName || ''}・${itemName || '費用'}${taxId ? '（統編 ' + taxId + '）' : ''}`,
+        note: `發票開立：${invNoLabel}${memberName || ''}・${itemName || '費用'}${taxId ? '（統編 ' + taxId + '）' : ''}`,
       });
     } catch (e) { console.error('[發票加減項]', e.message); }
   }
@@ -89,9 +95,10 @@ const voidInvoice = async (db, id, staffId, staffName, voidReason, { skipCashAdj
   // 沖銷當日結帳加減項（負向、與開立時對稱；不刪改原始開立紀錄，保留稽核軌跡）
   if (!skipCashAdjustment) {
     try {
+      const invNoLabel = inv.invoiceNo ? `${inv.invoiceNo}・` : '';
       await require('./settlementService').addCashAdjustment({
         gymId: inv.gymId || null, amount: inv.amount, sign: '-', type: '發票作廢',
-        note: `發票作廢：${inv.invoiceNo || ''}・${inv.memberName || ''}・${inv.itemName || '費用'}（原發票 NT$${inv.amount}）`,
+        note: `發票作廢：${invNoLabel}${inv.memberName || ''}・${inv.itemName || '費用'}（原發票 NT$${inv.amount}）`,
       });
     } catch (e) { console.error('[發票作廢加減項]', e.message); }
   }

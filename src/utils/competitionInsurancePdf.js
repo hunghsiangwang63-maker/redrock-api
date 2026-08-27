@@ -45,38 +45,44 @@ function insuranceTableDef(insurance) {
   };
 }
 
-function signatureCell(row) {
-  const imgs = [row.memberSignatureUrl, row.guardianSignatureUrl].filter(Boolean);
-  if (!imgs.length) return { text: '', margin: [0, 12, 0, 12] };
-  return {
-    columns: imgs.map(src => ({ image: src, width: imgs.length > 1 ? 45 : 90, height: 28 })),
-    columnGap: 2,
-  };
+function sigImageCell(src, width) {
+  if (!src) return { text: '', margin: [0, 12, 0, 12] }; // 留白供現場補簽
+  return { image: src, width, height: 28, alignment: 'center' };
 }
 
-function dataTableDef(rows) {
-  const headers = ['序號', '背號', '姓名', '性別', '身份證字號', '民國生日', '簽名', '發票金額'].map(h => ({ text: h, bold: true, alignment: 'center', fillColor: '#BFBFBF' }));
+// 成人＝單一簽名欄；未成年＝「選手簽名／法定代理人簽名」兩獨立欄同時呈現（缺者留白供現場補簽）
+function dataTableDef(rows, isMinor) {
+  const headLabels = isMinor
+    ? ['序號', '背號', '姓名', '性別', '身份證字號', '民國生日', '選手簽名', '法定代理人簽名', '發票金額']
+    : ['序號', '背號', '姓名', '性別', '身份證字號', '民國生日', '簽名', '發票金額'];
+  const headers = headLabels.map(h => ({ text: h, bold: true, alignment: 'center', fillColor: '#BFBFBF', fontSize: 8 }));
   const body = [headers];
   rows.forEach(r => {
-    body.push([
+    const base = [
       { text: String(r.no || ''), alignment: 'center' },
       { text: String(r.bib || ''), alignment: 'center' },
       { text: r.name, alignment: 'center' },
       { text: r.gender, alignment: 'center' },
       { text: r.idNumber, alignment: 'center', fontSize: 8 },
       { text: r.birthdayRoc, alignment: 'center' },
-      signatureCell(r),
-      { text: r.invoiceAmount != null ? String(r.invoiceAmount) : '', alignment: 'center' },
-    ]);
+    ];
+    const sig = isMinor
+      ? [sigImageCell(r.memberSignatureUrl, 55), sigImageCell(r.guardianSignatureUrl, 55)]
+      : [sigImageCell(r.memberSignatureUrl, 90)];
+    body.push([...base, ...sig, { text: r.invoiceAmount != null ? String(r.invoiceAmount) : '', alignment: 'center' }]);
   });
   return {
-    table: { headerRows: 1, widths: [22, 28, 48, 22, 58, 45, 90, 42], body },
+    table: {
+      headerRows: 1,
+      widths: isMinor ? [20, 26, 44, 20, 55, 42, 62, 62, 36] : [22, 28, 48, 22, 58, 45, 90, 42],
+      body,
+    },
     layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5 },
   };
 }
 
 // 每 ROWS_PER_PAGE 位一頁，每頁重複完整表頭（標題+承保範圍+欄位列）
-function buildGroupContent(title, insurance, rows, isFirstGroup) {
+function buildGroupContent(title, insurance, rows, isFirstGroup, isMinor) {
   const chunks = [];
   for (let i = 0; i < rows.length; i += ROWS_PER_PAGE) chunks.push(rows.slice(i, i + ROWS_PER_PAGE));
   if (!chunks.length) chunks.push([]); // 無資料仍出一頁（表頭＋無資料提示）
@@ -85,7 +91,7 @@ function buildGroupContent(title, insurance, rows, isFirstGroup) {
     const pageBreak = !(isFirstGroup && ci === 0);
     content.push({ text: title, bold: true, fontSize: 13, alignment: 'center', margin: [0, 0, 0, 6], ...(pageBreak ? { pageBreak: 'before' } : {}) });
     content.push(centerBlock(insuranceTableDef(insurance)));
-    content.push(chunk.length ? centerBlock(dataTableDef(chunk)) : { text: '（無資料）', italics: true, color: '#999', alignment: 'center' });
+    content.push(chunk.length ? centerBlock(dataTableDef(chunk, isMinor)) : { text: '（無資料）', italics: true, color: '#999', alignment: 'center' });
   });
   return content;
 }
@@ -97,7 +103,7 @@ async function buildCompetitionInsurancePdfBuffer({ insurance, groups }) {
     pageSize: 'A4',
     pageOrientation: 'portrait',
     pageMargins: [24, 24, 24, 24],
-    content: groups.flatMap((g, i) => buildGroupContent(g.title, insurance, g.rows, i === 0)),
+    content: groups.flatMap((g, i) => buildGroupContent(g.title, insurance, g.rows, i === 0, !!g.isMinorGroup)),
   };
   const pdfDoc = await printer.createPdfKitDocument(docDefinition);
   return new Promise((resolve, reject) => {

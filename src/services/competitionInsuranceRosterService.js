@@ -108,7 +108,7 @@ async function buildCompetitionInsuranceRosterData(competitionId) {
     title: `${titleBase}（成人 ${k}）`,
     rows: adultByDiv.get(k).sort(sortByBib),
   }));
-  groups.push({ sheetName: '未成年', title: `${titleBase}（未成年）`, rows: minors });
+  groups.push({ sheetName: '未成年', title: `${titleBase}（未成年）`, rows: minors, isMinorGroup: true });
   // 序號：各 sheet 排序定案後由 1 起編（列印每頁 20 位、序號跨頁連續）
   groups.forEach(g => g.rows.forEach((r, i) => { r.no = i + 1; }));
 

@@ -2948,6 +2948,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **7 處按鈕全加金額判斷**：`MembersPage` 課程學員三清單（效期內/歷史詳情/未開課，`m.receivedAmount`）；`CompetitionsPage` 報名名單列（金額用與開票 modal `defaultAmount` **同一條 fallback 鏈** `receivedAmount ?? max(0,(paidAmount??memberPaidAmount??registrationFee)-insuranceFee)`，避免兩邊判定不一致）；`CheckinPage` 三處（今日課程學員最後一堂/今日入場 courseInvoice/比賽報到掃描）。
 - 📌 **已開過發票（`invoiceNo` 存在）仍顯示**——供查看號碼/作廢（比照體驗頁日期限制的同一原則）；候補列本就整組隱藏不受影響。0 元判定含 `?? 0`（無資料視同 0 隱藏，後端 attach 鏈本就恆回數字）。
 
+## 目前進度（2026-08-27 續8）— 課程/比賽實收金額改「彈窗檢視→按編輯」、名單列一律唯讀（純前端）
+> 需求：實收欄位只有管理人員可編輯（原本就是），但即使管理員，點名單開的彈窗也要先是檢視模式、按「編輯」鈕才能改。純前端，commit（redrock-web）`e288144`，staff 已 deploy＋實機驗證（課程范伶萌/比賽張芝翠兩側彈窗皆走過 檢視→編輯→取消 完整流程、名單列輸入框確認消失）。
+- ✅ **名單列 inline 輸入框全移除、改唯讀文字**：`MembersPage` 課程學員三清單的 `ReceivedAmountEditor` 砍掉輸入模式（管理員/站台皆只顯示「實收 NT$X」）；`CompetitionsPage` 報名名單列的 `RegReceivedAmountEditor` 移除、改純文字。
+- ✅ **編輯統一進詳細彈窗、預設檢視**：`CourseRegDetailModal` 加 `editable`/`onSaveAmount` 選填 props——實收金額列顯示文字＋（管理員）「✏️ 編輯」鈕 → 輸入框＋儲存/取消（Enter 儲存/Esc 取消）；**未傳 props＝維持原純唯讀**，`CoursesPage` 報名名單的同一元件沿用不受影響。比賽 `RegReceivedAmountEditor` 改 view-first 同款（詳細 modal 內用）。
+- 📌 權限不變：課程後端 `requireManager` 權威、前端 `isManagerRole`；比賽 `isManagerOnly`。存檔後彈窗/名單列/清單三處同步更新（沿用既有 `applyReceivedAmountEdit`/`setRegistrations` patch 機制）。
+
 ## 📋 查證確認（2026-08-27）：結帳現金公式已不包含預收款（對照 3.376.0 現行程式碼，無異動）
 > 使用者問「結帳現在的現金計算公式還會包含到預收款嗎」——對 `dailySettlements.js` 現行程式碼逐段確認，**答案：不會**（即 8/27 續2 收斂後的最終狀態）。供日後對帳疑問時直接引用：
 - **公式（兩館皆真列印權威模式）**：預期現金＝前日餘額＋`effectiveCash`＋加減項淨額；`effectiveCash`＝`payment.cash`＝今日開立發票中歸類為現金的部分（`invAuth.byMethod`）。

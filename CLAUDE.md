@@ -2975,9 +2975,17 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **已用 `redrocktaiwan.hc@gmail.com` 各寄一封通知信**（Gmail 網頁瀏覽器自動化，寄件備份確認送出）：說明報到需 App 報到 QR、請賽前至 app.redrocktaiwan.com 註冊，**強調姓名填中文本名＋手機填報名登記號碼**（`claimGuestCompetitionRegistrations`/`claimLegacyCompetitionReg` 自動認領報名）。若賽前仍未註冊，8/30 當天改櫃檯人工報到。
 - 💡 **技法備忘**：Gmail 撰寫視窗內文（contenteditable）用 `computer type` 打不進去（只剩簽名檔）；改 `javascript_tool` 直接 `insertBefore` DOM 節點寫入可行——注意頁面有 TrustedHTML CSP，**不能用 `innerHTML`**，要 `textContent`＋`createElement('br')` 組節點。收件者/主旨用 `form_input` 正常。
 
-## 📋 查證確認（2026-08-27）：值班同仁開比賽發票＝已開放、免調權限，只需打卡值班（無異動）
-> 使用者問「值班同仁要開比賽發票，權限要怎麼給？」——重新核對現行程式碼確認**不用給任何設定，能力早已存在**（2026-08-17 `3.313.0` 已把課程/比賽發票由 `requireManager` 放寬為 `requireManagerOrStation`）。
-- **整條路徑對值班 operator 皆通**：開票/作廢（`requireManagerOrStation`）✅、報名名單頁（`competitions.manage`∈COUNTER_PERMS）✅、報到掃描＋掃描後開票（`requireManagerOrStation`）✅。**操作＝員工在館別電腦打卡值班**（取得 operator 身分）即可，發票按鈕自動出現。
+## 目前進度（2026-08-27 續11）— 修：兼職值班看不到比賽名單（COUNTER_PERMS 從不含 competitions.manage）
+> 回報：兼職 王登第/江幸樺 實測值班狀態下看不到比賽名單、無法開發票。後端 `/health` `3.384.0-comp-roster-view-operator`；正式 API E2E（測試帳號改回 part_time、真值班打卡拿 operator token）驗證。commit `b8f62b0`。
+- 🐞 **根因**：`GET /competitions/:id/registrations` 掛 `checkPermission('competitions.manage')`，而 **COUNTER_PERMS 從來不含 `competitions.manage`**（只有無路由使用的死 key `competitions.entries`）→ 值班 operator 落入角色矩陣 → `part_time:false` → 403。**兩處先前的判斷都因 grep 看錯清單而錯**（COUNTER_PERMS 與 `PER_STAFF_OVERRIDABLE_KEYS` 兩清單相鄰，後者才含 competitions.manage）：①本日稍早「值班可開比賽發票」查證段 ②前端 `CompetitionsPage` 2026-08-24 加 `canManage=...||!!operator` 時的註解宣稱「checkPermission 對 operator 無條件通過」——按鈕看得到、API 被擋，正職值班沒事純因矩陣 `full_time:true`。
+- ✅ **修（最小範圍，比照 2026-07-20 課程 roster 同型雷原則「唯讀檢視別沿用管理權限」）**：名單端點改 `rosterViewGate`——`type∈{operator,station}` 放行、其餘照走 `competitions.manage` 矩陣（正職個人保留、兼職個人仍擋）。**賽事管理動作全部不放寬**（建立/編輯/刪除/對接/賽前通知/下載名單仍 manage）。
+- **E2E**：兼職值班 operator → 名單 **200**、發票狀態查詢 200、participant-emails（管理動作）仍 **403**；開票/作廢本就 `requireManagerOrStation` 不用動。測試殘留清乾淨（station-hsinchu 兩筆測試值班 shiftLogs 刪除、裝置驗證 0 殘留）。
+- 📌 **測試帳號 `test-parttime@redrock.app` 角色已改回 `part_time`**（8/8 曾為測權限改成 full_time；本次驗證需要兼職身分、且與帳號名相符，維持 part_time）。
+- 💡 **教訓**：查權限清單時 grep 行號命中不等於在目標清單內——**兩個相鄰的清單/Set 要看上下文確認歸屬**；「值班可用」的宣稱要用真 operator token 打過端點才算數（本日稍早的查證只讀了程式碼沒實測，被相鄰清單騙過）。
+
+## 📋 查證確認（2026-08-27）：值班同仁開比賽發票（⚠ 此段查證有誤、已由 3.384.0 更正——見下方「兼職值班看不到比賽名單」修復段）
+> 使用者問「值班同仁要開比賽發票，權限要怎麼給？」——當時查證答「免調權限、打卡值班即可」，其中「報名名單頁 `competitions.manage`∈COUNTER_PERMS」**是看錯清單**（grep 到的其實是相鄰的 `PER_STAFF_OVERRIDABLE_KEYS`；COUNTER_PERMS 裡只有從無路由使用的死 key `competitions.entries`）→ 值班**兼職**實際被名單端點 403 擋住、根本走不到開發票（值班**正職**能用純因矩陣 `full_time:true`，與值班無關）。實測回報後已修，見 3.384.0。
+- **開票/作廢/報到掃描（`requireManagerOrStation`）對值班確實本就放行**——當時只有「名單檢視」這一環判斷錯誤。
 - **兩個易誤判為「沒權限」的情況**：①個人帳號登入（未打卡值班）→ 正職看得到名單但開票被後端擋（刻意設計：發票綁櫃檯操作，解法＝打卡值班、非調權限）②實收金額 0 元 → 按鈕直接隱藏（8/27 續7 的 0 元隱藏，非權限問題）。
 - **仍限管理員的只有「實收金額覆寫」**（`requireManager`，值班不可改金額本身）——維持現狀，要放寬再議。
 

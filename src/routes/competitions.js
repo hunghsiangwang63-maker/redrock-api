@@ -1302,7 +1302,23 @@ router.post('/checkin/scan', authenticate, requireManagerOrStation, async (req, 
     const hit = await findRegByCheckinToken(db, req.body.token);
     if (!hit) return res.status(404).json({ error: 'QR_NOT_FOUND', message: '無效的報到 QR' });
     const { reg, comp } = hit;
+    // 背號（號碼布）：計分系統（redrock-comp）配發、存在其賽事文件 athletes map（origId＝報名 id，
+    // 見 competitionSyncService 檔頭）。已對接（有 compDocId）才查；跨專案讀取失敗/查無/尚未配發
+    // 一律回 null，不阻斷報到掃描本體（比照 competitionSyncService 各函式的不阻斷慣例）。
+    let bibNumber = null;
+    if (comp.compDocId) {
+      try {
+        const { getCompDb } = require('../config/compFirebase');
+        const evDoc = await getCompDb().collection('competitions').doc(comp.compDocId).get();
+        if (evDoc.exists) {
+          const athletes = evDoc.data().athletes || {};
+          const hitAth = Object.values(athletes).find(a => a && a.origId === reg.id);
+          if (hitAth && hitAth.bib) bibNumber = String(hitAth.bib);
+        }
+      } catch (e) { console.error('[報到掃描] 讀取計分系統背號失敗（不阻斷）:', e.message); }
+    }
     res.json({
+      bibNumber,
       registrationId: reg.id, memberId: reg.memberId, memberName: reg.memberName,
       competitionId: reg.competitionId, competitionName: reg.competitionName || comp.name, divisionName: reg.divisionName,
       eventDate: comp.eventDate, gymId: comp.gymId || null, status: reg.status, isComplete: reg.isComplete,

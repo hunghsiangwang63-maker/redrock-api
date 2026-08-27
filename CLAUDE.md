@@ -2954,6 +2954,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **編輯統一進詳細彈窗、預設檢視**：`CourseRegDetailModal` 加 `editable`/`onSaveAmount` 選填 props——實收金額列顯示文字＋（管理員）「✏️ 編輯」鈕 → 輸入框＋儲存/取消（Enter 儲存/Esc 取消）；**未傳 props＝維持原純唯讀**，`CoursesPage` 報名名單的同一元件沿用不受影響。比賽 `RegReceivedAmountEditor` 改 view-first 同款（詳細 modal 內用）。
 - 📌 權限不變：課程後端 `requireManager` 權威、前端 `isManagerRole`；比賽 `isManagerOnly`。存檔後彈窗/名單列/清單三處同步更新（沿用既有 `applyReceivedAmountEdit`/`setRegistrations` patch 機制）。
 
+## 目前進度（2026-08-27 續9）— 比賽報到掃描畫面精簡＋顯示計分系統背號
+> 需求：掃報到 QR 的員工視窗只顯示 比賽報到/選手名稱/比賽名稱/組別/**背號**（計分系統配發）/發票號碼（未開立顯示開立發票鍵），其他資料不顯示；經確認**三個警示（未繳費/未簽署/已報到）全部保留**（只在異常時顯示）。後端 `/health` `3.379.0-comp-checkin-scan-bib`；正式 API＋瀏覽器實機端到端驗證（黃煒安背號 772 從計分系統正確帶回並顯示）。commit 後端 `8629b22`、前端 `799c02b`。
+- ✅ **後端**（`competitions.js` `/checkin/scan`）：已對接賽事（`comp.compDocId`）→ `getCompDb()` 跨專案讀計分系統賽事文件 `athletes` map、以 `origId===報名id` 對應取 `bib` → 回應加 `bibNumber`；查無/未配發/讀取失敗回 null、try/catch 不阻斷掃描本體（多一次跨專案單文件讀 ~100-300ms，人工節奏可接受）。
+- ✅ **前端**（`CheckinPage.jsx` compScan 卡）：改顯示 選手/比賽名稱/組別/背號（紅色粗體；未配發顯示「—（計分系統尚未配發）」）；**移除**比賽日行與繳費「已確認（NT$X）」正常態顯示（繳費資訊只在未確認時以紅字警示呈現）；確認報到鈕/InvoiceButtonAuto（含 0 元隱藏）不動。
+- ⚠️ **踩雷備忘**：`competitionRegistrations.checkinToken` 存的是**無 `compchk:` 前綴的裸 uuid**（QR 內容才帶前綴、`findRegByCheckinToken` 查詢時剝除）——E2E 手動塞 token 時存了帶前綴的值 → `QR_NOT_FOUND`，改存裸值即通。測試用暫發 token 測後已從真實報名（黃煒安）清除（比賽日他自開 QR 頁會重新產生）。
+
 ## 📋 查證確認（2026-08-27）：「發現新版本」通知連彈＝部署密集期正常行為，拍板不改（無異動）
 > 使用者問「沒有改程式為什麼一直看到發現新版本通知」。查證 `UpdateChecker.jsx`＋`vite.config.js`：
 - **機制**：每次 build 產生 `buildId = git hash + build 時間戳` 寫進 `version.json`；開著的分頁每 5 分鐘輪詢＋切回分頁即查，線上 buildId 與內嵌值不同就彈「發現新版本」；「✕ 稍後再說」只壓掉**當前版本**，下次部署（新 buildId）會重新彈（刻意設計）。

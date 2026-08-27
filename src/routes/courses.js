@@ -1100,6 +1100,7 @@ router.delete('/:courseId',
         .where('courseId', '==', courseId)
         .where('status', 'in', ['confirmed', 'leave'])
         .where('date', '>=', today)
+        .select('memberId', 'courseName')
         .get();
       const enrollBatch = db.batch();
       const notifyMembers = new Map(); // memberId → { name, email, courseName }
@@ -1184,7 +1185,8 @@ router.post('/:courseId/reopen',
       // 注意：取消課程（DELETE /:courseId）當初標記 course_cancelled 時**不會**去動場次的
       // enrolledCount（該欄位在課程/場次取消時本就沒被扣減）——因此這裡還原報名狀態時也**不能**
       // 反向 +1，否則會與從未被扣減過的原值重複疊加（實測驗證過：若還原時 +1，人數會從 1 累加成 2）。
-      const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', courseId).where('status', '==', 'course_cancelled').get();
+      const enrollSnap = await db.collection('courseEnrollments').where('courseId', '==', courseId).where('status', '==', 'course_cancelled')
+        .select('sessionId', 'leaveAt', 'leaveReason').get();
       const enrollBatch = db.batch();
       let enrollmentsRestored = 0;
       enrollSnap.docs.forEach(d => {
@@ -1221,19 +1223,19 @@ router.delete('/:courseId/permanent',
       const courseSnap = await db.collection('courses').doc(courseId).get();
       const isCancelled = courseSnap.exists && courseSnap.data().status === 'cancelled';
       if (!isCancelled) {
-        const activeSnap = await db.collection('courseEnrollments')
+        const activeCnt = await db.collection('courseEnrollments')
           .where('courseId', '==', courseId)
           .where('status', 'in', ['confirmed', 'leave', 'waitlist'])
-          .get();
-        if (!activeSnap.empty) {
-          return res.status(400).json({ error: 'HAS_ENROLLMENTS', message: `尚有 ${activeSnap.size} 筆有效報名，請先「取消課程」並處理退費後再刪除` });
+          .count().get();
+        if (activeCnt.data().count > 0) {
+          return res.status(400).json({ error: 'HAS_ENROLLMENTS', message: `尚有 ${activeCnt.data().count} 筆有效報名，請先「取消課程」並處理退費後再刪除` });
         }
       }
 
       // 級聯刪除：場次、所有報名(含已取消)、補課額度、調整申請，最後刪課程本身
       let deleted = 0;
       for (const name of ['courseSessions', 'courseEnrollments', 'courseMakeupRights', 'courseAdjustmentRequests']) {
-        const snap = await db.collection(name).where('courseId', '==', courseId).get();
+        const snap = await db.collection(name).where('courseId', '==', courseId).select().get(); // key-only：只要 ref 供刪除
         for (let i = 0; i < snap.docs.length; i += 450) {
           const batch = db.batch();
           snap.docs.slice(i, i + 450).forEach(d => { batch.delete(d.ref); deleted++; });
@@ -1799,7 +1801,7 @@ router.put('/:courseId/members/:memberId/max-leaves',
         return res.status(400).json({ error: 'INVALID_VALUE', message: '可請假次數需為 0 或正整數' });
       }
       const snap = await db.collection('courseEnrollments')
-        .where('courseId', '==', courseId).where('memberId', '==', memberId).get();
+        .where('courseId', '==', courseId).where('memberId', '==', memberId).select().get(); // key-only：只要 ref 供批次更新
       if (snap.empty) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此學員報名' });
       const now = new Date();
       const batch = db.batch();
@@ -1825,6 +1827,7 @@ router.post('/:courseId/cancel-waitlist', authenticateAny, async (req, res) => {
       .where('courseId', '==', courseId)
       .where('memberId', '==', memberId)
       .where('status', '==', 'waitlist')
+      .select('sessionId')
       .get();
     if (snap.empty) return res.status(404).json({ error: 'NO_WAITLIST', message: '查無候補紀錄' });
 

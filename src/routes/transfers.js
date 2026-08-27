@@ -268,7 +268,8 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
           if (en2.courseId && en2.memberId) {
             const enAll = await db.collection('courseEnrollments')
               .where('courseId', '==', en2.courseId).where('memberId', '==', en2.memberId)
-              .where('status', 'in', ['confirmed', 'leave']).get();
+              .where('status', 'in', ['confirmed', 'leave'])
+              .select('date', 'startTime', 'endTime', 'isMakeup', 'isTrial').get();
             sessions = enAll.docs.map(d => d.data()).filter(e => !e.isMakeup && !e.isTrial && e.date)
               .map(e => ({ date: e.date, startTime: e.startTime, endTime: e.endTime }))
               .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || ''));

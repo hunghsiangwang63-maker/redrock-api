@@ -89,7 +89,7 @@ async function checkStillValidForInvoice(db, sourceType, refId) {
       // confirmed，卻導致當期課程發票被誤判失效自動作廢）。改查 courseRegistrations header（整筆報名
       // 層級的權威狀態，取消整筆報名/駁回退費等才會動到）——查無對應 header（雙寫前的舊資料）才退回
       // 原本直接查該筆 enrollment doc 的邏輯。
-      const headerSnap = await db.collection('courseRegistrations').where('payEnrollmentId', '==', refId).limit(1).get();
+      const headerSnap = await db.collection('courseRegistrations').where('payEnrollmentId', '==', refId).limit(1).select('status').get();
       if (!headerSnap.empty) {
         if (headerSnap.docs[0].data().status === 'cancelled') return { valid: false, reason: '課程報名已取消' };
       } else {

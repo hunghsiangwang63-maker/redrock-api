@@ -74,7 +74,8 @@ router.post('/enrollments/:enrollmentId/refund-request',
       let paidAmount = 0;
       try {
         const hSnap = await db.collection('courseRegistrations')
-          .where('courseId', '==', courseId).where('memberId', '==', memberId).get();
+          .where('courseId', '==', courseId).where('memberId', '==', memberId)
+          .select('status', 'fee').get();
         const h = hSnap.docs.map(d => d.data()).find(x => x.status !== 'cancelled');
         paidAmount = h ? (h.fee || 0) : all.reduce((s, e) => s + (e.enrollmentFee || 0), 0);
       } catch (e) { paidAmount = all.reduce((s, e) => s + (e.enrollmentFee || 0), 0); }

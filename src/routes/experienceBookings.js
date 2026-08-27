@@ -371,16 +371,35 @@ router.get('/', authenticate, async (req, res) => {
 });
 
 // ── GET /experience-bookings/my - 會員查自己的 ─────────────────────
+// ⚠️ /my 用「白名單投影」排除肥欄位（consentSignatureUrl/guardianSignatureUrl 簽名圖 base64 ~100KB+、
+// staffNote 系列員工備註）——此端點一個會員 session 會被打 4 次（首頁/onboarding gate/課程頁/體驗頁），
+// 訪客試上線上簽名（3.180.0）被電話認領後簽名圖會掛到會員名下、隨時間累積。
+// 【維護注意】booking 文件若新增「會員端要顯示」的欄位，必須同步加進這份白名單，否則會員端會靜默看不到
+// （2026-08-27 補投影；清單＝正式資料全欄位 ∪ 程式會寫入的欄位 − 上述肥欄位，當時已逐一核對）。
+const MY_BOOKING_FIELDS = [
+  'agreedTerms', 'bankLastFive', 'bookedByMemberId', 'bookingDate', 'bookingTime', 'claimedFromGuest',
+  'coachFee', 'coachFeeAdjDone', 'coachFeeSetAt', 'coachFeeSetBy', 'coachId', 'coachName',
+  'confirmedAt', 'confirmedBy', 'confirmedByName', 'consentSigned', 'contactEmail', 'contactName', 'contactPhone',
+  'correctionNote', 'courseId', 'courseName', 'courseType', 'createdAt', 'editedAt', 'editedBy', 'editedByName',
+  'facebookName', 'financeFixNote', 'financeUpdatedAt', 'financeUpdatedBy', 'financeUpdatedByName',
+  'gymId', 'id', 'insuranceNote', 'insuranceSkipped', 'invoiceAmount', 'isGuest', 'isWaitlist', 'kind',
+  'memberId', 'memberPaidAmount', 'needsInsurance', 'notes', 'numParticipants', 'participants',
+  'paymentConfirmed', 'paymentDate', 'paymentDeadline', 'paymentMethod', 'paymentRejectReason', 'paymentRejectedAt',
+  'paymentStatus', 'revenueAmount', 'revenueRecorded', 'revenueReversed', 'scheduleShiftId', 'sessionId', 'source',
+  'status', 'ticketsIssued', 'ticketsIssuedAt', 'totalFee', 'trialCourseId', 'trialEnrollmentId', 'trialSessionId',
+  'updatedAt', 'cancelReason', 'cancelledAt', 'paidAt',
+  'wasReturned', 'lastReturnType', 'lastReturnReason', 'lastReturnByName', 'lastReturnAt',
+  'refundRequested', 'refundAmount', 'refundAccount', 'refundBankCode', 'refundBankName', 'refundAccountName', 'refundHandlingFee',
+];
 router.get('/my', authenticateAny, async (req, res) => {
   try {
     const db = getDb();
     const memberId = req.member?.id;
     if (!memberId) return res.status(401).json({ error:'UNAUTHORIZED' });
-    const snap = await db.collection('experienceBookings').where('memberId','==',memberId).get();
-    const bookings = snap.docs.map(d=>{
-      const { staffNote, staffNoteBy, staffNoteAt, ...rest } = d.data(); // 員工備註不回傳會員端
-      return { id:d.id, ...rest };
-    }).sort((a,b)=>(b.createdAt?._seconds||0)-(a.createdAt?._seconds||0));
+    const snap = await db.collection('experienceBookings').where('memberId','==',memberId)
+      .select(...MY_BOOKING_FIELDS).get();
+    const bookings = snap.docs.map(d=>({ id:d.id, ...d.data() }))
+      .sort((a,b)=>(b.createdAt?._seconds||0)-(a.createdAt?._seconds||0));
     res.json({ bookings });
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
 });
@@ -1099,7 +1118,7 @@ router.post('/expire-unpaid', authenticate, async (req, res) => {
     const deadlineDays = settings.exists ? (settings.data().paymentDeadlineDays || 3) : 3;
     const cutoff = new Date(Date.now() - deadlineDays * 24 * 3600000);
 
-    const snap = await db.collection('experienceBookings').where('status', '==', 'pending').get();
+    const snap = await db.collection('experienceBookings').where('status', '==', 'pending').select('createdAt').get();
     let cancelled = 0;
     for (const doc of snap.docs) {
       const createdAt = doc.data().createdAt?.toDate?.() || new Date(0);

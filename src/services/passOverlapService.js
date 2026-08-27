@@ -31,7 +31,8 @@ async function applyCourseOverlapPassExtension({ memberId, courseId }) {
 
     // 個別入館起始覆寫（插班 courseAccessStart）：取較晚者（與 getCourseAccess 一致）
     const enSnap = await db.collection('courseEnrollments')
-      .where('courseId', '==', courseId).where('memberId', '==', memberId).get();
+      .where('courseId', '==', courseId).where('memberId', '==', memberId)
+      .select('courseAccessStart').get();
     if (enSnap.empty) return null; // 非此課學員不套
     const overrides = enSnap.docs.map(d => d.data().courseAccessStart).filter(Boolean).sort();
     if (overrides.length && overrides[overrides.length - 1] > freeStart) freeStart = overrides[overrides.length - 1];
@@ -76,7 +77,8 @@ async function applyCourseOverlapForMember(memberId) {
   try {
     if (!memberId) return null;
     const en = await db.collection('courseEnrollments')
-      .where('memberId', '==', memberId).where('status', '==', 'confirmed').get();
+      .where('memberId', '==', memberId).where('status', '==', 'confirmed')
+      .select('courseId').get();
     const courseIds = [...new Set(en.docs.map(d => d.data().courseId).filter(Boolean))];
     const all = [];
     for (const cid of courseIds) {

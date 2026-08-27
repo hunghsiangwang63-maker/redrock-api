@@ -403,7 +403,13 @@ const practiceEndOf = (c) => c.unlimitedPracticeEnd
 // 的一般取消（駁回報名表／課程本身取消等）區分，只有「因退費而取消」才視為已退費、保留在名單中顯示。
 const REFUND_CANCEL_PREFIX = '退費申請核准';
 const buildCourseMemberList = async (db, c) => {
-  const hSnap = await db.collection('courseRegistrations').where('courseId', '==', c.id).get();
+  // ⚠️ header 也內嵌兩張簽名圖（createRegistrationHeader），只取名單/付款欄位（2026-08-27 補投影）
+  const hSnap = await db.collection('courseRegistrations').where('courseId', '==', c.id)
+    .select('memberId', 'memberName', 'status', 'cancelReason', 'pauseStatus', 'waitlistPosition', 'cancelledAt',
+      'payEnrollmentId', 'fee', 'paymentMethod', 'paymentStatus', 'paymentConfirmed', 'memberPaidAmount',
+      'receivedAmountOverride', 'bankLastFive', 'paymentDate', 'enrolledAt', 'enrollNote', 'healthNote',
+      'referralSource', 'staffNote')
+    .get();
   const seen = new Map();
   const payMap = {};
   hSnap.docs.forEach(d => {
@@ -645,7 +651,8 @@ const buildHistoricalCourseMeta = async (gymId) => {
     return pe && pe < today; // 已過期（practiceEnd 早於今天）
   });
   // ⚠️ 效能：改讀 courseRegistrations header（同 buildCourseMemberList 理由），並 Promise.all 平行查詢。
-  const headerSnaps = await Promise.all(courses.map(c => db.collection('courseRegistrations').where('courseId', '==', c.id).get()));
+  const headerSnaps = await Promise.all(courses.map(c => db.collection('courseRegistrations').where('courseId', '==', c.id)
+    .select('status', 'pauseStatus', 'memberId').get()));
   const out = [];
   courses.forEach((c, i) => {
     const seen = new Set();

@@ -218,7 +218,7 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
       // 認領前已請假的日期（leaveDates）落在停課日 → 課沒上成、不發（比照既有學員請假者不補）。
       const closureSessions = allSessions.filter(s => s.status === 'cancelled' && /休館|closure/.test(String(s.cancelReason || '')));
       // 去重：已在名單則只標記已認領、不重複建
-      const ex = await db.collection('courseEnrollments').where('courseId', '==', claim.courseId).where('memberId', '==', memberId).get();
+      const ex = await db.collection('courseEnrollments').where('courseId', '==', claim.courseId).where('memberId', '==', memberId).select('status').get();
       const already = ex.docs.some(d => ['confirmed', 'leave', 'waitlist'].includes(d.data().status));
       if (!already && sessions.length) {
         const gymId = c.gymId || claim.gymId || null;
@@ -433,7 +433,7 @@ const claimGuestExperienceBookings = async (db, memberId, member) => {
   try {
     if (!member?.phone) return;
     const snap = await db.collection('experienceBookings')
-      .where('contactPhone', '==', member.phone).get();
+      .where('contactPhone', '==', member.phone).select('memberId', 'status').get();
     const batch = db.batch();
     let n = 0;
     snap.docs.forEach(d => {
@@ -475,7 +475,7 @@ const claimPendingExperienceTickets = async (db, memberId, member) => {
 const claimGuestCourseEnrollments = async (db, memberId, member) => {
   try {
     if (!member?.phone) return;
-    const snap = await db.collection('courseEnrollments').where('contactPhone', '==', member.phone).get();
+    const snap = await db.collection('courseEnrollments').where('contactPhone', '==', member.phone).select('isGuest', 'status').get();
     const batch = db.batch(); let n = 0;
     snap.docs.forEach(d => {
       const e = d.data();
@@ -487,7 +487,7 @@ const claimGuestCourseEnrollments = async (db, memberId, member) => {
     if (n) { await batch.commit(); console.log(`認領訪客課程/工作坊/試上報名 ${n} 筆 → ${memberId}`); }
     // 同步認領 courseRegistrations header（Phase 1 雙寫，僅供顯示查詢用；失敗不影響上面主要認領）
     try {
-      const hSnap = await db.collection('courseRegistrations').where('contactPhone', '==', member.phone).get();
+      const hSnap = await db.collection('courseRegistrations').where('contactPhone', '==', member.phone).select('isGuest', 'status').get();
       const hBatch = db.batch(); let hn = 0;
       hSnap.docs.forEach(d => {
         const h = d.data();
@@ -505,7 +505,7 @@ const claimGuestCourseEnrollments = async (db, memberId, member) => {
 const claimGuestCompetitionRegistrations = async (db, memberId, member) => {
   try {
     if (!member?.phone) return;
-    const snap = await db.collection('competitionRegistrations').where('phone', '==', member.phone).get();
+    const snap = await db.collection('competitionRegistrations').where('phone', '==', member.phone).select('isGuest', 'status').get();
     const batch = db.batch(); let n = 0;
     snap.docs.forEach(d => {
       const r = d.data();
@@ -527,7 +527,8 @@ const claimLegacyCompetitionReg = async (db, memberId, member) => {
     const phone = (member.phone || '').trim();
     if (!phone || !member.name) return null;
     const snap = await db.collection('competitionRegistrations')
-      .where('claimPhone', '==', phone).get();
+      .where('claimPhone', '==', phone)
+      .select('memberId', 'memberName', 'competitionId', 'competitionName', 'divisionName').get();
     if (snap.empty) return null;
     let claimed = 0;
     for (const d of snap.docs) {

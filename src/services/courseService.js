@@ -565,7 +565,8 @@ const updateSession = async ({ sessionId, staffId, data }) => {
   // 一般取消不發正取豁免券，那是「休館停課」的專屬行為）
   let makeupRestored = 0, trialAffected = 0;
   if (data.status === 'cancelled' && prevStatus !== 'cancelled') {
-    const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId).get();
+    const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId)
+      .select('status', 'isMakeup', 'makeupId', 'isTrial', 'experienceBookingId').get();
     const now = new Date();
     for (const d of enSnap.docs) {
       const e = d.data();
@@ -598,7 +599,8 @@ const updateSession = async ({ sessionId, staffId, data }) => {
   // 日期/時段變更 → 同步該場次報名的快照（enrollment 存 date/startTime/endTime 快照，
   // 不同步會讓會員端「我的課程/請假判定」停在舊日期）
   if (updates.date || updates.startTime || updates.endTime) {
-    const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId).get();
+    const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId)
+      .select('status').get();
     const batch = db.batch(); let n = 0;
     enSnap.forEach(d => {
       if (d.data().status === 'cancelled') return;
@@ -1113,13 +1115,15 @@ const repointPayEnrollmentIfNeeded = async (db, memberId, courseId, cancelledEnr
   try {
     const headerSnap = await db.collection('courseRegistrations')
       .where('memberId', '==', memberId).where('courseId', '==', courseId)
-      .where('status', 'in', ['confirmed', 'waitlist']).limit(1).get();
+      .where('status', 'in', ['confirmed', 'waitlist']).limit(1)
+      .select('payEnrollmentId').get();
     if (headerSnap.empty) return;
     const header = headerSnap.docs[0];
     if (header.data().payEnrollmentId !== cancelledEnrollmentId) return;
     const altSnap = await db.collection(ENROLLMENT_COLLECTION)
       .where('memberId', '==', memberId).where('courseId', '==', courseId)
-      .where('status', 'in', ['confirmed', 'leave', 'waitlist']).get();
+      .where('status', 'in', ['confirmed', 'leave', 'waitlist'])
+      .select('isMakeup', 'isTrial').get();
     const alt = altSnap.docs.find(d => d.id !== cancelledEnrollmentId && !d.data().isMakeup && !d.data().isTrial);
     if (!alt) return;
     await header.ref.update({ payEnrollmentId: alt.id, updatedAt: new Date() });
@@ -1144,7 +1148,8 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
   const rules = resolveRules(course, await getCategoryOf(db, course.categoryId));
   const expiresAt = makeupExpiryDayjs(course, rules, session.date).toDate();
 
-  const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId).get();
+  const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId)
+    .select('status', 'isTrial', 'isMakeup', 'makeupId', 'experienceBookingId', 'memberId').get();
   const now = new Date();
   let issued = 0, makeupRestored = 0, trialAffected = 0;
   for (const d of enSnap.docs) {
@@ -1250,6 +1255,7 @@ const promoteWaitlist = async (sessionId) => {
   const waitlistSnap = await db.collection(ENROLLMENT_COLLECTION)
     .where('sessionId', '==', sessionId)
     .where('status', '==', 'waitlist')
+    .select('waitlistPosition', 'memberName', 'isTrial', 'paymentStatus')
     .get();
 
   if (waitlistSnap.empty) return null;
@@ -1409,6 +1415,7 @@ const cancelCourseEnrollments = async ({ courseId, memberId, reason, onlyFutureS
     .where('courseId', '==', courseId)
     .where('memberId', '==', memberId)
     .where('status', 'in', ['confirmed', 'leave', 'waitlist'])
+    .select('date', 'status', 'sessionId')
     .get();
   let cancelled = 0;
   let freedAnyFutureSeat = false;
@@ -1454,7 +1461,8 @@ const sweepExpiredCoursePayments = async () => {
   const db = getDb();
   const now = new Date();
   // paymentDeadline 只掛在主報名(idx0)——與 enrollmentFee 同一筆，故 e.enrollmentFee 即為當初記帳金額。
-  const snap = await db.collection(ENROLLMENT_COLLECTION).where('paymentDeadline', '<', now).get();
+  const snap = await db.collection(ENROLLMENT_COLLECTION).where('paymentDeadline', '<', now)
+    .select('paymentDeadline', 'paymentConfirmed', 'status', 'courseId', 'memberId', 'enrollmentFee', 'gymId').get();
   const expired = snap.docs.map(d => ({ id: d.id, ...d.data() }))
     .filter(e => e.paymentDeadline && e.paymentConfirmed !== true && e.status !== 'cancelled');
 
@@ -1564,7 +1572,7 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
   // 後端權威：目標場次已有有效報名 → 擋（避免同一人同場次雙重佔位、人數灌水）
   const dupSnap = await db.collection(ENROLLMENT_COLLECTION)
     .where('sessionId', '==', targetSessionId)
-    .where('memberId', '==', memberId).get();
+    .where('memberId', '==', memberId).select('status').get();
   if (dupSnap.docs.some(d => ['confirmed', 'leave', 'waitlist'].includes(d.data().status))) {
     throw { code: 'ALREADY_IN_SESSION', message: '你已在此場次名單中，無需補課' };
   }
@@ -1596,7 +1604,8 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
     }
     // 目標梯次「可作為補課場次」——週課一律開放（2026-08 起簡化）；非週課仍走 makeupTarget 開關
     const tRegSnap = await db.collection(ENROLLMENT_COLLECTION)
-      .where('courseId', '==', session.courseId).where('status', '==', 'confirmed').get();
+      .where('courseId', '==', session.courseId).where('status', '==', 'confirmed')
+      .select('isMakeup', 'isTrial', 'memberId').get();
     const tReg = new Set(); tRegSnap.docs.forEach(x => { const e = x.data(); if (!e.isMakeup && !e.isTrial) tReg.add(e.memberId); });
     if (!isTargetOpen(targetCourse.makeupTarget, tReg.size, targetCourse.type)) {
       throw { code: 'MAKEUP_TARGET_CLOSED', message: '此梯次目前未開放作為補課場次，請改選其他梯次' };
@@ -2290,8 +2299,8 @@ const enrollTrial = async ({ memberId, memberName, sessionId, gymId, trialFee, b
 
   const dup = await db.collection(ENROLLMENT_COLLECTION)
     .where('memberId', '==', memberId).where('sessionId', '==', sessionId)
-    .where('status', 'in', ['confirmed', 'waitlist']).get();
-  if (!dup.empty) throw { code: 'ALREADY_ENROLLED', message: '此會員已在該場次名單中' };
+    .where('status', 'in', ['confirmed', 'waitlist']).count().get();
+  if (dup.data().count > 0) throw { code: 'ALREADY_ENROLLED', message: '此會員已在該場次名單中' };
 
   const isFull = (session.enrolledCount || 0) >= (session.maxStudents || 0);
   // 候補上限（course.maxWaitlist）：滿了且候補也滿 → 擋
@@ -2358,6 +2367,7 @@ const sweepExpiredTrialPayments = async () => {
   const snap = await db.collection(ENROLLMENT_COLLECTION)
     .where('isTrial', '==', true)
     .where('paymentStatus', '==', 'pending')
+    .select('status', 'paymentDeadline', 'sessionId', 'experienceBookingId')
     .get();
   const toMs = (v) => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
   const expired = snap.docs.filter(d => {

@@ -474,7 +474,8 @@ router.get('/waiver/parent/:token', async (req, res) => {
   try {
     const db = getDb();
     const snap = await db.collection('competitionRegistrations')
-      .where('parentSignToken', '==', req.params.token).limit(1).get();
+      .where('parentSignToken', '==', req.params.token).limit(1)
+      .select('isComplete', 'memberName', 'competitionName', 'competitionId').get();
     if (snap.empty) return res.status(404).json({ error: 'INVALID_TOKEN', message: '連結無效或已過期' });
 
     const registration = snap.docs[0].data();

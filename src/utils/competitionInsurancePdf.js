@@ -47,7 +47,8 @@ function insuranceTableDef(insurance) {
 
 function sigImageCell(src, width) {
   if (!src) return { text: '', margin: [0, 12, 0, 12] }; // 留白供現場補簽
-  return { image: src, width, height: 28, alignment: 'center' };
+  // fit＝等比縮放進 width×28 的框內（不指定 width+height 硬拉伸變形）；alignment 水平置中
+  return { image: src, fit: [width, 28], alignment: 'center', margin: [0, 2, 0, 2] };
 }
 
 // 成人＝單一簽名欄；未成年＝「選手簽名／法定代理人簽名」兩獨立欄同時呈現（缺者留白供現場補簽）

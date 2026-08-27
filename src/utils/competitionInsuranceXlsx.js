@@ -32,17 +32,40 @@ function extFromDataUrl(dataUrl) {
   return m[1] === 'jpg' ? 'jpeg' : m[1];
 }
 
-// 在指定列的指定欄嵌入一張簽名圖（佔滿該儲存格）
-function addSignatureImage(workbook, ws, rowIdx, col, dataUrl) {
+// 讀 PNG 原始寬高（IHDR：width@16-19、height@20-23，big-endian）——簽名皆為 canvas 產出的 PNG
+function pngSize(dataUrl) {
+  try {
+    const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1, dataUrl.indexOf(',') + 1 + 64);
+    const buf = Buffer.from(b64, 'base64');
+    if (buf.length >= 24 && buf.toString('ascii', 12, 16) === 'IHDR') {
+      return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+    }
+  } catch (e) { /* 解析失敗走 fallback（填滿儲存格） */ }
+  return null;
+}
+
+// 在指定列的指定欄嵌入一張簽名圖：依儲存格實際寬高**等比縮放並上下左右置中**（不拉伸變形）。
+// exceljs 圖片錨點的小數 col/row 是「該欄寬/列高的比例」→ 先把儲存格換算成 px
+// （欄寬字元數 ≈ ×7px、列高 pt ×4/3 = px），算出圖片等比縮放後佔的比例、再置中內縮錨點。
+// 非 PNG 或解析不到尺寸時 fallback 舊行為（填滿儲存格）。
+function addSignatureImage(workbook, ws, rowIdx, col, dataUrl, colWidthChars, rowHeightPts) {
   if (!dataUrl) return;
   const ext = extFromDataUrl(dataUrl);
   if (!ext) return; // 非圖片格式（理論上不會發生，防呆）
   const imgId = workbook.addImage({ base64: dataUrl, extension: ext });
-  ws.addImage(imgId, {
-    tl: { col: col - 1, row: rowIdx - 1 + 0.05 }, // exceljs 圖片錨點用 0-based row/col
-    br: { col: col, row: rowIdx - 0.05 },
-    editAs: 'oneCell',
-  });
+  let tl = { col: col - 1 + 0.02, row: rowIdx - 1 + 0.05 }; // exceljs 圖片錨點用 0-based row/col
+  let br = { col: col - 0.02, row: rowIdx - 0.05 };
+  const size = ext === 'png' ? pngSize(dataUrl) : null;
+  if (size && size.w > 0 && size.h > 0) {
+    const cellW = colWidthChars * 7;          // Excel 欄寬單位（字元）≈ 7px/字元
+    const cellH = rowHeightPts * 4 / 3;       // 列高 pt → px
+    const scale = Math.min((cellW * 0.92) / size.w, (cellH * 0.92) / size.h); // 四周留 4% 邊
+    const fw = (size.w * scale) / cellW;      // 圖片佔欄寬比例
+    const fh = (size.h * scale) / cellH;      // 圖片佔列高比例
+    tl = { col: col - 1 + (1 - fw) / 2, row: rowIdx - 1 + (1 - fh) / 2 };
+    br = { col: col - 1 + (1 + fw) / 2, row: rowIdx - 1 + (1 + fh) / 2 };
+  }
+  ws.addImage(imgId, { tl, br, editAs: 'oneCell' });
 }
 
 // 承保範圍文字一律不換行、縮小字級到欄寬內完整一句（shrinkToFit 與 wrapText 互斥，明確關掉換行）
@@ -134,8 +157,8 @@ function writeSheet(workbook, sheetName, title, insurance, rows, isMinor) {
       ws.getCell(rowIdx, c).alignment = { vertical: 'middle', horizontal: 'center' };
     }
     // 簽名：未成年＝選手/法定代理人各自獨立欄同時呈現（缺者留白供現場補簽）；成人＝單一簽名欄
-    addSignatureImage(workbook, ws, rowIdx, L.memberSigCol, r.memberSignatureUrl);
-    if (L.guardianSigCol) addSignatureImage(workbook, ws, rowIdx, L.guardianSigCol, r.guardianSignatureUrl);
+    addSignatureImage(workbook, ws, rowIdx, L.memberSigCol, r.memberSignatureUrl, L.widths[L.memberSigCol - 1], 46);
+    if (L.guardianSigCol) addSignatureImage(workbook, ws, rowIdx, L.guardianSigCol, r.guardianSignatureUrl, L.widths[L.guardianSigCol - 1], 46);
     if ((i + 1) % ROWS_PER_PAGE === 0 && i + 1 < rows.length) ws.getRow(rowIdx).addPageBreak();
   });
 

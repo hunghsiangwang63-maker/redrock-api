@@ -8,7 +8,8 @@ const { getDb, COLLECTIONS } = require('../config/firebase');
 
 const GYM_LABEL = { 'gym-hsinchu': '新竹紅石', 'gym-shilin': '士林紅石' };
 
-const genderLabel = (g) => (g === 'male' ? '男' : g === 'female' ? '女' : '');
+// 容錯：BeClass 匯入曾把性別存成中文「男/女」（2026-08-27 已全庫正規化為 male/female，此處保留防禦供未來匯入）
+const genderLabel = (g) => (g === 'male' ? '男' : g === 'female' ? '女' : (g === '男' || g === '女') ? g : '');
 
 // 西元 YYYY-MM-DD → 民國 7 碼 YYYMMDD（比賽報名生日皆為西元 ISO 格式）
 const toRoc7 = (isoDate) => {
@@ -108,6 +109,8 @@ async function buildCompetitionInsuranceRosterData(competitionId) {
     rows: adultByDiv.get(k).sort(sortByBib),
   }));
   groups.push({ sheetName: '未成年', title: `${titleBase}（未成年）`, rows: minors });
+  // 序號：各 sheet 排序定案後由 1 起編（列印每頁 20 位、序號跨頁連續）
+  groups.forEach(g => g.rows.forEach((r, i) => { r.no = i + 1; }));
 
   return { competition, titleBase, insurance: await loadInsurance(db), groups };
 }

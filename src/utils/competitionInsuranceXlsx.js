@@ -4,9 +4,9 @@
 // 承保範圍文字 shrinkToFit（不換行、自動縮字到欄寬內完整一句）。
 const ExcelJS = require('exceljs');
 
-const COLS = 7; // 背號 / 姓名 / 性別 / 身份證字號 / 民國生日 / 簽名 / 發票金額
-const HEADER_LABELS = ['背號', '姓名', '性別', '身份證字號', '民國生日', '簽名', '發票金額'];
-const SIG_COL = 6; // 「簽名」是第 6 欄（1-based）
+const COLS = 8; // 序號 / 背號 / 姓名 / 性別 / 身份證字號 / 民國生日 / 簽名 / 發票金額
+const HEADER_LABELS = ['序號', '背號', '姓名', '性別', '身份證字號', '民國生日', '簽名', '發票金額'];
+const SIG_COL = 7; // 「簽名」是第 7 欄（1-based）
 const ROWS_PER_PAGE = 20; // 每頁選手數（列印分頁）
 
 function extFromDataUrl(dataUrl) {
@@ -20,7 +20,7 @@ function addSignatureImages(workbook, ws, rowIdx, memberSig, guardianSig) {
   const imgs = [memberSig, guardianSig].filter(Boolean);
   if (!imgs.length) return;
   const rowTop = rowIdx - 1, rowBottom = rowIdx; // exceljs 圖片錨點用 0-based row/col
-  const colLeft = SIG_COL - 1, colRight = SIG_COL; // 0-based：簽名欄佔滿 [5,6)
+  const colLeft = SIG_COL - 1, colRight = SIG_COL; // 0-based：簽名欄佔滿 [6,7)
   imgs.forEach((dataUrl, i) => {
     const ext = extFromDataUrl(dataUrl);
     if (!ext) return; // 非圖片格式（理論上不會發生，防呆）
@@ -50,7 +50,7 @@ function buildInsuranceHeaderRows(ws, insurance, startRow) {
   // 「可投保年齡」列
   ws.mergeCells(startRow, 2, startRow, 3);
   ws.mergeCells(startRow, 4, startRow, 5);
-  ws.mergeCells(startRow, 6, startRow, 7);
+  ws.mergeCells(startRow, 6, startRow, 8);
   ws.getCell(startRow, 2).value = '可投保年齡';
   ws.getCell(startRow, 4).value = insurance.ageLabelUnder;
   ws.getCell(startRow, 6).value = insurance.ageLabelOver;
@@ -65,7 +65,7 @@ function buildInsuranceHeaderRows(ws, insurance, startRow) {
     const row = startRow + 1 + i;
     ws.mergeCells(row, 2, row, 3);
     ws.mergeCells(row, 4, row, 5);
-    ws.mergeCells(row, 6, row, 7);
+    ws.mergeCells(row, 6, row, 8);
     ws.getCell(row, 2).value = r.label;
     ws.getCell(row, 4).value = r.under;
     ws.getCell(row, 6).value = r.over;
@@ -82,7 +82,7 @@ function writeSheet(workbook, sheetName, title, insurance, rows) {
   // sheet 名稱去除 xlsx 不允許的字元、上限 31 字
   const safeName = String(sheetName).replace(/[\\/?*[\]:]/g, ' ').slice(0, 31);
   const ws = workbook.addWorksheet(safeName);
-  const COL_WIDTHS = [8, 12, 6, 14, 11, 20, 10]; // 背號/姓名/性別/身份證字號/民國生日/簽名/發票金額
+  const COL_WIDTHS = [6, 8, 12, 6, 14, 11, 20, 10]; // 序號/背號/姓名/性別/身份證字號/民國生日/簽名/發票金額
   COL_WIDTHS.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
 
   // 標題列
@@ -118,12 +118,13 @@ function writeSheet(workbook, sheetName, title, insurance, rows) {
   rows.forEach((r, i) => {
     const rowIdx = headerRow + 1 + i;
     ws.getRow(rowIdx).height = 46;
-    ws.getCell(rowIdx, 1).value = r.bib;
-    ws.getCell(rowIdx, 2).value = r.name;
-    ws.getCell(rowIdx, 3).value = r.gender;
-    ws.getCell(rowIdx, 4).value = r.idNumber;
-    ws.getCell(rowIdx, 5).value = r.birthdayRoc;
-    ws.getCell(rowIdx, 7).value = r.invoiceAmount;
+    ws.getCell(rowIdx, 1).value = r.no;
+    ws.getCell(rowIdx, 2).value = r.bib;
+    ws.getCell(rowIdx, 3).value = r.name;
+    ws.getCell(rowIdx, 4).value = r.gender;
+    ws.getCell(rowIdx, 5).value = r.idNumber;
+    ws.getCell(rowIdx, 6).value = r.birthdayRoc;
+    ws.getCell(rowIdx, 8).value = r.invoiceAmount;
     for (let c = 1; c <= COLS; c++) {
       ws.getCell(rowIdx, c).alignment = { vertical: 'middle', horizontal: 'center' };
     }

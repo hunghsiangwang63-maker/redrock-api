@@ -23,23 +23,23 @@ function centerBlock(tableDef) {
 }
 
 function insuranceTableDef(insurance) {
-  // 7 欄配置：承保範圍(1) + 標籤(2) + 未滿15(2) + 15以上(2)；年齡文字 noWrap+小字＝一行完整不換行
+  // 8 欄配置：承保範圍(1) + 標籤(2) + 未滿15(2) + 15以上(3)；年齡文字 noWrap+小字＝一行完整不換行
   const body = [
     [{ text: '承保範圍', rowSpan: insurance.rows.length + 1, alignment: 'center', bold: true, fillColor: '#E0E0E0' },
       { text: '可投保年齡', colSpan: 2, alignment: 'center', fillColor: '#E0E0E0' }, {},
       { text: insurance.ageLabelUnder, colSpan: 2, alignment: 'center', fillColor: '#E0E0E0', color: 'red', fontSize: 7, noWrap: true }, {},
-      { text: insurance.ageLabelOver, colSpan: 2, alignment: 'center', fillColor: '#E0E0E0', color: 'red', fontSize: 7, noWrap: true }, {}],
+      { text: insurance.ageLabelOver, colSpan: 3, alignment: 'center', fillColor: '#E0E0E0', color: 'red', fontSize: 7, noWrap: true }, {}, {}],
   ];
   insurance.rows.forEach(r => {
     body.push([
       {}, // rowSpan 佔位
       { text: r.label, colSpan: 2, alignment: 'center', color: 'red', fontSize: 8, noWrap: true }, {},
       { text: r.under, colSpan: 2, alignment: 'center', color: 'red' }, {},
-      { text: r.over, colSpan: 2, alignment: 'center', color: 'red' }, {},
+      { text: r.over, colSpan: 3, alignment: 'center', color: 'red' }, {}, {},
     ]);
   });
   return {
-    table: { widths: [45, 45, 45, 40, 40, 45, 45], body },
+    table: { widths: [40, 42, 42, 38, 38, 30, 30, 30], body },
     layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5 },
     margin: [0, 4, 0, 10],
   };
@@ -55,10 +55,11 @@ function signatureCell(row) {
 }
 
 function dataTableDef(rows) {
-  const headers = ['背號', '姓名', '性別', '身份證字號', '民國生日', '簽名', '發票金額'].map(h => ({ text: h, bold: true, alignment: 'center', fillColor: '#BFBFBF' }));
+  const headers = ['序號', '背號', '姓名', '性別', '身份證字號', '民國生日', '簽名', '發票金額'].map(h => ({ text: h, bold: true, alignment: 'center', fillColor: '#BFBFBF' }));
   const body = [headers];
   rows.forEach(r => {
     body.push([
+      { text: String(r.no || ''), alignment: 'center' },
       { text: String(r.bib || ''), alignment: 'center' },
       { text: r.name, alignment: 'center' },
       { text: r.gender, alignment: 'center' },
@@ -69,7 +70,7 @@ function dataTableDef(rows) {
     ]);
   });
   return {
-    table: { headerRows: 1, widths: [28, 48, 22, 58, 45, 100, 42], body },
+    table: { headerRows: 1, widths: [22, 28, 48, 22, 58, 45, 90, 42], body },
     layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5 },
   };
 }

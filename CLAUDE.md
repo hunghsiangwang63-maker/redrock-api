@@ -2960,6 +2960,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端**（`CheckinPage.jsx` compScan 卡）：改顯示 選手/比賽名稱/組別/背號（紅色粗體；未配發顯示「—（計分系統尚未配發）」）；**移除**比賽日行與繳費「已確認（NT$X）」正常態顯示（繳費資訊只在未確認時以紅字警示呈現）；確認報到鈕/InvoiceButtonAuto（含 0 元隱藏）不動。
 - ⚠️ **踩雷備忘**：`competitionRegistrations.checkinToken` 存的是**無 `compchk:` 前綴的裸 uuid**（QR 內容才帶前綴、`findRegByCheckinToken` 查詢時剝除）——E2E 手動塞 token 時存了帶前綴的值 → `QR_NOT_FOUND`，改存裸值即通。測試用暫發 token 測後已從真實報名（黃煒安）清除（比賽日他自開 QR 頁會重新產生）。
 
+## 📋 202608 賽事未註冊選手通知（2026-08-27，資料查證＋寄信，無程式異動）
+> 使用者問「此次比賽選手有幾個還沒註冊會員系統？」→ 查證後依指示用新竹館 Gmail 寄信通知。
+- 📊 **查證結果**：202608 紅石成人抱石賽 61 筆有效報名中，**2 位未註冊會員**——葉書瑞（V4-V5、0918191578、yehleo82@gmail.com）、林伯謙（V2-V3、0922339292、ab76527652@gmail.com）；兩位皆 BeClass 匯入型報名（`claimPhone` 待認領、已繳費已簽署），其餘 59 筆 memberId 已逐筆驗證全部指向存在的會員（無孤兒）。
+- ✅ **已用 `redrocktaiwan.hc@gmail.com` 各寄一封通知信**（Gmail 網頁瀏覽器自動化，寄件備份確認送出）：說明報到需 App 報到 QR、請賽前至 app.redrocktaiwan.com 註冊，**強調姓名填中文本名＋手機填報名登記號碼**（`claimGuestCompetitionRegistrations`/`claimLegacyCompetitionReg` 自動認領報名）。若賽前仍未註冊，8/30 當天改櫃檯人工報到。
+- 💡 **技法備忘**：Gmail 撰寫視窗內文（contenteditable）用 `computer type` 打不進去（只剩簽名檔）；改 `javascript_tool` 直接 `insertBefore` DOM 節點寫入可行——注意頁面有 TrustedHTML CSP，**不能用 `innerHTML`**，要 `textContent`＋`createElement('br')` 組節點。收件者/主旨用 `form_input` 正常。
+
 ## 📋 查證確認（2026-08-27）：「發現新版本」通知連彈＝部署密集期正常行為，拍板不改（無異動）
 > 使用者問「沒有改程式為什麼一直看到發現新版本通知」。查證 `UpdateChecker.jsx`＋`vite.config.js`：
 - **機制**：每次 build 產生 `buildId = git hash + build 時間戳` 寫進 `version.json`；開著的分頁每 5 分鐘輪詢＋切回分頁即查，線上 buildId 與內嵌值不同就彈「發現新版本」；「✕ 稍後再說」只壓掉**當前版本**，下次部署（新 buildId）會重新彈（刻意設計）。

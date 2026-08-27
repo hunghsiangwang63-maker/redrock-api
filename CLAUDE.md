@@ -2954,6 +2954,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **編輯統一進詳細彈窗、預設檢視**：`CourseRegDetailModal` 加 `editable`/`onSaveAmount` 選填 props——實收金額列顯示文字＋（管理員）「✏️ 編輯」鈕 → 輸入框＋儲存/取消（Enter 儲存/Esc 取消）；**未傳 props＝維持原純唯讀**，`CoursesPage` 報名名單的同一元件沿用不受影響。比賽 `RegReceivedAmountEditor` 改 view-first 同款（詳細 modal 內用）。
 - 📌 權限不變：課程後端 `requireManager` 權威、前端 `isManagerRole`；比賽 `isManagerOnly`。存檔後彈窗/名單列/清單三處同步更新（沿用既有 `applyReceivedAmountEdit`/`setRegistrations` patch 機制）。
 
+## 📋 查證確認（2026-08-27）：「發現新版本」通知連彈＝部署密集期正常行為，拍板不改（無異動）
+> 使用者問「沒有改程式為什麼一直看到發現新版本通知」。查證 `UpdateChecker.jsx`＋`vite.config.js`：
+- **機制**：每次 build 產生 `buildId = git hash + build 時間戳` 寫進 `version.json`；開著的分頁每 5 分鐘輪詢＋切回分頁即查，線上 buildId 與內嵌值不同就彈「發現新版本」；「✕ 稍後再說」只壓掉**當前版本**，下次部署（新 buildId）會重新彈（刻意設計）。
+- **主因**：當天為部署密集日（同日 staff 站部署 4+ 次），通知是準的、非誤報。**次因（機制特性）**：buildId 含時間戳 → 程式碼零改動重新 build+deploy 也算「新版本」——兩站一起 deploy 時**沒被改到的那一站**也會彈（假新版本）。
+- **拍板：不改**。曾提出的改法（buildId 改用 dist 產物內容 hash，內容沒變不彈）供日後若覺得干擾再啟用；目前維持「每次 deploy＝新版本」的簡單語意。
+
 ## 📋 查證確認（2026-08-27）：結帳現金公式已不包含預收款（對照 3.376.0 現行程式碼，無異動）
 > 使用者問「結帳現在的現金計算公式還會包含到預收款嗎」——對 `dailySettlements.js` 現行程式碼逐段確認，**答案：不會**（即 8/27 續2 收斂後的最終狀態）。供日後對帳疑問時直接引用：
 - **公式（兩館皆真列印權威模式）**：預期現金＝前日餘額＋`effectiveCash`＋加減項淨額；`effectiveCash`＝`payment.cash`＝今日開立發票中歸類為現金的部分（`invAuth.byMethod`）。

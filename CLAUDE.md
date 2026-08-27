@@ -2977,6 +2977,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **已用 `redrocktaiwan.hc@gmail.com` 各寄一封通知信**（Gmail 網頁瀏覽器自動化，寄件備份確認送出）：說明報到需 App 報到 QR、請賽前至 app.redrocktaiwan.com 註冊，**強調姓名填中文本名＋手機填報名登記號碼**（`claimGuestCompetitionRegistrations`/`claimLegacyCompetitionReg` 自動認領報名）。若賽前仍未註冊，8/30 當天改櫃檯人工報到。
 - 💡 **技法備忘**：Gmail 撰寫視窗內文（contenteditable）用 `computer type` 打不進去（只剩簽名檔）；改 `javascript_tool` 直接 `insertBefore` DOM 節點寫入可行——注意頁面有 TrustedHTML CSP，**不能用 `innerHTML`**，要 `textContent`＋`createElement('br')` 組節點。收件者/主旨用 `form_input` 正常。
 
+## 📋 查證確認（2026-08-27）：選手背號來源＝計分系統端人工指定，RedRock 不產生（拍板維持現狀，無異動）
+> 使用者問「以後選手背號從哪邊給？」——查證 redrock-comp（本機=線上 md5 一致）後確認並拍板「先不用改」。
+- **背號只在計分系統給、三個入口皆人工、無自動編號**：①批次匯入名單（**第一欄＝背號**；姓名+組別比對到既有選手則更新其背號）②手動新增選手（「號碼」輸入框）③逐位編輯（選手編輯視窗）。
+- **與 RedRock 單向不衝突**：RedRock 推送報名名單**不帶背號**（新選手推過去背號空白）；重新推送**刻意保留**計分系統已設的 bib/order/round（`syncAllAthletes` 既有設計）→ 重推不會洗掉已給的號碼。RedRock 端（報到掃描 3.379.0／保險名冊 3.380.0）皆唯讀從計分系統讀回。
+- ⚠️ **賽前名單異動 SOP 提醒**：RedRock「重新推送」後，**新增的選手要到計分系統補背號**（推送不自動給號）——補完名冊/報到掃描才會帶到；沒補的選手名冊排最後、掃描顯示「（計分系統尚未配發）」。
+
 ## 目前進度（2026-08-27 續11）— 修：兼職值班看不到比賽名單（COUNTER_PERMS 從不含 competitions.manage）
 > 回報：兼職 王登第/江幸樺 實測值班狀態下看不到比賽名單、無法開發票。後端 `/health` `3.384.0-comp-roster-view-operator`；正式 API E2E（測試帳號改回 part_time、真值班打卡拿 operator token）驗證。commit `b8f62b0`。
 - 🐞 **根因**：`GET /competitions/:id/registrations` 掛 `checkPermission('competitions.manage')`，而 **COUNTER_PERMS 從來不含 `competitions.manage`**（只有無路由使用的死 key `competitions.entries`）→ 值班 operator 落入角色矩陣 → `part_time:false` → 403。**兩處先前的判斷都因 grep 看錯清單而錯**（COUNTER_PERMS 與 `PER_STAFF_OVERRIDABLE_KEYS` 兩清單相鄰，後者才含 competitions.manage）：①本日稍早「值班可開比賽發票」查證段 ②前端 `CompetitionsPage` 2026-08-24 加 `canManage=...||!!operator` 時的註解宣稱「checkPermission 對 operator 無條件通過」——按鈕看得到、API 被擋，正職值班沒事純因矩陣 `full_time:true`。

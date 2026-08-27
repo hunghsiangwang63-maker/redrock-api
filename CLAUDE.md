@@ -2966,6 +2966,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **已用 `redrocktaiwan.hc@gmail.com` 各寄一封通知信**（Gmail 網頁瀏覽器自動化，寄件備份確認送出）：說明報到需 App 報到 QR、請賽前至 app.redrocktaiwan.com 註冊，**強調姓名填中文本名＋手機填報名登記號碼**（`claimGuestCompetitionRegistrations`/`claimLegacyCompetitionReg` 自動認領報名）。若賽前仍未註冊，8/30 當天改櫃檯人工報到。
 - 💡 **技法備忘**：Gmail 撰寫視窗內文（contenteditable）用 `computer type` 打不進去（只剩簽名檔）；改 `javascript_tool` 直接 `insertBefore` DOM 節點寫入可行——注意頁面有 TrustedHTML CSP，**不能用 `innerHTML`**，要 `textContent`＋`createElement('br')` 組節點。收件者/主旨用 `form_input` 正常。
 
+## 📋 查證確認（2026-08-27）：值班同仁開比賽發票＝已開放、免調權限，只需打卡值班（無異動）
+> 使用者問「值班同仁要開比賽發票，權限要怎麼給？」——重新核對現行程式碼確認**不用給任何設定，能力早已存在**（2026-08-17 `3.313.0` 已把課程/比賽發票由 `requireManager` 放寬為 `requireManagerOrStation`）。
+- **整條路徑對值班 operator 皆通**：開票/作廢（`requireManagerOrStation`）✅、報名名單頁（`competitions.manage`∈COUNTER_PERMS）✅、報到掃描＋掃描後開票（`requireManagerOrStation`）✅。**操作＝員工在館別電腦打卡值班**（取得 operator 身分）即可，發票按鈕自動出現。
+- **兩個易誤判為「沒權限」的情況**：①個人帳號登入（未打卡值班）→ 正職看得到名單但開票被後端擋（刻意設計：發票綁櫃檯操作，解法＝打卡值班、非調權限）②實收金額 0 元 → 按鈕直接隱藏（8/27 續7 的 0 元隱藏，非權限問題）。
+- **仍限管理員的只有「實收金額覆寫」**（`requireManager`，值班不可改金額本身）——維持現狀，要放寬再議。
+
 ## 📋 查證確認（2026-08-27）：「發現新版本」通知連彈＝部署密集期正常行為，拍板不改（無異動）
 > 使用者問「沒有改程式為什麼一直看到發現新版本通知」。查證 `UpdateChecker.jsx`＋`vite.config.js`：
 - **機制**：每次 build 產生 `buildId = git hash + build 時間戳` 寫進 `version.json`；開著的分頁每 5 分鐘輪詢＋切回分頁即查，線上 buildId 與內嵌值不同就彈「發現新版本」；「✕ 稍後再說」只壓掉**當前版本**，下次部署（新 buildId）會重新彈（刻意設計）。

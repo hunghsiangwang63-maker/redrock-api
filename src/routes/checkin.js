@@ -502,7 +502,10 @@ async function getLastSessionCourseInvoiceData(db, gymId, today) {
       .select('sessionId', 'memberId', 'isMakeup', 'isTrial', 'courseName').get())),
     courseIdChunks.length
       ? Promise.all(courseIdChunks.map(chunk => db.collection('courseRegistrations')
-          .where('courseId', 'in', chunk).where('status', '==', 'confirmed').get()))
+          .where('courseId', 'in', chunk).where('status', '==', 'confirmed')
+          // header 也內嵌兩張簽名圖（createRegistrationHeader），只取發票資料需要的欄位（2026-08-27 補投影）
+          .select('courseId', 'memberId', 'payEnrollmentId', 'fee', 'paymentMethod', 'memberPaidAmount', 'receivedAmountOverride')
+          .get()))
       : Promise.resolve([]),
   ]);
   const enrollments = [];

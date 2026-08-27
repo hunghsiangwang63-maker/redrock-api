@@ -231,17 +231,20 @@ router.get('/signature/:memberId', authenticateAny, async (req, res) => {
         return res.status(403).json({ error: 'FORBIDDEN', message: '只能查看自己或子會員的同意書' });
       }
     }
+    // 兩段式：先只投影 signedAt 找最新一筆，再單獨抓那一份完整文件（含簽名圖 base64）——
+    // 簽名圖 ~100KB/筆，重簽過的會員有多筆時避免整批拉回只回傳一筆（2026-08-27 用量回查補投影）
     const snap = await db.collection('fallTestSignatures')
       .where('memberId', '==', req.params.memberId)
+      .select('signedAt')
       .get();
     if (snap.empty) return res.json({ signature: null });
-    // 取最新一筆
-    const docs = snap.docs.map(d => d.data()).sort((a, b) => {
-      const ta = a.signedAt?.toDate?.() || new Date(0);
-      const tb = b.signedAt?.toDate?.() || new Date(0);
+    const newest = snap.docs.slice().sort((a, b) => {
+      const ta = a.data().signedAt?.toDate?.() || new Date(0);
+      const tb = b.data().signedAt?.toDate?.() || new Date(0);
       return tb - ta;
-    });
-    res.json({ signature: docs[0] });
+    })[0];
+    const full = await newest.ref.get();
+    res.json({ signature: full.data() });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

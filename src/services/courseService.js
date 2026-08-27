@@ -1688,9 +1688,13 @@ const markTodayCourseAttendanceOnEntry = async ({ memberId, gymId, staffId }) =>
     const today = taiwanToday();
 
     // 1. 該會員 confirmed 且未暫停的報名 → 取課程 id 集合
+    // ⚠️ .select() 只取判斷用兩欄——此函式「每一次入場」都會被呼叫（confirmCheckIn + /checkin/phone），
+    // 原本全文件抓（含簽名圖 base64，平均 77KB/筆）＝課程學員一次入場拉回 0.5~3MB，是 2026-08-27
+    // 用量回查時找到的最大殘餘 egress 熱點。
     const enrollSnap = await db.collection(ENROLLMENT_COLLECTION)
       .where('memberId', '==', memberId)
       .where('status', '==', 'confirmed')
+      .select('courseId', 'pauseStatus')
       .get();
     const courseIds = [...new Set(
       enrollSnap.docs.map(d => d.data())
@@ -1785,8 +1789,12 @@ const getSessionRoster = async (sessionId) => {
   if (courseId && memberIds.length) {
     for (let i = 0; i < memberIds.length; i += 30) {
       const batch = memberIds.slice(i, i + 30);
+      // ⚠️ .select()：courseRegistrations header 也內嵌兩張簽名圖（createRegistrationHeader 有收），
+      // 名單只需要 5 個報名層級 fallback 欄位（2026-08-27 用量回查補投影）
       const hSnap = await db.collection('courseRegistrations')
-        .where('courseId', '==', courseId).where('memberId', 'in', batch).get();
+        .where('courseId', '==', courseId).where('memberId', 'in', batch)
+        .select('memberId', 'enrollGender', 'enrollAge', 'enrollNote', 'healthNote', 'referralSource')
+        .get();
       hSnap.forEach(hd => { headerMap[hd.data().memberId] = hd.data(); });
     }
   }

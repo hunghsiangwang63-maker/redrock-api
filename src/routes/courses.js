@@ -836,7 +836,10 @@ router.get('/:courseId/attendance/download',
         for (let i = 0; i < memberIds.length; i += 30) {
           const batch = memberIds.slice(i, i + 30);
           const hSnap = await db.collection('courseRegistrations')
-            .where('courseId', '==', courseId).where('memberId', 'in', batch).get();
+            .where('courseId', '==', courseId).where('memberId', 'in', batch)
+            // header 內嵌簽名圖，只取備註欄位（2026-08-27 補投影）
+            .select('memberId', 'enrollNote', 'healthNote', 'referralSource', 'staffNote')
+            .get();
           hSnap.forEach(d => {
             const h = d.data();
             noteMap[h.memberId] = { enrollNote: h.enrollNote || '', healthNote: h.healthNote || '', referralSource: h.referralSource || '', staffNote: h.staffNote || '' };
@@ -900,7 +903,10 @@ router.get('/:courseId/roster/download',
 
       // 報名 header（courseRegistrations）：staffNote/會員填實際匯款/管理員編修實收金額，用 sourceEnrollmentIds 對回各筆報名
       const headerByEnrollId = {};
-      const hSnap = await db.collection('courseRegistrations').where('courseId', '==', courseId).get();
+      // header 內嵌簽名圖，只取 CSV 用到的欄位（2026-08-27 補投影）
+      const hSnap = await db.collection('courseRegistrations').where('courseId', '==', courseId)
+        .select('sourceEnrollmentIds', 'memberPaidAmount', 'receivedAmountOverride', 'healthNote', 'enrollNote', 'referralSource', 'staffNote')
+        .get();
       hSnap.forEach(d => {
         const h = d.data();
         (h.sourceEnrollmentIds || []).forEach(eid => { headerByEnrollId[eid] = h; });
@@ -1649,7 +1655,11 @@ router.get('/:courseId/enrollments',
         for (let i = 0; i < memberIds.length; i += 30) {
           const batch = memberIds.slice(i, i + 30);
           const hSnap = await db.collection('courseRegistrations')
-            .where('courseId', '==', courseId).where('memberId', 'in', batch).get();
+            .where('courseId', '==', courseId).where('memberId', 'in', batch)
+            // header 內嵌簽名圖，只取名單顯示欄位（2026-08-27 補投影，與下方 headerMap 取用欄位一一對應）
+            .select('memberId', 'paymentStatus', 'receivedAmountOverride', 'payEnrollmentId', 'fee', 'paymentMethod',
+              'bankLastFive', 'paymentDate', 'memberPaidAmount', 'enrolledAt', 'enrollNote', 'healthNote', 'referralSource', 'staffNote')
+            .get();
           hSnap.forEach(hd => {
             const h = hd.data();
             headerMap[h.memberId] = {

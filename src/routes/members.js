@@ -126,8 +126,14 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
     }
     // 待補文件：未成年比賽報名待法定代理人簽署（本人+子女；簽署完成即消失）
     for (const id of ids) {
+      // ⚠️ .select()：報名文件內嵌參賽同意書簽名圖 base64（~100KB+/筆），首頁每次開啟都打此查詢
+      // （本人＋每位子女各一次）——只取通知判斷/顯示用欄位（2026-08-27 用量回查補投影）
       const snap = await db.collection('competitionRegistrations')
-        .where('memberId', '==', id).get();
+        .where('memberId', '==', id)
+        .select('status', 'parentRequired', 'isComplete', 'competitionName', 'formReturned', 'formReturnReason',
+          'formRejected', 'rejectedAlertDismissed', 'cancelledAt', 'cancelReason',
+          'paymentStatus', 'refundAlertDismissed', 'refundedAt', 'refundAmount')
+        .get();
       snap.docs.forEach(d => {
         const o = d.data();
         const kidName = id === req.member.id ? null : (kids.docs.find(k => k.id === id)?.data()?.name || null);
@@ -181,8 +187,11 @@ router.get('/my/alerts', authenticateAny, async (req, res) => {
     }
     // 試上/體驗因場次取消（近 14 天，資訊性通知：請洽櫃檯改期或退費）
     for (const id of ids) {
+      // ⚠️ .select()：試上預約文件可能內嵌簽名圖（訪客試上線上簽名），只取通知顯示欄位
       const snap = await db.collection('experienceBookings')
-        .where('memberId', '==', id).where('cancelReason', '==', 'session_cancelled').get();
+        .where('memberId', '==', id).where('cancelReason', '==', 'session_cancelled')
+        .select('kind', 'courseName', 'courseType', 'cancelledAt', 'refundRequested', 'refundAmount')
+        .get();
       snap.docs.forEach(d => {
         const o = d.data();
         const sec = o.cancelledAt?._seconds || o.cancelledAt?.seconds || 0;

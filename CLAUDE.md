@@ -2977,6 +2977,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **已用 `redrocktaiwan.hc@gmail.com` 各寄一封通知信**（Gmail 網頁瀏覽器自動化，寄件備份確認送出）：說明報到需 App 報到 QR、請賽前至 app.redrocktaiwan.com 註冊，**強調姓名填中文本名＋手機填報名登記號碼**（`claimGuestCompetitionRegistrations`/`claimLegacyCompetitionReg` 自動認領報名）。若賽前仍未註冊，8/30 當天改櫃檯人工報到。
 - 💡 **技法備忘**：Gmail 撰寫視窗內文（contenteditable）用 `computer type` 打不進去（只剩簽名檔）；改 `javascript_tool` 直接 `insertBefore` DOM 節點寫入可行——注意頁面有 TrustedHTML CSP，**不能用 `innerHTML`**，要 `textContent`＋`createElement('br')` 組節點。收件者/主旨用 `form_input` 正常。
 
+## 目前進度（2026-08-28）— 計分系統首頁贊助商 Logo（顯示期間制，員工端賽事管理維護）
+> 需求：計分系統主頁放贊助商 Logo、可設顯示期間，從員工端 課程活動→比賽報名 管理。橫跨三 repo；redrock-api `/health` `3.387.0-comp-sponsor-logos`；正式環境端到端驗證（建測試贊助商→首頁出現→刪除→消失）。commit：api `7e19c82`、web `6420198`、comp `92b8e60`。
+- **資料流**：員工端上傳（前端 canvas 縮圖至最長邊 600px PNG 保留透明底）→ redrock-api `GET/POST/PUT/DELETE /competitions/sponsors`（`competitions.manage`；**⚠ 路由順序：GET /sponsors 必須註冊在 GET /:id 之前**否則被參數路由吃掉）→ 經既有 `COMP_FIREBASE_SA`/`getCompDb()` 寫進**計分系統專案**的 `sponsors` 集合（logo base64 內嵌、≤700KB 後端擋；各場比賽共用同一份清單）。
+- **計分系統端**：`firestore.rules` 加 `sponsors` **公開唯讀、client 不可寫**（只有 redrock-api Admin SDK 能寫，沿用 8/15 安全模型）；首頁 `loadCompList` 併載 `loadSponsors`——比賽清單下方「— 賽事贊助 —」logo 卡列，**只在 `startDate<=今天<=endDate` 顯示、到期自動下架**，期間外/無資料整個區塊不出現。
+- **員工端**（`CompetitionsPage`）：賽事管理標題列加「🤝 贊助商 Logo」（canManage 含值班/正職）→ Modal：新增（名稱/起訖日/選檔即時縮圖預覽）＋清單（顯示中/未在期間徽章、就地改期間、刪除）。
+- **E2E**：API 建測試贊助商（期間=今天）→ comp 首頁實機出現 logo 卡 → DELETE → 首頁消失、清單 0 筆；測試資料清潔。
+
 ## 📋 產出（2026-08-27）：「比賽報到與成績查詢」A4 指引（通用版，四輪迭代定版；無程式異動）
 > 需求：一頁 A4 含會員系統 QR＋登入後取得比賽報到 QR 的步驟＋計分系統 QR（查成績）。經四輪迭代定版：初版（含賽名/電話）→ 通用化（拿掉比賽名稱/場館電話，色系同會員系統 `#8B1A1A`+`#F7F3F3`，日後成人/兒童/新竹/士林各場比賽通用）→ 標題放大 2/3 頁寬＋內文放大＋左右底色區等高 → 「點選該場賽事名稱」＋補第 5 點賽程查詢（主辦單位得依現場實際狀況調整賽程）。**定版已寄 chihchiu_chu@yahoo.com.tw**（新竹館 Gmail，主旨標「定版」；共寄 4 封、以最後一封為準）。
 - **製作方式（可重現）**：pdfmake＋`src/assets/fonts/NotoSansTC-Regular.ttf`＋`qrcode` 套件（皆 redrock-api 現成依賴），腳本產 PDF（scratchpad throwaway、未留存——要改版直接重寫，版面規格見此段）。左框 QR＝**深連結** `app.redrocktaiwan.com/member/competitions?tab=my`（登入 redirect 保留 query、登入後直達「我的比賽報名」，已核對 `App.jsx MemberRoute` 的 `loc.pathname+loc.search`）；右框 QR＝`comp.redrocktaiwan.com`（免登入）。**左右等高技法**：pdfmake 同一 table 同一列的儲存格自動等高——兩框做成同列兩格（中間夾空白 gap 欄）即拉齊。

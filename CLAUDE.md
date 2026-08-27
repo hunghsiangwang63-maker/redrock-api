@@ -1152,6 +1152,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 未啟用：LinePay/街口/台灣Pay（adapter 骨架待金鑰）；BeClass（逐步取代中）；Climbio（資料已移轉完）。金鑰全在 Railway 環境變數（Render 為手動同步副本）。
 已下線：**Vercel（2026-07-18 專案已刪）**——早期原型 `redrock-web` 專案（6/14 建）連著 GitHub repo 持續影子自動部署（每次 push 都白跑一次 build），查證 0 自訂網域、DNS 無任何指向、CORS 殘留早已清 → `vercel project rm` 刪除，帳號現 0 專案。
 **Railway 停機應變手冊：`docs/outage-playbook.md`**（櫃檯紙本 SOP／恢復程序／故障轉移＝純一筆 CNAME／PEM 踩雷備忘／長期 Cloud Run 選項）。
+**發票列印代理失效處理手冊：`docs/print-agent-troubleshooting.md`**（2026-08-27 整理自歷次事故——快速診斷順序／NSSM 壞值·睡眠喚醒·PNA·逾時等病因對照／士林 ASUS 備用機切換與紙捲號碼銜接／關開關退手動記帳／手寫發票補登 SOP／裝機預防清單）。
 
 ## 目前進度（2026-07-14）— 員工端課程列表條列式 + 佔用名額透明化
 > 兩項 UI/資料改善。後端 `/health` `2.53.0-reserved-slots-note`；commit 後端 `5fb142f`、前端 `3a9b523`＋`1fe0a5d`；瀏覽器實機驗證通過。

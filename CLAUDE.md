@@ -2960,6 +2960,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **前端**（`CheckinPage.jsx` compScan 卡）：改顯示 選手/比賽名稱/組別/背號（紅色粗體；未配發顯示「—（計分系統尚未配發）」）；**移除**比賽日行與繳費「已確認（NT$X）」正常態顯示（繳費資訊只在未確認時以紅字警示呈現）；確認報到鈕/InvoiceButtonAuto（含 0 元隱藏）不動。
 - ⚠️ **踩雷備忘**：`competitionRegistrations.checkinToken` 存的是**無 `compchk:` 前綴的裸 uuid**（QR 內容才帶前綴、`findRegByCheckinToken` 查詢時剝除）——E2E 手動塞 token 時存了帶前綴的值 → `QR_NOT_FOUND`，改存裸值即通。測試用暫發 token 測後已從真實報名（黃煒安）清除（比賽日他自開 QR 頁會重新產生）。
 
+## 目前進度（2026-08-27 續10）— 比賽簽到表暨保險名冊改版（分組sheet＋背號＋發票金額＋每頁20位）
+> 需求：依 成人(V2-V3組)/成人(V4-V5組)/未成年 分 3 個 sheet；表頭不動且列印每頁重複；可投保年齡文字不換行、縮字到欄寬內完整一句；欄位改 背號/姓名/性別/身份證字號/民國生日/簽名/發票金額；每頁 20 位；依背號排序。後端 `/health` `3.380.0-comp-insurance-roster-redesign`；正式資料實產驗證（61 位背號全帶、三 sheet 升冪）。commit `b846e98`。
+- ✅ **資料服務**（`competitionInsuranceRosterService.js`）：改回傳 `groups`——**成人依組別各一組（依賽事 divisions 順序、通用非硬編碼）＋未成年合一組**；**背號**沿用 3.379.0 報到掃描同一對應（`getCompDb()` 讀計分系統 `athletes` map、`origId`＝報名id；本機無 `COMP_FIREBASE_SA` 時優雅降級留空不阻斷）；**發票金額**走 `computeNetReceivedAmount`（與開發票 modal 預填/記帳同一單一來源、扣保費）；排序＝背號數字升冪、無背號排最後再依姓名。
+- ✅ **xlsx**（`competitionInsuranceXlsx.js`）：7 欄、承保範圍合併改 2-3/4-5/6-7；`pageSetup.printTitlesRow='1:8'`（標題+承保範圍+欄位列每頁重複印，workbook.xml Print_Titles 已驗證）＋A4 直式 `fitToWidth:1`；每 20 位 `row.addPageBreak()`（raw XML `<brk id=28>` 驗證有寫入——**⚠ exceljs 讀回不解析 rowBreaks、驗證要拆 zip 看 sheet XML**）；承保範圍全區 `shrinkToFit:true, wrapText:false`（縮字不換行）。
+- ✅ **PDF**（`competitionInsurancePdf.js`）同步改版：每 20 位一頁、每頁重複完整表頭（標題+承保範圍+欄位列）；年齡文字 `noWrap`+縮字級。前端免改（同端點 `?format=`）。
+- **驗證（正式 API）**：xlsx/pdf 皆 200；三 sheet＝成人(V2-V3 組)37位/成人(V4-V5 組)17位/未成年7位、**背號 61/61 全帶**（733 起）且各 sheet 升冪；PDF 5 頁。成品已交付使用者確認列印版面。
+
 ## 📋 202608 賽事未註冊選手通知（2026-08-27，資料查證＋寄信，無程式異動）
 > 使用者問「此次比賽選手有幾個還沒註冊會員系統？」→ 查證後依指示用新竹館 Gmail 寄信通知。
 - 📊 **查證結果**：202608 紅石成人抱石賽 61 筆有效報名中，**2 位未註冊會員**——葉書瑞（V4-V5、0918191578、yehleo82@gmail.com）、林伯謙（V2-V3、0922339292、ab76527652@gmail.com）；兩位皆 BeClass 匯入型報名（`claimPhone` 待認領、已繳費已簽署），其餘 59 筆 memberId 已逐筆驗證全部指向存在的會員（無孤兒）。

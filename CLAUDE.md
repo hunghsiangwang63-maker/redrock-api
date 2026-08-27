@@ -2977,6 +2977,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **已用 `redrocktaiwan.hc@gmail.com` 各寄一封通知信**（Gmail 網頁瀏覽器自動化，寄件備份確認送出）：說明報到需 App 報到 QR、請賽前至 app.redrocktaiwan.com 註冊，**強調姓名填中文本名＋手機填報名登記號碼**（`claimGuestCompetitionRegistrations`/`claimLegacyCompetitionReg` 自動認領報名）。若賽前仍未註冊，8/30 當天改櫃檯人工報到。
 - 💡 **技法備忘**：Gmail 撰寫視窗內文（contenteditable）用 `computer type` 打不進去（只剩簽名檔）；改 `javascript_tool` 直接 `insertBefore` DOM 節點寫入可行——注意頁面有 TrustedHTML CSP，**不能用 `innerHTML`**，要 `textContent`＋`createElement('br')` 組節點。收件者/主旨用 `form_input` 正常。
 
+## 目前進度（2026-08-27 續12）— 計分系統：成績表「開始滾動」改進入比賽即顯示（原僅純觀眾可見）
+> 回報「成績表頁手機才看得到『開始滾動』、電腦版看不到」。查證 `redrock-comp`（動手前照慣例先比對本機=線上 md5）：**與裝置無關**（全檔 0 個 media query）——按鈕條件原為「純觀眾」（`!adminUnlocked && !currentJudge`），手機是匿名觀看所以看得到、電腦登入了管理員就被藏。commit（redrock-comp）`e86c6b2`，已 deploy＋線上 md5 比對一致＋瀏覽器實測（按鈕出現→點擊開始自動捲動→停止，console 零錯誤）。
+- ✅ **改法（4 處）**：顯示條件改「進入比賽即顯示」（`currentCompId`）；`startCarousel` 早退 guard 與 interval 內「管理員/裁判登入即自動停」移除；`maybeStartCarousel` 只看 `currentPage==='live'`。**行為不變的部分**：滾動仍預設停止、手動開啟；離開成績表頁仍自動停。管理員/裁判現在也能在現場大螢幕（登入狀態的電腦）開自動滾動。
+
 ## 📋 查證確認（2026-08-27）：選手背號來源＝計分系統端人工指定，RedRock 不產生（拍板維持現狀，無異動）
 > 使用者問「以後選手背號從哪邊給？」——查證 redrock-comp（本機=線上 md5 一致）後確認並拍板「先不用改」。
 - **背號只在計分系統給、三個入口皆人工、無自動編號**：①批次匯入名單（**第一欄＝背號**；姓名+組別比對到既有選手則更新其背號）②手動新增選手（「號碼」輸入框）③逐位編輯（選手編輯視窗）。

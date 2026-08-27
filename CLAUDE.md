@@ -2928,6 +2928,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📊 **預期**：穩態應再降 $2-4/天，9 月估 **$250-350/月**；底線 ~$150-250/月＝業務本體（合法 JSON 流量＋讀取次數）。下次查帳單比對 8/27 之後的日費用。
 - 💡 **教訓**：「集合 A 的文件很肥」修完之後，要追問「**同一批資料有沒有被雙寫到別的集合**」——header 雙寫把簽名圖也複製了一份，讓所有「以為在查小文件」的 header 查詢一樣中招；肥欄位雙寫過去的集合，投影防護要同步跟上。
 
+## 目前進度（2026-08-27 續5）— 剩餘 33 處肥文件查詢全面補投影（使用者拍板連低頻窄查詢也做完）
+> 承續4「刻意不動 33 處」→ 使用者要求「其他低頻窄查詢還是要優化」→ 逐一讀每處消費端核對實際用到的欄位後全部處理。後端 `/health` `3.378.0-full-projection-sweep`；正式資料驗證 **8/8**（投影/count/key-only 與原查詢結果逐欄位一致）＋部署後冒煙測試（課程學員報表 16 門課欄位齊全/歷史開課/發票號碼狀態）通過。commit `e687b90`。**至此全庫「肥文件集合」（courseEnrollments/courseRegistrations/competitionRegistrations/experienceBookings/fallTestSignatures）已無任何未投影的查詢**。
+- ✅ **`.select(欄位)` ×28**：memberService 認領鏈全部 6 處（訪客體驗/課程/比賽、BeClass 比賽、待指派券、claim 去重）；passOverlapService 2 處；courseService 10 處（場次取消×2/repoint×2/休館停課/候補遞補/退課/兩個 sweep/補課去重與目標人數）；members.js 課程學員報表 `buildCourseMemberList`（21 欄）＋歷史開課 meta；courses.js 取消課程/重開；transfers.js 確認信場次清單；invoices.js header 狀態檢查；competitions.js 家長簽署 token 頁；courseAdjustments.js 退費 header；experienceBookings.js 逾期清理。
+- ✅ **`.count()` ×2**（純存在性/計數，零資料回傳）：`enrollTrial` 去重、課程永久刪除 guard。**key-only `.select()`（無參數＝只回 ref）×2**：永久刪除級聯刪除迴圈、`maxLeavesAllowed` 批次更新。
+- ✅ **`/experience-bookings/my` 改 82 欄白名單投影**（排除簽名圖×2＋staffNote×3）——查證後**其實不是低頻**：一個會員 session 會被打 4 次（首頁/onboarding gate/課程頁/體驗頁）；訪客試上線上簽名（3.180.0）被電話認領後簽名圖會掛到會員名下隨時間累積。白名單＝正式資料全欄位 ∪ 程式會寫入的欄位，已對全部 30 筆正式文件驗證零遺漏。**⚠️ 維護 footgun（程式碼註解已標）**：booking 文件日後新增「會員端要顯示」的欄位，必須同步加進 `MY_BOOKING_FIELDS` 白名單，否則會員端靜默看不到。
+- 📌 **慣例確立**：對這幾個肥集合下新查詢時**一律**帶 `.select()`（或存在性檢查用 `.count()`、純刪除/批次更新用 key-only `.select()`）；欄位清單以消費端實際讀取為準逐一核對，勿抄別處清單。
+
 - 會員端 UI 驗證：課程試上分頁 + 場次代班「（代班）」顯示（需會員帳號登入實測）
 - 「試上人數」目前僅由試上報名流程產生 `isTrial` 名單；如需員工手動加試上者，需另做 UI
 - 清理 dev Firebase 殘留測試會員：`【練習】…` 系列、`測試/測試API會員/管理員測試會員/Test1/Who` 等，以及測試用 `王大明`(0900222222)/子帳號 `小明明`；可用員工端「刪除會員」或 `DELETE /members/:id`（super_admin）清除（會一併刪子帳號、保留歷史紀錄）

@@ -2977,6 +2977,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **已用 `redrocktaiwan.hc@gmail.com` 各寄一封通知信**（Gmail 網頁瀏覽器自動化，寄件備份確認送出）：說明報到需 App 報到 QR、請賽前至 app.redrocktaiwan.com 註冊，**強調姓名填中文本名＋手機填報名登記號碼**（`claimGuestCompetitionRegistrations`/`claimLegacyCompetitionReg` 自動認領報名）。若賽前仍未註冊，8/30 當天改櫃檯人工報到。
 - 💡 **技法備忘**：Gmail 撰寫視窗內文（contenteditable）用 `computer type` 打不進去（只剩簽名檔）；改 `javascript_tool` 直接 `insertBefore` DOM 節點寫入可行——注意頁面有 TrustedHTML CSP，**不能用 `innerHTML`**，要 `textContent`＋`createElement('br')` 組節點。收件者/主旨用 `form_input` 正常。
 
+## 📋 資料修正（2026-08-27）：洪紹祖/洪紹文課程款 cash→linepay＋移除今日結帳兩筆現金補入（無程式異動）
+> 使用者問「為什麼今天新竹結帳還有現金補入項目？」→ 查明＝**設計行為非 bug**：兩筆青少年進階班週六A班現金 7,700（洪紹祖/洪紹文）於 8/26 23:40 確認收款——晚於當日 23:21 的正式結帳，`addCashAdjustment` 的「已結帳順延」保護（2026-08-11 設計）自動把「+現金補入」順延寫進 8/27 的自動暫存檔。時間軸自洽（8/26 差異僅 -420 證明點鈔時該現金不在抽屜）。
+- ✅ **使用者接著指示「那兩筆改標註為 linepay 付款、順便更新結帳內容」**——實際是 LinePay 收款、非現金。修正 8 份文件（皆附 `correctionNote`）：`transferRecords`×2／`courseEnrollments` 主筆×2／`courseRegistrations` header×2／`transactions`×2（7,700、認列 10/31）全改 `linepay`；兩筆皆未開過發票、發票側免處理。
+- ✅ **今日（8/27）新竹 draft 結帳移除那兩筆「+現金補入 7,700」**（加減項 2→0）——LinePay 不進抽屜、補入已不成立，留著會讓預期現金虛高 15,400 產生假差異。
+- 📌 **對帳備忘**：LinePay 商家後台 8/26 會有這兩筆 7,700；系統端為課程預收款、認列日 10/31 才進營收，日結帳付款統計不會在 8/26/8/27 出現——月結對不到日結帳屬正常。同型案例參照 2026-08-16 鍾承江（checkIns 混付）與同日陳以恩/陳以喬（底層 paymentMethod 誤記）處理模式。
+
 ## 目前進度（2026-08-27 續12）— 計分系統：成績表「開始滾動」改進入比賽即顯示（原僅純觀眾可見）
 > 回報「成績表頁手機才看得到『開始滾動』、電腦版看不到」。查證 `redrock-comp`（動手前照慣例先比對本機=線上 md5）：**與裝置無關**（全檔 0 個 media query）——按鈕條件原為「純觀眾」（`!adminUnlocked && !currentJudge`），手機是匿名觀看所以看得到、電腦登入了管理員就被藏。commit（redrock-comp）`e86c6b2`，已 deploy＋線上 md5 比對一致＋瀏覽器實測（按鈕出現→點擊開始自動捲動→停止，console 零錯誤）。
 - ✅ **改法（4 處）**：顯示條件改「進入比賽即顯示」（`currentCompId`）；`startCarousel` 早退 guard 與 interval 內「管理員/裁判登入即自動停」移除；`maybeStartCarousel` 只看 `currentPage==='live'`。**行為不變的部分**：滾動仍預設停止、手動開啟；離開成績表頁仍自動停。管理員/裁判現在也能在現場大螢幕（登入狀態的電腦）開自動滾動。

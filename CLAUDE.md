@@ -2977,6 +2977,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **已用 `redrocktaiwan.hc@gmail.com` 各寄一封通知信**（Gmail 網頁瀏覽器自動化，寄件備份確認送出）：說明報到需 App 報到 QR、請賽前至 app.redrocktaiwan.com 註冊，**強調姓名填中文本名＋手機填報名登記號碼**（`claimGuestCompetitionRegistrations`/`claimLegacyCompetitionReg` 自動認領報名）。若賽前仍未註冊，8/30 當天改櫃檯人工報到。
 - 💡 **技法備忘**：Gmail 撰寫視窗內文（contenteditable）用 `computer type` 打不進去（只剩簽名檔）；改 `javascript_tool` 直接 `insertBefore` DOM 節點寫入可行——注意頁面有 TrustedHTML CSP，**不能用 `innerHTML`**，要 `textContent`＋`createElement('br')` 組節點。收件者/主旨用 `form_input` 正常。
 
+## 📋 產出（2026-08-27）：「比賽報到與成績查詢」A4 指引（通用版，四輪迭代定版；無程式異動）
+> 需求：一頁 A4 含會員系統 QR＋登入後取得比賽報到 QR 的步驟＋計分系統 QR（查成績）。經四輪迭代定版：初版（含賽名/電話）→ 通用化（拿掉比賽名稱/場館電話，色系同會員系統 `#8B1A1A`+`#F7F3F3`，日後成人/兒童/新竹/士林各場比賽通用）→ 標題放大 2/3 頁寬＋內文放大＋左右底色區等高 → 「點選該場賽事名稱」＋補第 5 點賽程查詢（主辦單位得依現場實際狀況調整賽程）。**定版已寄 chihchiu_chu@yahoo.com.tw**（新竹館 Gmail，主旨標「定版」；共寄 4 封、以最後一封為準）。
+- **製作方式（可重現）**：pdfmake＋`src/assets/fonts/NotoSansTC-Regular.ttf`＋`qrcode` 套件（皆 redrock-api 現成依賴），腳本產 PDF（scratchpad throwaway、未留存——要改版直接重寫，版面規格見此段）。左框 QR＝**深連結** `app.redrocktaiwan.com/member/competitions?tab=my`（登入 redirect 保留 query、登入後直達「我的比賽報名」，已核對 `App.jsx MemberRoute` 的 `loc.pathname+loc.search`）；右框 QR＝`comp.redrocktaiwan.com`（免登入）。**左右等高技法**：pdfmake 同一 table 同一列的儲存格自動等高——兩框做成同列兩格（中間夾空白 gap 欄）即拉齊。
+- 💡 **Gmail 瀏覽器自動化寄信踩雷（本日三封皆遇到）**：按「傳送」第一下**穩定失敗**（視窗只被縮小成草稿、無「郵件已送出」toast）——從右下縮小列點開還原後再按一次才會真的送出；**每次寄完務必到寄件備份確認最上方有這封**，不能只看按過傳送。附件用 `file_upload` 工具打**隱藏的 `input[type=file]`**（不是📎按鈕，點那顆會開原生檔案選擇器卡死）。
+
 ## 📋 資料修正（2026-08-27）：洪紹祖/洪紹文課程款 cash→linepay＋移除今日結帳兩筆現金補入（無程式異動）
 > 使用者問「為什麼今天新竹結帳還有現金補入項目？」→ 查明＝**設計行為非 bug**：兩筆青少年進階班週六A班現金 7,700（洪紹祖/洪紹文）於 8/26 23:40 確認收款——晚於當日 23:21 的正式結帳，`addCashAdjustment` 的「已結帳順延」保護（2026-08-11 設計）自動把「+現金補入」順延寫進 8/27 的自動暫存檔。時間軸自洽（8/26 差異僅 -420 證明點鈔時該現金不在抽屜）。
 - ✅ **使用者接著指示「那兩筆改標註為 linepay 付款、順便更新結帳內容」**——實際是 LinePay 收款、非現金。修正 8 份文件（皆附 `correctionNote`）：`transferRecords`×2／`courseEnrollments` 主筆×2／`courseRegistrations` header×2／`transactions`×2（7,700、認列 10/31）全改 `linepay`；兩筆皆未開過發票、發票側免處理。

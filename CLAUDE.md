@@ -2943,6 +2943,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **備註欄三處改大 textarea**（排班/重要事項/固定週班表單）：單行 `<input>` → `rows=6`/`minHeight:140`/`resize:vertical` 的 `<textarea>`＋`maxLength=200`＋右下即時字數計（N/200），200 字完整顯示。
 - ⚠️ 過程小雷：第一版用「textarea 前插＋舊 input 包 `{false && ...}`」的偷懶替換法會少右大括號直接語法錯誤——批次替換多行 JSX 元素要整段刪除重寫，別用條件包裹殘留舊碼。
 
+## 目前進度（2026-08-27 續7）— 課程/比賽實收金額 0 隱藏「開立發票」鈕（純前端）
+> 需求：比賽或課程註記費用為 0 的會員，直接隱藏該列的開發票按鍵。純前端，commit（redrock-web）`988b10d`，staff 已 deploy＋實機驗證（王登第 實收 0 那筆按鈕正確消失、同組 >0 者保留、已開立者顯示號碼）。
+- ✅ **7 處按鈕全加金額判斷**：`MembersPage` 課程學員三清單（效期內/歷史詳情/未開課，`m.receivedAmount`）；`CompetitionsPage` 報名名單列（金額用與開票 modal `defaultAmount` **同一條 fallback 鏈** `receivedAmount ?? max(0,(paidAmount??memberPaidAmount??registrationFee)-insuranceFee)`，避免兩邊判定不一致）；`CheckinPage` 三處（今日課程學員最後一堂/今日入場 courseInvoice/比賽報到掃描）。
+- 📌 **已開過發票（`invoiceNo` 存在）仍顯示**——供查看號碼/作廢（比照體驗頁日期限制的同一原則）；候補列本就整組隱藏不受影響。0 元判定含 `?? 0`（無資料視同 0 隱藏，後端 attach 鏈本就恆回數字）。
+
 ## 📋 查證確認（2026-08-27）：結帳現金公式已不包含預收款（對照 3.376.0 現行程式碼，無異動）
 > 使用者問「結帳現在的現金計算公式還會包含到預收款嗎」——對 `dailySettlements.js` 現行程式碼逐段確認，**答案：不會**（即 8/27 續2 收斂後的最終狀態）。供日後對帳疑問時直接引用：
 - **公式（兩館皆真列印權威模式）**：預期現金＝前日餘額＋`effectiveCash`＋加減項淨額；`effectiveCash`＝`payment.cash`＝今日開立發票中歸類為現金的部分（`invAuth.byMethod`）。

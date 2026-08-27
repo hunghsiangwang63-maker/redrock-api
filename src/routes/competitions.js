@@ -153,7 +153,17 @@ const attachInvoiceStatus = async (db, registrations) => {
   });
 };
 
-router.get('/:id/registrations', authenticate, checkPermission('competitions.manage'), async (req, res) => {
+// 名單「檢視」對值班/站台放行（開發票/確認收款等櫃檯流程的前置是先看得到名單）；
+// 其餘身分仍走 competitions.manage 矩陣（管理員/正職可、兼職個人不可）。
+// ⚠ 2026-08-27 修：COUNTER_PERMS 裡是 competitions.entries（無路由使用的死 key），從來不含
+// competitions.manage —— 值班兼職(part_time operator)打此端點一直被矩陣擋 403、看不到名單也就
+// 開不了發票（正職值班能用純粹因矩陣 full_time:true，跟值班無關）。賽事管理動作（建立/編輯/
+// 刪除/對接/賽前通知/下載）維持 manage 不放寬。
+const rosterViewGate = (req, res, next) => {
+  if (['operator', 'station'].includes(req.staff?.type)) return next();
+  return checkPermission('competitions.manage')(req, res, next);
+};
+router.get('/:id/registrations', authenticate, rosterViewGate, async (req, res) => {
   try {
     const registrations = await competitionService.getCompetitionRegistrations(req.params.id);
     // 附加「實收金額」（管理員編修 > 匯款確認金額-保費 > 應繳費用-保費），供名單/開發票 modal 顯示與預填

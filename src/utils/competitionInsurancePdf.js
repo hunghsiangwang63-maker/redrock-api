@@ -1,5 +1,7 @@
 // ── 比賽簽到表暨保險名冊：PDF 輸出（pdfmake，純 JS、無需 LibreOffice/headless Chrome）──
 // 中文字型：bundle 隨附的 Noto Sans TC（OFL 授權，src/assets/fonts/），否則中文會變空白方塊。
+// 2026-08-27 改版：一組一段（成人各組別/未成年）；欄位 背號/姓名/性別/身份證字號/民國生日/簽名/發票金額；
+// 每 20 位選手一頁、每頁都重複完整表頭（標題+承保範圍+欄位列）；承保範圍文字 noWrap 縮字不換行。
 const path = require('path');
 const PdfPrinter = require('pdfmake/js/Printer.js').default;
 const URLResolver = require('pdfmake/js/URLResolver.js').default;
@@ -7,6 +9,8 @@ const fs = require('fs');
 
 const FONT_PATH = path.join(__dirname, '..', 'assets', 'fonts', 'NotoSansTC-Regular.ttf');
 const FONTS = { NotoSansTC: { normal: FONT_PATH, bold: FONT_PATH, italics: FONT_PATH, bolditalics: FONT_PATH } };
+
+const ROWS_PER_PAGE = 20; // 每頁選手數
 
 function getPrinter() {
   const resolver = new URLResolver(fs);
@@ -19,22 +23,23 @@ function centerBlock(tableDef) {
 }
 
 function insuranceTableDef(insurance) {
+  // 7 欄配置：承保範圍(1) + 標籤(2) + 未滿15(2) + 15以上(2)；年齡文字 noWrap+小字＝一行完整不換行
   const body = [
     [{ text: '承保範圍', rowSpan: insurance.rows.length + 1, alignment: 'center', bold: true, fillColor: '#E0E0E0' },
       { text: '可投保年齡', colSpan: 2, alignment: 'center', fillColor: '#E0E0E0' }, {},
-      { text: insurance.ageLabelUnder, colSpan: 2, alignment: 'center', fillColor: '#E0E0E0' }, {},
-      { text: insurance.ageLabelOver, colSpan: 3, alignment: 'center', fillColor: '#E0E0E0' }, {}, {}],
+      { text: insurance.ageLabelUnder, colSpan: 2, alignment: 'center', fillColor: '#E0E0E0', color: 'red', fontSize: 7, noWrap: true }, {},
+      { text: insurance.ageLabelOver, colSpan: 2, alignment: 'center', fillColor: '#E0E0E0', color: 'red', fontSize: 7, noWrap: true }, {}],
   ];
   insurance.rows.forEach(r => {
     body.push([
       {}, // rowSpan 佔位
-      { text: r.label, colSpan: 2, alignment: 'center', color: 'red' }, {},
+      { text: r.label, colSpan: 2, alignment: 'center', color: 'red', fontSize: 8, noWrap: true }, {},
       { text: r.under, colSpan: 2, alignment: 'center', color: 'red' }, {},
-      { text: r.over, colSpan: 3, alignment: 'center', color: 'red' }, {}, {},
+      { text: r.over, colSpan: 2, alignment: 'center', color: 'red' }, {},
     ]);
   });
   return {
-    table: { widths: [45, 33, 33, 33, 33, 27, 27, 27], body },
+    table: { widths: [45, 45, 45, 40, 40, 45, 45], body },
     layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5 },
     margin: [0, 4, 0, 10],
   };
@@ -50,45 +55,48 @@ function signatureCell(row) {
 }
 
 function dataTableDef(rows) {
-  const headers = ['No.', '姓名', '性別', '身份字號', '民國生日', '簽名', '備註', '組別'].map(h => ({ text: h, bold: true, alignment: 'center', fillColor: '#BFBFBF' }));
+  const headers = ['背號', '姓名', '性別', '身份證字號', '民國生日', '簽名', '發票金額'].map(h => ({ text: h, bold: true, alignment: 'center', fillColor: '#BFBFBF' }));
   const body = [headers];
   rows.forEach(r => {
     body.push([
-      { text: String(r.no), alignment: 'center' },
+      { text: String(r.bib || ''), alignment: 'center' },
       { text: r.name, alignment: 'center' },
       { text: r.gender, alignment: 'center' },
       { text: r.idNumber, alignment: 'center', fontSize: 8 },
       { text: r.birthdayRoc, alignment: 'center' },
       signatureCell(r),
-      { text: r.note, alignment: 'center', fontSize: 8 },
-      { text: r.divisionName, alignment: 'center', fontSize: 8 },
+      { text: r.invoiceAmount != null ? String(r.invoiceAmount) : '', alignment: 'center' },
     ]);
   });
   return {
-    table: { headerRows: 1, widths: [22, 45, 22, 55, 45, 100, 45, 55], body },
+    table: { headerRows: 1, widths: [28, 48, 22, 58, 45, 100, 42], body },
     layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5 },
   };
 }
 
-function buildSheetContent(title, insurance, rows, pageBreakBefore) {
-  return [
-    { text: title, bold: true, fontSize: 13, alignment: 'center', margin: [0, 0, 0, 6], ...(pageBreakBefore ? { pageBreak: 'before' } : {}) },
-    centerBlock(insuranceTableDef(insurance)),
-    rows.length ? centerBlock(dataTableDef(rows)) : { text: '（無資料）', italics: true, color: '#999', alignment: 'center' },
-  ];
+// 每 ROWS_PER_PAGE 位一頁，每頁重複完整表頭（標題+承保範圍+欄位列）
+function buildGroupContent(title, insurance, rows, isFirstGroup) {
+  const chunks = [];
+  for (let i = 0; i < rows.length; i += ROWS_PER_PAGE) chunks.push(rows.slice(i, i + ROWS_PER_PAGE));
+  if (!chunks.length) chunks.push([]); // 無資料仍出一頁（表頭＋無資料提示）
+  const content = [];
+  chunks.forEach((chunk, ci) => {
+    const pageBreak = !(isFirstGroup && ci === 0);
+    content.push({ text: title, bold: true, fontSize: 13, alignment: 'center', margin: [0, 0, 0, 6], ...(pageBreak ? { pageBreak: 'before' } : {}) });
+    content.push(centerBlock(insuranceTableDef(insurance)));
+    content.push(chunk.length ? centerBlock(dataTableDef(chunk)) : { text: '（無資料）', italics: true, color: '#999', alignment: 'center' });
+  });
+  return content;
 }
 
-async function buildCompetitionInsurancePdfBuffer({ titleBase, insurance, adults, minors }) {
+async function buildCompetitionInsurancePdfBuffer({ insurance, groups }) {
   const printer = getPrinter();
   const docDefinition = {
     defaultStyle: { font: 'NotoSansTC', fontSize: 9 },
     pageSize: 'A4',
     pageOrientation: 'portrait',
     pageMargins: [24, 24, 24, 24],
-    content: [
-      ...buildSheetContent(`${titleBase}（成人）`, insurance, adults, false),
-      ...buildSheetContent(`${titleBase}（未成年）`, insurance, minors, true),
-    ],
+    content: groups.flatMap((g, i) => buildGroupContent(g.title, insurance, g.rows, i === 0)),
   };
   const pdfDoc = await printer.createPdfKitDocument(docDefinition);
   return new Promise((resolve, reject) => {

@@ -2966,6 +2966,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **xlsx**（`competitionInsuranceXlsx.js`）：7 欄、承保範圍合併改 2-3/4-5/6-7；`pageSetup.printTitlesRow='1:8'`（標題+承保範圍+欄位列每頁重複印，workbook.xml Print_Titles 已驗證）＋A4 直式 `fitToWidth:1`；每 20 位 `row.addPageBreak()`（raw XML `<brk id=28>` 驗證有寫入——**⚠ exceljs 讀回不解析 rowBreaks、驗證要拆 zip 看 sheet XML**）；承保範圍全區 `shrinkToFit:true, wrapText:false`（縮字不換行）。
 - ✅ **PDF**（`competitionInsurancePdf.js`）同步改版：每 20 位一頁、每頁重複完整表頭（標題+承保範圍+欄位列）；年齡文字 `noWrap`+縮字級。前端免改（同端點 `?format=`）。
 - **驗證（正式 API）**：xlsx/pdf 皆 200；三 sheet＝成人(V2-V3 組)37位/成人(V4-V5 組)17位/未成年7位、**背號 61/61 全帶**（733 起）且各 sheet 升冪；PDF 5 頁。成品已交付使用者確認列印版面。
+- ✅ **續2：未成年 sheet 簽名拆兩欄＋加組別欄（`3.382.0`→`3.383.0-roster-minor-division-col`，commit `7be4534`+`118a52b`）**：回報「家長/小選手簽名都要同時呈現」——查證檔案**本就兩張並排嵌在同一格**（6/7 位皆有雙簽；王登第資料本就只有家長簽名＝BeClass 匯入家長遠端簽），問題是擠同格無標示看不出誰是誰 → 未成年 sheet 改 **10 欄**：簽名拆「**選手簽名／法定代理人簽名**」兩獨立欄（缺者留白供現場補簽）＋加「**組別**」欄（未成年各組混一張、需標示）；成人 sheet 維持 8 欄單一簽名欄不變。xlsx 欄位配置改資料驅動（`layoutFor` 的 headers/rowValues 一一對應，之後加減欄位改一處）；PDF 同步。正式驗證：未成年圖片各自錨在第 8/9 欄、組別/性別正確。
 - ✅ **續：第一欄加序號＋修「缺性別」（`3.381.0-roster-seq-no-gender-fix`，commit `1a82146`）**：①欄位改 8 欄（序號在最前，各 sheet 排序定案後由 1 起編、跨頁連續）②回報「幾位缺性別（BeClass 帶過來的）」——查明**其實有資料、只是 BeClass 匯入把性別存成中文「男/女」**（非系統 `male/female`），顯示層對不上變空白。**資料修正**：全庫掃描僅此賽事 12 筆、正規化為 male/female（**12/12 與身分證第 2 碼交叉驗證一致**才寫入、附 `genderNormalizedNote` 稽核、複查 0 殘留）；`genderLabel` 加中文容錯（防未來匯入再現）。正式環境複驗：三 sheet 序號連續、缺性別 0。⚠ **BeClass 匯入資料的 enum 欄位（性別等）可能存中文原值**——之後匯入要記得正規化，或比對身分證第 2 碼（1=男/2=女）。
 
 ## 📋 202608 賽事未註冊選手通知（2026-08-27，資料查證＋寄信，無程式異動）

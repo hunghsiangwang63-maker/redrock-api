@@ -2917,7 +2917,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📊 **每日費用趨勢（TWD）**：8/1~8/8 高峰 $65~245（8/5 最高）→ 8/9~8/17 $45~120 → 8/18（修復前一天）$71.83 → 8/19（修復部署當天）$37.34 → **8/20~8/26 穩態 $9~15/天**（8/25 實測 $9.27）——降幅約 85%。
 - 📊 **SKU 層面驗證（降幅確實來自 Firestore 資料流出，與修復目標吻合）**：`Internet Data Transfer Out APAC→APAC` 8/19 累計 341.72 GiB → 8/26 累計 371.6 GiB＝**修復後 7 天僅增 ~30 GiB（~4.3 GiB/天，原 ~20 GiB/天）**；`Data Transfer to Google Services` 150.79 GiB／$547 **與 8/19 查到的數字完全相同、7 天零增長**（這條整個被修掉）；Read Ops 本月累計 $244（佔比小、正常）。
 - 📊 **月度**：8月累計（8/1~8/26）$2,196、預估月底 $2,223（8/19 當時預估 $2,732，下修 ~$500；前 18 天高費用已成事實拉不回）。以穩態 ~$10-15/天推算 **9 月整月約 $300~450**，將回落至遠低於 7 月（$1,198）的水準。
-- 📌 無需進一步動作；下次再查帳單可直接比對 9 月整月數字。
+- 📌 無需進一步動作；下次再查帳單可直接比對 9 月整月數字。（→ 同日續4 又補了一批殘餘熱路徑投影，見下）
+
+## 目前進度（2026-08-27 續4）— 殘餘 egress 熱路徑全面補投影（承續3「還能再降嗎」）
+> 使用者問「還能再降嗎」→ 全庫掃出 **42 個**對「內嵌簽名圖的肥集合」未加 `.select()` 的查詢，多數為低頻窄查詢不動，補上其中 **9 個熱路徑**。後端 `/health` `3.377.0-residual-egress-projection`；正式資料驗證 4/4（投影前後查詢結果逐欄位一致）＋部署後冒煙測試通過。commit `57276d0`。
+- 🐞 **最大宗：`markTodayCourseAttendanceOnEntry`（`courseService.js`）**——**每一次入場**（QR confirm＋電話入場）都把該會員全部 confirmed 報名**完整文件**拉回來只為取 courseId 清單：實測一位課程學員 30 筆報名＝**3,189KB/次入場 → 投影後 1.5KB**（-99.95%）。這是 8/19 修復後穩態仍有 ~1.5-2 GiB/天流出的主要殘餘來源。
+- 🔍 **關鍵發現：`courseRegistrations` header 也內嵌兩張簽名圖**（`createRegistrationHeader` 有收 `portraitSignature`/`guardianSignature`，實測 ~167KB/筆）——先前只知道 `courseEnrollments` slot 肥，header 一直被當成「小文件」沒防護。5 處 header 全文件查詢一併補投影：`checkin.js getLastSessionCourseInvoiceData`（今日儀表板發票資料）、`courseService.getSessionRoster` header fallback（場次名單）、`courses.js GET /:courseId/enrollments` header join（報名名單）、出缺席 CSV noteMap、名單 CSV headerByEnrollId。
+- ✅ **其餘**：`/members/my/alerts` 的 `competitionRegistrations`（**含比賽簽名圖 ~92KB/筆，會員每開一次首頁×本人+每位子女各查一次**）與 `experienceBookings`（session_cancelled 通知）補投影；`fallTests.js GET /signature/:memberId` 改**兩段式**（先投影 `signedAt` 找最新一筆、再單獨抓那份完整文件——回傳內容本來就是簽名圖本體、不能投影掉，只省「多筆重簽時整批拉回只回傳一筆」的浪費）。
+- ⛔ **刻意不動**：其餘 33 處（單人單課、認領鏈、取消課程等低頻窄查詢）——省不了多少、逐一驗欄位的風險/工時不划算；**B（簽名圖不要每堂/每 header 複製一份的資料模型遷移）與 C（Read Ops 快取/降 QR 輪詢頻率）也確認不做**（工程投入大於省下金額）。
+- 📊 **預期**：穩態應再降 $2-4/天，9 月估 **$250-350/月**；底線 ~$150-250/月＝業務本體（合法 JSON 流量＋讀取次數）。下次查帳單比對 8/27 之後的日費用。
+- 💡 **教訓**：「集合 A 的文件很肥」修完之後，要追問「**同一批資料有沒有被雙寫到別的集合**」——header 雙寫把簽名圖也複製了一份，讓所有「以為在查小文件」的 header 查詢一樣中招；肥欄位雙寫過去的集合，投影防護要同步跟上。
 
 - 會員端 UI 驗證：課程試上分頁 + 場次代班「（代班）」顯示（需會員帳號登入實測）
 - 「試上人數」目前僅由試上報名流程產生 `isTrial` 名單；如需員工手動加試上者，需另做 UI

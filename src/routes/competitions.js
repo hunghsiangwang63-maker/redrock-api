@@ -51,6 +51,80 @@ router.post('/sweep-expired-payments', authenticate, async (req, res) => {
 });
 
 // ── PUT /competitions/:id - 修改賽事 ───────────────────────────────
+// ── 贊助商 Logo 管理（顯示於計分系統 comp.redrocktaiwan.com 首頁比賽清單下方，可設顯示期間）──
+// 資料直接存「計分系統」專案的 Firestore（sponsors 集合，經 COMP_FIREBASE_SA Admin SDK 寫入；
+// 該專案規則 sponsors 公開唯讀、client 不可寫）。Logo 以 base64 dataURL 內嵌（前端上傳前已縮圖）。
+// ⚠️ 路由順序：GET /sponsors 必須註冊在下方 GET /:id 之前，否則會被 :id 參數路由吃掉。
+const getCompDbOr503 = (res) => {
+  try {
+    const { getCompDb } = require('../config/compFirebase');
+    const cdb = getCompDb();
+    if (!cdb) { res.status(503).json({ error: 'COMP_NOT_CONFIGURED', message: '計分系統金鑰未設定（COMP_FIREBASE_SA）' }); return null; }
+    return cdb;
+  } catch (e) {
+    res.status(503).json({ error: 'COMP_NOT_CONFIGURED', message: '計分系統金鑰未設定（COMP_FIREBASE_SA）' });
+    return null;
+  }
+};
+
+router.get('/sponsors', authenticate, checkPermission('competitions.manage'), async (req, res) => {
+  try {
+    const cdb = getCompDbOr503(res); if (!cdb) return;
+    const snap = await cdb.collection('sponsors').get();
+    const sponsors = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => ((a.createdAt || '') < (b.createdAt || '') ? -1 : 1));
+    res.json({ sponsors });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+router.post('/sponsors', authenticate, checkPermission('competitions.manage'), async (req, res) => {
+  try {
+    const cdb = getCompDbOr503(res); if (!cdb) return;
+    const { name, logo, startDate, endDate } = req.body;
+    if (!name || !String(name).trim()) return res.status(400).json({ error: 'MISSING_NAME', message: '請填寫贊助商名稱' });
+    if (!/^data:image\/(png|jpeg|jpg|webp);base64,/.test(logo || '')) return res.status(400).json({ error: 'INVALID_LOGO', message: 'Logo 需為圖片檔' });
+    if (logo.length > 700 * 1024) return res.status(400).json({ error: 'LOGO_TOO_LARGE', message: 'Logo 縮圖後仍過大，請改用較小的圖檔' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate || '') || !/^\d{4}-\d{2}-\d{2}$/.test(endDate || ''))
+      return res.status(400).json({ error: 'INVALID_PERIOD', message: '請設定顯示期間（開始／結束日期）' });
+    if (endDate < startDate) return res.status(400).json({ error: 'INVALID_PERIOD', message: '結束日期不可早於開始日期' });
+    const ref = await cdb.collection('sponsors').add({
+      name: String(name).trim(), logo, startDate, endDate,
+      createdAt: new Date().toISOString(), createdBy: req.staff?.name || req.staff?.id || '',
+    });
+    res.status(201).json({ success: true, id: ref.id });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+router.put('/sponsors/:sid', authenticate, checkPermission('competitions.manage'), async (req, res) => {
+  try {
+    const cdb = getCompDbOr503(res); if (!cdb) return;
+    const updates = {};
+    if (req.body.name != null) {
+      if (!String(req.body.name).trim()) return res.status(400).json({ error: 'MISSING_NAME', message: '贊助商名稱不可空白' });
+      updates.name = String(req.body.name).trim();
+    }
+    if (req.body.startDate != null || req.body.endDate != null) {
+      const sd = req.body.startDate, ed = req.body.endDate;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(sd || '') || !/^\d{4}-\d{2}-\d{2}$/.test(ed || ''))
+        return res.status(400).json({ error: 'INVALID_PERIOD', message: '請設定顯示期間（開始／結束日期）' });
+      if (ed < sd) return res.status(400).json({ error: 'INVALID_PERIOD', message: '結束日期不可早於開始日期' });
+      updates.startDate = sd; updates.endDate = ed;
+    }
+    if (!Object.keys(updates).length) return res.status(400).json({ error: 'NO_UPDATES', message: '無可更新欄位' });
+    updates.updatedAt = new Date().toISOString();
+    await cdb.collection('sponsors').doc(req.params.sid).update(updates);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+router.delete('/sponsors/:sid', authenticate, checkPermission('competitions.manage'), async (req, res) => {
+  try {
+    const cdb = getCompDbOr503(res); if (!cdb) return;
+    await cdb.collection('sponsors').doc(req.params.sid).delete();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 router.put('/:id', authenticate, checkPermission('competitions.manage'), async (req, res) => {
   try {
     const competition = await competitionService.updateCompetition(req.params.id, req.body);

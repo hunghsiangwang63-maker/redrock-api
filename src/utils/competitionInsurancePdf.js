@@ -53,7 +53,7 @@ function sigImageCell(src, width) {
 // 成人＝單一簽名欄；未成年＝「選手簽名／法定代理人簽名」兩獨立欄同時呈現（缺者留白供現場補簽）
 function dataTableDef(rows, isMinor) {
   const headLabels = isMinor
-    ? ['序號', '背號', '姓名', '性別', '身份證字號', '民國生日', '選手簽名', '法定代理人簽名', '發票金額']
+    ? ['序號', '背號', '姓名', '組別', '性別', '身份證字號', '民國生日', '選手簽名', '法定代理人簽名', '發票金額']
     : ['序號', '背號', '姓名', '性別', '身份證字號', '民國生日', '簽名', '發票金額'];
   const headers = headLabels.map(h => ({ text: h, bold: true, alignment: 'center', fillColor: '#BFBFBF', fontSize: 8 }));
   const body = [headers];
@@ -62,6 +62,7 @@ function dataTableDef(rows, isMinor) {
       { text: String(r.no || ''), alignment: 'center' },
       { text: String(r.bib || ''), alignment: 'center' },
       { text: r.name, alignment: 'center' },
+      ...(isMinor ? [{ text: r.divisionName || '', alignment: 'center', fontSize: 8 }] : []),
       { text: r.gender, alignment: 'center' },
       { text: r.idNumber, alignment: 'center', fontSize: 8 },
       { text: r.birthdayRoc, alignment: 'center' },
@@ -74,7 +75,7 @@ function dataTableDef(rows, isMinor) {
   return {
     table: {
       headerRows: 1,
-      widths: isMinor ? [20, 26, 44, 20, 55, 42, 62, 62, 36] : [22, 28, 48, 22, 58, 45, 90, 42],
+      widths: isMinor ? [18, 24, 40, 36, 18, 52, 40, 56, 56, 32] : [22, 28, 48, 22, 58, 45, 90, 42],
       body,
     },
     layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5 },

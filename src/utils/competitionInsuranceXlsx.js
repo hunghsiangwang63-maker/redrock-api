@@ -1,25 +1,28 @@
 // ── 比賽簽到表暨保險名冊：xlsx 輸出（exceljs，支援嵌入簽名圖片）──────────────
 // 2026-08-27 改版：一組一 sheet（成人各組別/未成年）；成人 8 欄（單一簽名欄）、
-// 未成年 9 欄（簽名拆「選手簽名／法定代理人簽名」兩獨立欄同時呈現，缺者留白供現場補簽）；
+// 未成年 10 欄（加組別欄；簽名拆「選手簽名／法定代理人簽名」兩獨立欄同時呈現，缺者留白供現場補簽）；
 // 表頭（標題+承保範圍+欄位列）設為列印標題列（每頁重複印）；每 20 位選手強制分頁；
 // 承保範圍文字 shrinkToFit（不換行、自動縮字到欄寬內完整一句）。
 const ExcelJS = require('exceljs');
 
 const ROWS_PER_PAGE = 20; // 每頁選手數（列印分頁）
 
-// 每張 sheet 的欄位配置：成人＝單一簽名欄；未成年＝選手/法定代理人兩簽名欄
+// 每張 sheet 的欄位配置：成人＝單一簽名欄；未成年＝加組別欄＋選手/法定代理人兩簽名欄。
+// rowValues 與 headers 一一對應（簽名欄給 null、由圖片嵌入），加減欄位改這裡即可。
 function layoutFor(isMinor) {
   if (isMinor) return {
-    cols: 9,
-    headers: ['序號', '背號', '姓名', '性別', '身份證字號', '民國生日', '選手簽名', '法定代理人簽名', '發票金額'],
-    widths: [6, 8, 12, 6, 14, 11, 16, 16, 10],
-    memberSigCol: 7, guardianSigCol: 8, amountCol: 9,
+    cols: 10,
+    headers: ['序號', '背號', '姓名', '組別', '性別', '身份證字號', '民國生日', '選手簽名', '法定代理人簽名', '發票金額'],
+    widths: [6, 8, 12, 11, 6, 14, 11, 15, 15, 10],
+    memberSigCol: 8, guardianSigCol: 9,
+    rowValues: (r) => [r.no, r.bib, r.name, r.divisionName, r.gender, r.idNumber, r.birthdayRoc, null, null, r.invoiceAmount],
   };
   return {
     cols: 8,
     headers: ['序號', '背號', '姓名', '性別', '身份證字號', '民國生日', '簽名', '發票金額'],
     widths: [6, 8, 12, 6, 14, 11, 20, 10],
-    memberSigCol: 7, guardianSigCol: null, amountCol: 8,
+    memberSigCol: 7, guardianSigCol: null,
+    rowValues: (r) => [r.no, r.bib, r.name, r.gender, r.idNumber, r.birthdayRoc, null, r.invoiceAmount],
   };
 }
 
@@ -126,13 +129,7 @@ function writeSheet(workbook, sheetName, title, insurance, rows, isMinor) {
   rows.forEach((r, i) => {
     const rowIdx = headerRow + 1 + i;
     ws.getRow(rowIdx).height = 46;
-    ws.getCell(rowIdx, 1).value = r.no;
-    ws.getCell(rowIdx, 2).value = r.bib;
-    ws.getCell(rowIdx, 3).value = r.name;
-    ws.getCell(rowIdx, 4).value = r.gender;
-    ws.getCell(rowIdx, 5).value = r.idNumber;
-    ws.getCell(rowIdx, 6).value = r.birthdayRoc;
-    ws.getCell(rowIdx, L.amountCol).value = r.invoiceAmount;
+    L.rowValues(r).forEach((v, ci) => { if (v != null) ws.getCell(rowIdx, ci + 1).value = v; });
     for (let c = 1; c <= L.cols; c++) {
       ws.getCell(rowIdx, c).alignment = { vertical: 'middle', horizontal: 'center' };
     }

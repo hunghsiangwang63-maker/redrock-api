@@ -2985,6 +2985,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E**：API 建測試贊助商（期間=今天）→ comp 首頁實機出現 logo 卡 → DELETE → 首頁消失、清單 0 筆；測試資料清潔。
 - ✅ **續（同日 3.388.0-sponsor-global-period-order，commit api `29d5657`/web `d88ea27`/comp `b11eb7d`）**：依使用者要求改版——①顯示期間改**全域統一**（存 `sponsors/_settings` 保留 doc，非逐 logo；未設定期間＝一律不顯示）②排序加**拖曳整列＋順序數字**（`sortOrder` 欄位、`PUT /sponsors/reorder` 整批寫回；**⚠ `/sponsors/period`、`/sponsors/reorder` 必須註冊在 `PUT /sponsors/:sid` 之前**否則被參數吃掉）③圖檔格式/大小建議直接放在上傳 Modal（透明PNG橫式最佳/HEIC不支援/自動縮600px/首頁顯示44×130）。**到期行為＝只是不顯示、logo 資料保留在系統**（下場比賽改期間即可重用；要移除需手動刪）。E2E：全域期間設定/兩測試logo/reorder對調/清理全過；**使用者已自行上傳真實 logo「kawas」**（保留、sort 0）。
 
+## 目前進度（2026-08-28 續）— 贊助商Logo補強（本期間不顯示/視窗內訊息）＋移除計分系統「新增比賽」
+> 三件連續（承贊助商 Logo 功能）。commit：api `2c00a3c`（`3.389.0-sponsor-per-logo-hidden`）、web `ef62cdf`+`688eeff`、comp `2625c6a`+`e5a76fd`+`b74da32`。
+- ✅ **逐 logo「本期間不顯示」開關**：sponsor doc 加 `hidden` 布林（`PUT /sponsors/:sid` 支援）；首頁過濾 `hidden===true`；員工端清單每列勾選框（勾了 logo 淡化）——資料保留、只是這期不上架。
+- 🐞 **修：操作訊息被 modal 蓋住**（使用者實測回報「贊助商名稱不可空白出現在後面」）：訊息同步顯示在贊助商視窗內。**該錯誤本身的根因＝API commit 又因 bash cwd 重置漏推**（本 session 第三次踩同一雷：compound command 裡 `cd 別的repo && ...` 後下一段 `git add` 相對路徑就錯位）——**教訓：多 repo 連續部署時每個 repo 的 git 操作都要顯式 `cd` 該 repo 開頭**。使用者問「是否加儲存鈕」→ 答不用（根因是部署時差非即存設計），維持即存＋視窗內回饋。
+- ✅ **移除計分系統「+ 新增比賽」**（回報「從staff按進入計分系統還是會看到新增比賽」）：政策＝比賽一律從員工端「賽事管理→新增賽事→對接」建立，計分系統側手動新增只會做出無報名關聯的孤兒賽事 → 按鈕/modal/`showNewCompModal`/`createComp` 全移除，卡片「複製當範本」保留。
+- 🚨 **險釀事故（已修，`b74da32`）**：移除 modal 後 **Init 區塊還有一行 `getElementById('new-comp-date').value=...`**——元素已刪 → null.value 拋錯 → **Init 中斷、`loadCompList()`/`trySsoLogin()` 不執行＝首頁整個掛掉**，且已部署出去約 2 分鐘才靠殘留引用 grep 抓到。**教訓：redrock-comp 單檔 HTML 移除任何 DOM 元素後，必須全檔 grep 該元素 id 的 JS 引用（尤其檔尾 Init 區塊）**——`node --check` 只驗語法、抓不到 runtime null 引用；部署後務必實機開頁看 console。
+- 📌 使用者已上傳 7 個真實贊助商 logo（kawas/城市綠洲/大地花生/心流/PASSION/M2C 等）；**全域顯示期間仍是測試設的 8/28~8/28，已兩度提醒使用者改成涵蓋比賽日**。
+
 ## 📋 產出（2026-08-27）：「比賽報到與成績查詢」A4 指引（通用版，四輪迭代定版；無程式異動）
 > 需求：一頁 A4 含會員系統 QR＋登入後取得比賽報到 QR 的步驟＋計分系統 QR（查成績）。經四輪迭代定版：初版（含賽名/電話）→ 通用化（拿掉比賽名稱/場館電話，色系同會員系統 `#8B1A1A`+`#F7F3F3`，日後成人/兒童/新竹/士林各場比賽通用）→ 標題放大 2/3 頁寬＋內文放大＋左右底色區等高 → 「點選該場賽事名稱」＋補第 5 點賽程查詢（主辦單位得依現場實際狀況調整賽程）。**定版已寄 chihchiu_chu@yahoo.com.tw**（新竹館 Gmail，主旨標「定版」；共寄 4 封、以最後一封為準）。
 - **製作方式（可重現）**：pdfmake＋`src/assets/fonts/NotoSansTC-Regular.ttf`＋`qrcode` 套件（皆 redrock-api 現成依賴），腳本產 PDF（scratchpad throwaway、未留存——要改版直接重寫，版面規格見此段）。左框 QR＝**深連結** `app.redrocktaiwan.com/member/competitions?tab=my`（登入 redirect 保留 query、登入後直達「我的比賽報名」，已核對 `App.jsx MemberRoute` 的 `loc.pathname+loc.search`）；右框 QR＝`comp.redrocktaiwan.com`（免登入）。**左右等高技法**：pdfmake 同一 table 同一列的儲存格自動等高——兩框做成同列兩格（中間夾空白 gap 欄）即拉齊。

@@ -2998,6 +2998,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 > 兩件一起提出：「比賽清單賽事排序用比賽日期排。會員端『比賽報名』頁面可以也以同樣的logo顯示嗎?」——第一件完成；第二件做到一半使用者喊停「會員端不用加贊助商logo」，已全數還原、零殘留。
 - ✅ **比賽清單排序改「比賽日期」新→舊**（redrock-comp `24f51f9`，已 deploy＋線上 md5 一致）：排序鍵改**賽名開頭 YYYYMMDD 為主**（最明確的比賽日）、`createdAt` 為輔——關鍵背景：對接建立的賽事 `createdAt` 本就＝`competition.eventDate`（`competitionSyncService` 既有寫法），兩鍵殊途同歸，賽名帶日期者以賽名為準更直觀。
 - ⛔ **會員端贊助 Logo 已還原**（中途收到指示喊停）：做到一半的三處全退——①`MemberCompetitionsPage.jsx` 贊助列（已改好+build，**未部署**、git checkout 還原）②後端 `GET /competitions/sponsors/public` 公開端點+版本號 `3.390.0`（未 commit、git checkout 還原——無消費者留著是死碼）③會員站 hosting 從頭到尾沒部署過。三 repo `git status` 皆乾淨。贊助 Logo 現況＝**只顯示在計分系統首頁**（比賽清單上方）。
+- ✅ **贊助商 Logo 按鈕對兼職值班隱藏（對齊後端）**（web `f6973ff`，已 deploy）：查證「正職都看得到嗎」→ 正職個人/值班皆可用（`competitions.manage` 矩陣 `full_time:true`；被逐人覆寫關掉「比賽賽事管理」者除外）；**兼職值班原本看得到按鈕但後端 403**（`competitions.manage` 不在 COUNTER_PERMS、`part_time:false`——8/27 名單那顆雷的殘餘）。拍板**維持兼職不可用**、前端加 `canSponsor`（依實際角色 `operator?.role||staff?.role` 判斷）只藏按鈕；順手更正檔內 2026-08-24 那段「competitions.manage ∈ COUNTER_PERMS」的錯誤註解。
 
 ## 📋 產出（2026-08-27）：「比賽報到與成績查詢」A4 指引（通用版，四輪迭代定版；無程式異動）
 > 需求：一頁 A4 含會員系統 QR＋登入後取得比賽報到 QR 的步驟＋計分系統 QR（查成績）。經四輪迭代定版：初版（含賽名/電話）→ 通用化（拿掉比賽名稱/場館電話，色系同會員系統 `#8B1A1A`+`#F7F3F3`，日後成人/兒童/新竹/士林各場比賽通用）→ 標題放大 2/3 頁寬＋內文放大＋左右底色區等高 → 「點選該場賽事名稱」＋補第 5 點賽程查詢（主辦單位得依現場實際狀況調整賽程）。**定版已寄 chihchiu_chu@yahoo.com.tw**（新竹館 Gmail，主旨標「定版」；共寄 4 封、以最後一封為準）。

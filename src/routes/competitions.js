@@ -139,8 +139,16 @@ router.put('/sponsors/:sid', authenticate, checkPermission('competitions.manage'
   try {
     const cdb = getCompDbOr503(res); if (!cdb) return;
     if (req.params.sid === '_settings') return res.status(400).json({ error: 'RESERVED_ID', message: '保留文件不可經此端點修改' });
-    if (req.body.name == null || !String(req.body.name).trim()) return res.status(400).json({ error: 'MISSING_NAME', message: '贊助商名稱不可空白' });
-    await cdb.collection('sponsors').doc(req.params.sid).update({ name: String(req.body.name).trim(), updatedAt: new Date().toISOString() });
+    const updates = {};
+    if (req.body.name != null) {
+      if (!String(req.body.name).trim()) return res.status(400).json({ error: 'MISSING_NAME', message: '贊助商名稱不可空白' });
+      updates.name = String(req.body.name).trim();
+    }
+    // 本期間不顯示：保留 logo 資料、只是這期不上架（首頁過濾 hidden===true）
+    if (req.body.hidden != null) updates.hidden = !!req.body.hidden;
+    if (!Object.keys(updates).length) return res.status(400).json({ error: 'NO_UPDATES', message: '無可更新欄位' });
+    updates.updatedAt = new Date().toISOString();
+    await cdb.collection('sponsors').doc(req.params.sid).update(updates);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

@@ -67,28 +67,68 @@ const getCompDbOr503 = (res) => {
   }
 };
 
+// 顯示期間為「全域統一」設定（存 sponsors/_settings 保留 doc，非逐 logo）；排序依 sortOrder（拖曳/數字調整）
 router.get('/sponsors', authenticate, checkPermission('competitions.manage'), async (req, res) => {
   try {
     const cdb = getCompDbOr503(res); if (!cdb) return;
     const snap = await cdb.collection('sponsors').get();
-    const sponsors = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      .sort((a, b) => ((a.createdAt || '') < (b.createdAt || '') ? -1 : 1));
-    res.json({ sponsors });
+    let period = null;
+    const sponsors = [];
+    snap.docs.forEach(d => {
+      if (d.id === '_settings') { period = d.data(); return; }
+      sponsors.push({ id: d.id, ...d.data() });
+    });
+    sponsors.sort((a, b) => {
+      const sa = a.sortOrder != null ? a.sortOrder : 99999;
+      const sb = b.sortOrder != null ? b.sortOrder : 99999;
+      if (sa !== sb) return sa - sb;
+      return (a.createdAt || '') < (b.createdAt || '') ? -1 : 1;
+    });
+    res.json({ sponsors, period: period ? { startDate: period.startDate || '', endDate: period.endDate || '' } : null });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// 全域顯示期間（⚠ 必須註冊在 PUT /sponsors/:sid 之前，否則 'period' 會被 :sid 吃掉）
+router.put('/sponsors/period', authenticate, checkPermission('competitions.manage'), async (req, res) => {
+  try {
+    const cdb = getCompDbOr503(res); if (!cdb) return;
+    const { startDate, endDate } = req.body;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate || '') || !/^\d{4}-\d{2}-\d{2}$/.test(endDate || ''))
+      return res.status(400).json({ error: 'INVALID_PERIOD', message: '請設定顯示期間（開始／結束日期）' });
+    if (endDate < startDate) return res.status(400).json({ error: 'INVALID_PERIOD', message: '結束日期不可早於開始日期' });
+    await cdb.collection('sponsors').doc('_settings').set({
+      startDate, endDate, updatedAt: new Date().toISOString(), updatedBy: req.staff?.name || req.staff?.id || '',
+    }, { merge: true });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// 排序（拖曳/順序數字調整後整批寫回；⚠ 同樣必須在 PUT /sponsors/:sid 之前）
+router.put('/sponsors/reorder', authenticate, checkPermission('competitions.manage'), async (req, res) => {
+  try {
+    const cdb = getCompDbOr503(res); if (!cdb) return;
+    const ids = req.body.ids;
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'INVALID_IDS', message: '缺少排序清單' });
+    const batch = cdb.batch();
+    ids.forEach((id, i) => { if (id !== '_settings') batch.update(cdb.collection('sponsors').doc(String(id)), { sortOrder: i }); });
+    await batch.commit();
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
 router.post('/sponsors', authenticate, checkPermission('competitions.manage'), async (req, res) => {
   try {
     const cdb = getCompDbOr503(res); if (!cdb) return;
-    const { name, logo, startDate, endDate } = req.body;
+    const { name, logo } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'MISSING_NAME', message: '請填寫贊助商名稱' });
     if (!/^data:image\/(png|jpeg|jpg|webp);base64,/.test(logo || '')) return res.status(400).json({ error: 'INVALID_LOGO', message: 'Logo 需為圖片檔' });
     if (logo.length > 700 * 1024) return res.status(400).json({ error: 'LOGO_TOO_LARGE', message: 'Logo 縮圖後仍過大，請改用較小的圖檔' });
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate || '') || !/^\d{4}-\d{2}-\d{2}$/.test(endDate || ''))
-      return res.status(400).json({ error: 'INVALID_PERIOD', message: '請設定顯示期間（開始／結束日期）' });
-    if (endDate < startDate) return res.status(400).json({ error: 'INVALID_PERIOD', message: '結束日期不可早於開始日期' });
+    // 新增的排在最後（sortOrder = 現有最大值 +1）
+    const snap = await cdb.collection('sponsors').get();
+    let maxSort = -1;
+    snap.docs.forEach(d => { if (d.id !== '_settings' && d.data().sortOrder != null) maxSort = Math.max(maxSort, d.data().sortOrder); });
     const ref = await cdb.collection('sponsors').add({
-      name: String(name).trim(), logo, startDate, endDate,
+      name: String(name).trim(), logo, sortOrder: maxSort + 1,
       createdAt: new Date().toISOString(), createdBy: req.staff?.name || req.staff?.id || '',
     });
     res.status(201).json({ success: true, id: ref.id });
@@ -98,21 +138,9 @@ router.post('/sponsors', authenticate, checkPermission('competitions.manage'), a
 router.put('/sponsors/:sid', authenticate, checkPermission('competitions.manage'), async (req, res) => {
   try {
     const cdb = getCompDbOr503(res); if (!cdb) return;
-    const updates = {};
-    if (req.body.name != null) {
-      if (!String(req.body.name).trim()) return res.status(400).json({ error: 'MISSING_NAME', message: '贊助商名稱不可空白' });
-      updates.name = String(req.body.name).trim();
-    }
-    if (req.body.startDate != null || req.body.endDate != null) {
-      const sd = req.body.startDate, ed = req.body.endDate;
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(sd || '') || !/^\d{4}-\d{2}-\d{2}$/.test(ed || ''))
-        return res.status(400).json({ error: 'INVALID_PERIOD', message: '請設定顯示期間（開始／結束日期）' });
-      if (ed < sd) return res.status(400).json({ error: 'INVALID_PERIOD', message: '結束日期不可早於開始日期' });
-      updates.startDate = sd; updates.endDate = ed;
-    }
-    if (!Object.keys(updates).length) return res.status(400).json({ error: 'NO_UPDATES', message: '無可更新欄位' });
-    updates.updatedAt = new Date().toISOString();
-    await cdb.collection('sponsors').doc(req.params.sid).update(updates);
+    if (req.params.sid === '_settings') return res.status(400).json({ error: 'RESERVED_ID', message: '保留文件不可經此端點修改' });
+    if (req.body.name == null || !String(req.body.name).trim()) return res.status(400).json({ error: 'MISSING_NAME', message: '贊助商名稱不可空白' });
+    await cdb.collection('sponsors').doc(req.params.sid).update({ name: String(req.body.name).trim(), updatedAt: new Date().toISOString() });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

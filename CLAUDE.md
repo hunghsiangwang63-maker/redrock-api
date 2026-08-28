@@ -3012,7 +3012,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **更新包**：`git archive HEAD local-print-agent`（排除 win7/，新竹用現代 Node 版）→ `local-print-agent-update-20260828.zip`（40KB、15 檔）；一併帶到 8/15 的 PNA 預檢 header 修正（士林「無法連線」同顆雷的預防）＋ EADDRINUSE 錯誤處理＋行距修正。**免重新 npm install**（無新增套件）。
 - ✅ **已寄 chihchiu_chu@yahoo.com.tw**（Outlook wanghh63@hotmail.com，寄件備份確認 8/28 11:12 含附件）＋另附在對話中交付。安裝＝解壓覆蓋（**node_modules 與 .env 保留不動**）→ 重啟 RedRockPrintAgent 服務（services.msc）或 npm start 視窗 → 驗證現金付款「錢箱在紙張開始印之前先彈開」即成功。
 - ⚠️ **踩雷：Gmail 封鎖內含 .js 檔的 zip**（「附加您的檔案時發生錯誤」，redrocktaiwan.hc@gmail.com 實測）——與 8/15 士林走 Outlook 同因；**之後寄 local-print-agent 這類含 .js 的更新包一律直接用 Outlook**，別再試 Gmail（Outlook 對 zip 內 .js 放行、已兩次實證）。Gmail 失敗草稿已捨棄。
-- 📌 **待驗證**：現場照步驟安裝後回報行為（開櫃先於列印）；未回報前新竹仍是舊版行為。
+- ✅ **現場已完成安裝並確認 OK（2026-08-28）**：使用者以「覆蓋檔案→重開機」方式更新（服務開機自啟、免手動權限操作；Node 不鎖程式檔、跑著也能直接覆蓋），新竹現在與程式庫同步＝先開錢箱再印發票。安裝位置查法備忘：services.msc → RedRockPrintAgent → 內容「可執行檔所在路徑」→ `daemon` 上一層即 agent 資料夾；node_modules 千餘檔案為正常依賴數量（本機實測 1,002 檔/90 套件）。
 
 ## 目前進度（2026-08-28 續2）— 比賽清單改依「比賽日期」排序；會員端贊助 Logo 中途喊停（已全數還原）
 > 兩件一起提出：「比賽清單賽事排序用比賽日期排。會員端『比賽報名』頁面可以也以同樣的logo顯示嗎?」——第一件完成；第二件做到一半使用者喊停「會員端不用加贊助商logo」，已全數還原、零殘留。

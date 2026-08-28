@@ -2983,6 +2983,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **計分系統端**：`firestore.rules` 加 `sponsors` **公開唯讀、client 不可寫**（只有 redrock-api Admin SDK 能寫，沿用 8/15 安全模型）；首頁 `loadCompList` 併載 `loadSponsors`——比賽清單下方「— 賽事贊助 —」logo 卡列，**只在 `startDate<=今天<=endDate` 顯示、到期自動下架**，期間外/無資料整個區塊不出現。
 - **員工端**（`CompetitionsPage`）：賽事管理標題列加「🤝 贊助商 Logo」（canManage 含值班/正職）→ Modal：新增（名稱/起訖日/選檔即時縮圖預覽）＋清單（顯示中/未在期間徽章、就地改期間、刪除）。
 - **E2E**：API 建測試贊助商（期間=今天）→ comp 首頁實機出現 logo 卡 → DELETE → 首頁消失、清單 0 筆；測試資料清潔。
+- ✅ **續（同日 3.388.0-sponsor-global-period-order，commit api `29d5657`/web `d88ea27`/comp `b11eb7d`）**：依使用者要求改版——①顯示期間改**全域統一**（存 `sponsors/_settings` 保留 doc，非逐 logo；未設定期間＝一律不顯示）②排序加**拖曳整列＋順序數字**（`sortOrder` 欄位、`PUT /sponsors/reorder` 整批寫回；**⚠ `/sponsors/period`、`/sponsors/reorder` 必須註冊在 `PUT /sponsors/:sid` 之前**否則被參數吃掉）③圖檔格式/大小建議直接放在上傳 Modal（透明PNG橫式最佳/HEIC不支援/自動縮600px/首頁顯示44×130）。**到期行為＝只是不顯示、logo 資料保留在系統**（下場比賽改期間即可重用；要移除需手動刪）。E2E：全域期間設定/兩測試logo/reorder對調/清理全過；**使用者已自行上傳真實 logo「kawas」**（保留、sort 0）。
 
 ## 📋 產出（2026-08-27）：「比賽報到與成績查詢」A4 指引（通用版，四輪迭代定版；無程式異動）
 > 需求：一頁 A4 含會員系統 QR＋登入後取得比賽報到 QR 的步驟＋計分系統 QR（查成績）。經四輪迭代定版：初版（含賽名/電話）→ 通用化（拿掉比賽名稱/場館電話，色系同會員系統 `#8B1A1A`+`#F7F3F3`，日後成人/兒童/新竹/士林各場比賽通用）→ 標題放大 2/3 頁寬＋內文放大＋左右底色區等高 → 「點選該場賽事名稱」＋補第 5 點賽程查詢（主辦單位得依現場實際狀況調整賽程）。**定版已寄 chihchiu_chu@yahoo.com.tw**（新竹館 Gmail，主旨標「定版」；共寄 4 封、以最後一封為準）。

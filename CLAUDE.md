@@ -3036,7 +3036,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **使用者接著指示「那兩筆改標註為 linepay 付款、順便更新結帳內容」**——實際是 LinePay 收款、非現金。修正 8 份文件（皆附 `correctionNote`）：`transferRecords`×2／`courseEnrollments` 主筆×2／`courseRegistrations` header×2／`transactions`×2（7,700、認列 10/31）全改 `linepay`；兩筆皆未開過發票、發票側免處理。
 - ✅ **今日（8/27）新竹 draft 結帳移除那兩筆「+現金補入 7,700」**（加減項 2→0）——LinePay 不進抽屜、補入已不成立，留著會讓預期現金虛高 15,400 產生假差異。
 - 📌 **對帳備忘**：LinePay 商家後台 8/26 會有這兩筆 7,700；系統端為課程預收款、認列日 10/31 才進營收，日結帳付款統計不會在 8/26/8/27 出現——月結對不到日結帳屬正常。同型案例參照 2026-08-16 鍾承江（checkIns 混付）與同日陳以恩/陳以喬（底層 paymentMethod 誤記）處理模式。
-- ✅ **同型追加（2026-08-28）：林柏亘 青少年進階班周六A班 7,700 cash→linepay**——這筆尚在**待收款 pending**（與洪家兄弟已確認的情況不同），只改四份文件付款方式標註（header/主報名/transferRecords/transactions，皆附 correctionNote）、不動狀態；LinePay 到帳後照常走待收款確認，確認時因非現金不會寫「+現金補入」。
+- ✅ **同型追加（2026-08-28）：林柏亘 青少年進階班周六A班 7,700 cash→linepay**——這筆尚在**待收款 pending**（與洪家兄弟已確認的情況不同），只改四份文件付款方式標註（header/主報名/transferRecords/transactions，皆附 correctionNote）、不動狀態；同日稍後已依指示走正式 `PUT /transfers/:id/confirm` **登記已收款**（transferRecord confirmed/7700、主報名 paymentConfirmed、header confirmed 皆驗證，且確認無誤寫現金補入加減項）——此筆全案結清。
 
 ## 目前進度（2026-08-27 續12）— 計分系統：成績表「開始滾動」改進入比賽即顯示（原僅純觀眾可見）
 > 回報「成績表頁手機才看得到『開始滾動』、電腦版看不到」。查證 `redrock-comp`（動手前照慣例先比對本機=線上 md5）：**與裝置無關**（全檔 0 個 media query）——按鈕條件原為「純觀眾」（`!adminUnlocked && !currentJudge`），手機是匿名觀看所以看得到、電腦登入了管理員就被藏。commit（redrock-comp）`e86c6b2`，已 deploy＋線上 md5 比對一致＋瀏覽器實測（按鈕出現→點擊開始自動捲動→停止，console 零錯誤）。

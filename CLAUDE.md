@@ -2994,6 +2994,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **續2（comp `87612d1`）**：①**贊助列移到比賽清單上方**（標題下方）——賽事多時不再被推到頁面深處，一進頁即可見 ②**清單排序改最新在最上**——順修既有缺陷：對接建立的賽事常無 `createdAt`、原排序會沉底（20260830 就因此排在舊賽事後面），改 createdAt 缺漏時用賽名開頭 YYYYMMDD 補當排序鍵。實機驗證兩者到位。③排列改**逐排均分**（comp `02f5e30`，使用者拍板）：以卡片最大寬估一排容量→算排數→均分（12個/容10→**6+6**、15個→8+7、7個@手機容2→2+2+2+1），視窗縮放 debounce 200ms 重排（`window.onresize` 覆蓋式綁定，遵此檔慣例）；單元驗證＋實機 JS 模擬窄螢幕（7個@700px→4+3）皆過。
 - 📌 使用者已上傳 7 個真實贊助商 logo（kawas/城市綠洲/大地花生/心流/PASSION/M2C 等）；**全域顯示期間仍是測試設的 8/28~8/28，已兩度提醒使用者改成涵蓋比賽日**。
 
+## 目前進度（2026-08-28 續2）— 比賽清單改依「比賽日期」排序；會員端贊助 Logo 中途喊停（已全數還原）
+> 兩件一起提出：「比賽清單賽事排序用比賽日期排。會員端『比賽報名』頁面可以也以同樣的logo顯示嗎?」——第一件完成；第二件做到一半使用者喊停「會員端不用加贊助商logo」，已全數還原、零殘留。
+- ✅ **比賽清單排序改「比賽日期」新→舊**（redrock-comp `24f51f9`，已 deploy＋線上 md5 一致）：排序鍵改**賽名開頭 YYYYMMDD 為主**（最明確的比賽日）、`createdAt` 為輔——關鍵背景：對接建立的賽事 `createdAt` 本就＝`competition.eventDate`（`competitionSyncService` 既有寫法），兩鍵殊途同歸，賽名帶日期者以賽名為準更直觀。
+- ⛔ **會員端贊助 Logo 已還原**（中途收到指示喊停）：做到一半的三處全退——①`MemberCompetitionsPage.jsx` 贊助列（已改好+build，**未部署**、git checkout 還原）②後端 `GET /competitions/sponsors/public` 公開端點+版本號 `3.390.0`（未 commit、git checkout 還原——無消費者留著是死碼）③會員站 hosting 從頭到尾沒部署過。三 repo `git status` 皆乾淨。贊助 Logo 現況＝**只顯示在計分系統首頁**（比賽清單上方）。
+
 ## 📋 產出（2026-08-27）：「比賽報到與成績查詢」A4 指引（通用版，四輪迭代定版；無程式異動）
 > 需求：一頁 A4 含會員系統 QR＋登入後取得比賽報到 QR 的步驟＋計分系統 QR（查成績）。經四輪迭代定版：初版（含賽名/電話）→ 通用化（拿掉比賽名稱/場館電話，色系同會員系統 `#8B1A1A`+`#F7F3F3`，日後成人/兒童/新竹/士林各場比賽通用）→ 標題放大 2/3 頁寬＋內文放大＋左右底色區等高 → 「點選該場賽事名稱」＋補第 5 點賽程查詢（主辦單位得依現場實際狀況調整賽程）。**定版已寄 chihchiu_chu@yahoo.com.tw**（新竹館 Gmail，主旨標「定版」；共寄 4 封、以最後一封為準）。
 - **製作方式（可重現）**：pdfmake＋`src/assets/fonts/NotoSansTC-Regular.ttf`＋`qrcode` 套件（皆 redrock-api 現成依賴），腳本產 PDF（scratchpad throwaway、未留存——要改版直接重寫，版面規格見此段）。左框 QR＝**深連結** `app.redrocktaiwan.com/member/competitions?tab=my`（登入 redirect 保留 query、登入後直達「我的比賽報名」，已核對 `App.jsx MemberRoute` 的 `loc.pathname+loc.search`）；右框 QR＝`comp.redrocktaiwan.com`（免登入）。**左右等高技法**：pdfmake 同一 table 同一列的儲存格自動等高——兩框做成同列兩格（中間夾空白 gap 欄）即拉齊。

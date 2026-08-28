@@ -2994,6 +2994,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **續2（comp `87612d1`）**：①**贊助列移到比賽清單上方**（標題下方）——賽事多時不再被推到頁面深處，一進頁即可見 ②**清單排序改最新在最上**——順修既有缺陷：對接建立的賽事常無 `createdAt`、原排序會沉底（20260830 就因此排在舊賽事後面），改 createdAt 缺漏時用賽名開頭 YYYYMMDD 補當排序鍵。實機驗證兩者到位。③排列改**逐排均分**（comp `02f5e30`，使用者拍板）：以卡片最大寬估一排容量→算排數→均分（12個/容10→**6+6**、15個→8+7、7個@手機容2→2+2+2+1），視窗縮放 debounce 200ms 重排（`window.onresize` 覆蓋式綁定，遵此檔慣例）；單元驗證＋實機 JS 模擬窄螢幕（7個@700px→4+3）皆過。
 - 📌 使用者已上傳 7 個真實贊助商 logo（kawas/城市綠洲/大地花生/心流/PASSION/M2C 等）；**全域顯示期間仍是測試設的 8/28~8/28，已兩度提醒使用者改成涵蓋比賽日**。
 
+## 目前進度（2026-08-28 續3）— 修：計分系統裁判「手動輸入密碼」從未能登入（存明文、比對雜湊）
+> 回報「2026 系統測試的裁判無法登入（aaaa@gmail.com／aaaa 已設好）」。用公開讀（匿名 token + Firestore REST）直接看該賽事 `judgeAccounts`——**6 個帳號的 password 全是明文**，而登入（前端本地預檢＋後端 `compAuthService` judge 分支）比對的都是 SHA-256 雜湊 → 永遠「Email 或密碼錯誤」。redrock-comp commit `2b4b179`（已 deploy＋md5 一致）；資料修復＋端到端驗證通過。
+- 🐞 **根因**：裁判帳號三條建立路徑——批次匯入名冊（`importJudgeRoster`）與名冊挑選（`selectJudgeFromRoster`）都有 `hashPw()`，**唯獨「設定頁逐格手動輸入密碼」（`setJudgeField`）存明文、從頭就漏了雜湊**——手動打密碼的裁判帳號從此功能存在以來就從未登入成功過。修：`setJudgeField` 對 `field==='password'` 改先 `hashPw(value)` 再存（清空密碼直接存空字串）。
+- ✅ **資料修復（6 帳號就地雜湊，密碼不變照用）**：走正式管道拿寫入權限（`/comp-auth/login` super_admin → `signInWithCustomToken` REST 換 idToken → Firestore REST PATCH，fieldPath 數字開頭的 map key 要反引號 ``judgeAccounts.`0_Q_j0`.password``）。⚠️ **第一次修錯：雜湊順序是「鹽在前」`sha256(PW_SALT + password)`**（前端 `hashPw()` 與後端 `compAuthService` 皆同），我先用了密碼在前 → 驗證仍 401 才發現——**動 hashPw 相關資料一律先讀兩邊實作核對拼接順序，別憑印象**。
+- ✅ **E2E（打正式 `/comp-auth/login` judge 分支）**：aaaa/正確密碼 → 200 token；錯密碼 → 401；eeee/eee、ffff/ffff → 200。前端本地預檢與伺服器同一份雜湊，兩層皆通。
+- 📌 **附帶**：密碼輸入格重新渲染後會顯示 64 碼雜湊（與匯入名冊的裁判既有行為一致，非壞掉）；裁判要登入仍需該賽事「對外顯示」勾起（裁判登入前是匿名觀眾、清單看不到隱藏賽事——見同日稍早查證）。
+
 ## 📋 交付（2026-08-28）：新竹 Dell 發票代理更新包（先開錢箱再印發票）——寄出待現場安裝
 > 回報「新竹收銀機（接Dell筆電）還是印完發票才開錢箱，要怎麼改成先開錢箱？」查證：**程式碼早在 8/14 就改好了**（commit `3b8639f`，`/print` 的 openDrawer 提早到列印內容之前送出）——Dell 那台跑的是 8/14 前的舊版檔案（local-print-agent 是櫃檯本機服務，git 改了不會自動同步，要人工換檔）。無程式異動，純打包交付。
 - ✅ **更新包**：`git archive HEAD local-print-agent`（排除 win7/，新竹用現代 Node 版）→ `local-print-agent-update-20260828.zip`（40KB、15 檔）；一併帶到 8/15 的 PNA 預檢 header 修正（士林「無法連線」同顆雷的預防）＋ EADDRINUSE 錯誤處理＋行距修正。**免重新 npm install**（無新增套件）。

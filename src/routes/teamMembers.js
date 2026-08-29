@@ -260,6 +260,19 @@ router.get('/members/download', authenticate, requireManager, async (req, res) =
     const rows = snap.docs.map(d => d.data())
       .sort((a, b) => (a.createdAt?._seconds||0) - (b.createdAt?._seconds||0));
 
+    // 第一張表＝基本名冊（2026-08-29 指定格式：8 欄、此順序、依申請日期排序）
+    const roster = rows.map((r, i) => ({
+      '序號': i + 1,
+      '姓名': r.memberName || '',
+      '性別': r.memberGender || '',
+      '生日': r.memberBirthday || '',
+      '身分證字號': r.idNumber || '',
+      '手機': r.memberPhone || '',
+      'Email': r.memberEmail || '',
+      '地址': r.address || '',
+    }));
+
+    // 第二張表＝完整資料（原有全部欄位保留，供繳費/隊服/狀態等營運查核）
     const data = rows.map((r, i) => ({
       '序號': i + 1,
       '姓名': r.memberName || '',
@@ -288,9 +301,10 @@ router.get('/members/download', authenticate, requireManager, async (req, res) =
       '申請時間': r.createdAt?._seconds ? new Date(r.createdAt._seconds * 1000).toLocaleString('zh-TW') : '',
     }));
 
-    const ws = require('../utils/xlsxSafe').sanitizeSheet(XLSX.utils.json_to_sheet(data));
+    const { sanitizeSheet } = require('../utils/xlsxSafe');
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, `${year}年度`);
+    XLSX.utils.book_append_sheet(wb, sanitizeSheet(XLSX.utils.json_to_sheet(roster)), `${year}年度名冊`);
+    XLSX.utils.book_append_sheet(wb, sanitizeSheet(XLSX.utils.json_to_sheet(data)), '完整資料');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

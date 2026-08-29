@@ -104,6 +104,15 @@ function taiwanMonthStart() {
 
 const ascentDate = (a) => a.recordedAt && (a.recordedAt.toDate ? a.recordedAt.toDate() : new Date(a.recordedAt));
 
+// 未下架路線 id 集合——積分/排名只計 active 路線（2026-08-29 政策：下架＝換掉的線不再計分；
+// 完攀記錄本身保留，重新上架即恢復計分）。路線集合小（數十~數百條），全掃投影可接受。
+async function getActiveRouteIdSet(db) {
+  const snap = await db.collection('climbingRoutes').select('status').get();
+  const set = new Set();
+  snap.docs.forEach(d => { if (d.data().status !== 'archived') set.add(d.id); });
+  return set;
+}
+
 // ── GET /climbing-routes/scoring-config：計分規則（供前端顯示各層級分數）──
 router.get('/scoring-config', authenticateAny, async (req, res) => {
   try {
@@ -142,17 +151,23 @@ router.put('/scoring-config', authenticate, requireManager, async (req, res) => 
 });
 
 // ── GET /climbing-routes/rankings?gymId=&period=month|all：排名（top 50＋呼叫者本人名次）──
+// gymId 不帶＝全館合併。只計「未下架路線」的成績；不參加排名（routeRankingOptOut）者不上榜、
+// 本人仍可看到自己的積分（myStats）；顯示名＝自訂暱稱（routeNickname）優先、否則本名快照。
 router.get('/rankings', authenticateAny, async (req, res) => {
   try {
     const db = getDb();
     const { gymId, period } = req.query;
-    const snap = await db.collection('routeAscents')
-      .select('memberId', 'memberName', 'gymId', 'points', 'recordedAt')
-      .get();
+    const [snap, activeRoutes] = await Promise.all([
+      db.collection('routeAscents')
+        .select('routeId', 'memberId', 'memberName', 'gymId', 'points', 'recordedAt')
+        .get(),
+      getActiveRouteIdSet(db),
+    ]);
     const monthStart = period === 'month' ? taiwanMonthStart() : null;
     const byMember = new Map();
     snap.docs.forEach(d => {
       const a = d.data();
+      if (!activeRoutes.has(a.routeId)) return; // 下架/已刪路線不計分
       if (gymId && a.gymId !== gymId) return;
       if (monthStart) {
         const at = ascentDate(a);
@@ -164,11 +179,56 @@ router.get('/rankings', authenticateAny, async (req, res) => {
       if (a.memberName) cur.memberName = a.memberName; // 取最新快照姓名
       byMember.set(a.memberId, cur);
     });
-    const sorted = [...byMember.values()].sort((x, y) => y.points - x.points || y.ascents - x.ascents);
-    sorted.forEach((r, i) => { r.rank = i + 1; });
+    // join 會員排名設定（fieldMask 只抓兩欄，避免整份 member 文件流量）
+    const ids = [...byMember.keys()].filter(Boolean);
+    const settings = {};
+    if (ids.length) {
+      try {
+        const docs = await db.getAll(...ids.map(id => db.collection('members').doc(id)), { fieldMask: ['routeRankingOptOut', 'routeNickname'] });
+        docs.forEach(d => { if (d.exists) settings[d.id] = d.data() || {}; });
+      } catch (e) { /* join 失敗不阻斷排名（全部視為參加、顯示本名） */ }
+    }
+    const all = [...byMember.values()].map(r => ({
+      ...r,
+      memberName: (settings[r.memberId]?.routeNickname || '').trim() || r.memberName,
+      optOut: settings[r.memberId]?.routeRankingOptOut === true,
+    }));
+    const ranked = all.filter(r => !r.optOut).sort((x, y) => y.points - x.points || y.ascents - x.ascents);
+    ranked.forEach((r, i) => { r.rank = i + 1; });
     const myId = req.member?.id || null;
-    const mine = myId ? sorted.find(r => r.memberId === myId) || null : null;
-    res.json({ rankings: sorted.slice(0, 50), total: sorted.length, myRank: mine });
+    const mine = myId ? ranked.find(r => r.memberId === myId) || null : null;
+    const myStatsRaw = myId ? all.find(r => r.memberId === myId) || null : null;
+    const strip = ({ optOut, ...r }) => r;
+    res.json({
+      rankings: ranked.slice(0, 50).map(strip),
+      total: ranked.length,
+      myRank: mine ? strip(mine) : null,
+      myOptedOut: !!(myStatsRaw && myStatsRaw.optOut),
+      myStats: myStatsRaw ? { points: myStatsRaw.points, ascents: myStatsRaw.ascents } : null,
+    });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET/PUT /climbing-routes/ranking-settings：會員排名偏好（參加與否＋暱稱限10字，存 members 文件）──
+router.get('/ranking-settings', authenticateMember, async (req, res) => {
+  res.json({ optOut: req.member.routeRankingOptOut === true, nickname: req.member.routeNickname || '' });
+});
+router.put('/ranking-settings', authenticateMember, async (req, res) => {
+  try {
+    const db = getDb();
+    const updates = { updatedAt: new Date() };
+    if (req.body.optOut !== undefined) updates.routeRankingOptOut = req.body.optOut === true;
+    if (req.body.nickname !== undefined) {
+      const nick = String(req.body.nickname || '').trim();
+      if ([...nick].length > 10) return res.status(400).json({ error: 'NICKNAME_TOO_LONG', message: '暱稱最多 10 個字' });
+      updates.routeNickname = nick;
+    }
+    await db.collection('members').doc(req.member.id).update(updates);
+    res.json({
+      success: true,
+      optOut: updates.routeRankingOptOut !== undefined ? updates.routeRankingOptOut : (req.member.routeRankingOptOut === true),
+      nickname: updates.routeNickname !== undefined ? updates.routeNickname : (req.member.routeNickname || ''),
+    });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -188,17 +248,23 @@ router.get('/member', authenticateMember, async (req, res) => {
       .filter(r => r.status !== 'archived')
       .map(r => ({ ...r, basePoints: Number(cfg.gradePoints[r.grade]) || 0 }))
       .sort((a, b) => (a.area || '').localeCompare(b.area || '', 'zh-Hant') || GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade));
+    // 只計「未下架路線」的積分（2026-08-29 政策）；myAscents map 仍全量供個別路線顯示
+    const activeRoutes = await getActiveRouteIdSet(db);
     const myAscents = {};
-    let myTotalPoints = 0, myTotalAscents = 0;
+    const totals = { all: { points: 0, ascents: 0 }, byGym: {} };
     mySnap.docs.forEach(d => {
       const a = d.data();
       myAscents[a.routeId] = { tier: a.tier, points: a.points, recordedAt: a.recordedAt };
-      myTotalPoints += Number(a.points) || 0;
-      myTotalAscents += 1;
+      if (!activeRoutes.has(a.routeId)) return;
+      const pts = Number(a.points) || 0;
+      totals.all.points += pts; totals.all.ascents += 1;
+      const g = a.gymId || 'unknown';
+      if (!totals.byGym[g]) totals.byGym[g] = { points: 0, ascents: 0 };
+      totals.byGym[g].points += pts; totals.byGym[g].ascents += 1;
     });
     res.json({
       routes, myAscents,
-      myTotals: { points: myTotalPoints, ascents: myTotalAscents }, // 含他館與已下架路線（總累積）
+      myTotals: totals, // { all, byGym }——僅計未下架路線（分館＋合併）
       checkedInToday: checkedIn,
       tiers: TIERS.map(t => ({ key: t.key, label: t.label, multiplier: Number(cfg.tierMultipliers[t.key]) || t.multiplier })),
     });

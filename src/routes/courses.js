@@ -281,6 +281,8 @@ router.post('/:courseId/sessions',
       res.status(201).json({ session, message: '場次已建立' });
     } catch (err) {
       if (err.code === 'COURSE_NOT_FOUND') return res.status(404).json(err);
+      if (err.code === 'DUPLICATE_SESSION') return res.status(409).json(err);
+      if (err.code) return res.status(400).json(err); // SESSION_DATE_OUT_OF_RANGE / INVALID_SESSION_TIME
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }
   }
@@ -1029,6 +1031,7 @@ router.put('/sessions/:sessionId',
       });
       res.json({ session, message: '場次已更新' });
     } catch (err) {
+      if (err.code === 'DUPLICATE_SESSION') return res.status(409).json(err);
       if (err.code) return res.status(400).json(err);
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }

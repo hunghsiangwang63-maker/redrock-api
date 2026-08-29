@@ -195,6 +195,22 @@ const syncCourseSessionCount = async (db, courseId, delta, now) => {
 };
 
 // ── 建立課程場次 ──────────────────────────────────────────────────
+// 場次日期/時間規則（新增與編輯共用，後端權威）：
+// ① 場次日期必須落在課程梯次起訖日內（課程未設起訖日的欄位不檢查——虛擬補課掛靠課程等無日期者不受影響）。
+//    要在期間外加開（如課程展延補課）→ 先到「編輯梯次」調整課程起訖日，讓課程日期維持單一真相。
+// ② 結束時間必須晚於開始時間（兩者皆有值時才比，HH:MM 字串比較）。
+const validateSessionSchedule = (course, { date, startTime, endTime }) => {
+  if (date && course.startDate && date < course.startDate) {
+    throw { code: 'SESSION_DATE_OUT_OF_RANGE', message: `場次日期 ${date} 早於課程開始日 ${course.startDate}。場次需在課程梯次期間內；如需調整請先至「編輯梯次」修改課程起訖日。` };
+  }
+  if (date && course.endDate && date > course.endDate) {
+    throw { code: 'SESSION_DATE_OUT_OF_RANGE', message: `場次日期 ${date} 晚於課程結束日 ${course.endDate}。場次需在課程梯次期間內；如需在期間外加開（如展延補課），請先至「編輯梯次」延長課程結束日。` };
+  }
+  if (startTime && endTime && endTime <= startTime) {
+    throw { code: 'INVALID_SESSION_TIME', message: '結束時間必須晚於開始時間' };
+  }
+};
+
 const createSession = async ({ courseId, gymId, staffId, data }) => {
   const db = getDb();
   const id = uuidv4();
@@ -203,6 +219,17 @@ const createSession = async ({ courseId, gymId, staffId, data }) => {
   const courseDoc = await db.collection(COURSE_COLLECTION).doc(courseId).get();
   if (!courseDoc.exists) throw { code: 'COURSE_NOT_FOUND' };
   const course = courseDoc.data();
+
+  validateSessionSchedule(course, data);
+
+  // 防重複建立（2026-08-28 筋膜刀講座連按兩次「新增場次」建出兩筆相同場次的事故）：
+  // 同課程＋同日期＋同開始時間已有未取消場次 → 擋下
+  const dupSnap = await db.collection(SESSION_COLLECTION)
+    .where('courseId', '==', courseId).where('date', '==', data.date)
+    .select('startTime', 'status').get();
+  if (dupSnap.docs.some(d => d.data().status !== 'cancelled' && d.data().startTime === data.startTime)) {
+    throw { code: 'DUPLICATE_SESSION', message: `此課程 ${data.date} ${data.startTime} 已有場次（可能重複建立）。如確要同時段第二場，請先調整時間或取消既有場次。` };
+  }
 
   const session = {
     id,
@@ -550,6 +577,20 @@ const updateSession = async ({ sessionId, staffId, data }) => {
   if (data.endTime) updates.endTime = data.endTime;
   if (data.instructor !== undefined) updates.instructor = data.instructor;
   if (data.notes !== undefined) updates.notes = data.notes;
+
+  // 日期/時間變更 → 套用與新增場次同一套排程規則（梯次期間內＋時間先後）＋防撞既有場次
+  if (data.date || data.startTime || data.endTime) {
+    const cur = doc.data();
+    const eff = { date: data.date || cur.date, startTime: data.startTime || cur.startTime, endTime: data.endTime || cur.endTime };
+    const courseDoc = await db.collection(COURSE_COLLECTION).doc(cur.courseId).get();
+    if (courseDoc.exists) validateSessionSchedule(courseDoc.data(), eff);
+    const dupSnap = await db.collection(SESSION_COLLECTION)
+      .where('courseId', '==', cur.courseId).where('date', '==', eff.date)
+      .select('startTime', 'status').get();
+    if (dupSnap.docs.some(d => d.id !== sessionId && d.data().status !== 'cancelled' && d.data().startTime === eff.startTime)) {
+      throw { code: 'DUPLICATE_SESSION', message: `此課程 ${eff.date} ${eff.startTime} 已有另一個場次，請調整日期或時間。` };
+    }
+  }
 
   await ref.update(updates);
 

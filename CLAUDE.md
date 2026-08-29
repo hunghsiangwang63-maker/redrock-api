@@ -3005,7 +3005,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 > 回報「新竹筋膜刀按摩課程，會員端看到兩個相同時段的選項」。查證＝**8/28 22:11/22:12 建課時「新增場次」連按兩次**，建出兩筆一模一樣的 8/28 20:00-21:30 場次（日期本身也建錯，講座實為 9/15）→ 會員報名頁當晚出現兩個相同選項（陳錦漩/曾聖發兩位隊員各報進不同的那筆，隊員價 0 元）。8/29 早上店員已自行修正（建 9/15 正確場次＋帶入學員＋取消兩筆重複場次），報名頁已正常（打正式 API 驗證只剩 9/15 一個選項）。
 - 🐞 **殘留問題**：「取消場次」不取消一般 confirmed 報名（3.87.0 設計只連動補課/試上）→ 兩位隊員各留一筆掛在已取消 8/28 場次上的幽靈 confirmed 報名，「我的課程」看到兩筆同時段。
 - ✅ **修正**：兩筆幽靈報名標 `cancelled`＋`cancelReason:session_cancelled`＋correctionNote（改前確認 0 筆連動 transactions/transferRecords，fee 0 無金流）；兩筆已取消場次 enrolledCount 同步歸 0（防未來 reconcile 掃描誤報漂移）。最終狀態：三位學員各一筆 9/15 confirmed，8/28 兩筆 cancelled。
-- 📌 **潛在改善（未做）**：`createSession` 無防連點/同日同時段去重——同型誤建（連按兩次）之後仍可能發生，要根治需前端按鈕防連點或後端同課程同日同時段擋重複。
+- ✅ **續：防呆已補上（`3.390.0-session-dedup-daterange-guard`，commit 後端 `b5cac72`、前端 `d0be7f7`；正式環境直呼真實 service E2E **11/11**，throwaway 課程測後全清）**：
+  - **後端權威（`createSession`＋`updateSession` 共用）**：①**同課程＋同日期＋同開始時間已有未取消場次 → 擋 `DUPLICATE_SESSION`**（409；已取消場次不擋重建；編輯撞既有場次也擋、排除自己）②**新規則：場次日期必須在課程梯次起訖日內**（`SESSION_DATE_OUT_OF_RANGE`，課程未設起訖日的欄位不檢查——虛擬掛靠課程不受影響）③結束時間須晚於開始時間（`INVALID_SESSION_TIME`）。共用 `validateSessionSchedule`（新增/編輯一份邏輯）。
+  - **前端**（`CoursesPage` 新增/編輯場次 Modal）：module 層 `sessionScheduleIssue` 早期檢查——日期超出梯次期間即紅字警示＋送出鈕鎖定（文字「日期不在梯次期間內」）；新增 Modal 另有同時段重複的琥珀警示（讀已載入 sessions，後端仍權威）；`handleCreateSession` 補 loading 早退雙保險。
+  - ⚠️ **工作流變更**：「已結束課程直接加開場次」（2026-07-17 補課場地模式）現在會被日期規則擋下——**要在期間外加開（如展延補課）需先到「編輯梯次」延長課程結束日再新增場次**（讓課程起訖日維持單一真相）。`generate-sessions` 天生在期間內產生、不受影響；體驗課程場次為直接寫入（不走 createSession）、不受影響。
 
 ## 目前進度（2026-08-28 續5）— 會員「我的紀錄」精簡化（入場分年分季＋課程梯次分組）
 > 需求：「入場記錄三個月內分次顯示、超過三個月以後分年顯示，點入後分季列表。課程以週課梯次為主，點入才有相關細項資料。」純前端 `MemberRecordsPage.jsx`，commit（redrock-web）`7be8110`，member 已 deploy。

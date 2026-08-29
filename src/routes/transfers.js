@@ -162,14 +162,18 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
     const pmOverride = (req.body.paymentMethod && PM_ALLOWED.includes(req.body.paymentMethod) && req.body.paymentMethod !== t.paymentMethod)
       ? req.body.paymentMethod : null;
     const pm = pmOverride || t.paymentMethod;
-    // 收款確認權限：涉及「轉帳」（原方式或更正後方式）→ 僅管理員（需核對銀行入帳）；
-    // 現金／現場電子支付（LinePay/街口/台灣Pay，值班自己刷條碼即可確認）→ 值班 operator 或管理員。
     const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
     const isStationMode = ['operator', 'station'].includes(req.staff?.type);
-    if (t.paymentMethod === 'transfer' || pm === 'transfer') {
-      if (!isManager) return res.status(403).json({ error: 'MANAGER_REQUIRED', message: '轉帳收款確認限管理員' });
+    // 付款方式更正僅限管理員（2026-08-29 拍板；值班/其他員工不開放——明確 403、不靜默忽略，
+    // 避免「以為改了其實沒改」）。
+    if (pmOverride && !isManager) {
+      return res.status(403).json({ error: 'MANAGER_REQUIRED', message: '付款方式更正限管理員' });
+    }
+    // 收款確認權限（原規則不變）：現金→值班 operator 或管理員；其他（轉帳等）→僅管理員。
+    if (t.paymentMethod === 'cash') {
+      if (!isManager && !isStationMode) return res.status(403).json({ error: 'MANAGER_OR_STATION_REQUIRED', message: '現金收款確認限值班人員或管理員' });
     } else {
-      if (!isManager && !isStationMode) return res.status(403).json({ error: 'MANAGER_OR_STATION_REQUIRED', message: '收款確認限值班人員或管理員' });
+      if (!isManager) return res.status(403).json({ error: 'MANAGER_REQUIRED', message: '轉帳收款確認限管理員' });
     }
     if (t.status === 'confirmed') return res.json({ message: '已確認收款' }); // 冪等：避免重複確認
     const now = new Date();

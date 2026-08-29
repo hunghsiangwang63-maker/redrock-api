@@ -69,6 +69,8 @@ router.get('/', authenticate, async (req, res) => {
       .select('status', 'memberName', 'competitionName', 'divisionName', 'registeredAt', 'competitionId').get();
     const expRegPromise = db.collection('experienceBookings').where('createdAt', '>=', sevenDaysAgo)
       .select('gymId', 'participants', 'contactName', 'courseName', 'courseType', 'bookingDate', 'numParticipants', 'createdAt').get();
+    const teamRegPromise = db.collection('teamApplications').where('createdAt', '>=', sevenDaysAgo)
+      .select('status', 'memberName', 'year', 'primaryGym', 'createdAt').get();
 
     // 體驗課程類型標籤對照（供下方通知/待辦顯示用；避免原本 record.courseType/b.courseType
     // 直接顯示原始 id（如 'general'）——courseType 目前只剩 general，但保留通用查表寫法。
@@ -440,7 +442,7 @@ router.get('/', authenticate, async (req, res) => {
     // 最終排序（最新在前）
     tasks.sort((a, b) => b.createdAt - a.createdAt);
 
-    // ── 新報名通知（近 7 天，分項：課程 / 比賽 / 體驗；資訊性，不計入待辦 badge）──
+    // ── 新報名通知（近 7 天，分項：課程 / 比賽 / 體驗 / 入隊；資訊性，不計入待辦 badge）──
     const registrations = [];
     const secOf = ts => ts?._seconds || (ts?.toDate ? Math.floor(ts.toDate().getTime()/1000) : 0);
     const dayOf = ts => { const s = secOf(ts); return s ? new Date(s*1000 + 8*3600000).toISOString().slice(0,10) : today; };
@@ -482,6 +484,15 @@ router.get('/', authenticate, async (req, res) => {
         const displayName = singleParticipant && singleParticipant !== b.contactName
           ? `${singleParticipant}（${b.contactName}代訂）` : (b.contactName || '');
         registrations.push({ id:`reg_exp_${d.id}`, regType:'experience', memberName:displayName, name:b.courseName || ctLabelMap[b.courseType] || '體驗課程', detail:`${dateWithWeekday(b.bookingDate)}${b.numParticipants?` · ${b.numParticipants}人`:''}`.trim(), createdAt: secOf(b.createdAt), dateStr: dayOf(b.createdAt), gymId:b.gymId, link:`/staff/experience?booking=${d.id}` });
+      });
+    } catch(e) {}
+    // 入隊申請（2026-08-29 補：原本近7天動態只有上面三類，入隊只出現在待辦任務/待收款）
+    try {
+      const snap = await teamRegPromise;
+      snap.docs.forEach(d => {
+        const t = d.data();
+        if (['cancelled', 'rejected'].includes(t.status)) return;
+        registrations.push({ id:`reg_team_${d.id}`, regType:'team', memberName:t.memberName||'', name:`${t.year||''} 年度攀岩隊`.trim(), detail:t.primaryGym||'', createdAt: secOf(t.createdAt), dateStr: dayOf(t.createdAt), gymId:null, link:'/staff/vip' });
       });
     } catch(e) {}
     registrations.sort((a, b) => b.createdAt - a.createdAt);

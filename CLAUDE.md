@@ -3106,6 +3106,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **後端**：抽 `performCompetitionCheckin`（掃碼確認與手動報到**共用同一報到核心**：正取/已簽署/比賽日當天/未重複 → 標記 checkedInAt+0元入場紀錄，不卡墜測/waiver）；新增 `POST /competitions/registrations/:regId/manual-checkin`（`requireManagerOrStation`，依 regId 尋址、免 token）。**未註冊會員（memberId:null，如 BeClass 匯入未認領者）也能手動報到**（E2E 驗證）。
 - ✅ **前端**（`CompetitionsPage` 報名名單列）：已報到顯示綠「✅ 已報到」；**比賽日當天**未報到的正取顯示紅「手動報到」鈕（confirm 確認→呼叫端點→就地更新）。非比賽日不顯示（後端仍權威擋）。
 - 📌 **明日操作**：選手無 QR（手機沒電/未註冊/不會操作）→ 賽事管理 → 202608 名單 → 找到選手按「手動報到」。效果與掃碼完全相同（含防重複——掃過碼的再手動會擋 409、反之亦然）。
+- ✅ **續：名單加搜尋＋背號**（`3.397.0-reg-list-bib-search`，commit 後端＋web `ae0732c`；真實資料驗證 61/61 背號全帶）：`GET /:id/registrations` 附掛 `bibNumber`（一次跨專案讀計分系統 athletes map、origId 對應，與報到掃描/保險名冊同源；未對接/已取消回 null）；名單 Modal 頂部搜尋框（**姓名/電話/背號**即時過濾、與分頁/狀態篩選疊加）、列上姓名前顯示紅色 `#背號`。
 
 ## 目前進度（2026-08-29 續3）— 待辦「近7天報名」動態納入入隊申請
 > 查證「入隊申請/繳費會不會進通知」——待辦任務/待收款/退回追蹤本就完整涵蓋（不會漏接）、但「近7天報名」動態只有課程/比賽/體驗三類、🔔通知面板從不寫入隊條目（teamMembers.js 零通知呼叫）。使用者拍板補「近7天報名」。後端 `/health` `3.395.0-recent-reg-team-apply`；E2E 3/3。commit 後端＋web `aad2bd8`。

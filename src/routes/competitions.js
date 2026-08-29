@@ -284,6 +284,20 @@ router.get('/:id/registrations', authenticate, rosterViewGate, async (req, res) 
     const compDoc = await getDb().collection(COLLECTIONS.COMPETITIONS).doc(req.params.id).get();
     const compGymId = compDoc.exists ? compDoc.data().gymId : null;
     registrations.forEach(r => { if (!r.gymId) r.gymId = compGymId; });
+    // 背號（2026-08-29 補）：已對接計分系統的賽事一次讀 athletes map（origId＝報名 id）附掛每筆
+    // bibNumber——與報到掃描/保險名冊同一對應來源；未對接/查無/讀取失敗回 null、不阻斷名單。
+    const compDocId = compDoc.exists ? compDoc.data().compDocId : null;
+    if (compDocId) {
+      try {
+        const { getCompDb } = require('../config/compFirebase');
+        const evDoc = await getCompDb().collection('competitions').doc(compDocId).get();
+        if (evDoc.exists) {
+          const bibByRegId = {};
+          Object.values(evDoc.data().athletes || {}).forEach(a => { if (a && a.origId && a.bib) bibByRegId[a.origId] = String(a.bib); });
+          registrations.forEach(r => { r.bibNumber = bibByRegId[r.id] || null; });
+        }
+      } catch (e) { console.error('[報名名單] 讀取計分系統背號失敗（不阻斷）:', e.message); }
+    }
     await attachInvoiceStatus(getDb(), registrations);
     res.json({ registrations });
   } catch (err) {

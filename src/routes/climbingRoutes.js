@@ -230,8 +230,9 @@ router.get('/', authenticate, async (req, res) => {
 
 // ── POST /climbing-routes：新增路線（支援批次）──
 // 單條：{gymId, area, color, grade, ...}（向下相容）
-// 批次：{gymId, area, setter, igUrl, setAt, note, routes:[{color,grade,name?,note?}]}
+// 批次：{gymId, area, setter, igUrl, setAt, plannedRemoveAt, routes:[{color,grade,name?,note?}]}
 //   → 同一支 IG 影片對應多條路線的情境：共用欄位填一次、一次建 N 條（上限 20）。
+//   備註 note 跟「每條路線」走（會員可見）；plannedRemoveAt 預計下架日＝共用（純提示、不自動下架）。
 router.post('/', authenticate, routeEditorGate,
   [
     body('gymId').notEmpty(),
@@ -267,6 +268,7 @@ router.post('/', authenticate, routeEditorGate,
           setter: String(req.body.setter || '').trim(),
           igUrl: String(req.body.igUrl || '').trim(),
           setAt: req.body.setAt || taiwanToday(),
+          plannedRemoveAt: String(req.body.plannedRemoveAt || '').trim(),
           status: 'active',
           createdAt: now, createdBy: req.staff.id, createdByName: req.staff.name || '', updatedAt: now,
         };
@@ -289,7 +291,7 @@ router.put('/:id', authenticate, routeEditorGate, async (req, res) => {
     if (req.staff.role !== 'super_admin' && req.staff.gymId && doc.data().gymId !== req.staff.gymId) {
       return res.status(403).json({ error: 'CROSS_GYM_FORBIDDEN', message: '只能管理自己館別的路線' });
     }
-    const allowed = ['area', 'color', 'grade', 'name', 'note', 'setter', 'igUrl', 'setAt', 'status'];
+    const allowed = ['area', 'color', 'grade', 'name', 'note', 'setter', 'igUrl', 'setAt', 'plannedRemoveAt', 'status'];
     const updates = {};
     for (const k of allowed) {
       if (req.body[k] === undefined) continue;

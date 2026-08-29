@@ -388,7 +388,7 @@ const copyPreviousMonthShifts = async (gymId, targetMonth, createdBy) => {
 
 // ── 排班行事曆重要事項標籤（休館/比賽/維修等；獨立於員工排班，不綁 staffId）──
 // gymId: null＝全館皆顯示；allDay=true 為全天資訊，false 則需 startTime/endTime。
-const EVENT_CATEGORIES = ['closure', 'competition', 'maintenance', 'routesetting', 'other'];
+const EVENT_CATEGORIES = ['closure', 'competition', 'maintenance', 'routesetting', 'other', 'group_experience'];
 
 const createScheduleEvent = async ({ gymId, date, allDay, startTime, endTime, category, title, note, createdBy }) => {
   if (!date) throw { code: 'MISSING_DATE', message: '請選擇日期' };

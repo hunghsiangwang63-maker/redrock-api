@@ -285,7 +285,7 @@ router.post('/events',
   authenticate, checkPermission('schedule.events'),
   [
     body('date').isDate().withMessage('請輸入有效日期'),
-    body('category').isIn(['closure', 'competition', 'maintenance', 'routesetting', 'other']).withMessage('類別不正確'),
+    body('category').isIn(['closure', 'competition', 'maintenance', 'routesetting', 'group_experience', 'other']).withMessage('類別不正確'),
   ],
   validate,
   async (req, res) => {
@@ -314,7 +314,7 @@ router.post('/events/recurring',
     body('startDate').isDate().withMessage('請輸入有效起始日期'),
     body('endDate').optional({ checkFalsy: true }).isDate().withMessage('結束日期格式不正確'),
     body('recurType').isIn(['weekly', 'biweekly', 'monthly']).withMessage('循環類型不正確'),
-    body('category').isIn(['closure', 'competition', 'maintenance', 'routesetting', 'other']).withMessage('類別不正確'),
+    body('category').isIn(['closure', 'competition', 'maintenance', 'routesetting', 'group_experience', 'other']).withMessage('類別不正確'),
   ],
   validate,
   async (req, res) => {

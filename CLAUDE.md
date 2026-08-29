@@ -3148,6 +3148,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ⚠ **會員端未實機登入驗證**（無現成會員 session；API 層已由 E2E 完整覆蓋、build+bundle 確認）；路線資料兩館皆空、待現場建立。**routeAscents 若日後累積數萬筆**再考慮排名聚合快取（目前全掃描+投影可接受）。
 - ✅ **續：批次建立＋館別＋備註**（`3.392.0-routes-batch-note-gym`，commit 後端＋web `fcb7313`；E2E 7/7＋實機 Modal 驗證）：**一支 IG 影片對應 5~10 條路線**的情境——新增 Modal 改批次：共用欄位（**館別**下拉[super_admin 可選、其他鎖自己館]/區域/定線員/日期/IG連結/**備註 note[會員看得到]**）填一次＋「路線清單」逐條加顏色/難度/名稱、「＋再加一條（同一支影片）」一次送出（後端 `POST /climbing-routes` 收 `routes` 陣列、上限 20、`db.batch()`；單條舊格式向下相容）。編輯 Modal 加備註、館別唯讀（改館別會讓 ascents 的 gymId 快照不一致，建錯館刪除重建）；員工列表與會員路線卡顯示 💬 備註。
 - ✅ **續2：備註跟路線走＋預計下架日期**（`3.393.0-routes-per-note-planned-remove`，web `b4da890`；E2E 6/6）：批次 Modal 改**每條路線各自一個備註欄**（會員可見，共用備註取消）；新增 **`plannedRemoveAt` 預計下架日期**——批次共用填一次存進每條、編輯可各自改、**純提示不自動下架**（員工列表對「已過預計下架日仍 active」的路線紅字「請下架」提醒；會員路線卡顯示「預計換線 X」）。
+- ✅ **續3：積分只計未下架＋分館/合併＋排名偏好＋IG分享**（`3.401.0-routes-scoring-active-only-ranking-prefs`；E2E **11/11**）：
+  - **計分政策改**：積分/排名**只計「未下架路線」**的完攀（下架＝換掉的線不再計分、記錄保留、重新上架即恢復——E2E 驗證 300↔800 來回）；helper `getActiveRouteIdSet`（select status 全掃、路線集合小可接受）。
+  - **分館/合併**：`/member` 端點 `myTotals` 改 `{all, byGym}`（會員積分卡顯示 本館＋全館合併）；排名 gymId 不帶＝全館合併（前端排名分頁三選 chips：全館合併/新竹/士林，獨立於路線分頁的館別選擇）。
+  - **排名偏好**（存 members 文件 `routeRankingOptOut`/`routeNickname`）：`GET/PUT /climbing-routes/ranking-settings`（暱稱後端權威 ≤10 字）；rankings **join 用 `db.getAll(...refs,{fieldMask})` 只抓兩欄**；退出者不上榜、本人回 `myOptedOut+myStats`（前端灰卡提示「積分照常累計」）；榜上顯示名＝暱稱優先。
+  - **IG 分享**：路線卡示範鈕旁分享鈕（`navigator.share` 原生面板、fallback 複製連結+toast；SVG icon 避 tofu）。
 - 🔒 **入口暫時隱藏、待測試完成才正式上線**（web commit `22a3480`）：兩端導覽入口以 flag 藏起、**路由保留**——測試期間直接輸入 `staff.redrocktaiwan.com/staff/routes`／`app.redrocktaiwan.com/member/routes` 進入。**正式上線＝改兩處**：`StaffLayout.jsx` 的 `ROUTES_FEATURE_LIVE = true`＋`MemberHomePage.jsx` 解除「路線攻略」快速功能項的註解，build+deploy。
 
 - 會員端 UI 驗證：課程試上分頁 + 場次代班「（代班）」顯示（需會員帳號登入實測）

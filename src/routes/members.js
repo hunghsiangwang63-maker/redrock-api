@@ -346,42 +346,79 @@ router.post('/my/children',
   }
 );
 
+// 持有效定期票人員（分票種）——列表端點與 Excel 下載共用同一組裝邏輯（單一真相，避免平行複製）
+const buildActivePassGroups = async (db, gymId) => {
+  const today = taiwanToday(); // 台灣日期（與入場資格判定同源）
+  const snap = await db.collection(COLLECTIONS.MEMBER_PASSES).where('status', '==', 'active').get();
+  // endDate 用臨時休館補償後的到期日（與入場資格 getValidPasses 同源）
+  let passes = (await require('../services/passExpiryService').attachEffectiveEndDates(
+    snap.docs.map(d => ({ id: d.id, ...d.data() }))
+  )).filter(p => (p.effectiveEndDate || p.endDate || '') >= today);
+  // 與入場資格 getValidPasses 同源：全館票(scope='shared')任館可用；單館票看 targetGymId
+  if (gymId) passes = passes.filter(p => p.scope === 'shared' || p.targetGymId === gymId);
+  // 姓名/電話以 members 集合為權威補齊——定期票文件（POST /passes、seed）常未存 memberName，
+  // 否則前端 `memberName || memberId` 會 fallback 顯示原始 memberId。
+  const memberIds = [...new Set(passes.map(p => p.memberId).filter(Boolean))];
+  const nameMap = {}, phoneMap = {};
+  if (memberIds.length) {
+    const memberDocs = await db.getAll(...memberIds.map(id => db.collection(COLLECTIONS.MEMBERS).doc(id)));
+    memberDocs.forEach(d => { if (d.exists) { nameMap[d.id] = d.data().name || ''; phoneMap[d.id] = d.data().phone || ''; } });
+  }
+  const groups = {};
+  passes.forEach(p => {
+    const key = p.passTypeId || p.passTypeName || 'other';
+    if (!groups[key]) groups[key] = { passTypeId: p.passTypeId || null, passTypeName: p.passTypeName || '定期票', members: [] };
+    groups[key].members.push({
+      memberId: p.memberId, memberName: nameMap[p.memberId] || p.memberName || '(已刪除會員)',
+      phone: phoneMap[p.memberId] || '',
+      startDate: p.startDate || null, endDate: p.effectiveEndDate || p.endDate || null,
+      credits: p.credits ?? null, // 回數票剩餘次數（算天數票為 null）
+      // 展延核准時寫入（passAdjustmentService.approvePassRequest）；停用期間內票視為非有效期，供列表下方註明
+      suspendStart: p.suspendStart || null, suspendEnd: p.suspendEnd || null, suspendRequestedAt: p.suspendRequestedAt || null,
+    });
+  });
+  const passTypes = Object.values(groups)
+    .map(g => ({ ...g, count: g.members.length, members: g.members.sort((a, b) => (a.endDate || '') < (b.endDate || '') ? -1 : 1) }))
+    .sort((a, b) => b.count - a.count);
+  return { passTypes, total: passes.length };
+};
+
 // ── GET /members/reports/active-passes - 持有效定期票人員（分票種）──
 router.get('/reports/active-passes', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    const today = taiwanToday(); // 台灣日期（與入場資格判定同源）
     const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
-    const snap = await db.collection(COLLECTIONS.MEMBER_PASSES).where('status', '==', 'active').get();
-    // endDate 用臨時休館補償後的到期日（與入場資格 getValidPasses 同源）
-    let passes = (await require('../services/passExpiryService').attachEffectiveEndDates(
-      snap.docs.map(d => ({ id: d.id, ...d.data() }))
-    )).filter(p => (p.effectiveEndDate || p.endDate || '') >= today);
-    // 與入場資格 getValidPasses 同源：全館票(scope='shared')任館可用；單館票看 targetGymId
-    if (gymId) passes = passes.filter(p => p.scope === 'shared' || p.targetGymId === gymId);
-    // 姓名以 members 集合為權威補齊——定期票文件（POST /passes、seed）常未存 memberName，
-    // 否則前端 `memberName || memberId` 會 fallback 顯示原始 memberId。
-    const memberIds = [...new Set(passes.map(p => p.memberId).filter(Boolean))];
-    const nameMap = {};
-    if (memberIds.length) {
-      const memberDocs = await db.getAll(...memberIds.map(id => db.collection(COLLECTIONS.MEMBERS).doc(id)));
-      memberDocs.forEach(d => { if (d.exists) nameMap[d.id] = d.data().name || ''; });
-    }
-    const groups = {};
-    passes.forEach(p => {
-      const key = p.passTypeId || p.passTypeName || 'other';
-      if (!groups[key]) groups[key] = { passTypeId: p.passTypeId || null, passTypeName: p.passTypeName || '定期票', members: [] };
-      groups[key].members.push({
-        memberId: p.memberId, memberName: nameMap[p.memberId] || p.memberName || '(已刪除會員)',
-        startDate: p.startDate || null, endDate: p.effectiveEndDate || p.endDate || null,
-        // 展延核准時寫入（passAdjustmentService.approvePassRequest）；停用期間內票視為非有效期，供列表下方註明
-        suspendStart: p.suspendStart || null, suspendEnd: p.suspendEnd || null, suspendRequestedAt: p.suspendRequestedAt || null,
+    res.json(await buildActivePassGroups(db, gymId));
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /members/reports/active-passes/download - 定期票持有人 Excel（限管理員，比照全站下載政策 2026-07-24）──
+router.get('/reports/active-passes/download', authenticate, requireManager, async (req, res) => {
+  try {
+    const db = getDb();
+    const gymId = req.staff.role === 'super_admin' ? (req.query.gymId || null) : req.staff.gymId;
+    const { passTypes } = await buildActivePassGroups(db, gymId);
+    const rows = [];
+    let i = 0;
+    passTypes.forEach(g => g.members.forEach(m => {
+      rows.push({
+        '序號': ++i,
+        '票種': g.passTypeName,
+        '姓名': m.memberName,
+        '電話': m.phone || '',
+        '開始日': m.startDate || '',
+        '到期日': m.endDate || '',
+        '剩餘次數': m.credits != null ? m.credits : '',
+        '暫停期間': m.suspendStart ? `${m.suspendStart}~${m.suspendEnd || ''}` : '',
       });
-    });
-    const passTypes = Object.values(groups)
-      .map(g => ({ ...g, count: g.members.length, members: g.members.sort((a, b) => (a.endDate || '') < (b.endDate || '') ? -1 : 1) }))
-      .sort((a, b) => b.count - a.count);
-    res.json({ passTypes, total: passes.length });
+    }));
+    const { sanitizeSheet } = require('../utils/xlsxSafe');
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, sanitizeSheet(XLSX.utils.json_to_sheet(rows)), '定期票持有人');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="active_passes_${taiwanToday()}.xlsx"`);
+    res.send(buf);
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

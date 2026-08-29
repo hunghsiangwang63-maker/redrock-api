@@ -228,13 +228,14 @@ router.get('/', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// ── POST /climbing-routes：新增路線 ──
+// ── POST /climbing-routes：新增路線（支援批次）──
+// 單條：{gymId, area, color, grade, ...}（向下相容）
+// 批次：{gymId, area, setter, igUrl, setAt, note, routes:[{color,grade,name?,note?}]}
+//   → 同一支 IG 影片對應多條路線的情境：共用欄位填一次、一次建 N 條（上限 20）。
 router.post('/', authenticate, routeEditorGate,
   [
     body('gymId').notEmpty(),
-    body('grade').isIn(GRADES).withMessage('難度須為 V0~V10'),
     body('area').trim().notEmpty().withMessage('請填寫牆面/區域'),
-    body('color').trim().notEmpty().withMessage('請填寫岩點顏色'),
   ], validate,
   async (req, res) => {
     try {
@@ -243,22 +244,37 @@ router.post('/', authenticate, routeEditorGate,
       if (req.staff.role !== 'super_admin' && req.staff.gymId && req.body.gymId !== req.staff.gymId) {
         return res.status(403).json({ error: 'CROSS_GYM_FORBIDDEN', message: '只能管理自己館別的路線' });
       }
-      const id = uuidv4();
+      const items = Array.isArray(req.body.routes) && req.body.routes.length
+        ? req.body.routes
+        : [{ color: req.body.color, grade: req.body.grade, name: req.body.name, note: req.body.note }];
+      if (items.length > 20) return res.status(400).json({ error: 'TOO_MANY_ROUTES', message: '一次最多建立 20 條路線' });
+      for (const it of items) {
+        if (!GRADES.includes(it.grade)) return res.status(400).json({ error: 'INVALID_GRADE', message: '難度須為 V0~V10' });
+        if (!String(it.color || '').trim()) return res.status(400).json({ error: 'MISSING_COLOR', message: '每條路線請填寫岩點顏色' });
+      }
       const now = new Date();
-      const route = {
-        gymId: req.body.gymId,
-        area: String(req.body.area).trim(),
-        color: String(req.body.color).trim(),
-        grade: req.body.grade,
-        name: String(req.body.name || '').trim(),
-        setter: String(req.body.setter || '').trim(),
-        igUrl: String(req.body.igUrl || '').trim(),
-        setAt: req.body.setAt || taiwanToday(),
-        status: 'active',
-        createdAt: now, createdBy: req.staff.id, createdByName: req.staff.name || '', updatedAt: now,
-      };
-      await db.collection('climbingRoutes').doc(id).set(route);
-      res.status(201).json({ success: true, route: { id, ...route } });
+      const sharedNote = String(req.body.note || '').trim(); // 批次共用備註（會員可見）；每條可各自覆寫
+      const batch = db.batch();
+      const created = items.map(it => {
+        const id = uuidv4();
+        const route = {
+          gymId: req.body.gymId,
+          area: String(req.body.area).trim(),
+          color: String(it.color).trim(),
+          grade: it.grade,
+          name: String(it.name || '').trim(),
+          note: String(it.note !== undefined ? it.note : sharedNote).trim(),
+          setter: String(req.body.setter || '').trim(),
+          igUrl: String(req.body.igUrl || '').trim(),
+          setAt: req.body.setAt || taiwanToday(),
+          status: 'active',
+          createdAt: now, createdBy: req.staff.id, createdByName: req.staff.name || '', updatedAt: now,
+        };
+        batch.set(db.collection('climbingRoutes').doc(id), route);
+        return { id, ...route };
+      });
+      await batch.commit();
+      res.status(201).json({ success: true, route: created[0], routes: created });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );
@@ -273,7 +289,7 @@ router.put('/:id', authenticate, routeEditorGate, async (req, res) => {
     if (req.staff.role !== 'super_admin' && req.staff.gymId && doc.data().gymId !== req.staff.gymId) {
       return res.status(403).json({ error: 'CROSS_GYM_FORBIDDEN', message: '只能管理自己館別的路線' });
     }
-    const allowed = ['area', 'color', 'grade', 'name', 'setter', 'igUrl', 'setAt', 'status'];
+    const allowed = ['area', 'color', 'grade', 'name', 'note', 'setter', 'igUrl', 'setAt', 'status'];
     const updates = {};
     for (const k of allowed) {
       if (req.body[k] === undefined) continue;

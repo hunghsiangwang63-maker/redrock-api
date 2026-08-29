@@ -1573,35 +1573,52 @@ router.post('/invoices/:id/void', authenticate, requireManagerOrStation, async (
 });
 
 // POST /competitions/checkin/confirm - 確認報到（值班/管理員；不卡墜測）
+// 報到核心（掃碼確認與手動報到共用；回 {status, body}）：正取＋已簽署＋比賽日當天＋未重複 → 標記＋0元入場紀錄
+const performCompetitionCheckin = async (db, reg, comp, staff) => {
+  if (reg.status === 'cancelled') return { status: 400, body: { error: 'CANCELLED', message: '此報名已取消' } };
+  if (reg.status !== 'confirmed') return { status: 400, body: { error: 'NOT_CONFIRMED', message: '此報名非正取（候補請先遞補）' } };
+  if (!reg.isComplete) return { status: 400, body: { error: 'NOT_COMPLETE', message: '尚未完成簽署（未成年待法定代理人簽署）' } };
+  const { taiwanToday } = require('../utils/taiwanDate');
+  if (comp.eventDate && comp.eventDate !== taiwanToday()) {
+    return { status: 400, body: { error: 'NOT_EVENT_DAY', message: `比賽日為 ${comp.eventDate}，今日不可報到` } };
+  }
+  if (reg.checkedInAt) return { status: 409, body: { error: 'ALREADY_CHECKED_IN', message: '此選手已完成報到' } };
+  const now = new Date();
+  await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(reg.id).update({
+    checkedInAt: now, checkedInBy: staff.id, checkedInByName: staff.name, updatedAt: now,
+  });
+  // 入場紀錄（0 元、entryType competition；供今日入場統計/稽核；不觸發墜測/waiver 關卡）
+  const checkInId = _uuidv4();
+  await db.collection('checkIns').doc(checkInId).set({
+    id: checkInId, memberId: reg.memberId, memberName: reg.memberName,
+    gymId: comp.gymId || staff.gymId || null,
+    entryType: 'competition', amountPaid: 0, paymentMethod: null,
+    isCompetitionCheckin: true, competitionId: reg.competitionId, registrationId: reg.id,
+    checkedInAt: now, confirmedBy: staff.id, createdAt: now,
+  });
+  return { status: 200, body: { success: true, message: `${reg.memberName} 報到完成（${reg.divisionName || ''}）`, checkInId } };
+};
+
 router.post('/checkin/confirm', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const db = getDb();
     const hit = await findRegByCheckinToken(db, req.body.token);
     if (!hit) return res.status(404).json({ error: 'QR_NOT_FOUND', message: '無效的報到 QR' });
-    const { reg, comp } = hit;
-    if (reg.status === 'cancelled') return res.status(400).json({ error: 'CANCELLED', message: '此報名已取消' });
-    if (reg.status !== 'confirmed') return res.status(400).json({ error: 'NOT_CONFIRMED', message: '此報名非正取（候補請先遞補）' });
-    if (!reg.isComplete) return res.status(400).json({ error: 'NOT_COMPLETE', message: '尚未完成簽署（未成年待法定代理人簽署）' });
-    const { taiwanToday } = require('../utils/taiwanDate');
-    const today = taiwanToday();
-    if (comp.eventDate && comp.eventDate !== today) {
-      return res.status(400).json({ error: 'NOT_EVENT_DAY', message: `比賽日為 ${comp.eventDate}，今日不可報到` });
-    }
-    if (reg.checkedInAt) return res.status(409).json({ error: 'ALREADY_CHECKED_IN', message: '此選手已完成報到' });
-    const now = new Date();
-    await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(reg.id).update({
-      checkedInAt: now, checkedInBy: req.staff.id, checkedInByName: req.staff.name, updatedAt: now,
-    });
-    // 入場紀錄（0 元、entryType competition；供今日入場統計/稽核；不觸發墜測/waiver 關卡）
-    const checkInId = _uuidv4();
-    await db.collection('checkIns').doc(checkInId).set({
-      id: checkInId, memberId: reg.memberId, memberName: reg.memberName,
-      gymId: comp.gymId || req.staff.gymId || null,
-      entryType: 'competition', amountPaid: 0, paymentMethod: null,
-      isCompetitionCheckin: true, competitionId: reg.competitionId, registrationId: reg.id,
-      checkedInAt: now, confirmedBy: req.staff.id, createdAt: now,
-    });
-    res.json({ success: true, message: `${reg.memberName} 報到完成（${reg.divisionName || ''}）`, checkInId });
+    const r = await performCompetitionCheckin(db, hit.reg, hit.comp, req.staff);
+    res.status(r.status === 200 ? 200 : r.status).json(r.body);
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── POST /competitions/registrations/:regId/manual-checkin - 手動報到（無 QR 時：手機沒電/未註冊會員等；值班/管理員）──
+router.post('/registrations/:regId/manual-checkin', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS).doc(req.params.regId).get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名記錄' });
+    const reg = { id: doc.id, ...doc.data() };
+    const comp = (await db.collection(COLLECTIONS.COMPETITIONS).doc(reg.competitionId).get()).data() || {};
+    const r = await performCompetitionCheckin(db, reg, comp, req.staff);
+    res.status(r.status === 200 ? 200 : r.status).json(r.body);
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

@@ -3107,6 +3107,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **排名** `GET /climbing-routes/rankings?gymId=&period=month|all`：routeAscents 全集合投影掃描記憶體聚合（文件小、無肥欄位），top 50＋本人名次；月排名依 `recordedAt` 台灣當月。
 - **前端**：員工 `/staff/routes`（nav「路線管理」ti-route；part_time 個人隱藏；依區域分組、下架區收合、完攀人數統計）；會員 `/member/routes`（首頁快速功能「🪨 路線攻略」，中英日字典已補）——路線/排名兩分頁、館別 chips（localStorage 記憶）、我的總分卡、未入場琥珀提示＋記錄鈕鎖定、記錄 Modal 七層級各自顯示分數、排名前三 🥇🥈🥉＋本人列高亮。
 - ⚠ **會員端未實機登入驗證**（無現成會員 session；API 層已由 E2E 完整覆蓋、build+bundle 確認）；路線資料兩館皆空、待現場建立。**routeAscents 若日後累積數萬筆**再考慮排名聚合快取（目前全掃描+投影可接受）。
+- ✅ **續：批次建立＋館別＋備註**（`3.392.0-routes-batch-note-gym`，commit 後端＋web `fcb7313`；E2E 7/7＋實機 Modal 驗證）：**一支 IG 影片對應 5~10 條路線**的情境——新增 Modal 改批次：共用欄位（**館別**下拉[super_admin 可選、其他鎖自己館]/區域/定線員/日期/IG連結/**備註 note[會員看得到]**）填一次＋「路線清單」逐條加顏色/難度/名稱、「＋再加一條（同一支影片）」一次送出（後端 `POST /climbing-routes` 收 `routes` 陣列、上限 20、`db.batch()`；單條舊格式向下相容）。編輯 Modal 加備註、館別唯讀（改館別會讓 ascents 的 gymId 快照不一致，建錯館刪除重建）；員工列表與會員路線卡顯示 💬 備註。
 - 🔒 **入口暫時隱藏、待測試完成才正式上線**（web commit `22a3480`）：兩端導覽入口以 flag 藏起、**路由保留**——測試期間直接輸入 `staff.redrocktaiwan.com/staff/routes`／`app.redrocktaiwan.com/member/routes` 進入。**正式上線＝改兩處**：`StaffLayout.jsx` 的 `ROUTES_FEATURE_LIVE = true`＋`MemberHomePage.jsx` 解除「路線攻略」快速功能項的註解，build+deploy。
 
 - 會員端 UI 驗證：課程試上分頁 + 場次代班「（代班）」顯示（需會員帳號登入實測）

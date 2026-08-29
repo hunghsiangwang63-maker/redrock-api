@@ -172,6 +172,7 @@ app.use('/simulate', require('./routes/simulateRegistration'));
 app.use('/cards',        require('./routes/cards'));
 app.use('/team-members', require('./routes/teamMembers'));
 app.use('/gyms',         require('./routes/gyms'));
+app.use('/climbing-routes', require('./routes/climbingRoutes'));
 app.use('/courses',      require('./routes/courses'));
 app.use('/vip',          require('./routes/vip'));
 app.use('/course-categories', require('./routes/courseCategories'));
@@ -206,7 +207,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.390.0-session-dedup-daterange-guard',
+    version: '3.391.0-climbing-routes-scoring',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),

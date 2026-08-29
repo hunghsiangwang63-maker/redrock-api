@@ -156,13 +156,20 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此轉帳紀錄' });
     const t = doc.data();
-    // 收款確認權限：現金→值班 operator 或管理員；轉帳→僅管理員
+    // 付款方式更正（2026-08-29）：確認收款當下可一併更正選錯的付款方式（會員選現金實刷 LinePay 等，
+    // 8/16 陳以恩、8/27 洪家兄弟等真實案例先前都只能事後手動修資料）——同步寫進轉帳單＋訂單＋記帳。
+    const PM_ALLOWED = ['cash', 'transfer', 'linepay', 'jkopay', 'taiwanpay'];
+    const pmOverride = (req.body.paymentMethod && PM_ALLOWED.includes(req.body.paymentMethod) && req.body.paymentMethod !== t.paymentMethod)
+      ? req.body.paymentMethod : null;
+    const pm = pmOverride || t.paymentMethod;
+    // 收款確認權限：涉及「轉帳」（原方式或更正後方式）→ 僅管理員（需核對銀行入帳）；
+    // 現金／現場電子支付（LinePay/街口/台灣Pay，值班自己刷條碼即可確認）→ 值班 operator 或管理員。
     const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
     const isStationMode = ['operator', 'station'].includes(req.staff?.type);
-    if (t.paymentMethod === 'cash') {
-      if (!isManager && !isStationMode) return res.status(403).json({ error: 'MANAGER_OR_STATION_REQUIRED', message: '現金收款確認限值班人員或管理員' });
-    } else {
+    if (t.paymentMethod === 'transfer' || pm === 'transfer') {
       if (!isManager) return res.status(403).json({ error: 'MANAGER_REQUIRED', message: '轉帳收款確認限管理員' });
+    } else {
+      if (!isManager && !isStationMode) return res.status(403).json({ error: 'MANAGER_OR_STATION_REQUIRED', message: '收款確認限值班人員或管理員' });
     }
     if (t.status === 'confirmed') return res.json({ message: '已確認收款' }); // 冪等：避免重複確認
     const now = new Date();
@@ -181,11 +188,13 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
 
     // 管理員可編輯備註（選填；留空不動既有值，避免無意間清空先前備註）
     const noteUpdate = req.body.staffNote != null ? { staffNote: String(req.body.staffNote).trim() } : {};
+    const pmUpdate = pmOverride ? { paymentMethod: pmOverride } : {};
     await ref.update({
       status: 'confirmed', confirmedBy: req.staff.id,
       confirmedAt: now, updatedAt: now, notes: req.body.notes || '',
       confirmedAmount: req.body.confirmedAmount != null && req.body.confirmedAmount !== '' ? Number(req.body.confirmedAmount) : null, // 員工填實際收款金額
       ...noteUpdate,
+      ...(pmOverride ? { paymentMethod: pmOverride, paymentMethodCorrected: { from: t.paymentMethod, by: req.staff.id, byName: req.staff.name || '', at: now } } : {}),
     });
     // 依訂單型別確認底層付款（side-effect 失敗不阻斷收款確認）
     try {
@@ -203,7 +212,7 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
         const bkDocBefore = await bkRef.get();
         const wasAlreadyConfirmed = bkDocBefore.exists && bkDocBefore.data().status === 'confirmed';
         await bkRef.update({
-          status: 'confirmed', paymentStatus: 'confirmed', ...clearReject, ...noteUpdate,
+          status: 'confirmed', paymentStatus: 'confirmed', ...clearReject, ...noteUpdate, ...pmUpdate,
           confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
         });
         // 體驗/試上營收記錄（與 /experience-bookings/:id/confirm 同一 helper、冪等）
@@ -225,7 +234,17 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
         } catch (e) { console.error('[體驗營收/transfers]', e.message); }
       } else if (t.orderType === 'course' && t.refId) {
         // 課程營收已於報名時(courses.js enroll, deferPayment=false)記入(認列＝最後一堂課)，此處僅標記付款確認
-        await db.collection('courseEnrollments').doc(t.refId).update({ paymentStatus: 'confirmed', ...clearReject, ...noteUpdate, updatedAt: now });
+        await db.collection('courseEnrollments').doc(t.refId).update({ paymentStatus: 'confirmed', ...clearReject, ...noteUpdate, ...pmUpdate, updatedAt: now });
+        // 付款方式更正：課程營收在報名當下已記帳（accrual）→ 一併回改既有交易（比照 8/27 手動修正的範圍）
+        if (pmOverride) {
+          try {
+            const txSnap = await db.collection('transactions').where('relatedId', '==', t.refId).get();
+            const batch = db.batch();
+            let n = 0;
+            txSnap.docs.forEach(d => { if (d.data().type === 'course' && (d.data().totalAmount || 0) > 0) { batch.update(d.ref, { paymentMethod: pmOverride, updatedAt: now }); n++; } });
+            if (n) await batch.commit();
+          } catch (e) { console.error('付款方式更正回改課程交易失敗（收款已確認）:', e.message); }
+        }
         // 定期票 × 課程免費期間重疊補償（政策 2026-07-17；收款確認後才套、冪等、不阻斷）
         try {
           const enDoc = await db.collection('courseEnrollments').doc(t.refId).get();
@@ -286,7 +305,7 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
         } catch (e) { console.error('[Email] 課程確認通知', e.message); }
       } else if (t.orderType === 'competition' && t.refId) {
         await db.collection('competitionRegistrations').doc(t.refId).update({
-          paymentStatus: 'confirmed', ...clearReject, ...noteUpdate, paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,
+          paymentStatus: 'confirmed', ...clearReject, ...noteUpdate, ...pmUpdate, paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,
         });
         // 記比賽營收（預收，認列在比賽前一天）；helper 冪等
         try { await require('../services/competitionService').recordCompetitionRevenue({ db, regId: t.refId, sign: 1, staffId: by, staffName: byName }); }
@@ -304,7 +323,7 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
         } catch (e) { console.error('[Email] 比賽確認通知', e.message); }
       } else if (t.orderType === 'rental' && t.refId) {
         await db.collection('equipmentRentals').doc(t.refId).update({
-          paymentStatus: 'confirmed', status: 'active', ...clearReject, ...noteUpdate, confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
+          paymentStatus: 'confirmed', status: 'active', ...clearReject, ...noteUpdate, ...pmUpdate, confirmedBy: by, confirmedByName: byName, confirmedAt: now, updatedAt: now,
         });
         // 器材租借轉帳確認收款 → 記營收（租金，冪等）
         try { await require('./rentals').recordRentalRevenue(db, t.refId, { staffId: by, staffName: byName }); }
@@ -312,7 +331,7 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
       } else if (t.orderType === 'team_member' && t.refId) {
         const appRef = db.collection('teamApplications').doc(t.refId);
         await appRef.update({
-          paymentStatus: 'confirmed', status: 'active', ...noteUpdate, paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,
+          paymentStatus: 'confirmed', status: 'active', ...noteUpdate, ...pmUpdate, paidAt: now, paidConfirmedBy: by, paidConfirmedByName: byName, updatedAt: now,
         });
         // 開通隊員折扣資格（依年度）
         const app = (await appRef.get()).data();
@@ -323,7 +342,7 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
         }
       }
       // 比賽/課程/入隊「臨櫃現金」收款確認 → 金額寫入該館當日結帳加減項（＋現金補入，note＝人名＋活動名）
-      if (t.paymentMethod === 'cash' && ['course', 'competition', 'team_member'].includes(t.orderType)) {
+      if (pm === 'cash' && ['course', 'competition', 'team_member'].includes(t.orderType)) { // 用更正後的方式判斷（改成電子支付就不寫現金補入；改成現金則要寫）
         try {
           await require('../services/settlementService').addCashAdjustment({
             gymId: t.gymId, amount: t.amount,

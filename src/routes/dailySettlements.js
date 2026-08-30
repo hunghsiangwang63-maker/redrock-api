@@ -1061,4 +1061,5 @@ router.get('/invoice-export', authenticate, requireManager, async (req, res) => 
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+router.checkInvoiceRolloverDue = checkInvoiceRolloverDue; // 供 E2E 直接驗證（比照 gyms.js 的 getGymStatusForDate 慣例）
 module.exports = router;

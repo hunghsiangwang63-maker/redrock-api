@@ -190,6 +190,10 @@ const syncFinalResults = async (competitionId) => {
     updated++;
   });
   if (updated) await batch.commit();
+  // 記錄「已完成成績回寫」於賽事文件本身（比照 sendCompetitionNotice 的 lastNoticeSentAt），
+  // 供員工端按鈕改顯示「已完成成績回寫」（allowed 白名單不涵蓋此欄位、故直接 .update 寫入，
+  // 不影響 updateCompetition 的欄位權限控管）。
+  if (updated) await ref.update({ lastFinalResultsSyncedAt: now, lastFinalResultsSyncedCount: updated });
   return { updated, skipped };
 };
 

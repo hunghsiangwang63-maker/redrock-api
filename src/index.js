@@ -207,7 +207,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.406.0-competition-notice-results-button-labels',
+    version: '3.407.0-ticket-approval-sweep-replaces-cloud-function',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
@@ -304,6 +304,10 @@ if (require.main === module) {
     require('./services/courseService').sweepExpiredTrialPayments()
       .then(r => { if (r.cancelled > 0) console.log(`[試上逾期] 釋放 ${r.cancelled} 筆、遞補 ${r.promotedSessions} 場次`); })
       .catch(e => console.error('[試上逾期] 失敗', e.message));
+    // 單次入場券逾時未審核自動取消（每小時；取代已刪除的 Firebase Cloud Function autoExpireSingleEntryTickets）
+    require('./routes/passes').sweepExpiredTicketApprovals()
+      .then(r => { if (r.cancelled > 0) console.log(`[單次券逾期] 自動取消 ${r.cancelled} 筆未審核票券`); })
+      .catch(e => console.error('[單次券逾期] 失敗', e.message));
   }, 60 * 60 * 1000);
 }
 

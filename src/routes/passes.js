@@ -866,4 +866,52 @@ router.post('/single-entry/:id/transfer',
   }
 );
 
+// ── 每小時排程：自動取消超過 24 小時未審核的單次入場券 ──
+// 取代 2026-06-12 部署、現已刪除的 Firebase Cloud Function（autoExpireSingleEntryTickets，
+// 每小時觸發一次、asia-east1、與現行系統的 singleEntryTickets 資料模型獨立運作）——原本只有
+// 「按核准/拒絕當下」才會被動檢查逾期（見上方 /single-entry/:id/approve、batch/approve），
+// 沒有主動巡邏機制；此函式補上主動巡邏，並額外通知發放人員（原 Cloud Function 版本沒有這個
+// 通知，改用系統既有的 createNotification 慣例補上，讓發放人員知道要不要重新申請）。
+// 掛進 index.js 每小時 setInterval（比照 runCardTransferExpiry／sweepExpiredTrialPayments）。
+async function sweepExpiredTicketApprovals() {
+  const db = getDb();
+  const now = new Date();
+  // 單一等值查詢＋記憶體過濾逾期（避開 status+approvalDeadline 複合索引需求，比照本專案其餘
+  // 逾期掃描慣例；待審核票券數量在任何時刻都很少，記憶體過濾成本可忽略）。
+  const snapAll = await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS)
+    .where('status', '==', 'pending_approval')
+    .get();
+  const expiredDocs = snapAll.docs.filter(d => {
+    const dl = d.data().approvalDeadline;
+    if (!dl) return false;
+    const dlDate = typeof dl.toDate === 'function' ? dl.toDate() : new Date(dl);
+    return dlDate <= now;
+  });
+  if (!expiredDocs.length) return { cancelled: 0 };
+
+  const { createNotification } = require('../services/notificationService');
+  const batch = db.batch();
+  expiredDocs.forEach(d => {
+    batch.update(d.ref, { status: 'cancelled', cancelReason: 'approval_timeout', updatedAt: now });
+  });
+  await batch.commit();
+
+  for (const d of expiredDocs) {
+    const t = d.data();
+    try {
+      await createNotification({
+        gymId: t.gymId,
+        targetStaffId: t.soldByStaffId,
+        type: 'single_entry_ticket_auto_cancelled',
+        title: '單次入場券已逾時自動取消',
+        body: `${t.memberName} 的單次入場券已超過 24 小時無人審核，系統已自動取消，如需要請重新申請。`,
+        referenceId: d.id,
+        referenceType: 'singleEntryTicket',
+      });
+    } catch (e) { /* 單筆通知失敗不影響其餘票券的取消結果 */ }
+  }
+  return { cancelled: expiredDocs.length };
+}
+router.sweepExpiredTicketApprovals = sweepExpiredTicketApprovals; // 供 index.js 排程呼叫（比照 gyms.js 慣例）
+
 module.exports = router;

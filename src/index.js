@@ -207,7 +207,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.403.0-today-competition-invoice',
+    version: '3.404.0-auto-enable-scoring',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
@@ -289,6 +289,9 @@ if (require.main === module) {
       console.log(`[值班提醒] 目標日 ${r.targetDate}：發送 ${r.sent}、略過(已送) ${r.skipped}、共 ${r.total} 班`);
     } catch (e) { console.error('[值班提醒] 失敗', e.message); }
   };
+  // 賽前 10 分鐘自動開啟計分系統「計分中」（每 5 分鐘檢查；見 competitionSyncService）
+  try { require('./services/competitionSyncService').startAutoScoringTimer(); } catch (e) { console.error('[自動開計分] 啟動失敗:', e.message); }
+
   setInterval(() => {
     const dateStr = taiwanToday();
     if (new Date().getHours() === 9 && lastInstallmentRunDate !== dateStr) {

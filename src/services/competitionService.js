@@ -86,7 +86,7 @@ const computeCompetitionFee = async ({ competition, birthday, memberId, partnerG
 // 賽事管理
 // ══════════════════════════════════════════════════════
 
-const createCompetition = async ({ name, description, gymId, registrationStart, registrationEnd, earlyBirdDeadline, eventDate, divisions, customFields, waiverContent, scoringSystem, webhookUrl, fees, refundPolicies, status, paymentDeadlineDays, staffId }) => {
+const createCompetition = async ({ name, description, gymId, registrationStart, registrationEnd, earlyBirdDeadline, eventDate, eventStartTime, divisions, customFields, waiverContent, scoringSystem, webhookUrl, fees, refundPolicies, status, paymentDeadlineDays, staffId }) => {
   if (!SCORING_SYSTEMS.includes(scoringSystem)) {
     throw { code: 'INVALID_SCORING_SYSTEM', message: 'scoringSystem 必須為 rating_system 或 competition_management_v2' };
   }
@@ -101,6 +101,7 @@ const createCompetition = async ({ name, description, gymId, registrationStart, 
     id, name, description: description || '',
     gymId: gymId || null,
     registrationStart, registrationEnd, eventDate,
+    eventStartTime: eventStartTime || null, // 比賽開始時間 HH:MM（選填；供賽前10分鐘自動開啟計分，未填預設 09:00）
     earlyBirdDeadline: earlyBirdDeadline || null,
     divisions: divisions.map(d => ({
       id: d.id || uuidv4(),
@@ -203,7 +204,7 @@ const updateCompetition = async (competitionId, updates) => {
   }
 
   const oldDivisions = doc.data().divisions || [];
-  const allowed = ['name', 'description', 'gymId', 'registrationStart', 'registrationEnd', 'earlyBirdDeadline', 'eventDate',
+  const allowed = ['name', 'description', 'gymId', 'registrationStart', 'registrationEnd', 'earlyBirdDeadline', 'eventDate', 'eventStartTime',
     'divisions', 'customFields', 'waiverContent', 'scoringSystem', 'webhookUrl', 'status', 'fees', 'refundPolicies', 'paymentDeadlineDays'];
   const payload = { updatedAt: new Date() };
   allowed.forEach(f => { if (updates[f] !== undefined) payload[f] = updates[f]; });

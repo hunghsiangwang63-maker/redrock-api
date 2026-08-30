@@ -191,4 +191,56 @@ const pullFinalResults = async (competition) => {
   return { updated: Object.keys(results).length, results };
 };
 
-module.exports = { COMP_SCORING, isCompScoring, syncCompEvent, syncCompAthlete, syncAllAthletes, removeCompAthlete, pullFinalResults };
+// ── 賽前 10 分鐘自動開啟計分（2026-08-30：現場屢次忘記開「🟢 計分中」）──────────
+// 每 5 分鐘檢查：open 賽事 && eventDate=今天 && 已對接（compDocId）&& 未處理過 →
+// 現在時間 >= (eventStartTime||'09:00') − 10 分鐘 → 讀計分系統賽事：未 ended 且未開啟 →
+// scoringEnabled=true ＋ 站內通知同館管理員。不論實際有沒有改（已手動開/已結束皆然），
+// RedRock 賽事標 scoringAutoEnabledAt（冪等：只自動處理一次——之後管理員手動關閉不會被重開）。
+const autoEnableScoringSweep = async () => {
+  try {
+    const db = getDb();
+    const { taiwanToday } = require('../utils/taiwanDate');
+    const today = taiwanToday();
+    const snap = await db.collection('competitions').where('status', '==', 'open').get();
+    const now = new Date(); // TZ=Asia/Taipei
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    for (const d of snap.docs) {
+      const c = d.data();
+      if (c.eventDate !== today || !c.compDocId || c.scoringAutoEnabledAt) continue;
+      const st = /^\d{2}:\d{2}$/.test(c.eventStartTime || '') ? c.eventStartTime : '09:00';
+      const [hh, mm] = st.split(':').map(Number);
+      if (nowMin < hh * 60 + mm - 10) continue; // 未到開賽前 10 分鐘
+      let action = 'skipped';
+      try {
+        const cdb = getCompDb();
+        const evRef = cdb.collection('competitions').doc(c.compDocId);
+        const ev = await evRef.get();
+        if (ev.exists && ev.data().ended !== true && ev.data().scoringEnabled !== true) {
+          await evRef.update({ scoringEnabled: true });
+          action = 'enabled';
+          try {
+            const { notifyRoleInGym } = require('./notificationService');
+            await notifyRoleInGym(c.gymId, ['gym_manager', 'super_admin'], {
+              type: 'scoring_auto_enabled', title: '計分系統已自動開啟',
+              body: `「${c.name}」開賽前 10 分鐘（${st}），計分系統「計分中」已自動開啟。`,
+            });
+          } catch (e) { console.error('[自動開計分] 通知失敗（不阻斷）:', e.message); }
+        }
+      } catch (e) { console.error('[自動開計分] 讀寫計分系統失敗（下輪再試）:', e.message); continue; }
+      await d.ref.update({ scoringAutoEnabledAt: new Date(), scoringAutoEnableAction: action });
+      console.log(`[自動開計分] ${c.name}: ${action}`);
+    }
+  } catch (e) { console.error('[自動開計分] sweep 失敗:', e.message); }
+};
+
+// 啟動排程（index.js 呼叫；global 旗標防多次 require 重複掛 interval，比照 staffEntry sweep 模式）
+const startAutoScoringTimer = () => {
+  if (global.__autoScoringTimerStarted) return;
+  global.__autoScoringTimerStarted = true;
+  setInterval(autoEnableScoringSweep, 5 * 60 * 1000);
+  setTimeout(autoEnableScoringSweep, 20 * 1000); // 開機 20 秒後先跑一次（部署當下若已在窗口內即刻生效）
+};
+
+module.exports = { COMP_SCORING, isCompScoring, syncCompEvent, syncCompAthlete, syncAllAthletes, removeCompAthlete, pullFinalResults,
+  autoEnableScoringSweep, startAutoScoringTimer,
+};

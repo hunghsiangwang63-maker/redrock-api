@@ -3109,6 +3109,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 ## 目前進度（2026-08-29 續7）— 排班重要事項加「團體體驗」類別
 > 後端 `/health` `3.400.0-schedule-event-group-experience`；E2E 3/3。三處白名單同步：`scheduleService.EVENT_CATEGORIES`＋`schedule.js` 兩個路由 validator＋前端 `SchedulePage.EVENT_CATEGORY_META`（👥 team teal `#0E7C86`，排在定線後/其他前）。循環安排/檢視彈窗/月曆色塊皆自動支援（讀同一 META）。**類別按鈕固定同一列**（web `19345c1`：nowrap 等分、字級 11、「維修/保養」按鈕簡稱「維修」`shortLabel`；實機截圖驗證六鈕一列不換行）。
 
+## 目前進度（2026-08-30）— 比賽日當天現場迭代（202608 賽事進行中）
+> 比賽日當天連續小改，皆即時部署。後端 `3.402.0`；web `c22b595`/`35962af` 等。
+- ✅ **比賽推播查證＋圖片**：確認 07:58 廣播「即將開賽」成功發 61/61 位（`memberHomeReminders` 集合——⚠ 集合名非 memberReminders，查錯會誤判 0 筆）；測試帳號 0900123123 補單發一則＋補圖；**首頁提醒卡縮圖（44×44）點擊開全螢幕看完整圖**（lightbox，web `35962af`）。
+- ✅ **報到 QR 輪詢**（web `c22b595`）：選手開著報到 QR 每 3 秒輪詢 checkin-token，掃碼完成畫面即時切「✅ 已完成報到」（原本要關掉重開）。
+- 🐞 **修：名單「✅ 已報到」標籤從未顯示**（`3.402.0-reg-list-checkedin-field`）：`REGISTRATION_LIST_FIELDS` 投影漏 `checkedInAt`——8/29 加的名單報到標籤因此恆不顯示；補 `checkedInAt`/`checkedInByName` 兩欄，真實資料驗證（現場已 40 位報到全部正確帶出）。**教訓：對「投影白名單」端點加新顯示欄位時，投影清單必須同步加**（此端點 8/27 才為 egress 優化改投影制，之後新增欄位都要記得）。
+- ✅ **GCloud 用量**：8/29 已入帳 $4.67＋預估 ~$8-9 最終（8/28 最終結算 $11.56——帳單 1-2 天延遲入帳，當天讀數會偏低）；月累計 8/1-29 $2,234.96、月底幾乎不再增長。**已設預算警示「RedRock 月費用警示」**（帳單帳戶級、$600/月、50/90/100% email、僅警告不停服務）；⚠ 發現既有舊預算「Firebase Project redrock-dev-a35c1」$300/月（非本次建）——正常月費 $250-350 會常態觸發它，建議刪除或調高（待使用者決定）。**「會員系統降回免費方案」評估＝不可行**（讀取每日數十萬次 vs 免費 5萬/天、egress ~60-100GiB/月 vs 免費 10GiB/月；Spark 超額直接拒絕服務＝系統停擺）。
+
 ## 目前進度（2026-08-29 續6）— 定期票持有人報表 Excel 下載
 > 需求：會員資料查詢→定期票分頁要能下 Excel。後端 `/health` `3.399.0-active-passes-xlsx`；真實資料驗證（28 位持有人、欄位/迴歸皆正確）。commit 後端＋web。
 - ✅ **抽共用 `buildActivePassGroups`**（列表 `GET /reports/active-passes` 與新下載端點共用組裝，補 **phone/credits** 欄——members 權威補齊）；新增 `GET /reports/active-passes/download`（**requireManager**，比照 2026-07-24 全站下載政策）——單表欄位：序號/票種/姓名/電話/開始日/到期日/剩餘次數(回數票)/暫停期間；到期日＝臨時休館補償後（與列表/入場資格同源）。

@@ -1351,20 +1351,6 @@ router.delete('/:id',
   }
 );
 
-// ── GET /members/:id/qrcode - 取得 QR Code ──────────────────────
-router.get('/:id/qrcode',
-  authenticate,
-  checkPermission('members.read'),
-  async (req, res) => {
-    try {
-      const member = await memberService.getMember(req.params.id);
-      res.json({ qrCode: member.qrCode, qrCodeId: member.qrCodeId });
-    } catch (err) {
-      res.status(404).json({ error: 'MEMBER_NOT_FOUND' });
-    }
-  }
-);
-
 
 
 // ── POST /members/:id/children - 新增子會員 ──────────────────────

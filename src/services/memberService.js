@@ -1,26 +1,18 @@
 const { taiwanToday } = require('../utils/taiwanDate');
 const { getDb, COLLECTIONS, FieldPath } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
-const QRCode = require('qrcode');
 const dayjs = require('dayjs');
 const { ageOf, isUnder4 } = require('../utils/age');
 
 // ── QR Code 產生 ──────────────────────────────────────────────────
-const generateQRCode = async (memberId, memberPhone) => {
+// 2026-08-31：移除靜態 base64 QR 圖片產生與儲存（member.qrCode，~4.6KB/筆）——全庫掃描
+// 確認全前端（會員/員工端）與獨立端點 GET /:id/qrcode 皆無人讀取此圖（入場實際走動態
+// qrToken，會員 App 前端即時繪製）；此欄位卻在會員登入、/auth/member/me、會員詳情三個
+// 高頻端點被完整讀取＋回傳，純屬浪費 Firestore 讀取/傳輸費用。只保留 qrCodeId（短字串，
+// getMemberByQRCode 仍依賴它反查會員），不再產生圖片本身。
+const generateQRCode = async (memberId) => {
   const qrCodeId = `RR-${memberId.slice(0, 8).toUpperCase()}`;
-  const qrData = JSON.stringify({ type: 'member', id: memberId, qrCodeId });
-
-  // 產生 base64 QR Code 圖片，直接內嵌回傳（不再上傳 Firebase Storage）：
-  //  - 入場實際走動態 qrToken（會員 App 前端即時繪製），此靜態圖僅作身分 QR。
-  //  - 無人以路徑/簽名 URL 讀取此圖；直接存 base64 data URI，與 seed 舊會員一致，
-  //    並移除 Storage 依賴（避免 Storage 異常時卡死建立會員）。
-  const qrBase64 = await QRCode.toDataURL(qrData, {
-    width: 300,
-    margin: 2,
-    color: { dark: '#8B1A1A', light: '#FFFFFF' },
-  });
-
-  return { qrCodeId, qrCodeUrl: qrBase64 }; // qrCodeUrl 現為 base64 data URI（欄位名沿用）
+  return { qrCodeId };
 };
 
 // ── 判斷封鎖原因 ──────────────────────────────────────────────────
@@ -661,7 +653,7 @@ const createMember = async (memberData, staffId, options = {}) => {
   const isMinor = _age !== null && _age < 18;
 
   // 產生 QR Code
-  const { qrCodeId, qrCodeUrl } = await generateQRCode(memberId, memberData.phone);
+  const { qrCodeId } = await generateQRCode(memberId);
 
   const now = new Date();
   const member = {
@@ -676,7 +668,6 @@ const createMember = async (memberData, staffId, options = {}) => {
     parentName: memberData.parentName || null,
     parentPhone: memberData.parentPhone || null,
     parentRelation: memberData.parentRelation || null,
-    qrCode: qrCodeUrl,
     qrCodeId,
     isMinor,
     isChildAccount: options.isChildAccount || false,
@@ -738,6 +729,7 @@ const sanitizeMember = (m) => {
   if (!m) return m;
   const out = { ...m };
   for (const f of SENSITIVE_FIELDS) delete out[f];
+  delete out.qrCode; // 2026-08-31：欄位已停用（見 generateQRCode 註解），雙重防護舊資料清理過渡期
   return out;
 };
 

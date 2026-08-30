@@ -710,6 +710,41 @@ router.get('/today',
         } catch (e) { courseInvoiceByGym[gid] = new Map(); }
       }));
 
+      // 比賽報到入場（isCompetitionCheckin/registrationId）：附報名費發票資訊，讓「今日入場」清單
+      // 也能開立/查看同一張比賽報名費發票（2026-08-30 比賽日需求，比照上面 course_access 同一模式）。
+      // ⚠ 用 fieldMask 批次讀報名文件——competitionRegistrations 內嵌簽名圖（~92KB/筆），不能整份拉。
+      const compRegIds = [...new Set(records.filter(r => r.registrationId).map(r => r.registrationId))];
+      const compInvByReg = new Map();
+      if (compRegIds.length) {
+        try {
+          const compSvc = require('../services/competitionService');
+          const regDocs = await db.getAll(...compRegIds.map(id => db.collection('competitionRegistrations').doc(id)), {
+            fieldMask: ['memberId', 'memberName', 'competitionId', 'divisionName', 'paymentMethod',
+              'paidAmount', 'memberPaidAmount', 'registrationFee', 'insuranceFee', 'receivedAmountOverride',
+              'status', 'refundRequested'],
+          });
+          const compIds = [...new Set(regDocs.filter(d => d.exists).map(d => d.data().competitionId).filter(Boolean))];
+          const compNames = {};
+          if (compIds.length) {
+            const compDocs = await db.getAll(...compIds.map(id => db.collection('competitions').doc(id)), { fieldMask: ['name'] });
+            compDocs.forEach(d => { if (d.exists) compNames[d.id] = d.data().name || ''; });
+          }
+          regDocs.forEach(d => {
+            if (!d.exists) return;
+            const reg = d.data();
+            if (reg.status === 'cancelled' || reg.refundRequested) return; // 已取消/申請退費不給開票（比照名單規則）
+            compInvByReg.set(d.id, {
+              registrationId: d.id, competitionId: reg.competitionId || null,
+              competitionName: compNames[reg.competitionId] || '', divisionName: reg.divisionName || '',
+              memberId: reg.memberId || null, memberName: reg.memberName || '',
+              paymentMethod: reg.paymentMethod || null,
+              registrationFee: reg.registrationFee ?? null, insuranceFee: reg.insuranceFee ?? null,
+              receivedAmount: compSvc.computeNetReceivedAmount(reg),
+            });
+          });
+        } catch (e) { console.error('[今日入場] 比賽發票資訊附掛失敗（不阻斷）:', e.message); }
+      }
+
       // 今日全部紀錄（依館分組排列；當日量級小、全量回傳讓清單與統計數一致）
       // ⚠ amountPaid/rentShoes/rentChalk 原本漏在此投影（前端「今日入場紀錄」一律顯示空白金額/無岩鞋粉袋標籤，非僅線上支付才如此）
       // ⚠ memberId/entryFee/shoesPrice/chalkPrice/partnerVendor/isTeamDiscount 原本也漏在此投影——
@@ -731,6 +766,9 @@ router.get('/today',
             shoesPrice: r.shoesPrice || 0, chalkPrice: r.chalkPrice || 0,
             ...(courseInv ? {
               courseInvoice: { courseId: courseInv.courseId, courseName: courseInv.courseName, enrollmentId: courseInv.enrollmentId, paymentMethod: courseInv.paymentMethod, receivedAmount: courseInv.receivedAmount },
+            } : {}),
+            ...(r.registrationId && compInvByReg.has(r.registrationId) ? {
+              competitionInvoice: compInvByReg.get(r.registrationId),
             } : {}),
           };
         })

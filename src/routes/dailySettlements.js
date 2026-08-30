@@ -12,6 +12,26 @@ const { authenticate, checkPermission, requireStationAuth, requireManager } = re
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
+// ── 偶數月最後一個營業日提醒（換發票本／設定下一期發票號碼）──────────────────
+// 判斷：今天是偶數月 && 今天有營業 && 「明天到月底」都沒有營業日（=今天是這個月最後一次結帳機會）。
+// 只在偶數月且距月底 ≤6 天時才展開逐日查詢（getGymStatusForDate 內部各查一次 Firestore），
+// 平時（奇數月、或偶數月但離月底還遠）直接短路回 false，不產生額外查詢成本。
+async function checkInvoiceRolloverDue(gymId, todayStr) {
+  const d = dayjs(todayStr);
+  if ((d.month() + 1) % 2 !== 0) return false; // 僅偶數月（月底提醒下一期＝奇數月開始）
+  const daysInMonth = d.daysInMonth();
+  const dayOfMonth = d.date();
+  if (daysInMonth - dayOfMonth > 6) return false; // 離月底還遠，不可能是最後營業日
+  const { getGymStatusForDate } = require('./gyms');
+  const todayStatus = await getGymStatusForDate(gymId, todayStr);
+  if (!todayStatus.isOpen) return false; // 今天本身沒營業，不算「最後一個營業日」
+  for (let dd = dayOfMonth + 1; dd <= daysInMonth; dd++) {
+    const st = await getGymStatusForDate(gymId, d.date(dd).format('YYYY-MM-DD'));
+    if (st.isOpen) return false; // 後面還有營業日
+  }
+  return true;
+}
+
 // ── 入場費六分類（結帳摘要 GET /today 與月銷售 Excel monthly-export 共用）──────────
 // 折扣為 checkIn 旗標（隊員 isTeamDiscount、優惠券＝舊折扣卡 legacyDiscount 或優惠折扣券卡
 // discount_card 入場），疊加另拆「隊員＋優惠券」；無折扣才依原入場類型（成人/學生/兒童/…）。
@@ -718,6 +738,8 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
 
     await db.collection('dailySettlements').doc(id).set(settlement);
 
+    const invoiceRolloverDue = await checkInvoiceRolloverDue(gymId, today).catch(() => false);
+
     // 警示通知
     if (Math.abs(difference) > 200) {
       const managersSnap = await db.collection('staff').where('role', 'in', ['super_admin', 'gym_manager']).get();
@@ -737,7 +759,7 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
     }
 
     const doneWord = wasSettled ? '已更新今日結帳' : '結帳完成';
-    res.status(201).json({ settlement, resettled: wasSettled, message: Math.abs(difference) > 200 ? `${doneWord}，差異 NT$${difference} 已通知管理員` : `${doneWord}！` });
+    res.status(201).json({ settlement, resettled: wasSettled, invoiceRolloverDue, message: Math.abs(difference) > 200 ? `${doneWord}，差異 NT$${difference} 已通知管理員` : `${doneWord}！` });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

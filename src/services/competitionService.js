@@ -690,7 +690,7 @@ const promoteNextWaitlist = async (competitionId, divisionId) => {
 // 3.5MB+），是名單查詢延遲的主因。.select() 讓 Firestore 從伺服器端就不回傳這兩欄，非事後在
 // Node 端過濾（事後過濾無法省下傳輸時間）。新增欄位時記得一併加進這份清單，否則會被投影掉。
 const REGISTRATION_LIST_FIELDS = [
-  'armSpan', 'bankLastFive', 'bankName', 'birthday', 'cancelReason', 'cancelledAt', 'checkinToken',
+  'armSpan', 'bankLastFive', 'bankName', 'birthday', 'cancelReason', 'cancelledAt', 'checkedInAt', 'checkedInByName', 'checkinToken',
   'claimName', 'claimPhone', 'claimedAt', 'competitionId', 'competitionName', 'customFieldValues',
   'divisionId', 'divisionName', 'email', 'emergencyContact', 'emergencyPhone', 'emergencyRelation',
   'formRejected', 'formReturnReason', 'formReturned', 'formReturnedAt', 'formReturnedBy', 'gender',

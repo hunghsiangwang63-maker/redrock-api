@@ -3115,6 +3115,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **報到 QR 輪詢**（web `c22b595`）：選手開著報到 QR 每 3 秒輪詢 checkin-token，掃碼完成畫面即時切「✅ 已完成報到」（原本要關掉重開）。
 - 🐞 **修：名單「✅ 已報到」標籤從未顯示**（`3.402.0-reg-list-checkedin-field`）：`REGISTRATION_LIST_FIELDS` 投影漏 `checkedInAt`——8/29 加的名單報到標籤因此恆不顯示；補 `checkedInAt`/`checkedInByName` 兩欄，真實資料驗證（現場已 40 位報到全部正確帶出）。**教訓：對「投影白名單」端點加新顯示欄位時，投影清單必須同步加**（此端點 8/27 才為 egress 優化改投影制，之後新增欄位都要記得）。
 - ✅ **今日入場比賽報到列附報名費發票**（`3.403.0-today-competition-invoice`；現場 59 筆實測全帶到）：`GET /checkin/today` 對 `registrationId` 的入場批次附 `competitionInvoice`（**fieldMask 讀報名文件避 92KB 簽名圖**；已取消/申請退費不給；賽名另查 competitions name）；前端今日入場列加 `InvoiceButtonAuto`（sourceType competition、復用既有 compInvoiceTarget modal、0 元隱藏）——與賽事名單/報到掃描三入口同一張發票互相防重複。
+- ✅ **賽前 10 分鐘自動開啟計分**（`3.404.0-auto-enable-scoring`）：解「當天忘記開🟢計分中」（8/28 體檢提醒過、今天又靠手動）——賽事加 `eventStartTime`（HH:MM 選填、建賽/編輯表單有欄位、**未填預設 09:00**）；`competitionSyncService.autoEnableScoringSweep` **每 5 分鐘**檢查（開機20秒也跑一次）：open＋eventDate=今天＋已對接＋未處理過 → 現在 ≥ 開始時間−10分 → 讀計分系統賽事（未 ended 且未開）→ `scoringEnabled=true`＋站內通知同館管理員（`scoring_auto_enabled`）。**冪等**：不論實際結果（enabled/skipped）都標 `scoringAutoEnabledAt`——只自動處理一次，之後管理員手動關閉（如賽後）不會被重開。
 - ✅ **GCloud 用量**：8/29 已入帳 $4.67＋預估 ~$8-9 最終（8/28 最終結算 $11.56——帳單 1-2 天延遲入帳，當天讀數會偏低）；月累計 8/1-29 $2,234.96、月底幾乎不再增長。**已設預算警示「RedRock 月費用警示」**（帳單帳戶級、$600/月、50/90/100% email、僅警告不停服務）；⚠ 發現既有舊預算「Firebase Project redrock-dev-a35c1」$300/月（非本次建）——正常月費 $250-350 會常態觸發它，建議刪除或調高（待使用者決定）。**「會員系統降回免費方案」評估＝不可行**（讀取每日數十萬次 vs 免費 5萬/天、egress ~60-100GiB/月 vs 免費 10GiB/月；Spark 超額直接拒絕服務＝系統停擺）。
 
 ## 目前進度（2026-08-29 續6）— 定期票持有人報表 Excel 下載

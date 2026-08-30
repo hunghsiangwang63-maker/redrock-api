@@ -10,6 +10,7 @@
  */
 const admin = require('firebase-admin');
 const { getCompDb } = require('../config/compFirebase');
+const { getDb } = require('../config/firebase');
 
 const COMP_SCORING = 'competition_management_v2';
 const CAT_COLORS = ['#4e8ef7', '#f74e8e', '#2D7D46', '#854F0B', '#533AB7', '#0F6E56', '#A32D2D', '#B5762B'];
@@ -220,10 +221,13 @@ const autoEnableScoringSweep = async () => {
           action = 'enabled';
           try {
             const { notifyRoleInGym } = require('./notificationService');
-            await notifyRoleInGym(c.gymId, ['gym_manager', 'super_admin'], {
-              type: 'scoring_auto_enabled', title: '計分系統已自動開啟',
-              body: `「${c.name}」開賽前 10 分鐘（${st}），計分系統「計分中」已自動開啟。`,
-            });
+            for (const role of ['gym_manager', 'super_admin']) {
+              await notifyRoleInGym({
+                gymId: c.gymId, role,
+                type: 'scoring_auto_enabled', title: '計分系統已自動開啟',
+                body: `「${c.name}」開賽前 10 分鐘（${st}），計分系統「計分中」已自動開啟。`,
+              });
+            }
           } catch (e) { console.error('[自動開計分] 通知失敗（不阻斷）:', e.message); }
         }
       } catch (e) { console.error('[自動開計分] 讀寫計分系統失敗（下輪再試）:', e.message); continue; }

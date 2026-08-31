@@ -136,10 +136,14 @@ const getCourseAccess = async (memberId) => {
   const db = getDb();
   const today = taiwanToday();
 
-  // 找出此會員所有「未取消、未暫停」的報名紀錄
+  // 找出此會員所有「未取消、未暫停」的報名紀錄——courseEnrollments 平均 ~77KB/筆（內嵌
+  // portraitSignature/guardianSignature 簽名圖，最大 ~180KB），此函式被 verifyEntry（會員
+  // 產生入場QR）、/checkin/eligibility（電話搜尋）、/members/my/identity（會員首頁身份卡）
+  // 三個高頻端點呼叫，只需這幾個小欄位判斷課程學員資格，加 .select() 避免簽名圖被白白傳輸。
   const enrollSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
     .where('memberId', '==', memberId)
     .where('status', '==', 'confirmed')
+    .select('courseId', 'pauseStatus', 'refundPending', 'isMakeup', 'isTrial', 'date', 'sessionId', 'courseAccessStart', 'courseName')
     .get();
   const allEnrollments = enrollSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))

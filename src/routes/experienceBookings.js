@@ -360,7 +360,7 @@ router.get('/', authenticate, async (req, res) => {
     let ref = db.collection('experienceBookings');
     if (effectiveGymId) ref = ref.where('gymId','==',effectiveGymId);
     if (status) ref = ref.where('status','==',status);
-    const snap = await ref.get();
+    const snap = await ref.select(...STAFF_LIST_FIELDS).get();
     let bookings = snap.docs.map(d=>({ id:d.id,...d.data() }));
     if (from) bookings = bookings.filter(b=>b.bookingDate>=from);
     if (to)   bookings = bookings.filter(b=>b.bookingDate<=to);
@@ -391,6 +391,10 @@ const MY_BOOKING_FIELDS = [
   'wasReturned', 'lastReturnType', 'lastReturnReason', 'lastReturnByName', 'lastReturnAt',
   'refundRequested', 'refundAmount', 'refundAccount', 'refundBankCode', 'refundBankName', 'refundAccountName', 'refundHandlingFee',
 ];
+// 員工端主列表白名單：MY_BOOKING_FIELDS（會員端已核對過的欄位聯集）＋員工專屬欄位
+// （staffNote 員工備註、memberName 顯示是誰預約的）——同一份肥欄位排除原則。
+const STAFF_LIST_FIELDS = [...MY_BOOKING_FIELDS, 'staffNote', 'memberName'];
+
 router.get('/my', authenticateAny, async (req, res) => {
   try {
     const db = getDb();

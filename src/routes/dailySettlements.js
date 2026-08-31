@@ -126,11 +126,18 @@ async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
     const gymDoc = await db.collection('gyms').doc(gymId).get();
     result.printingEnabled = !!(gymDoc.exists && gymDoc.data().invoicePrintingEnabled === true);
     if (!result.printingEnabled) return result;
-    const invSnap = await db.collection('invoices').where('gymId', '==', gymId).get();
+    // 2026-08-31：原本查全館「歷史全部發票」再記憶體篩選今天——invoices 集合會隨營業時間
+    // 持續累積（現已破千筆/館），此函式被 GET /today（結帳頁載入，員工整天反覆呼叫）與
+    // POST /（結帳送出）共用，每次都白白讀取全部歷史發票再丟棄絕大多數，且問題只會隨時間惡化。
+    // 改用 gymId+issuedAt 複合索引做真正的資料庫端日期範圍查詢，只讀今天的發票。
+    const invSnap = await db.collection('invoices')
+      .where('gymId', '==', gymId)
+      .where('issuedAt', '>=', todayStart)
+      .where('issuedAt', '<=', todayEnd)
+      .get();
     const tsOf = (v) => v?.toDate ? v.toDate().getTime() : ((v?._seconds || 0) * 1000);
     const todayInvoices = invSnap.docs
       .map(d => d.data())
-      .filter(inv => { const t = tsOf(inv.issuedAt); return t >= todayStart.getTime() && t <= todayEnd.getTime(); })
       .sort((a, b) => tsOf(a.issuedAt) - tsOf(b.issuedAt));
     if (!todayInvoices.length) return result;
     // 依字軌分組，組內再依號碼排序找出連續區段——號碼不連續就視為換過捲，即使字軌相同也拆成新一段

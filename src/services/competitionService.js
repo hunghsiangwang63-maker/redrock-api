@@ -258,8 +258,11 @@ const getCompetitions = async (status) => {
   // 各組即時報名數（正取/候補）→ 會員端顯示「剩 N 位/額滿」
   for (const c of comps) {
     try {
+      // competitionRegistrations 平均 ~92KB/筆（內嵌簽名圖），此函式對每場賽事各查一次全部報名
+      // 只為算正取/候補人數——只需 divisionId/status 兩個小欄位，加 .select() 避免簽名圖被白白
+      // 傳輸。GET /competitions 是會員/員工兩端賽事清單頁共用的主要資料來源，中高頻。
       const regs = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS)
-        .where('competitionId', '==', c.id).get();
+        .where('competitionId', '==', c.id).select('divisionId', 'status').get();
       const byDiv = {};
       regs.docs.forEach(rd => {
         const r = rd.data();
@@ -725,13 +728,18 @@ const getCompetitionRegistrations = async (competitionId) => {
     .sort((a, b) => (a.registeredAt?._seconds || 0) - (b.registeredAt?._seconds || 0));
 };
 
+// 會員「我的紀錄」查自己的比賽報名——沿用 REGISTRATION_LIST_FIELDS（已排除簽名圖），
+// 排掉 staffNote（員工內部備註，不給會員看）、額外加 result（3.375.0 比賽成績回寫，會員
+// 端顯示組別名次用，該既有清單建立時間早於此功能、未收錄，故單獨補上）。
+const MEMBER_REG_FIELDS = [...REGISTRATION_LIST_FIELDS.filter(f => f !== 'staffNote'), 'result'];
 const getMemberRegistrations = async (memberId) => {
   const db = getDb();
   const snap = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS)
     .where('memberId', '==', memberId)
+    .select(...MEMBER_REG_FIELDS)
     .get();
   return snap.docs
-    .map(d => { const { staffNote, ...rest } = d.data(); return { id: d.id, ...rest }; }) // staffNote＝員工內部備註，不回傳會員
+    .map(d => ({ id: d.id, ...d.data() }))
     .sort((a, b) => (b.registeredAt?._seconds || b.createdAt?._seconds || 0) - (a.registeredAt?._seconds || a.createdAt?._seconds || 0));
 };
 

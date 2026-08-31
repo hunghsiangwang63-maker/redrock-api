@@ -795,9 +795,12 @@ const recordCompetitionRevenue = async ({ db, regId, sign = 1, refund = false, s
 const sweepExpiredCompetitionPayments = async () => {
   const db = getDb();
   const now = new Date();
+  // 每日 09:00 排程、全表跨賽事掃描（無 competitionId 限定）——補投影避免整份含簽名圖的
+  // 文件被讀出，只取判斷/後續動作實際用到的 9 個欄位。
   const snap = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS)
     .where('status', '==', 'confirmed')
     .where('paymentStatus', '==', 'pending')
+    .select('registrationFee', 'paymentMethod', 'bankLastFive', 'paymentDeadline', 'competitionId', 'divisionId', 'email', 'memberId', 'competitionName')
     .get();
   let cancelled = 0;
   for (const doc of snap.docs) {

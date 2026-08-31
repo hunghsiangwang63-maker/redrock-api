@@ -40,10 +40,13 @@ const toDate = (v) =>
 
 // 名下是否有任何有價值資料（子女或任一集合有紀錄）→ 回集合名，無則 null
 const findValue = async (db, memberId) => {
-  const kids = await db.collection(COLLECTIONS.MEMBERS).where('parentMemberId', '==', memberId).limit(1).get();
+  // 純存在性檢查，改空 select() 只回文件參照（不含任何欄位資料）——避免 courseEnrollments/
+  // competitionRegistrations 等內嵌簽名圖的肥集合命中時整份文件被讀出（每次每候選帳號最多
+  // 省一筆 ~90-180KB）。
+  const kids = await db.collection(COLLECTIONS.MEMBERS).where('parentMemberId', '==', memberId).select().limit(1).get();
   if (!kids.empty) return 'children';
   for (const [coll, field] of VALUE_COLLECTIONS) {
-    const s = await db.collection(coll).where(field, '==', memberId).limit(1).get();
+    const s = await db.collection(coll).where(field, '==', memberId).select().limit(1).get();
     if (!s.empty) return coll;
   }
   return null;
@@ -72,7 +75,10 @@ const sweepGhostAccounts = async ({ graceDays = DEFAULT_GRACE_DAYS, commit = tru
   const cutoff = dayjs().subtract(graceDays, 'day').toDate();
 
   // 單一 where（避免複合索引）：自助註冊 → 記憶體過濾 createdAt / 排除保護對象
-  const snap = await db.collection(COLLECTIONS.MEMBERS).where('registeredBy', '==', 'self').get();
+  // 每日 09:00 排程、全表掃描全部自助註冊會員——補投影只取迴圈實際用到的 6 欄位，
+  // 其餘（未滿寬限期/子帳號/隊員/VIP）在記憶體篩選前就不需要讀出完整文件。
+  const snap = await db.collection(COLLECTIONS.MEMBERS).where('registeredBy', '==', 'self')
+    .select('createdAt', 'isChildAccount', 'isTeamMember', 'memberType', 'name', 'phone').get();
 
   const deleted = [];
   let scanned = 0, skippedWithValue = 0;

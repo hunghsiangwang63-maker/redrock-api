@@ -335,6 +335,7 @@ router.get('/member/me', authenticateMember, async (req, res) => {
         email: member.email,
         birthday: member.birthday,
         gender: member.gender,
+        nickname: member.nickname || null,
         emergencyContact: member.emergencyContact || null,
         isBlocked: blockReasons.length > 0,
         blockReasons,

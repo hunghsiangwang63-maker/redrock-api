@@ -399,7 +399,10 @@ router.get('/search-member', authenticateMember, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// ── GET /climbing-routes?gymId=&includeArchived=1：員工路線清單（含完攀人數統計）──
+// ── GET /climbing-routes?gymId=&includeArchived=1：員工路線清單（含完攀人數統計＋按讚總數）──
+// 2026-09-02 修：原本直接把 likes（{memberId:true,...} 誰按過讚的完整清單）整包 spread 進回應，
+// 比會員端 /member（早就拿掉這欄位、只給統計值）晚了一步——雖然畫面沒顯示，但任何登入員工開
+// 瀏覽器開發者工具都看得到完整按讚者名單，非設計本意，改成只給彙總後的 likeCount。
 router.get('/', authenticate, async (req, res) => {
   try {
     const db = getDb();
@@ -415,7 +418,11 @@ router.get('/', authenticate, async (req, res) => {
       const rid = d.data().routeId;
       countByRoute[rid] = (countByRoute[rid] || 0) + 1;
     });
-    const routes = snap.docs.map(d => ({ id: d.id, ...d.data(), ascentCount: countByRoute[d.id] || 0 }))
+    const routes = snap.docs.map(d => {
+      const r = d.data();
+      const { likes, ...rest } = r; // 不把完整 likes map（含所有按讚者 memberId）回傳給員工端，比照會員端 /member 的既有做法
+      return { id: d.id, ...rest, likeCount: Object.keys(likes || {}).length, ascentCount: countByRoute[d.id] || 0 };
+    })
       .filter(r => includeArchived ? true : r.status !== 'archived')
       .sort((a, b) => (a.area || '').localeCompare(b.area || '', 'zh-Hant') || GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade));
     res.json({ routes });

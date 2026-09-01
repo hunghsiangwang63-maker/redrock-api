@@ -1,22 +1,28 @@
 /**
- * 抱石路線管理 + 完攀計分（2026-08-29 新增）
+ * 抱石路線管理 + 完攀計分（2026-08-29 新增）+ 社交互動（2026-09-01 新增：讚/分享/tag朋友）
  *
  * 集合：
- *   climbingRoutes  路線（gymId/area/color/grade V0~V10/setter/igUrl/setAt/status active|archived）
+ *   climbingRoutes  路線（gymId/area/color/grade V0~V10/setter/igUrl/setAt/status active|archived/
+ *                    likes:{memberId:true}——內嵌 map，路線數量規模小，不比照肥集合另開子集合）
  *   routeAscents    完攀記錄（doc id = `${routeId}_${memberId}` 天然去重；points 記錄當下快照、後端權威）
+ *   routeTags       路線標記朋友（每筆一個 from→to 配對，供逐一通知與查詢「我被誰標記過」）
  *
  * 計分：分數 = 難度基本分 × 嘗試層級係數（四捨五入）。
  *   預設值寫死於 DEFAULT_SCORING，可由 systemSettings/routeScoring 覆寫（目前無 UI、走 API/資料設定）。
  *   points 為記錄當下快照——之後調整計分設定不追溯既有記錄（與全站 accrual 快照原則一致）。
  *
- * 記錄限制：會員本人、且「今日已於該路線所屬館別入場（未取消）」才能記錄/更改（DELETE 不限）。
+ * 記錄限制：完攀記錄——會員本人、且「今日已於該路線所屬館別入場（未取消）」才能記錄/更改（DELETE 不限）。
+ *   2026-09-01 拍板：讚/分享/tag朋友「不限入館時使用」，任何時候都可操作（跟完攀記錄的入館限制分開）。
  *
  * 權限：
  *   路線編輯（POST/PUT/DELETE）＝管理員 / 場館電腦(operator·station) / 正職（比照 gyms.js requireAnnounceEditor）
  *   路線檢視（staff GET）＝任何登入員工；會員清單/排名/記錄＝會員 token。
  *
- * ⚠ 路由順序：/scoring-config、/rankings、/member 必須註冊在 /:id 之前（本專案踩過多次的參數路由雷）。
- * ⚠ routeAscents 文件小（無簽名圖等大欄位），全集合掃描搭配 .select() 投影可接受；
+ * Tag 隱私：被標記人姓名對外顯示一律遮蔽中間字（見 maskName，如「王小明」→「王X明」）——tag 記錄是
+ *   公開展示在路線頁面供大家看到「誰標記了誰」的社交功能，不能完整曝光個資。
+ *
+ * ⚠ 路由順序：/scoring-config、/rankings、/member、/search-member 必須註冊在 /:id 之前（本專案踩過多次的參數路由雷）。
+ * ⚠ routeAscents/routeTags 文件小（無簽名圖等大欄位），全集合掃描搭配 .select() 投影可接受；
  *   若日後記錄量大（數萬筆）再考慮聚合快取。
  */
 const express = require('express');
@@ -103,6 +109,17 @@ function taiwanMonthStart() {
 }
 
 const ascentDate = (a) => a.recordedAt && (a.recordedAt.toDate ? a.recordedAt.toDate() : new Date(a.recordedAt));
+
+// tag 顯示用姓名遮蔽——保留頭尾各一字，中間全部換成 X（如「王小明」→「王X明」、兩字名「王明」→「王X」、
+// 單字/空字串原樣返回）。只用在 tag 相關的公開顯示（誰標記了誰），完攀排名/暱稱等既有顯示不受影響。
+function maskName(name) {
+  const s = String(name || '');
+  const n = [...s]; // 用 code point 迭代避免把 emoji/組字字元切壞（姓名不太可能有，保險起見）
+  if (n.length <= 1) return s;
+  if (n.length === 2) return n[0] + 'X';
+  return n[0] + 'X'.repeat(n.length - 2) + n[n.length - 1];
+}
+const TAG_LIMIT = 5; // 單次最多同時標記幾人，避免濫用洗版
 
 // 未下架路線 id 集合——積分/排名只計 active 路線（2026-08-29 政策：下架＝換掉的線不再計分；
 // 完攀記錄本身保留，重新上架即恢復計分）。路線集合小（數十~數百條），全掃投影可接受。
@@ -239,14 +256,32 @@ router.get('/member', authenticateMember, async (req, res) => {
     const gymId = req.query.gymId;
     if (!gymId) return res.status(400).json({ error: 'MISSING_GYM', message: '請指定館別' });
     const cfg = await getScoringConfig(db);
-    const [routesSnap, mySnap, checkedIn] = await Promise.all([
+    const [routesSnap, mySnap, checkedIn, tagsSnap] = await Promise.all([
       db.collection('climbingRoutes').where('gymId', '==', gymId).get(),
       db.collection('routeAscents').where('memberId', '==', req.member.id).get(),
       checkedInTodayAt(db, req.member.id, gymId),
+      // 該館所有路線的標記記錄一次撈完（避免逐條路線各查一次 /tags 的 N+1），姓名已遮蔽供公開顯示
+      db.collection('routeTags').where('gymId', '==', gymId).select('routeId', 'fromMemberName', 'taggedMemberName').get(),
     ]);
+    const tagsByRoute = {};
+    tagsSnap.docs.forEach(d => {
+      const t = d.data();
+      if (!tagsByRoute[t.routeId]) tagsByRoute[t.routeId] = [];
+      tagsByRoute[t.routeId].push({ from: maskName(t.fromMemberName), tagged: maskName(t.taggedMemberName) });
+    });
     const routes = routesSnap.docs.map(d => ({ id: d.id, ...d.data() }))
       .filter(r => r.status !== 'archived')
-      .map(r => ({ ...r, basePoints: Number(cfg.gradePoints[r.grade]) || 0 }))
+      .map(r => {
+        const likes = r.likes || {};
+        const { likes: _drop, ...rest } = r; // 不把完整 likes map（含所有按讚者 memberId）回傳給前端，只給統計值
+        return {
+          ...rest,
+          basePoints: Number(cfg.gradePoints[r.grade]) || 0,
+          likeCount: Object.keys(likes).length,
+          liked: likes[req.member.id] === true,
+          tags: tagsByRoute[r.id] || [],
+        };
+      })
       .sort((a, b) => (a.area || '').localeCompare(b.area || '', 'zh-Hant') || GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade));
     // 只計「未下架路線」的積分（2026-08-29 政策）；myAscents map 仍全量供個別路線顯示
     const activeRoutes = await getActiveRouteIdSet(db);
@@ -268,6 +303,32 @@ router.get('/member', authenticateMember, async (req, res) => {
       checkedInToday: checkedIn,
       tiers: TIERS.map(t => ({ key: t.key, label: t.label, multiplier: Number(cfg.tierMultipliers[t.key]) || t.multiplier })),
     });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /climbing-routes/search-member?phone=&name=：搜尋會員供 tag 朋友用（authenticateMember）──
+// 安全考量（避免被拿來枚舉他人個資）：phone 需 >=7 碼精確比對；name 需完全比對（不做模糊/前綴搜尋）。
+// 回傳完整姓名/電話給「發起 tag 的人」自行核對是不是認識的那位——這裡不遮蔽，遮蔽只用在事後公開顯示
+// tag 記錄時（見 maskName）。排除會員自己、上限 10 筆。
+router.get('/search-member', authenticateMember, async (req, res) => {
+  try {
+    const db = getDb();
+    const phone = String(req.query.phone || '').trim();
+    const name = String(req.query.name || '').trim();
+    if (!phone && !name) return res.status(400).json({ error: 'MISSING_QUERY', message: '請輸入電話或姓名' });
+    if (phone && phone.length < 7) return res.status(400).json({ error: 'PHONE_TOO_SHORT', message: '電話請輸入至少 7 碼' });
+    let docs = [];
+    if (phone) {
+      const snap = await db.collection('members').where('phone', '==', phone).limit(10).get();
+      docs = snap.docs;
+    } else {
+      const snap = await db.collection('members').where('name', '==', name).limit(10).get();
+      docs = snap.docs;
+    }
+    const results = docs
+      .filter(d => d.id !== req.member.id)
+      .map(d => ({ id: d.id, name: d.data().name || '', phone: d.data().phone || '' }));
+    res.json({ results });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -429,6 +490,87 @@ router.delete('/:id/ascents', authenticateMember, async (req, res) => {
     if (!doc.exists) return res.status(404).json({ error: 'ASCENT_NOT_FOUND', message: '無此完攀記錄' });
     await ref.delete();
     res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── POST /climbing-routes/:id/like：按讚 toggle（不限入館，任何時候都可操作）──
+// 內嵌於路線文件的 likes map（非獨立集合）——路線數量規模小，讀清單時單一查詢即可帶出讚數與「我是否已讚」，
+// 不需要額外聚合查詢。
+router.post('/:id/like', authenticateMember, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection('climbingRoutes').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'ROUTE_NOT_FOUND', message: '路線不存在' });
+    const likes = doc.data().likes || {};
+    const already = likes[req.member.id] === true;
+    const admin = require('firebase-admin');
+    await ref.update({ [`likes.${req.member.id}`]: already ? admin.firestore.FieldValue.delete() : true, updatedAt: new Date() });
+    const newLikes = { ...likes };
+    if (already) delete newLikes[req.member.id]; else newLikes[req.member.id] = true;
+    res.json({ success: true, liked: !already, likeCount: Object.keys(newLikes).length });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── POST /climbing-routes/:id/tag：標記朋友（不限入館）；建立 routeTags 記錄＋發送首頁提醒卡通知被標記者 ──
+router.post('/:id/tag',
+  authenticateMember,
+  [body('taggedMemberIds').isArray({ min: 1, max: TAG_LIMIT }).withMessage(`請選擇 1~${TAG_LIMIT} 位朋友`)],
+  validate,
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const routeDoc = await db.collection('climbingRoutes').doc(req.params.id).get();
+      if (!routeDoc.exists) return res.status(404).json({ error: 'ROUTE_NOT_FOUND', message: '路線不存在' });
+      const route = routeDoc.data();
+      const targetIds = [...new Set(req.body.taggedMemberIds)].filter(id => id && id !== req.member.id);
+      if (!targetIds.length) return res.status(400).json({ error: 'NO_VALID_TARGET', message: '沒有可標記的對象' });
+      const memberDocs = await db.getAll(...targetIds.map(id => db.collection('members').doc(id)), { fieldMask: ['name'] });
+      const found = memberDocs.filter(d => d.exists);
+      if (!found.length) return res.status(404).json({ error: 'MEMBERS_NOT_FOUND', message: '找不到指定的會員' });
+      const now = new Date();
+      const batch = db.batch();
+      const created = found.map(d => {
+        const id = uuidv4();
+        const taggedName = d.data().name || '';
+        const rec = {
+          id, routeId: req.params.id, routeName: `${route.area || ''} ${route.color || ''} ${route.grade || ''}`.trim(),
+          gymId: route.gymId,
+          fromMemberId: req.member.id, fromMemberName: req.member.name || '',
+          taggedMemberId: d.id, taggedMemberName: taggedName,
+          createdAt: now,
+        };
+        batch.set(db.collection('routeTags').doc(id), rec);
+        return rec;
+      });
+      await batch.commit();
+      // 通知被標記者（首頁提醒卡，沿用既有機制；失敗不阻斷 tag 本身）
+      try {
+        const memberReminderService = require('../services/memberReminderService');
+        await Promise.all(created.map(t => memberReminderService.createReminder({
+          memberId: t.taggedMemberId,
+          title: `${maskName(t.fromMemberName)} 在路線上標記了你！`,
+          subtitle: t.routeName || '快去看看是哪條路線～',
+          icon: '🏷️',
+          link: `/member/routes?route=${req.params.id}`,
+        })));
+      } catch (e) { console.error('[路線tag] 通知發送失敗', e.message); }
+      res.status(201).json({ success: true, tagged: created.map(t => maskName(t.taggedMemberName)) });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
+// ── GET /climbing-routes/:id/tags：列出該路線的標記記錄（姓名已遮蔽，供公開顯示）──
+router.get('/:id/tags', authenticateMember, async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('routeTags').where('routeId', '==', req.params.id)
+      .select('fromMemberName', 'taggedMemberName', 'createdAt').get();
+    const tags = snap.docs
+      .map(d => d.data())
+      .map(t => ({ from: maskName(t.fromMemberName), tagged: maskName(t.taggedMemberName), createdAt: t.createdAt }))
+      .sort((a, b) => (b.createdAt?._seconds || 0) - (a.createdAt?._seconds || 0));
+    res.json({ tags });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

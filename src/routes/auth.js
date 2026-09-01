@@ -678,18 +678,20 @@ router.put('/member/profile',
   [
     body('name').trim().notEmpty().withMessage('姓名不可為空'),
     body('email').optional({ nullable: true }).isEmail().withMessage('Email 格式不正確'),
+    body('nickname').optional({ nullable: true }).isLength({ max: 10 }).withMessage('暱稱最多 10 個字'),
   ],
   validate,
   async (req, res) => {
     try {
       if (!req.member) return res.status(403).json({ error: 'FORBIDDEN', message: '僅會員可使用' });
       const db = getDb();
-      const { name, email, birthday, gender, emergencyContact } = req.body;
+      const { name, email, birthday, gender, emergencyContact, nickname } = req.body;
       const updates = { name, updatedAt: new Date() };
       if (email !== undefined) updates.email = email || null;
       if (birthday !== undefined) updates.birthday = birthday || null;
       if (gender !== undefined) updates.gender = gender || null;
       if (emergencyContact !== undefined) updates.emergencyContact = emergencyContact || null;
+      if (nickname !== undefined) updates.nickname = nickname ? String(nickname).trim().slice(0, 10) : null;
       await db.collection(COLLECTIONS.MEMBERS).doc(req.member.id).update(updates);
       const snap = await db.collection(COLLECTIONS.MEMBERS).doc(req.member.id).get();
       res.json({ success: true, member: { id: snap.id, ...snap.data() } });

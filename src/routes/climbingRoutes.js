@@ -18,8 +18,10 @@
  *   路線編輯（POST/PUT/DELETE）＝管理員 / 場館電腦(operator·station) / 正職（比照 gyms.js requireAnnounceEditor）
  *   路線檢視（staff GET）＝任何登入員工；會員清單/排名/記錄＝會員 token。
  *
- * Tag 隱私：被標記人姓名對外顯示一律遮蔽中間字（見 maskName，如「王小明」→「王X明」）——tag 記錄是
- *   公開展示在路線頁面供大家看到「誰標記了誰」的社交功能，不能完整曝光個資。
+ * Tag 隱私：被標記人姓名對外顯示——有設定暱稱（members.nickname，2026-09-02 新增的一般會員資料
+ *   欄位，也可在「個人資料」編輯）就直接顯示暱稱（自己選的公開稱呼、不需遮蔽）；沒設定則遮蔽本名
+ *   中間字（見 maskName，如「王小明」→「王X明」，見 publicDisplayName）。tag 記錄是公開展示在路線
+ *   頁面供大家看到「誰標記了誰」的社交功能，沒暱稱時不能完整曝光個資。
  *
  * ⚠ 路由順序：/scoring-config、/rankings、/member、/search-member 必須註冊在 /:id 之前（本專案踩過多次的參數路由雷）。
  * ⚠ routeAscents/routeTags 文件小（無簽名圖等大欄位），全集合掃描搭配 .select() 投影可接受；
@@ -119,6 +121,12 @@ function maskName(name) {
   if (n.length === 2) return n[0] + 'X';
   return n[0] + 'X'.repeat(n.length - 2) + n[n.length - 1];
 }
+// 公開顯示名稱——會員自訂暱稱（2026-09-02 新增，會員資料的一般欄位，非路線專屬）是自己選擇要公開露出
+// 的稱呼，直接顯示不需遮蔽；沒設定暱稱者一律回退顯示遮蔽後的本名（既有隱私預設不變）。
+function publicDisplayName(name, nickname) {
+  const n = String(nickname || '').trim();
+  return n || maskName(name);
+}
 const TAG_LIMIT = 5; // 單次最多同時標記幾人，避免濫用洗版
 
 // 未下架路線 id 集合——積分/排名只計 active 路線（2026-08-29 政策：下架＝換掉的線不再計分；
@@ -169,7 +177,7 @@ router.put('/scoring-config', authenticate, requireManager, async (req, res) => 
 
 // ── GET /climbing-routes/rankings?gymId=&period=month|all：排名（top 50＋呼叫者本人名次）──
 // gymId 不帶＝全館合併。只計「未下架路線」的成績；不參加排名（routeRankingOptOut）者不上榜、
-// 本人仍可看到自己的積分（myStats）；顯示名＝自訂暱稱（routeNickname）優先、否則本名快照。
+// 本人仍可看到自己的積分（myStats）；顯示名＝會員自訂暱稱（一般會員資料欄位 nickname）優先、否則本名快照。
 router.get('/rankings', authenticateAny, async (req, res) => {
   try {
     const db = getDb();
@@ -201,13 +209,13 @@ router.get('/rankings', authenticateAny, async (req, res) => {
     const settings = {};
     if (ids.length) {
       try {
-        const docs = await db.getAll(...ids.map(id => db.collection('members').doc(id)), { fieldMask: ['routeRankingOptOut', 'routeNickname'] });
+        const docs = await db.getAll(...ids.map(id => db.collection('members').doc(id)), { fieldMask: ['routeRankingOptOut', 'nickname'] });
         docs.forEach(d => { if (d.exists) settings[d.id] = d.data() || {}; });
       } catch (e) { /* join 失敗不阻斷排名（全部視為參加、顯示本名） */ }
     }
     const all = [...byMember.values()].map(r => ({
       ...r,
-      memberName: (settings[r.memberId]?.routeNickname || '').trim() || r.memberName,
+      memberName: (settings[r.memberId]?.nickname || '').trim() || r.memberName,
       optOut: settings[r.memberId]?.routeRankingOptOut === true,
     }));
     const ranked = all.filter(r => !r.optOut).sort((x, y) => y.points - x.points || y.ascents - x.ascents);
@@ -226,9 +234,12 @@ router.get('/rankings', authenticateAny, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// ── GET/PUT /climbing-routes/ranking-settings：會員排名偏好（參加與否＋暱稱限10字，存 members 文件）──
+// ── GET/PUT /climbing-routes/ranking-settings：會員排名偏好（參加與否）＋暱稱快速編輯 ──
+// 2026-09-02 續：暱稱已升級為一般會員資料欄位（members.nickname，也可在「個人資料」編輯，見
+// auth.js PUT /member/profile），這裡保留同一欄位的快速編輯入口（不用離開路線頁），寫入的是
+// 同一份資料、非另一個獨立欄位——兩處編輯完全同步，無資料分歧風險。
 router.get('/ranking-settings', authenticateMember, async (req, res) => {
-  res.json({ optOut: req.member.routeRankingOptOut === true, nickname: req.member.routeNickname || '' });
+  res.json({ optOut: req.member.routeRankingOptOut === true, nickname: req.member.nickname || '' });
 });
 router.put('/ranking-settings', authenticateMember, async (req, res) => {
   try {
@@ -238,13 +249,13 @@ router.put('/ranking-settings', authenticateMember, async (req, res) => {
     if (req.body.nickname !== undefined) {
       const nick = String(req.body.nickname || '').trim();
       if ([...nick].length > 10) return res.status(400).json({ error: 'NICKNAME_TOO_LONG', message: '暱稱最多 10 個字' });
-      updates.routeNickname = nick;
+      updates.nickname = nick || null;
     }
     await db.collection('members').doc(req.member.id).update(updates);
     res.json({
       success: true,
       optOut: updates.routeRankingOptOut !== undefined ? updates.routeRankingOptOut : (req.member.routeRankingOptOut === true),
-      nickname: updates.routeNickname !== undefined ? updates.routeNickname : (req.member.routeNickname || ''),
+      nickname: updates.nickname !== undefined ? (updates.nickname || '') : (req.member.nickname || ''),
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
@@ -327,7 +338,7 @@ router.get('/search-member', authenticateMember, async (req, res) => {
     }
     const results = docs
       .filter(d => d.id !== req.member.id)
-      .map(d => ({ id: d.id, name: d.data().name || '', phone: d.data().phone || '' }));
+      .map(d => ({ id: d.id, name: d.data().name || '', phone: d.data().phone || '', nickname: d.data().nickname || '' }));
     res.json({ results });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
@@ -525,7 +536,7 @@ router.post('/:id/tag',
       const route = routeDoc.data();
       const targetIds = [...new Set(req.body.taggedMemberIds)].filter(id => id && id !== req.member.id);
       if (!targetIds.length) return res.status(400).json({ error: 'NO_VALID_TARGET', message: '沒有可標記的對象' });
-      const memberDocs = await db.getAll(...targetIds.map(id => db.collection('members').doc(id)), { fieldMask: ['name'] });
+      const memberDocs = await db.getAll(...targetIds.map(id => db.collection('members').doc(id)), { fieldMask: ['name', 'nickname'] });
       const found = memberDocs.filter(d => d.exists);
       if (!found.length) return res.status(404).json({ error: 'MEMBERS_NOT_FOUND', message: '找不到指定的會員' });
       const now = new Date();
@@ -533,11 +544,12 @@ router.post('/:id/tag',
       const created = found.map(d => {
         const id = uuidv4();
         const taggedName = d.data().name || '';
+        const taggedNickname = d.data().nickname || '';
         const rec = {
           id, routeId: req.params.id, routeName: `${route.area || ''} ${route.color || ''} ${route.grade || ''}`.trim(),
           gymId: route.gymId,
-          fromMemberId: req.member.id, fromMemberName: req.member.name || '',
-          taggedMemberId: d.id, taggedMemberName: taggedName,
+          fromMemberId: req.member.id, fromMemberName: req.member.name || '', fromMemberNickname: req.member.nickname || '',
+          taggedMemberId: d.id, taggedMemberName: taggedName, taggedMemberNickname: taggedNickname,
           createdAt: now,
         };
         batch.set(db.collection('routeTags').doc(id), rec);
@@ -549,26 +561,30 @@ router.post('/:id/tag',
         const memberReminderService = require('../services/memberReminderService');
         await Promise.all(created.map(t => memberReminderService.createReminder({
           memberId: t.taggedMemberId,
-          title: `${maskName(t.fromMemberName)} 在路線上標記了你！`,
+          title: `${publicDisplayName(t.fromMemberName, t.fromMemberNickname)} 在路線上標記了你！`,
           subtitle: t.routeName || '快去看看是哪條路線～',
           icon: '🏷️',
           link: `/member/routes?route=${req.params.id}`,
         })));
       } catch (e) { console.error('[路線tag] 通知發送失敗', e.message); }
-      res.status(201).json({ success: true, tagged: created.map(t => maskName(t.taggedMemberName)) });
+      res.status(201).json({ success: true, tagged: created.map(t => publicDisplayName(t.taggedMemberName, t.taggedMemberNickname)) });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );
 
-// ── GET /climbing-routes/:id/tags：列出該路線的標記記錄（姓名已遮蔽，供公開顯示）──
+// ── GET /climbing-routes/:id/tags：列出該路線的標記記錄（供公開顯示；有暱稱顯示暱稱，否則遮蔽本名）──
 router.get('/:id/tags', authenticateMember, async (req, res) => {
   try {
     const db = getDb();
     const snap = await db.collection('routeTags').where('routeId', '==', req.params.id)
-      .select('fromMemberName', 'taggedMemberName', 'createdAt').get();
+      .select('fromMemberName', 'fromMemberNickname', 'taggedMemberName', 'taggedMemberNickname', 'createdAt').get();
     const tags = snap.docs
       .map(d => d.data())
-      .map(t => ({ from: maskName(t.fromMemberName), tagged: maskName(t.taggedMemberName), createdAt: t.createdAt }))
+      .map(t => ({
+        from: publicDisplayName(t.fromMemberName, t.fromMemberNickname),
+        tagged: publicDisplayName(t.taggedMemberName, t.taggedMemberNickname),
+        createdAt: t.createdAt,
+      }))
       .sort((a, b) => (b.createdAt?._seconds || 0) - (a.createdAt?._seconds || 0));
     res.json({ tags });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }

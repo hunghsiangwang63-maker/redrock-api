@@ -1235,6 +1235,7 @@ router.post('/self-register',
     body('birthday').notEmpty().withMessage('生日為必填').bail().isDate().withMessage('生日格式不正確'),
     body('email').isEmail().withMessage('Email 格式不正確'),
     body('password').isLength({ min: 8 }).withMessage('密碼至少8碼'),
+    body('nickname').optional({ checkFalsy: true }).isLength({ max: 10 }).withMessage('暱稱最多 10 個字'),
   ],
   validate,
   async (req, res) => {

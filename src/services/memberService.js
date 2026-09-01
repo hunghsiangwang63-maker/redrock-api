@@ -678,6 +678,10 @@ const createMember = async (memberData, staffId, options = {}) => {
     emailVerifyExpiry: null,
     isBlocked: false,
     blockReasons: [],
+    // 暱稱（選填，≤10字）——2026-09-02 新增，供路線積分排行榜、路線標記朋友(tag)等社交功能公開
+    // 顯示用（不需像本名一樣遮蔽中間字）；沿用原本僅限「路線排名」的 routeNickname 欄位設計，
+    // 因當時 0 位會員設定過，直接升級成一般會員資料欄位、不留舊欄位相容負擔。
+    nickname: memberData.nickname ? String(memberData.nickname).trim().slice(0, 10) : null,
     notes: memberData.notes || '',
     createdAt: now,
     updatedAt: now,

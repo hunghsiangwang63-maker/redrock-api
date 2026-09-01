@@ -1,18 +1,28 @@
 /**
  * 抱石路線管理 + 完攀計分（2026-08-29 新增）+ 社交互動（2026-09-01 新增：讚/分享/tag朋友）
+ * + 家長代子會員操作（2026-09-02 新增：完攀記錄/排名/暱稱/tag 皆可代子女操作）
  *
  * 集合：
  *   climbingRoutes  路線（gymId/area/color/grade V0~V10/setter/igUrl/setAt/status active|archived/
  *                    likes:{memberId:true}——內嵌 map，路線數量規模小，不比照肥集合另開子集合）
- *   routeAscents    完攀記錄（doc id = `${routeId}_${memberId}` 天然去重；points 記錄當下快照、後端權威）
- *   routeTags       路線標記朋友（每筆一個 from→to 配對，供逐一通知與查詢「我被誰標記過」）
+ *   routeAscents    完攀記錄（doc id = `${routeId}_${memberId}` 天然去重；points 記錄當下快照、後端權威；
+ *                    memberId＝實際完攀者，家長代記錄時另存 recordedByMemberId 供稽核）
+ *   routeTags       路線標記朋友（每筆一個 from→to 配對，供逐一通知與查詢「我被誰標記過」；家長代子女
+ *                    發起標記時 fromMemberId＝子女、另存 taggedByMemberId 供稽核）
  *
  * 計分：分數 = 難度基本分 × 嘗試層級係數（四捨五入）。
  *   預設值寫死於 DEFAULT_SCORING，可由 systemSettings/routeScoring 覆寫（目前無 UI、走 API/資料設定）。
  *   points 為記錄當下快照——之後調整計分設定不追溯既有記錄（與全站 accrual 快照原則一致）。
  *
- * 記錄限制：完攀記錄——會員本人、且「今日已於該路線所屬館別入場（未取消）」才能記錄/更改（DELETE 不限）。
- *   2026-09-01 拍板：讚/分享/tag朋友「不限入館時使用」，任何時候都可操作（跟完攀記錄的入館限制分開）。
+ * 記錄限制：完攀記錄——會員本人（或子會員，見下）、且「今日已於該路線所屬館別入場（未取消）」才能
+ *   記錄/更改（DELETE 不限）。2026-09-01 拍板：讚/分享/tag朋友「不限入館時使用」，任何時候都可操作
+ *   （跟完攀記錄的入館限制分開）。
+ *
+ * 家長代子會員操作（2026-09-02）：子會員無獨立登入（由家長用自己帳號代管），完攀記錄/排名/暱稱/tag
+ *   皆支援家長代操作——各端點加 targetMemberId（ascents/member/ranking-settings）或 fromMemberId
+ *   （tag）參數，未帶＝本人；共用 resolveActingMember() 驗證擁有權（本人或子會員，含共同家長
+ *   coParentIds）＋抓取目標會員資料。⚠ 唯一例外＝「讚」（like）——刻意不支援代操作，讚是登入帳號
+ *   本身對路線的收藏偏好、非特定完攀者的社交紀錄，一律算在 req.member.id 身上（見該端點註解）。
  *
  * 權限：
  *   路線編輯（POST/PUT/DELETE）＝管理員 / 場館電腦(operator·station) / 正職（比照 gyms.js requireAnnounceEditor）
@@ -127,6 +137,22 @@ function publicDisplayName(name, nickname) {
   const n = String(nickname || '').trim();
   return n || maskName(name);
 }
+
+// 解析「為誰操作」（本人或子會員，含共同家長 coParentIds）——2026-09-02 新增，讓完攀記錄/排名/暱稱/
+// tag 皆可由家長代子會員操作（子會員無獨立登入）。回傳 { ok:true, id, data } 或 { ok:false, status, body }。
+// 未帶 targetMemberId 或帶自己 id → 直接用 req.member（已是新鮮讀出的完整資料，省一次查詢）；
+// 帶子會員 id → 讀一次該子會員文件同時完成擁有權驗證＋資料抓取（不額外呼叫 utils/memberOwnership
+// 的 checkMemberOwnership，避免驗證+抓資料各查一次 Firestore）。
+async function resolveActingMember(db, member, targetMemberId) {
+  const id = String(targetMemberId || '').trim() || member.id;
+  if (id === member.id) return { ok: true, id, data: member };
+  const doc = await db.collection('members').doc(id).get();
+  if (!doc.exists) return { ok: false, status: 404, body: { error: 'MEMBER_NOT_FOUND', message: '查無此會員' } };
+  const d = doc.data() || {};
+  const isChild = d.parentMemberId === member.id || (Array.isArray(d.coParentIds) && d.coParentIds.includes(member.id));
+  if (!isChild) return { ok: false, status: 403, body: { error: 'FORBIDDEN', message: '只能為自己或子會員操作' } };
+  return { ok: true, id, data: d };
+}
 const TAG_LIMIT = 5; // 單次最多同時標記幾人，避免濫用洗版
 
 // 未下架路線 id 集合——積分/排名只計 active 路線（2026-08-29 政策：下架＝換掉的線不再計分；
@@ -220,7 +246,14 @@ router.get('/rankings', authenticateAny, async (req, res) => {
     }));
     const ranked = all.filter(r => !r.optOut).sort((x, y) => y.points - x.points || y.ascents - x.ascents);
     ranked.forEach((r, i) => { r.rank = i + 1; });
-    const myId = req.member?.id || null;
+    // 2026-09-02：家長可查子女的排名（targetMemberId，未帶＝查自己）——子會員無獨立登入，
+    // 完攀記錄本就可能是家長代為記錄在子女 memberId 下，排名頁需能切換檢視對象。
+    let myId = req.member?.id || null;
+    if (myId && req.query.targetMemberId) {
+      const resolved = await resolveActingMember(db, req.member, req.query.targetMemberId);
+      if (!resolved.ok) return res.status(resolved.status).json(resolved.body);
+      myId = resolved.id;
+    }
     const mine = myId ? ranked.find(r => r.memberId === myId) || null : null;
     const myStatsRaw = myId ? all.find(r => r.memberId === myId) || null : null;
     const strip = ({ optOut, ...r }) => r;
@@ -234,16 +267,24 @@ router.get('/rankings', authenticateAny, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// ── GET/PUT /climbing-routes/ranking-settings：會員排名偏好（參加與否）＋暱稱快速編輯 ──
+// ── GET/PUT /climbing-routes/ranking-settings?targetMemberId=：會員排名偏好（參加與否）＋暱稱快速編輯 ──
 // 2026-09-02 續：暱稱已升級為一般會員資料欄位（members.nickname，也可在「個人資料」編輯，見
 // auth.js PUT /member/profile），這裡保留同一欄位的快速編輯入口（不用離開路線頁），寫入的是
 // 同一份資料、非另一個獨立欄位——兩處編輯完全同步，無資料分歧風險。
+// targetMemberId（選填，未帶＝本人）：家長可代子會員設定暱稱／參加排名與否（子會員無獨立登入）。
 router.get('/ranking-settings', authenticateMember, async (req, res) => {
-  res.json({ optOut: req.member.routeRankingOptOut === true, nickname: req.member.nickname || '' });
+  try {
+    const db = getDb();
+    const resolved = await resolveActingMember(db, req.member, req.query.targetMemberId);
+    if (!resolved.ok) return res.status(resolved.status).json(resolved.body);
+    res.json({ optOut: resolved.data.routeRankingOptOut === true, nickname: resolved.data.nickname || '', targetMemberId: resolved.id });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 router.put('/ranking-settings', authenticateMember, async (req, res) => {
   try {
     const db = getDb();
+    const resolved = await resolveActingMember(db, req.member, req.body.targetMemberId);
+    if (!resolved.ok) return res.status(resolved.status).json(resolved.body);
     const updates = { updatedAt: new Date() };
     if (req.body.optOut !== undefined) updates.routeRankingOptOut = req.body.optOut === true;
     if (req.body.nickname !== undefined) {
@@ -251,34 +292,45 @@ router.put('/ranking-settings', authenticateMember, async (req, res) => {
       if ([...nick].length > 10) return res.status(400).json({ error: 'NICKNAME_TOO_LONG', message: '暱稱最多 10 個字' });
       updates.nickname = nick || null;
     }
-    await db.collection('members').doc(req.member.id).update(updates);
+    await db.collection('members').doc(resolved.id).update(updates);
     res.json({
       success: true,
-      optOut: updates.routeRankingOptOut !== undefined ? updates.routeRankingOptOut : (req.member.routeRankingOptOut === true),
-      nickname: updates.nickname !== undefined ? (updates.nickname || '') : (req.member.nickname || ''),
+      targetMemberId: resolved.id,
+      optOut: updates.routeRankingOptOut !== undefined ? updates.routeRankingOptOut : (resolved.data.routeRankingOptOut === true),
+      nickname: updates.nickname !== undefined ? (updates.nickname || '') : (resolved.data.nickname || ''),
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// ── GET /climbing-routes/member?gymId=：會員端路線清單（active）＋我的記錄＋今日入場狀態 ──
+// ── GET /climbing-routes/member?gymId=&targetMemberId=：會員端路線清單（active）＋我的記錄＋今日入場狀態 ──
+// targetMemberId（選填，未帶＝本人）：家長可切換檢視子會員的完攀記錄/積分/入場狀態（子會員無獨立
+// 登入，記錄完攀本就可能是家長代為記錄在子女 memberId 下）。「讚」不隨此切換——讚是登入帳號本身
+// 對路線的收藏偏好，不是特定完攀者的社交紀錄，一律用 req.member.id（見 like 端點註解）。
 router.get('/member', authenticateMember, async (req, res) => {
   try {
     const db = getDb();
     const gymId = req.query.gymId;
     if (!gymId) return res.status(400).json({ error: 'MISSING_GYM', message: '請指定館別' });
+    const resolved = await resolveActingMember(db, req.member, req.query.targetMemberId);
+    if (!resolved.ok) return res.status(resolved.status).json(resolved.body);
+    const targetId = resolved.id;
     const cfg = await getScoringConfig(db);
     const [routesSnap, mySnap, checkedIn, tagsSnap] = await Promise.all([
       db.collection('climbingRoutes').where('gymId', '==', gymId).get(),
-      db.collection('routeAscents').where('memberId', '==', req.member.id).get(),
-      checkedInTodayAt(db, req.member.id, gymId),
-      // 該館所有路線的標記記錄一次撈完（避免逐條路線各查一次 /tags 的 N+1），姓名已遮蔽供公開顯示
-      db.collection('routeTags').where('gymId', '==', gymId).select('routeId', 'fromMemberName', 'taggedMemberName').get(),
+      db.collection('routeAscents').where('memberId', '==', targetId).get(),
+      checkedInTodayAt(db, targetId, gymId),
+      // 該館所有路線的標記記錄一次撈完（避免逐條路線各查一次 /tags 的 N+1）；有暱稱顯示暱稱、否則遮蔽本名
+      db.collection('routeTags').where('gymId', '==', gymId)
+        .select('routeId', 'fromMemberName', 'fromMemberNickname', 'taggedMemberName', 'taggedMemberNickname').get(),
     ]);
     const tagsByRoute = {};
     tagsSnap.docs.forEach(d => {
       const t = d.data();
       if (!tagsByRoute[t.routeId]) tagsByRoute[t.routeId] = [];
-      tagsByRoute[t.routeId].push({ from: maskName(t.fromMemberName), tagged: maskName(t.taggedMemberName) });
+      tagsByRoute[t.routeId].push({
+        from: publicDisplayName(t.fromMemberName, t.fromMemberNickname),
+        tagged: publicDisplayName(t.taggedMemberName, t.taggedMemberNickname),
+      });
     });
     const routes = routesSnap.docs.map(d => ({ id: d.id, ...d.data() }))
       .filter(r => r.status !== 'archived')
@@ -313,19 +365,23 @@ router.get('/member', authenticateMember, async (req, res) => {
       myTotals: totals, // { all, byGym }——僅計未下架路線（分館＋合併）
       checkedInToday: checkedIn,
       tiers: TIERS.map(t => ({ key: t.key, label: t.label, multiplier: Number(cfg.tierMultipliers[t.key]) || t.multiplier })),
+      targetMemberId: targetId,
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// ── GET /climbing-routes/search-member?phone=&name=：搜尋會員供 tag 朋友用（authenticateMember）──
+// ── GET /climbing-routes/search-member?phone=&name=&excludeMemberId=：搜尋會員供 tag 朋友用（authenticateMember）──
 // 安全考量（避免被拿來枚舉他人個資）：phone 需 >=7 碼精確比對；name 需完全比對（不做模糊/前綴搜尋）。
 // 回傳完整姓名/電話給「發起 tag 的人」自行核對是不是認識的那位——這裡不遮蔽，遮蔽只用在事後公開顯示
 // tag 記錄時（見 maskName）。排除會員自己、上限 10 筆。
+// excludeMemberId（選填）：家長代子女發起標記時，前端會帶目前操作對象的 id 一併排除（不讓子女出現
+// 在自己的搜尋結果裡）——單純過濾用途、不需驗證擁有權（只會讓結果變少，不會多曝光任何資料）。
 router.get('/search-member', authenticateMember, async (req, res) => {
   try {
     const db = getDb();
     const phone = String(req.query.phone || '').trim();
     const name = String(req.query.name || '').trim();
+    const excludeId = String(req.query.excludeMemberId || '').trim();
     if (!phone && !name) return res.status(400).json({ error: 'MISSING_QUERY', message: '請輸入電話或姓名' });
     if (phone && phone.length < 7) return res.status(400).json({ error: 'PHONE_TOO_SHORT', message: '電話請輸入至少 7 碼' });
     let docs = [];
@@ -337,7 +393,7 @@ router.get('/search-member', authenticateMember, async (req, res) => {
       docs = snap.docs;
     }
     const results = docs
-      .filter(d => d.id !== req.member.id)
+      .filter(d => d.id !== req.member.id && d.id !== excludeId)
       .map(d => ({ id: d.id, name: d.data().name || '', phone: d.data().phone || '', nickname: d.data().nickname || '' }));
     res.json({ results });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
@@ -465,6 +521,8 @@ router.delete('/:id', authenticate, routeEditorGate, async (req, res) => {
 });
 
 // ── POST /climbing-routes/:id/ascents：會員記錄完攀（今日於該館入場才可；重複記錄＝更新層級）──
+// targetMemberId（選填，未帶＝本人）：家長可代子會員記錄（子會員無獨立登入、入場檢查看子女自己
+// 今日是否有入場，非家長）；代記錄時另存 recordedByMemberId 供稽核（比照體驗預約 bookedByMemberId）。
 router.post('/:id/ascents', authenticateMember,
   [body('tier').isIn(TIER_KEYS).withMessage('無效的嘗試層級')], validate,
   async (req, res) => {
@@ -474,29 +532,35 @@ router.post('/:id/ascents', authenticateMember,
       if (!routeDoc.exists) return res.status(404).json({ error: 'ROUTE_NOT_FOUND', message: '路線不存在' });
       const route = routeDoc.data();
       if (route.status === 'archived') return res.status(400).json({ error: 'ROUTE_ARCHIVED', message: '此路線已下架，無法記錄' });
-      const ok = await checkedInTodayAt(db, req.member.id, route.gymId);
+      const resolved = await resolveActingMember(db, req.member, req.body.targetMemberId);
+      if (!resolved.ok) return res.status(resolved.status).json(resolved.body);
+      const target = resolved.data;
+      const ok = await checkedInTodayAt(db, resolved.id, route.gymId);
       if (!ok) return res.status(403).json({ error: 'NOT_CHECKED_IN', message: '需於入場當日才能記錄完攀（請先於該館完成入場）' });
       const cfg = await getScoringConfig(db);
       const points = computePoints(cfg, route.grade, req.body.tier);
       if (!points) return res.status(400).json({ error: 'INVALID_SCORING', message: '無法計算分數' });
-      const docId = `${req.params.id}_${req.member.id}`; // 天然去重：一人一路線一筆
+      const docId = `${req.params.id}_${resolved.id}`; // 天然去重：一人一路線一筆
       const now = new Date();
       const ascent = {
-        routeId: req.params.id, memberId: req.member.id, memberName: req.member.name || '',
+        routeId: req.params.id, memberId: resolved.id, memberName: target.name || '',
         gymId: route.gymId, grade: route.grade, tier: req.body.tier, points,
         recordedAt: now, updatedAt: now,
       };
+      if (resolved.id !== req.member.id) ascent.recordedByMemberId = req.member.id; // 家長代子女記錄留稽核
       await db.collection('routeAscents').doc(docId).set(ascent); // 已存在＝整筆覆寫（更新層級/分數）
       res.status(201).json({ success: true, ascent });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );
 
-// ── DELETE /climbing-routes/:id/ascents：會員刪除自己的完攀記錄（不限入場當日，供修正誤記）──
+// ── DELETE /climbing-routes/:id/ascents?targetMemberId=：刪除完攀記錄（不限入場當日，供修正誤記）──
 router.delete('/:id/ascents', authenticateMember, async (req, res) => {
   try {
     const db = getDb();
-    const ref = db.collection('routeAscents').doc(`${req.params.id}_${req.member.id}`);
+    const resolved = await resolveActingMember(db, req.member, req.query.targetMemberId);
+    if (!resolved.ok) return res.status(resolved.status).json(resolved.body);
+    const ref = db.collection('routeAscents').doc(`${req.params.id}_${resolved.id}`);
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'ASCENT_NOT_FOUND', message: '無此完攀記錄' });
     await ref.delete();
@@ -507,6 +571,8 @@ router.delete('/:id/ascents', authenticateMember, async (req, res) => {
 // ── POST /climbing-routes/:id/like：按讚 toggle（不限入館，任何時候都可操作）──
 // 內嵌於路線文件的 likes map（非獨立集合）——路線數量規模小，讀清單時單一查詢即可帶出讚數與「我是否已讚」，
 // 不需要額外聚合查詢。
+// ⚠ 刻意不支援 targetMemberId（不像 ascents/tag/ranking-settings 可代子會員操作）——讚是登入帳號本身
+// 對路線的收藏偏好，不是特定完攀者的社交紀錄，一律算在 req.member.id（登入者本人）身上。
 router.post('/:id/like', authenticateMember, async (req, res) => {
   try {
     const db = getDb();
@@ -524,6 +590,8 @@ router.post('/:id/like', authenticateMember, async (req, res) => {
 });
 
 // ── POST /climbing-routes/:id/tag：標記朋友（不限入館）；建立 routeTags 記錄＋發送首頁提醒卡通知被標記者 ──
+// fromMemberId（選填，未帶＝本人）：家長可代子女發起標記（例如小孩跟朋友一起完攀，由家長操作 App
+// 標記對方）——公開顯示的「誰標記了誰」用子女自己的姓名/暱稱，非家長。
 router.post('/:id/tag',
   authenticateMember,
   [body('taggedMemberIds').isArray({ min: 1, max: TAG_LIMIT }).withMessage(`請選擇 1~${TAG_LIMIT} 位朋友`)],
@@ -534,7 +602,10 @@ router.post('/:id/tag',
       const routeDoc = await db.collection('climbingRoutes').doc(req.params.id).get();
       if (!routeDoc.exists) return res.status(404).json({ error: 'ROUTE_NOT_FOUND', message: '路線不存在' });
       const route = routeDoc.data();
-      const targetIds = [...new Set(req.body.taggedMemberIds)].filter(id => id && id !== req.member.id);
+      const resolved = await resolveActingMember(db, req.member, req.body.fromMemberId);
+      if (!resolved.ok) return res.status(resolved.status).json(resolved.body);
+      const fromMember = resolved.data;
+      const targetIds = [...new Set(req.body.taggedMemberIds)].filter(id => id && id !== resolved.id);
       if (!targetIds.length) return res.status(400).json({ error: 'NO_VALID_TARGET', message: '沒有可標記的對象' });
       const memberDocs = await db.getAll(...targetIds.map(id => db.collection('members').doc(id)), { fieldMask: ['name', 'nickname'] });
       const found = memberDocs.filter(d => d.exists);
@@ -548,10 +619,11 @@ router.post('/:id/tag',
         const rec = {
           id, routeId: req.params.id, routeName: `${route.area || ''} ${route.color || ''} ${route.grade || ''}`.trim(),
           gymId: route.gymId,
-          fromMemberId: req.member.id, fromMemberName: req.member.name || '', fromMemberNickname: req.member.nickname || '',
+          fromMemberId: resolved.id, fromMemberName: fromMember.name || '', fromMemberNickname: fromMember.nickname || '',
           taggedMemberId: d.id, taggedMemberName: taggedName, taggedMemberNickname: taggedNickname,
           createdAt: now,
         };
+        if (resolved.id !== req.member.id) rec.taggedByMemberId = req.member.id; // 家長代子女標記留稽核
         batch.set(db.collection('routeTags').doc(id), rec);
         return rec;
       });

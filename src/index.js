@@ -159,7 +159,6 @@ app.use('/passes',       require('./routes/passes'));
 app.use('/installments', require('./routes/installments'));
 app.use('/schedule',     require('./routes/schedule'));
 app.use('/competitions', require('./routes/competitions'));
-app.use('/', require('./routes/_tempCompRulesVerify')); // ⚠️ 臨時診斷路由，驗證完立即移除
 app.use('/staff',        require('./routes/staff'));
 app.use('/pass-adjustments', require('./routes/passAdjustments'));
 app.use('/course-adjustments', require('./routes/courseAdjustments'));

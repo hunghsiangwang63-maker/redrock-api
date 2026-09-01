@@ -165,6 +165,7 @@ app.use('/course-adjustments', require('./routes/courseAdjustments'));
 app.use('/team', require('./routes/teamMembers'));
 app.use('/rentals', require('./routes/rentals'));
 app.use('/pending-tasks', require('./routes/pendingTasks'));
+app.use('/member-inquiries', require('./routes/memberInquiries'));
 app.use('/comp-auth', require('./routes/compAuth'));
 app.use('/experience-bookings', require('./routes/experienceBookings'));
 app.use('/staff-entry', require('./routes/staffEntry'));
@@ -207,7 +208,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.413.1-route-staff-likes-leak-fix',
+    version: '3.414.0-member-inquiries',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),

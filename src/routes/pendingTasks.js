@@ -18,7 +18,7 @@ const dateWithWeekday = (dateStr) => {
 // 個人帳號（兼職／正職，未打卡值班）待辦頁權限收斂（2026-08-08 拍板，同日再擴及正職）：
 // 只看「今日提醒／預約」+ 我的近7日班表，墜落測驗待安排／需審核／待收款／近7天報名動態一律不回傳（非僅前端隱藏，後端直接不給資料）。
 // 值班中（operator）與管理員（super_admin/gym_manager）不受此限——仍走既有 COUNTER_PERMS / 管理權限。
-const REMIND_TYPES = ['rental_pickup', 'rental_return', 'experience'];
+const REMIND_TYPES = ['rental_pickup', 'rental_return', 'experience', 'member_inquiry'];
 const isRestrictedPersonalStaff = (staff) => staff?.type === 'staff' && ['part_time', 'full_time'].includes(staff?.role);
 
 // ── GET /pending-tasks - 彙整所有待處理事項 ──────────────────────────
@@ -63,6 +63,7 @@ router.get('/', authenticate, async (req, res) => {
     const ticketApprovalPromise = withGym(db.collection('singleEntryTickets').where('status', '==', 'pending_approval')).get();
     const fallTestPromise = withGym(db.collection('fallTestBookings').where('status', '==', 'pending')).get();
     const installmentPromise = db.collection('installmentPlans').where('status', 'in', ['active', 'overdue']).get();
+    const inquiryPromise = db.collection('memberInquiries').where('status', '==', 'pending').get();
     const courseRegPromise = db.collection('courseRegistrations').where('createdAt', '>=', sevenDaysAgo)
       .select('status', 'gymId', 'memberName', 'courseName', 'sessionCount', 'createdAt', 'courseId').get();
     const compRegPromise = db.collection('competitionRegistrations').where('registeredAt', '>=', sevenDaysAgo)
@@ -435,6 +436,24 @@ router.get('/', authenticate, async (req, res) => {
           link: `/staff/installments?plan=${d.id}&seq=${due.seq}`,
           dueSeq: due.seq, dueAmount: due.amount,   // 供前端直接呼叫 markInstallmentPaid，不用重新從 record.installments 找一次
           record: { id: d.id, ...p },
+        });
+      });
+    } catch(e) {}
+
+    // 13. 會員問題諮詢（自訂提問，常見問題瀏覽不進待辦——只有自由輸入的問題才需要人工回覆）
+    try {
+      const snap = await inquiryPromise;
+      snap.forEach(d => {
+        const r = d.data();
+        tasks.push({
+          id: `inquiry_${d.id}`, type: 'member_inquiry', targetId: d.id,
+          title: '會員問題諮詢',
+          desc: `${r.memberName} — ${r.subject}`,
+          date: r.createdAt?._seconds ? new Date(r.createdAt._seconds*1000).toISOString().slice(0,10) : today,
+          createdAt: r.createdAt?._seconds || 0,
+          gymId: null, memberName: r.memberName,
+          link: '/staff/pending-tasks',
+          record: { id: d.id, ...r },
         });
       });
     } catch(e) {}

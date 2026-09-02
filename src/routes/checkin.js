@@ -596,6 +596,45 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
     const sessionMap = {};
     sessions.forEach(s => { sessionMap[s.id] = s; });
 
+    // 小蜘蛛人新生（非舊生）制服/集點卡提醒（限新竹館，2026-09-02 需求）：週課正取報名（排除補課/試上）
+    // 若今天是該梯次「前三堂」（依 status:'scheduled' 場次日期排序，取消的堂不計入）、且該學員在
+    // 「小蜘蛛人」班別群組（依名稱比對，涵蓋初級/進階/密集班等，動態查詢不寫死 categoryId）非舊生
+    // （courseService.computeAlumniStatus 權威判定，全站唯一舊生判斷來源）→ 標記提醒。
+    // 全程 try/catch 不阻斷名單本身；非新竹館直接跳過、零額外查詢成本。
+    const spiderPrepByMember = new Set();
+    if (gymId === 'gym-hsinchu') {
+      try {
+        const spiderCourseIds = [...new Set(sessions.map(s => s.courseId).filter(Boolean))];
+        if (spiderCourseIds.length) {
+          const courseDocs = await db.getAll(...spiderCourseIds.map(id => db.collection('courses').doc(id)));
+          const catIds = [...new Set(courseDocs.filter(d => d.exists).map(d => d.data().categoryId).filter(Boolean))];
+          const catDocs = catIds.length ? await db.getAll(...catIds.map(id => db.collection('courseCategories').doc(id))) : [];
+          const spiderCatIds = new Set(catDocs.filter(d => d.exists && String(d.data().name || '').includes('小蜘蛛人')).map(d => d.id));
+          const spiderCourses = courseDocs.filter(d => d.exists && spiderCatIds.has(d.data().categoryId));
+
+          if (spiderCourses.length) {
+            const eligibleCourses = {}; // courseId -> 課程文件資料（僅「前三堂」符合者才收）
+            await Promise.all(spiderCourses.map(async (d) => {
+              const sessSnap = await db.collection('courseSessions').where('courseId', '==', d.id)
+                .where('status', '==', 'scheduled').select('date').get();
+              const dates = sessSnap.docs.map(x => x.data().date).sort();
+              if (dates.indexOf(todayStr0) >= 0 && dates.indexOf(todayStr0) < 3) eligibleCourses[d.id] = d.data();
+            }));
+
+            const targets = enrollments.filter(e => !e.isMakeup && !e.isTrial && sessionMap[e.sessionId] && eligibleCourses[sessionMap[e.sessionId].courseId]);
+            if (targets.length) {
+              const { computeAlumniStatus } = require('../services/courseService');
+              await Promise.all(targets.map(async (e) => {
+                const cid = sessionMap[e.sessionId].courseId;
+                const alumni = await computeAlumniStatus(db, eligibleCourses[cid], cid, e.memberId);
+                if (!alumni.isAlumni) spiderPrepByMember.add(e.memberId);
+              }));
+            }
+          }
+        }
+      } catch (e) { console.error('[今日課程學員] 小蜘蛛人新生提醒計算失敗（不阻斷）:', e.message); }
+    }
+
     const students = enrollments
       .filter(e => sessionMap[e.sessionId])
       .map(e => {
@@ -612,6 +651,7 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
           isTrial: e.isTrial === true,                                    // 試上學員標籤
           trialUnpaid: e.isTrial === true && e.paymentStatus !== 'paid',  // 試上費未收提醒
           isLastSession: !!inv,                                           // 今日為此梯次最後一堂（courses.endDate）
+          newStudentPrep: spiderPrepByMember.has(e.memberId),             // 小蜘蛛人新生：請準備制服跟集點卡
           ...(inv ? { enrollmentId: inv.enrollmentId, paymentMethod: inv.paymentMethod, receivedAmount: inv.receivedAmount } : {}),
         };
       })

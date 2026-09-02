@@ -2644,6 +2644,92 @@ const getMemberMakeupRights = async (memberId) => {
     }));
 };
 
+// ── 開課前通知：櫃檯編輯草稿後手動發送給該梯次目前有效（非取消）報名者 ──────
+// 完整比照 competitionService.js 的「賽前通知」（getParticipantEmails/sendCompetitionNotice）
+// 移植：BCC 分批寄送、to 用該館 gyms.email 自寄避免洩漏會員信箱、寄送結果記在課程文件上。
+// 課程參與者存在 courseRegistrations（一報名一筆 header，見 courseRegistrationService.js）而非
+// competitionRegistrations，且 header 本身沒有 email 欄位（只有 contactPhone）——一般會員一律
+// 退回查 members.email；訪客報名（isGuest，2026-07-30 公開報名頁）的 email 只存在
+// courseEnrollments 逐場次副本的 contactEmail，故訪客另從那邊補（單一 where(courseId) 查詢、
+// 記憶體比對，避免 courseId+memberId in[...] 複合索引風險）。
+const getCourseParticipantEmails = async (courseId) => {
+  const db = getDb();
+  const [regSnap, enrSnap] = await Promise.all([
+    db.collection('courseRegistrations').where('courseId', '==', courseId)
+      .select('memberId', 'memberName', 'status', 'isGuest').get(),
+    db.collection(ENROLLMENT_COLLECTION).where('courseId', '==', courseId)
+      .select('memberId', 'contactEmail', 'isGuest').get(),
+  ]);
+
+  const guestEmailMap = {};
+  enrSnap.docs.forEach(d => {
+    const e = d.data();
+    if (e.isGuest && e.contactEmail && !guestEmailMap[e.memberId]) guestEmailMap[e.memberId] = e.contactEmail;
+  });
+
+  const seenMember = new Set();
+  const targets = [];
+  regSnap.docs.forEach(d => {
+    const h = d.data();
+    if (h.status === 'cancelled') return;
+    if (seenMember.has(h.memberId)) return;
+    seenMember.add(h.memberId);
+    targets.push({ memberId: h.memberId, name: h.memberName || '', isGuest: !!h.isGuest });
+  });
+
+  const memberTargets = targets.filter(t => !t.isGuest);
+  const emailByMember = {};
+  if (memberTargets.length) {
+    const docs = await db.getAll(...memberTargets.map(t => db.collection('members').doc(t.memberId)), { fieldMask: ['email'] });
+    docs.forEach((d, i) => { if (d.exists) emailByMember[memberTargets[i].memberId] = d.data().email || null; });
+  }
+
+  const seenEmail = new Set();
+  const list = [];
+  targets.forEach(t => {
+    const email = String((t.isGuest ? guestEmailMap[t.memberId] : emailByMember[t.memberId]) || '').trim().toLowerCase();
+    if (!email || seenEmail.has(email)) return;
+    seenEmail.add(email);
+    list.push({ name: t.name, email });
+  });
+  return list;
+};
+
+const NOTICE_BCC_BATCH_SIZE = 40;
+const sendCourseNotice = async ({ courseId, subject, html, staffId, staffName }) => {
+  const db = getDb();
+  const courseRef = db.collection(COURSE_COLLECTION).doc(courseId);
+  const courseDoc = await courseRef.get();
+  if (!courseDoc.exists) throw { code: 'NOT_FOUND', message: '查無此課程' };
+  const course = courseDoc.data();
+  if (!subject || !String(subject).trim()) throw { code: 'MISSING_SUBJECT', message: '請填寫信件主旨' };
+  if (!html || !String(html).trim()) throw { code: 'MISSING_BODY', message: '請填寫信件內容' };
+
+  const list = await getCourseParticipantEmails(courseId);
+  if (!list.length) throw { code: 'NO_RECIPIENTS', message: '目前沒有可寄送的學員信箱（報名可能都還未填 email 或皆已取消）' };
+
+  let selfTo = process.env.FROM_EMAIL || 'noreply@redrocktaiwan.com';
+  try {
+    if (course.gymId) { const g = await db.collection('gyms').doc(course.gymId).get(); if (g.exists && g.data().email) selfTo = g.data().email; }
+  } catch (e) {}
+
+  const emailService = require('./emailService');
+  const emails = list.map(x => x.email);
+  let sentBatches = 0, failedBatches = 0;
+  const errors = [];
+  for (let i = 0; i < emails.length; i += NOTICE_BCC_BATCH_SIZE) {
+    const batch = emails.slice(i, i + NOTICE_BCC_BATCH_SIZE);
+    const r = await emailService.sendEmail({ to: selfTo, bcc: batch, subject, html });
+    if (r && !r.error) sentBatches++; else { failedBatches++; errors.push(r?.error || 'unknown error'); }
+  }
+  await courseRef.update({
+    lastNoticeSentAt: new Date(), lastNoticeSentBy: staffId || null, lastNoticeSentByName: staffName || '',
+    lastNoticeSubject: subject, lastNoticeRecipientCount: emails.length,
+  });
+  if (failedBatches > 0) throw { code: 'SEND_FAILED', message: `寄送失敗：${errors.join('; ')}`, recipientCount: emails.length, batchesSent: sentBatches, batchesFailed: failedBatches };
+  return { recipientCount: emails.length, batchesSent: sentBatches, batchesFailed: failedBatches };
+};
+
 module.exports = {
   RULE_DEFAULTS, resolveRules, getCategoryOf,
   createWeeklySessions,
@@ -2683,4 +2769,6 @@ module.exports = {
   clearSessionSubstitute,
   getMemberEnrollments,
   getMemberMakeupRights,
+  getCourseParticipantEmails,
+  sendCourseNotice,
 };

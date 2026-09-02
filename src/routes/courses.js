@@ -1254,6 +1254,33 @@ router.delete('/:courseId/permanent',
   }
 );
 
+// GET /courses/:courseId/participant-emails - 開課前通知用：目前有效報名者 email 清單
+// （完整比照 competitions.js 的賽前通知，見 courseService.getCourseParticipantEmails）
+router.get('/:courseId/participant-emails', authenticate, checkPermission('courses.manage'), async (req, res) => {
+  try {
+    const list = await courseService.getCourseParticipantEmails(req.params.courseId);
+    res.json({ recipients: list, count: list.length });
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+// POST /courses/:courseId/send-notice - 開課前通知：櫃檯編輯草稿後發送給全部有效報名者（BCC）
+router.post('/:courseId/send-notice', authenticate, checkPermission('courses.manage'), async (req, res) => {
+  try {
+    const { subject, body } = req.body;
+    const result = await courseService.sendCourseNotice({
+      courseId: req.params.courseId, subject, html: body,
+      staffId: req.staff.id, staffName: req.staff.name,
+    });
+    res.json({ ...result, message: `已寄出給 ${result.recipientCount} 位學員` });
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 // POST /courses/:courseId/image - 上傳課程海報（單張，存 Firebase Storage、回 signed URL 並寫入課程 imageUrl）
 router.post('/:courseId/image',
   authenticate, checkPermission('courses.manage'), auditLog('course.image.upload'),

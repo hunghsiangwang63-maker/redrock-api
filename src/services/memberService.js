@@ -905,9 +905,17 @@ const promoteChildToMember = async (childId, { phone, email, password }, actor =
   // 清單、且 checkMemberOwnership 只認這兩個欄位（2026-07-10 起不再檢查 isChildAccount）→
   // 前家長仍可代操作（報名/入場/查看票券等）。故升級時必須清除，才是真正的「獨立」；
   // 用 formerParentMemberId 留一筆歷史紀錄供稽核，不具任何功能性關聯。
+  // ⚠️ 修正一個既有 bug（員工端 /:id/promote 上線以來即存在，非本次新引入）：子會員建立時
+  // （POST /my/children → createMember）registeredBy 一律存 'self'（createMember 對 staffId
+  // 缺省的既有邏輯），登入時的 email 驗證 gate 原本靠 isChildAccount:true 豁免（子帳號本就無法
+  // 獨立登入）——但升級把 isChildAccount 設成 false 後，這份豁免同時失效，若系統當下開著
+  // 「Email 認證總開關」，升級後的會員會被 EMAIL_NOT_VERIFIED 卡死、完全無法登入看到任何
+  // 已完整保留的課程/票券/紀錄。升級是家長已登入、經過身份驗證的主動行為，比照店員建立帳號
+  // （emailVerified:true）同等信任層級直接視為已驗證，不需再走一次 Email 驗證流程。
   const updates = {
     phone, email, passwordHash,
     isChildAccount: false,
+    emailVerified: true,
     parentMemberId: null,
     coParentIds: admin.firestore.FieldValue.delete(),
     formerParentMemberId: child.parentMemberId || null,

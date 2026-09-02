@@ -13,12 +13,14 @@ const { getValidSingleEntryTickets, getCourseAccess } = require('./eligibility')
 const SPIDER_CATEGORY_NAME_MATCH = '小蜘蛛人';
 
 // ── 小蜘蛛人週課正式學員：非舊生免墜測入場例外（2026-09-02 政策）─────────────
-// 判斷此會員在該館是否持有「小蜘蛛人」系列週課的正式（非補課/試上）入場資格——依班別
+// 判斷此會員是否持有「小蜘蛛人」系列週課的正式（非補課/試上）入場資格——依班別
 // 名稱動態比對（涵蓋初級/進階/密集班等所有子班別，不寫死 categoryId），與「今日課程學員」
 // 名單的新生制服提醒（routes/checkin.js today-course-students）用同一套比對邏輯。
-const hasSpiderCourseAccess = async (memberId, gymId) => {
+// gymId 選填：帶入時嚴格限定該館（入場閘門 runEntryGates 用，入場本就是單一場館的事）；
+// 不帶（如登記測驗結果——由 super_admin 等無固定館別的帳號呼叫時 gymId 不可靠）則不分館。
+const hasSpiderCourseAccess = async (memberId, gymId = null) => {
   const access = await getCourseAccess(memberId);
-  const items = access.filter(a => !a.dayOnly && a.gymId === gymId && a.categoryId);
+  const items = access.filter(a => !a.dayOnly && a.categoryId && (!gymId || a.gymId === gymId));
   if (!items.length) return false;
   const db = getDb();
   const catIds = [...new Set(items.map(a => a.categoryId))];

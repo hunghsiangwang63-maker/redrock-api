@@ -42,8 +42,10 @@ async function recordFallTestResult({ memberId, result, notes, staffId, staffNam
     const sigSnap = await db.collection('fallTestSignatures')
       .where('memberId', '==', memberId).select().limit(1).get();
     if (sigSnap.empty) {
+      // gymId 有帶就限定該館（較嚴謹）；沒帶（如 super_admin 無固定館別）則不分館檢查，
+      // 避免無法判斷館別的呼叫端（見 routes/fallTests.js req.staff.gymId 可能為 null）誤擋
       const { hasSpiderCourseAccess } = require('./checkin/gates');
-      const isSpiderStudent = gymId ? await hasSpiderCourseAccess(memberId, gymId) : false;
+      const isSpiderStudent = await hasSpiderCourseAccess(memberId, gymId || null);
       if (!isSpiderStudent) {
         const e = new Error('此會員尚未簽署墜落測驗同意書，無法登記為通過');
         e.status = 400; e.code = 'SIGNATURE_REQUIRED'; throw e;

@@ -764,6 +764,10 @@ router.get('/today',
             entryFee: r.entryFee != null ? r.entryFee : null,
             rentShoes: r.rentShoes === true, rentChalk: r.rentChalk === true,
             shoesPrice: r.shoesPrice || 0, chalkPrice: r.chalkPrice || 0,
+            // 線上付款（街口等）購買單次入場券兌換入場時 amountPaid 恆為 0，真實金額/付款方式
+            // 記在 checkIns 文件的 onlineTicket 欄位（見 checkin/flow.js confirmCheckIn 寫回）——
+            // 此白名單投影原本漏掉這欄，導致「今日入場」清單的開立發票鈕永遠判定成「免費、無需開票」。
+            onlineTicket: r.onlineTicket || null,
             ...(courseInv ? {
               courseInvoice: { courseId: courseInv.courseId, courseName: courseInv.courseName, enrollmentId: courseInv.enrollmentId, paymentMethod: courseInv.paymentMethod, receivedAmount: courseInv.receivedAmount },
             } : {}),

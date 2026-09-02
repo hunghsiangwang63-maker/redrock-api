@@ -74,9 +74,13 @@ const TIERS = [
 ];
 const TIER_KEYS = TIERS.map(t => t.key);
 
+// 難度基本分（2026-09-02 拉大級距）：原本 V0=100 每級線性 +100，同等級係數下「2 條簡單」
+// 很容易追平甚至超過「1 條難一級」，稀釋了高難度的成就感。改為級距遞增、每級成長倍率皆 >2×，
+// 使「同一嘗試層級」下 2×base(n) 恆小於 base(n+1)（即使簡單的用最佳倍率 flash 1.5、難的用最差
+// 倍率 month 0.8 比，2×base(n)×1.5 對 base(n+1)×0.8 在 n=0~5 仍成立，n≥6 起差距更大更不成問題）。
+const GRADE_BASE_POINTS = [100, 250, 600, 1500, 3500, 8000, 18000, 40000, 90000, 200000, 450000];
 const DEFAULT_SCORING = {
-  // V0=100、每級 +100 → V10=1100
-  gradePoints: Object.fromEntries(GRADES.map((g, i) => [g, (i + 1) * 100])),
+  gradePoints: Object.fromEntries(GRADES.map((g, i) => [g, GRADE_BASE_POINTS[i]])),
   tierMultipliers: Object.fromEntries(TIERS.map(t => [t.key, t.multiplier])),
 };
 

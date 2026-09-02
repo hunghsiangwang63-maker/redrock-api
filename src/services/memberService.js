@@ -874,6 +874,53 @@ const verifyEmail = async (token) => {
   return { memberId: doc.id };
 };
 
+// ── 子會員升級為正式會員（獨立電話+Email+密碼）──────────────────────
+// 2026-09-02 新增：原本只有員工端 POST /members/:id/promote（authenticate+members.create）
+// 能做，現在也開放家長在 App 自助辦理（POST /members/my/children/:id/promote，會員自己的
+// 子會員才能操作，見 routes/members.js 呼叫端的擁有權檢查）。核心邏輯抽成單一函式共用，
+// 兩條路由僅差在「呼叫前的身份/擁有權驗證」與「actor 記錄哪個欄位」。
+// actor：{staffId} 或 {memberId}（自助升級時記，供稽核；未帶不記，維持既有員工路徑不變）。
+const promoteChildToMember = async (childId, { phone, email, password }, actor = {}) => {
+  const db = getDb();
+  const childRef = db.collection(COLLECTIONS.MEMBERS).doc(childId);
+  const childDoc = await childRef.get();
+  if (!childDoc.exists) throw { code: 'NOT_FOUND', message: '找不到此會員' };
+
+  const child = childDoc.data();
+  if (!child.isChildAccount) throw { code: 'NOT_CHILD_ACCOUNT', message: '此會員並非子會員，無需升級' };
+
+  // 新手機號碼不可重複（不可跟現有任何會員相同，含原本共用的家長電話）
+  const phoneClash = await db.collection(COLLECTIONS.MEMBERS).where('phone', '==', phone).get();
+  if (!phoneClash.empty) throw { code: 'PHONE_EXISTS', message: '此電話號碼已被其他會員使用' };
+
+  const bcrypt = require('bcryptjs');
+  const passwordHash = await bcrypt.hash(password, 10);
+  const admin = require('firebase-admin');
+
+  // 課程/票券/入場/紀錄等資料一律以 memberId 關聯（courseEnrollments、memberPasses、checkIns、
+  // competitionRegistrations、discountCards、routeAscents…皆是）——升級是「原地更新同一份會員
+  // 文件」、memberId（文件 id）完全不變，故所有既有資料自動、完整地跟著這個 id 走，不需任何搬移。
+  //
+  // 但 parentMemberId/coParentIds 若留著，會讓「已獨立」的會員仍出現在前家長的 /my/children
+  // 清單、且 checkMemberOwnership 只認這兩個欄位（2026-07-10 起不再檢查 isChildAccount）→
+  // 前家長仍可代操作（報名/入場/查看票券等）。故升級時必須清除，才是真正的「獨立」；
+  // 用 formerParentMemberId 留一筆歷史紀錄供稽核，不具任何功能性關聯。
+  const updates = {
+    phone, email, passwordHash,
+    isChildAccount: false,
+    parentMemberId: null,
+    coParentIds: admin.firestore.FieldValue.delete(),
+    formerParentMemberId: child.parentMemberId || null,
+    promotedAt: new Date(),
+    updatedAt: new Date(),
+  };
+  if (actor.staffId) updates.promotedBy = actor.staffId;
+  if (actor.memberId) updates.promotedByMemberId = actor.memberId;
+  await childRef.update(updates);
+
+  return { name: child.name };
+};
+
 module.exports = {
   createMember,
   claimLegacyFallTest,
@@ -885,4 +932,5 @@ module.exports = {
   refreshBlockStatus,
   generateQRCode,
   verifyEmail,
+  promoteChildToMember,
 };

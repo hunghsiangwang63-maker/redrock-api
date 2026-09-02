@@ -346,6 +346,40 @@ router.post('/my/children',
   }
 );
 
+// ── POST /members/my/children/:id/promote - 家長自助升級子會員為正式會員 ──
+// 2026-09-02 新增：原本子會員升級只有員工端能辦（POST /:id/promote），現在家長只要
+// 幫子會員準備好獨立的電話+Email+密碼，就能自己在 App 完成升級，不需臨櫃。
+// 密碼在此明確要求（不像員工端可留空回退成手機末4碼）——自助流程沒有店員把關，
+// 密碼交給一個容易被猜到的預設值風險較高，故強制家長自己設定。
+router.post('/my/children/:id/promote',
+  authenticateAny,
+  [
+    body('phone').matches(/^09\d{8}$|^\+\d{7,15}$/).withMessage('請輸入台灣手機（09 開頭 10 碼）或國際格式（+ 開頭 7~15 碼）'),
+    body('email').isEmail().withMessage('Email 格式不正確'),
+    body('password').isLength({ min: 8 }).withMessage('密碼至少8碼'),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const memberId = req.member?.id;
+      if (!memberId) return res.status(401).json({ error: 'UNAUTHORIZED' });
+
+      // 擁有權檢查：只能升級自己的子會員（含共同家長 coParentIds），與 /my/children 一致
+      const err = await checkMemberOwnership(req.member, req.params.id, { message: '只能升級自己的家庭成員' });
+      if (err) return res.status(err.status).json(err.body);
+
+      const { phone, email, password } = req.body;
+      const result = await memberService.promoteChildToMember(req.params.id, { phone, email, password }, { memberId });
+      res.json({ message: `${result.name} 已升級為正式會員，可使用新的手機號碼獨立登入` });
+    } catch (err) {
+      if (err.code === 'NOT_FOUND') return res.status(404).json(err);
+      if (err.code === 'NOT_CHILD_ACCOUNT') return res.status(400).json(err);
+      if (err.code === 'PHONE_EXISTS') return res.status(409).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // 持有效定期票人員（分票種）——列表端點與 Excel 下載共用同一組裝邏輯（單一真相，避免平行複製）
 const buildActivePassGroups = async (db, gymId) => {
   const today = taiwanToday(); // 台灣日期（與入場資格判定同源）
@@ -1414,37 +1448,14 @@ router.post('/:id/promote', authenticate, checkPermission('members.create'),
   validate,
   async (req, res) => {
     try {
-      const db = getDb();
-      const childRef = db.collection(COLLECTIONS.MEMBERS).doc(req.params.id);
-      const childDoc = await childRef.get();
-      if (!childDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此會員' });
-
-      const child = childDoc.data();
-      if (!child.isChildAccount) {
-        return res.status(400).json({ error: 'NOT_CHILD_ACCOUNT', message: '此會員並非子會員，無需升級' });
-      }
-
       const { phone, email } = req.body;
-
-      // 新手機號碼不可重複（不可跟現有任何會員相同，含原本共用的家長電話）
-      const phoneClash = await db.collection(COLLECTIONS.MEMBERS).where('phone', '==', phone).get();
-      if (!phoneClash.empty) return res.status(409).json({ error: 'PHONE_EXISTS', message: '此電話號碼已被其他會員使用' });
-
-      const bcrypt = require('bcryptjs');
-      const password = req.body.password || phone.slice(-4);
-      const passwordHash = await bcrypt.hash(password, 10);
-
-      await childRef.update({
-        phone, email, passwordHash,
-        isChildAccount: false,
-        promotedAt: new Date(),
-        promotedBy: req.staff.id,
-        updatedAt: new Date(),
-        // parentMemberId 保留作為歷史紀錄，不影響功能
-      });
-
-      res.json({ message: `${child.name} 已升級為正式會員，可使用新手機號碼獨立登入` });
+      const password = req.body.password || phone.slice(-4); // 未指定密碼 → 預設手機末4碼（既有行為，維持不變）
+      const result = await memberService.promoteChildToMember(req.params.id, { phone, email, password }, { staffId: req.staff.id });
+      res.json({ message: `${result.name} 已升級為正式會員，可使用新手機號碼獨立登入` });
     } catch (err) {
+      if (err.code === 'NOT_FOUND') return res.status(404).json(err);
+      if (err.code === 'NOT_CHILD_ACCOUNT') return res.status(400).json(err);
+      if (err.code === 'PHONE_EXISTS') return res.status(409).json(err);
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }
   }

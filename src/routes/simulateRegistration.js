@@ -6,14 +6,22 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../config/firebase');
-const { authenticate, requireManagerOrStation } = require('../middleware/auth');
+const { authenticate, requireManagerOrStation, checkPermission } = require('../middleware/auth');
 const simulationService = require('../services/simulationService');
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const MEMBER_BASE = process.env.CLIENT_URL || 'https://app.redrocktaiwan.com';
 
+// 課程的模擬報名權限比照「課程管理」本身（courses.manage）——凡是能設定/編輯課程的人
+// （管理員／值班館別電腦／個人 full_time 帳號）皆可用，不再侷限只有場館電腦登入才能用；
+// 比賽/體驗維持原本 requireManagerOrStation（未接獲需求，不擴大範圍）。
+const simulateGate = (req, res, next) => {
+  if (req.body?.type === 'course') return checkPermission('courses.manage')(req, res, next);
+  return requireManagerOrStation(req, res, next);
+};
+
 // POST /simulate/start — 建臨時模擬帳號 + 回真實報名表 deepLink
-router.post('/start', authenticate, requireManagerOrStation, async (req, res) => {
+router.post('/start', authenticate, simulateGate, async (req, res) => {
   try {
     const db = getDb();
     const { type, targetId, gymId } = req.body;

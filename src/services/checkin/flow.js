@@ -677,6 +677,15 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
       }
     }
   }
+  // ⚠️ 2026-09-03 修復：上面這段原本只把 onlineTicketInfo 塞進本次 API 回應（下方 return），
+  // 從未寫回 checkIns 文件本身——只有「剛掃碼確認的那一刻」（前端直接吃這次回應）看得到，
+  // 之後任何人重新載入「今日入場」清單（改讀 Firestore 持久化資料）都會發現 onlineTicket 消失、
+  // 入場費發票按鈕因此被 amountPaid===0 的既有防呆條件誤藏（真實案例：黃存澤街口付款入場，
+  // 稍後在今日入場清單完全看不到開立發票鈕）。比照上面 transactionId 的既有寫法，算出來後
+  // 補一次 update 存回文件，讓 GET /checkin/today 之後讀到的清單也能正確帶出。
+  if (onlineTicketInfo) {
+    await db.collection(COLLECTIONS.CHECK_INS).doc(checkInId).update({ onlineTicket: onlineTicketInfo });
+  }
 
   // 定期票線上續約後尚未開發票——確認入場成功畫面同樣提示（見 scanQrCode 同款欄位說明）。
   const pendingRenewalInvoice = await require('./eligibility').getPendingRenewalInvoiceHint(pending.memberId);

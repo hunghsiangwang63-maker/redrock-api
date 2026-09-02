@@ -8,7 +8,24 @@ const { getDb, COLLECTIONS, FieldPath } = require('../../config/firebase');
 const { getMember } = require('../memberService');
 const dayjs = require('dayjs');
 const { getMemberType } = require('./pricing');
-const { getValidSingleEntryTickets } = require('./eligibility');
+const { getValidSingleEntryTickets, getCourseAccess } = require('./eligibility');
+
+const SPIDER_CATEGORY_NAME_MATCH = '小蜘蛛人';
+
+// ── 小蜘蛛人週課正式學員：非舊生免墜測入場例外（2026-09-02 政策）─────────────
+// 判斷此會員在該館是否持有「小蜘蛛人」系列週課的正式（非補課/試上）入場資格——依班別
+// 名稱動態比對（涵蓋初級/進階/密集班等所有子班別，不寫死 categoryId），與「今日課程學員」
+// 名單的新生制服提醒（routes/checkin.js today-course-students）用同一套比對邏輯。
+const hasSpiderCourseAccess = async (memberId, gymId) => {
+  const access = await getCourseAccess(memberId);
+  const items = access.filter(a => !a.dayOnly && a.gymId === gymId && a.categoryId);
+  if (!items.length) return false;
+  const db = getDb();
+  const catIds = [...new Set(items.map(a => a.categoryId))];
+  const catDocs = await db.getAll(...catIds.map(id => db.collection('courseCategories').doc(id)));
+  const spiderCatIds = new Set(catDocs.filter(d => d.exists && String(d.data().name || '').includes(SPIDER_CATEGORY_NAME_MATCH)).map(d => d.id));
+  return items.some(a => spiderCatIds.has(a.categoryId));
+};
 
 const FALL_TEST_VALID_YEARS = 1;                 // 初次效期（與登記時 settings.validYears 預設一致）
 // 自動延長規則（2026-07-24 更正）：僅在「到期前 N 個月 ~ 到期前一天」窗口內入場時判斷；
@@ -193,8 +210,11 @@ const runEntryGates = async (memberId, gymId, { skipDuplicate = false, expTicket
     };
   }
 
-  // 2. 墜落測驗（例外：持當日有效體驗券者未過墜測可入場，但須簽墜測同意書）
+  // 2. 墜落測驗（例外1：持當日有效體驗券者未過墜測可入場，但須簽墜測同意書／
+  //    例外2：小蜘蛛人系列週課正式學員，未簽同意書或未過墜測皆可入場、僅顯示醒目提醒——
+  //    2026-09-02 政策，僅限這個班別群組，其餘課程/一般會員維持原本嚴格擋下）
   const fallTest = await checkFallTest(memberId);
+  let fallTestWarning = null;
   if (!fallTest.passed) {
     // 例外判定：'using'＝此次入場正在使用體驗券（createPendingCheckIn 實際入場，較嚴謹）；
     //           'owns' ＝會員持有當日有效體驗券（verifyEntry / 電話顯示用）
@@ -217,6 +237,9 @@ const runEntryGates = async (memberId, gymId, { skipDuplicate = false, expTicket
         };
       }
       // 有簽署 → 放行
+    } else if (await hasSpiderCourseAccess(memberId, gymId)) {
+      // 小蜘蛛人正式學員：放行，但標記醒目提醒供會員端/員工端入場流程顯示
+      fallTestWarning = { reason: 'fall_test_incomplete', message: '尚未完成墜落測驗同意書或測驗' };
     } else {
       const isNever = fallTest.reason === 'never_tested';
       return {
@@ -240,9 +263,9 @@ const runEntryGates = async (memberId, gymId, { skipDuplicate = false, expTicket
     };
   }
 
-  return { blocked: false, member, memberType: getMemberType(member), fallTest };
+  return { blocked: false, member, memberType: getMemberType(member), fallTest, fallTestWarning };
 };
 
 // ── 主驗票：verifyEntry ──────────────────────────────────────────
 // 用於「會員端選擇入場方式前」的資格確認
-module.exports = { FALL_TEST_VALID_YEARS, FALL_TEST_EXTENSION_WINDOW_MONTHS, FALL_TEST_EXTENSION_LOOKBACK_YEARS, FALL_TEST_EXTENSION_MIN_VISITS, FALL_TEST_EXTENSION_YEARS, resolveFallTestExpiry, checkFallTest, hasFallTestSignature, tryExtendFallTest, checkWaiver, runEntryGates };
+module.exports = { FALL_TEST_VALID_YEARS, FALL_TEST_EXTENSION_WINDOW_MONTHS, FALL_TEST_EXTENSION_LOOKBACK_YEARS, FALL_TEST_EXTENSION_MIN_VISITS, FALL_TEST_EXTENSION_YEARS, resolveFallTestExpiry, checkFallTest, hasFallTestSignature, tryExtendFallTest, checkWaiver, runEntryGates, hasSpiderCourseAccess };

@@ -197,6 +197,8 @@ const getCourseAccess = async (memberId) => {
       results.push({
         id: e.id, courseId, courseName: course.name,
         gymAccessStart: practiceStart, gymAccessEnd: practiceEnd,
+        // gymId/categoryId：供 gates.js 的小蜘蛛人非舊生免墜測入場例外判斷用（2026-09-02）
+        gymId: course.gymId || null, categoryId: course.categoryId || null,
       });
     }
   }

@@ -201,10 +201,11 @@ router.post('/:id/complete', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'NOT_PENDING', message: '此排測已處理' });
     }
 
-    // 登記結果（passed 需已簽同意書；passed 會更新效期並重算封鎖狀態）
+    // 登記結果（passed 需已簽同意書，小蜘蛛人正式學員例外；passed 會更新效期並重算封鎖狀態）
     const test = await recordFallTestResult({
       memberId: b.memberId, result, notes,
       staffId: req.staff.id, staffName: req.staff.name,
+      gymId: b.gymId || req.staff.gymId || null,
     });
 
     const status = result === 'passed' ? 'passed' : 'failed';

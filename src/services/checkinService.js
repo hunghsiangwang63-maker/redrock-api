@@ -26,6 +26,7 @@ module.exports = {
   hasFallTestSignature: gates.hasFallTestSignature,
   checkWaiver: gates.checkWaiver,
   runEntryGates: gates.runEntryGates,
+  hasSpiderCourseAccess: gates.hasSpiderCourseAccess,
   getMemberType: pricing.getMemberType,
   computePaidEntryAmount: pricing.computePaidEntryAmount,
   revertRenewal: cancel.revertRenewal,

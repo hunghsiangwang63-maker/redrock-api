@@ -183,6 +183,7 @@ router.post('/', authenticate, async (req, res) => {
     const test = await recordFallTestResult({
       memberId, result, notes,
       staffId: req.staff.id, staffName: req.staff.name,
+      gymId: req.staff.gymId || null,
     });
     res.status(201).json({ test, message: result === 'passed' ? '測驗通過！' : '測驗未通過' });
   } catch (err) {

@@ -36,6 +36,7 @@ const verifyEntry = async (memberId, gymId) => {
     memberType,
     isTeamMember: isActiveTeamMember(member),
     fallTestExpiresAt: fallTest.expiresAt,
+    fallTestWarning: gate.fallTestWarning || null, // 小蜘蛛人正式學員未過墜測/未簽同意書仍放行時的醒目提醒
     needsPromotion: member.isChildAccount === true && member.birthday && dayjs().diff(member.birthday, 'year') >= 18,
   };
 

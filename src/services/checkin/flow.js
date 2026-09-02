@@ -200,6 +200,7 @@ const createPendingCheckIn = async ({
     originalAmount: finalOriginal,
     isTeamDiscount: finalTeam,
     legacyDiscount: finalLegacy,
+    fallTestWarning: gate.fallTestWarning || null, // 小蜘蛛人正式學員未過墜測/未簽同意書仍放行時的醒目提醒
     partnerVendor: finalPartnerVendor,   // 特約廠商優惠（−20，掃碼提示出示證件）
     partnerGymMember: finalPartnerGymMember,   // 友館隊員優惠（9折，掃碼提示出示證件）
     rentShoes: rentShoes || false,
@@ -339,6 +340,7 @@ const scanQrCode = async (qrToken, staffGymId = null, isSuperAdmin = false) => {
     legacyDiscount: pending.legacyDiscount || false,
     partnerVendor: pending.partnerVendor === true,   // 特約廠商優惠 → 員工端提示出示證件
     partnerGymMember: pending.partnerGymMember === true,   // 友館隊員優惠 → 員工端提示出示證件
+    fallTestWarning: pending.fallTestWarning || null,   // 小蜘蛛人正式學員未過墜測/未簽同意書 → 員工端醒目提醒
     rentShoes: pending.rentShoes,
     shoesPrice: pending.shoesPrice,
     rentChalk: pending.rentChalk || false,
@@ -603,6 +605,7 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     legacyDiscount: pending.legacyDiscount || false,
     partnerVendor: pending.partnerVendor || false,   // 特約廠商優惠（供報表/掃碼顯示）
     partnerGymMember: pending.partnerGymMember || false,   // 友館隊員優惠（供報表/掃碼顯示）
+    fallTestWarning: pending.fallTestWarning || null,   // 小蜘蛛人正式學員未過墜測/未簽同意書仍放行入場（稽核留痕）
     rentShoes: pending.rentShoes,
     shoesPrice: pending.shoesPrice,
     rentChalk: pending.rentChalk || false,

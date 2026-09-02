@@ -395,6 +395,12 @@ router.get('/eligibility/:memberId', authenticate, requireManagerOrStation, asyn
 
     // 墜落測驗狀態（櫃檯入場閘門用，與會員自助 verifyEntry 一致）
     const fallTest = await checkinService.checkFallTest(req.params.memberId);
+    // 小蜘蛛人正式學員：未過墜測仍可入場的醒目提醒（供櫃檯確認前預覽，與 verifyEntry/runEntryGates 同一套判斷）
+    let fallTestWarning = null;
+    if (!fallTest.passed && req.query.gymId) {
+      const isSpiderStudent = await checkinService.hasSpiderCourseAccess(req.params.memberId, req.query.gymId);
+      if (isSpiderStudent) fallTestWarning = { reason: 'fall_test_incomplete', message: '尚未完成墜落測驗同意書或測驗' };
+    }
 
     // 可用票券（櫃檯兩段流程：選身分後可選用優惠券/黑卡/紅利/單次券）
     const discountCards = await require('../services/discountCardService').getValidDiscountCards(req.params.memberId);
@@ -417,6 +423,7 @@ router.get('/eligibility/:memberId', authenticate, requireManagerOrStation, asyn
       vipNote: vip?.note || null,
       fallTestPassed: fallTest.passed,
       fallTestReason: fallTest.passed ? null : fallTest.reason, // 'never_tested' | 'expired'
+      fallTestWarning, // 小蜘蛛人正式學員未過墜測仍可入場時的醒目提醒（見上）
       // 票券（兒童不適用折扣券）
       instruments: {
         discountCard: {
@@ -1052,6 +1059,7 @@ router.post('/phone', authenticate, requireManagerOrStation, async (req, res) =>
       entryOriginalFee: entryOriginal,
       isTeamDiscount,
       legacyDiscount,
+      fallTestWarning: gate.fallTestWarning || null, // 小蜘蛛人正式學員未過墜測/未簽同意書仍放行入場（稽核留痕）
       rentShoes: !!rentShoes,
       shoesPrice: rentShoes ? shoesPrice : 0,
       rentChalk: !!rentChalk,

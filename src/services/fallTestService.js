@@ -27,7 +27,7 @@ const getFallTestSettings = async (db) => {
  * @returns {Promise<object>} 建立的 fallTests 文件
  * @throws  帶 { status, code, message } 的 Error（呼叫端可據此回應）
  */
-async function recordFallTestResult({ memberId, result, notes, staffId, staffName }) {
+async function recordFallTestResult({ memberId, result, notes, staffId, staffName, gymId }) {
   const db = getDb();
   if (!memberId || !result) {
     const e = new Error('缺少必要欄位'); e.status = 400; e.code = 'MISSING_FIELDS'; throw e;
@@ -36,13 +36,18 @@ async function recordFallTestResult({ memberId, result, notes, staffId, staffNam
     const e = new Error('結果須為 passed 或 failed'); e.status = 400; e.code = 'INVALID_RESULT'; throw e;
   }
 
-  // 未簽署同意書不可登記通過
+  // 未簽署同意書不可登記通過——例外：小蜘蛛人週課正式學員未完成簽署，仍可先登記通過測驗
+  // （2026-09-02 政策，比照入場端的免墜測例外，同一套 hasSpiderCourseAccess 判斷）
   if (result === 'passed') {
     const sigSnap = await db.collection('fallTestSignatures')
       .where('memberId', '==', memberId).select().limit(1).get();
     if (sigSnap.empty) {
-      const e = new Error('此會員尚未簽署墜落測驗同意書，無法登記為通過');
-      e.status = 400; e.code = 'SIGNATURE_REQUIRED'; throw e;
+      const { hasSpiderCourseAccess } = require('./checkin/gates');
+      const isSpiderStudent = gymId ? await hasSpiderCourseAccess(memberId, gymId) : false;
+      if (!isSpiderStudent) {
+        const e = new Error('此會員尚未簽署墜落測驗同意書，無法登記為通過');
+        e.status = 400; e.code = 'SIGNATURE_REQUIRED'; throw e;
+      }
     }
   }
 

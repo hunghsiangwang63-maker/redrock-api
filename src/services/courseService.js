@@ -2131,16 +2131,23 @@ const getCourses = async (gymId) => {
 
   // 工作坊：名額以「場次層」判斷——course 層 enrolledCount 是彙總，不反映各場次；
   // 只要任一「未取消、今日(含)以後」場次未滿 → 視為尚有名額（部分場次額滿不算整體額滿）。
-  const workshopIds = courses.filter(c => c.type === 'workshop').map(c => c.id);
+  // 同一批查詢也判斷「是否還有未來場次」（不論課程類型）——依真實場次資料判斷是否已結束，
+  // 不倚賴 course.endDate 欄位（可能因加開場次/補課展延等原因與實際場次不同步）；
+  // 供會員端「課程總覽」排除已結束梯次用（hasFutureSession）。query 本身加 date>=today
+  // 縮小範圍（courseId+date 複合索引已存在），已結束課程這裡幾乎不會掃到任何文件。
   const workshopAnyOpen = {};
+  const hasFutureSessionByCourse = {};
   const _todayW = taiwanToday();
-  for (let i = 0; i < workshopIds.length; i += 30) {
-    const chunk = workshopIds.slice(i, i + 30);
+  for (let i = 0; i < courseIds.length; i += 30) {
+    const chunk = courseIds.slice(i, i + 30);
     try {
-      const ss = await db.collection(SESSION_COLLECTION).where('courseId', 'in', chunk).get();
+      const ss = await db.collection(SESSION_COLLECTION)
+        .where('courseId', 'in', chunk).where('date', '>=', _todayW)
+        .select('courseId', 'status', 'enrolledCount', 'maxStudents').get();
       ss.docs.forEach(d => {
         const s = d.data();
-        if (s.status === 'cancelled' || (s.date && s.date < _todayW)) return;
+        if (s.status === 'cancelled') return;
+        hasFutureSessionByCourse[s.courseId] = true;
         if ((s.enrolledCount || 0) < (s.maxStudents || 0)) workshopAnyOpen[s.courseId] = true;
       });
     } catch (e) { /* 場次查詢失敗不阻斷課程列表 */ }
@@ -2154,6 +2161,7 @@ const getCourses = async (gymId) => {
     const _rules = resolveRules(c, cat); // 班別繼承+梯次覆寫解析後的規則（供會員端顯示，勿直接讀 course 欄位）
     return {
       ...c, enrolledCount, realEnrolled, waitlistCount,
+      hasFutureSession: !!hasFutureSessionByCourse[c.id], // 依真實場次資料判斷是否還有未來場次（見上方註解）
       categoryName: cat?.name || null,
       categoryGroup: cat?.group || null,               // adult | youth | special（大類）
       categoryDescription: cat?.description || null,   // 班別共用課程介紹

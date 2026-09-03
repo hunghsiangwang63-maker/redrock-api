@@ -893,6 +893,35 @@ const sendCompetitionNotice = async ({ competitionId, subject, html, staffId, st
   return { recipientCount: emails.length, batchesSent: sentBatches, batchesFailed: failedBatches };
 };
 
+// ── 比賽退費政策計算（單一真相，供退費審核前預覽用）──
+// refundPolicies＝多段日期分級（見 createCompetition/updateCompetition 表單），依 deadline 升冪排序，
+// 找第一個「cancelDate <= deadline」的段落套用；晚於全部段落（或無政策）→ 不予退費。
+// ⚠️ 會員取消 modal（MemberCompetitionsPage.jsx）另有一份「以今日日期試算」的前端估算，供送出前
+// 立即參考用（畫面本身標「僅供參考，實際以館方核算為準」）——那份估算基準日是「當下這一刻」（送出即成立
+// 的 cancelledAt），此處則是審核當下回溯「實際取消日」重算，兩者計算規則相同、基準日不同，刻意不共用
+// 同一份程式碼（純前端預覽 vs 伺服器權威計算，跨前後端沒有共用函式的必要與機制）。
+const computeCompetitionRefundPolicy = (competition, { registrationFee, cancelDate }) => {
+  const policies = competition?.refundPolicies || [];
+  const sorted = [...policies].sort((a, b) => String(a.deadline).localeCompare(String(b.deadline)));
+  const hit = sorted.find(p => cancelDate && cancelDate <= p.deadline);
+  const fee = registrationFee || 0;
+  let estimate = 0, ruleLabel = '不予退費';
+  if (hit) {
+    if (hit.rule === 'full_minus_admin') {
+      estimate = Math.max(0, fee - (hit.adminFee || 0));
+      ruleLabel = `全額退費（扣行政費 NT$${hit.adminFee || 0}）`;
+    } else if (hit.rule === 'half_minus_admin') {
+      estimate = Math.max(0, Math.round(fee * 0.5) - (hit.adminFee || 0));
+      ruleLabel = `50% 退費（扣行政費 NT$${hit.adminFee || 0}）`;
+    }
+  }
+  return {
+    policies: sorted, matchedDeadline: hit?.deadline || null, rule: hit?.rule || null,
+    adminFee: hit?.adminFee || 0, ruleLabel, registrationFee: fee, cancelDate: cancelDate || null,
+    estimate,
+  };
+};
+
 module.exports = {
   sweepExpiredCompetitionPayments,
   SCORING_SYSTEMS,
@@ -901,7 +930,7 @@ module.exports = {
   sendWebhook, retryWebhook, promoteNextWaitlist, startScoringSync, syncFinalResults,
   getCompetitionRegistrations, getMemberRegistrations,
   recordCompetitionRevenue, computeNetReceivedAmount,
-  computeCompetitionAgeInfo, computeCompetitionFee,
+  computeCompetitionAgeInfo, computeCompetitionFee, computeCompetitionRefundPolicy,
   getParticipantEmails, sendCompetitionNotice,
   REGISTRATION_LIST_FIELDS,
 };

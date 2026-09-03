@@ -1317,6 +1317,34 @@ router.post('/registrations/:regId/reregister', authenticateAny, async (req, res
   }
 });
 
+// ── GET /competitions/registrations/:regId/refund-preview - 退費政策計算過程預覽 ──
+// 依「實際取消日」（cancelledAt）回溯套用該賽事的退費政策分級，供審核退費前顯示——
+// 賽事若未設定 refundPolicies（多為舊賽事/未設定退費政策），policies 回空陣列，前端顯示無政策可套用。
+router.get('/registrations/:regId/refund-preview',
+  authenticate, checkPermission('competitions.manage'),
+  async (req, res) => {
+    try {
+      const dayjs = require('dayjs');
+      const db = getDb();
+      const regDoc = await db.collection(COLLECTIONS.COMPETITION_REGISTRATIONS || 'competitionRegistrations').doc(req.params.regId).get();
+      if (!regDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名記錄' });
+      const reg = regDoc.data();
+      const compDoc = reg.competitionId ? await db.collection(COLLECTIONS.COMPETITIONS).doc(reg.competitionId).get() : null;
+      const competition = compDoc?.exists ? compDoc.data() : null;
+      const cancelDate = reg.cancelledAt?._seconds
+        ? dayjs(reg.cancelledAt._seconds * 1000).format('YYYY-MM-DD')
+        : (reg.cancelledAt ? dayjs(reg.cancelledAt).format('YYYY-MM-DD') : null);
+      const preview = competitionService.computeCompetitionRefundPolicy(competition, {
+        registrationFee: reg.paidAmount || reg.registrationFee || 0,
+        cancelDate,
+      });
+      res.json({ preview });
+    } catch (err) {
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // ── POST /competitions/registrations/:regId/refund - 退費 ──
 router.post('/registrations/:regId/refund',
   authenticate, checkPermission('competitions.manage'),

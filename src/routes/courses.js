@@ -1330,9 +1330,10 @@ router.put('/:courseId',
       ];
       const updates = { updatedAt: new Date() };
       allowedFields.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
-      // 梯次名稱/班別變更、或週課調整單堂價（需用目前總堂數重算整期總價）→ 讀一次現有文件
+      // 梯次名稱/班別變更、週課調整單堂價、或上課時段變更（需比對是否真的改變才決定是否連動場次/報名）→ 讀一次現有文件
       let _curDoc = null;
-      if (updates.cohortName !== undefined || updates.categoryId !== undefined || updates.pricePerSession !== undefined) {
+      if (updates.cohortName !== undefined || updates.categoryId !== undefined || updates.pricePerSession !== undefined
+        || updates.startTime !== undefined || updates.endTime !== undefined) {
         _curDoc = await db.collection('courses').doc(req.params.courseId).get();
       }
       const cur = _curDoc && _curDoc.exists ? _curDoc.data() : {};
@@ -1378,6 +1379,29 @@ router.put('/:courseId',
         let synced = 0;
         ssnap.forEach(d => { if (d.data().status !== 'cancelled') { batch.update(d.ref, { maxStudents: Number(updates.maxStudents), updatedAt: new Date() }); synced++; } });
         if (synced) await batch.commit();
+      }
+      // 上課時段（startTime/endTime）變更且真的與原值不同 → 同步旗下未取消場次＋其報名快照。
+      // 場次的時段是「加開場次/產生場次」當下的快照，課程層級事後改時段本來就不會回頭改場次
+      // （比照 maxStudents 同一類問題）——之前發生過課程改了 15:00~16:30，但整梯 9 場全部場次
+      // 仍停在建立當下的空白時段，導致月曆排序把它排到最前面、時段完全看不出來。
+      // enrollment 也要跟著同步（存 date/startTime/endTime 快照，用於請假時限「課前 N 小時」判定，
+      // 不同步會讓已報名學員的請假期限算成錯的時間，比純顯示問題更嚴重）。
+      if ((updates.startTime !== undefined && updates.startTime !== cur.startTime)
+        || (updates.endTime !== undefined && updates.endTime !== cur.endTime)) {
+        const timeUpd = {};
+        if (updates.startTime !== undefined) timeUpd.startTime = updates.startTime;
+        if (updates.endTime !== undefined) timeUpd.endTime = updates.endTime;
+        const tsnap = await db.collection('courseSessions').where('courseId', '==', req.params.courseId).get();
+        const tBatch = db.batch();
+        let tSynced = 0;
+        tsnap.forEach(d => { if (d.data().status !== 'cancelled') { tBatch.update(d.ref, { ...timeUpd, updatedAt: new Date() }); tSynced++; } });
+        if (tSynced) await tBatch.commit();
+
+        const ensnap = await db.collection('courseEnrollments').where('courseId', '==', req.params.courseId).select('status').get();
+        const eBatch = db.batch();
+        let eSynced = 0;
+        ensnap.forEach(d => { if (d.data().status !== 'cancelled') { eBatch.update(d.ref, { ...timeUpd, updatedAt: new Date() }); eSynced++; } });
+        if (eSynced) await eBatch.commit();
       }
       res.json({ message: '課程已更新', updates });
     } catch (err) {

@@ -1837,7 +1837,7 @@ router.get('/:courseId/enrollments',
           depositResolved: m.depositResolved, depositResolution: m.depositResolution,
         };
       });
-      // Sort by enrolledAt desc
+      // 依報名時間排序（越後面越新；原註解誤寫 desc，實際比較式為 asc，修正註解與行為一致）
       enrollments.sort((a, b) => {
         const ta = a.enrolledAt?._seconds || 0;
         const tb = b.enrolledAt?._seconds || 0;

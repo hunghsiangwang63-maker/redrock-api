@@ -478,7 +478,7 @@ const buildCourseMemberList = async (db, c) => {
   const hSnap = await db.collection('courseRegistrations').where('courseId', '==', c.id)
     .select('memberId', 'memberName', 'status', 'cancelReason', 'pauseStatus', 'waitlistPosition', 'cancelledAt',
       'payEnrollmentId', 'fee', 'paymentMethod', 'paymentStatus', 'paymentConfirmed', 'memberPaidAmount',
-      'receivedAmountOverride', 'bankLastFive', 'paymentDate', 'enrolledAt', 'enrollNote', 'healthNote',
+      'receivedAmountOverride', 'bankLastFive', 'paymentDate', 'enrolledAt', 'createdAt', 'enrollNote', 'healthNote',
       'referralSource', 'staffNote')
     .get();
   const seen = new Map();
@@ -506,7 +506,7 @@ const buildCourseMemberList = async (db, c) => {
       receivedAmountOverride: h.receivedAmountOverride ?? null,
       bankLastFive: h.bankLastFive || '',
       paymentDate: h.paymentDate || '',
-      enrolledAt: h.enrolledAt || null,
+      enrolledAt: h.enrolledAt || h.createdAt || null,
       enrollNote: h.enrollNote || '',
       healthNote: h.healthNote || '',
       referralSource: h.referralSource || '',
@@ -521,11 +521,17 @@ const buildCourseMemberList = async (db, c) => {
     mdocs.forEach(d => { if (d.exists) phoneMap[d.id] = d.data().phone || ''; });
     members = members.map(m => ({ ...m, memberPhone: phoneMap[m.memberId] || '' }));
   }
-  // 正取排前、候補排後（候補內依候補順位）
+  // 正取排前、候補排後（候補內依候補順位）；正取內依報名時間排序（越後面越新，2026-09-03 改為此規則、原為姓名筆劃排序）
+  const enrolledAtMs = (v) => {
+    if (!v) return 0;
+    if (typeof v.toMillis === 'function') return v.toMillis();
+    const sec = v._seconds ?? v.seconds;
+    return sec ? sec * 1000 : 0;
+  };
   return members.sort((a, b) => {
     if (!!a.isWaitlist !== !!b.isWaitlist) return a.isWaitlist ? 1 : -1;
     if (a.isWaitlist) return (a.waitlistPosition ?? 999) - (b.waitlistPosition ?? 999);
-    return (a.memberName || '').localeCompare(b.memberName || '');
+    return enrolledAtMs(a.enrolledAt) - enrolledAtMs(b.enrolledAt);
   });
 };
 

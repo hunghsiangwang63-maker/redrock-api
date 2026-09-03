@@ -65,7 +65,12 @@ router.post('/', authenticateAny, async (req, res) => {
     const gymDoc = await db.collection(COLLECTIONS.GYMS).doc(gymId).get();
     if (!gymDoc.exists) return res.status(404).json({ error: 'GYM_NOT_FOUND', message: '場館不存在' });
 
-    if (member.fallTestPassed) {
+    // 已通過墜落測驗（權威 checkFallTest，含遞延後 currentExpiresAt）——不可用 member.fallTestPassed
+    // 這個「曾經通過」的一次性寫死旗標判斷，它在測驗過期後從不會被回頭清掉，會讓已過期會員
+    // 永遠卡在「已通過墜落測驗，無需安排」、完全無法自助重新排測（真實案例：0918529058）。
+    const checkinService = require('../services/checkinService');
+    const ft = await checkinService.checkFallTest(memberId);
+    if (ft.passed) {
       return res.status(400).json({ error: 'ALREADY_PASSED', message: '已通過墜落測驗，無需安排' });
     }
 

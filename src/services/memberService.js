@@ -748,7 +748,9 @@ const sanitizeMemberForList = (m) => {
 // 搜尋清單投影欄位：搜尋比對用（name/phone/email）＋ MembersPage.jsx 清單列顯示用
 // （isChildAccount/memberType/waiverSigned/fallTestPassed/createdAt）。點進去看詳情走
 // 另一支單筆 getMember()（不受此投影影響），故清單本身不需要 qrCode/密碼雜湊等其他欄位。
-const SEARCH_LIST_FIELDS = ['name', 'phone', 'email', 'isChildAccount', 'memberType', 'waiverSigned', 'fallTestPassed', 'createdAt', 'isTeamMember', 'teamMemberSince', 'teamMemberUntil'];
+// fallTestExpiresAt：一併帶出供前端比對是否已過期（fallTestPassed 是一次性寫死旗標、
+// 過期後不會被清掉，前端需自行拿 fallTestExpiresAt 跟今天比較才能正確顯示「已過期」）。
+const SEARCH_LIST_FIELDS = ['name', 'phone', 'email', 'isChildAccount', 'memberType', 'waiverSigned', 'fallTestPassed', 'fallTestExpiresAt', 'createdAt', 'isTeamMember', 'teamMemberSince', 'teamMemberUntil'];
 
 // ── 搜尋會員 ─────────────────────────────────────────────────────
 const searchMembers = async ({ query, gymId, role, limit = 20, cursor }) => {

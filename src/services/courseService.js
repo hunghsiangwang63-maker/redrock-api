@@ -1799,6 +1799,10 @@ const SESSION_ROSTER_FIELDS = [
   'memberId', 'memberName', 'courseId', 'status', 'isMakeup',
   'enrollGender', 'enrollAge', 'enrollNote', 'healthNote', 'referralSource',
   'paymentStatus', 'leaveReason',
+  // 免登入公開報名（guest_ 開頭假 memberId，members 集合查無此人）：電話存在報名當下填的
+  // contactPhone，每堂場次副本皆有（非 idx0-only）——供下方電話補齊 fallback 用
+  // （2026-09-03 查獲：公開報名學員名單缺電話）。
+  'contactPhone', 'isGuest',
 ];
 const getSessionRoster = async (sessionId) => {
   const db = getDb();
@@ -1827,7 +1831,13 @@ const getSessionRoster = async (sessionId) => {
     const docs = await db.getAll(...refs);
     docs.forEach((doc, idx) => {
       const mid = batch[idx];
-      memberInfoMap[mid] = doc.exists ? { name: doc.data().name, phone: doc.data().phone } : { name: '（會員資料異常）', phone: '' };
+      // guest_ 開頭是免登入公開報名的假 memberId（查無 members 文件屬正常，非資料異常）——
+      // 姓名/電話留空，讓下方 || r.memberName / r.contactPhone 的 fallback 生效；
+      // 真的查無會員（非 guest_ 開頭）才顯示「會員資料異常」提醒（2026-09-03 查獲：
+      // 公開報名學員在名單被誤標成資料異常，姓名甚至被蓋過原本正確的 r.memberName）。
+      const isGuestId = mid.startsWith('guest_');
+      memberInfoMap[mid] = doc.exists ? { name: doc.data().name, phone: doc.data().phone }
+        : (isGuestId ? { name: '', phone: '' } : { name: '（會員資料異常）', phone: '' });
     });
   }
 
@@ -1854,7 +1864,7 @@ const getSessionRoster = async (sessionId) => {
     return {
       ...r,
       memberName: memberInfoMap[r.memberId]?.name || r.memberName || '',
-      memberPhone: memberInfoMap[r.memberId]?.phone || '',
+      memberPhone: memberInfoMap[r.memberId]?.phone || r.contactPhone || '',
       attendanceStatus: attendanceMap[r.memberId] || 'pending',
       enrollGender: r.enrollGender || header.enrollGender || null,
       enrollAge: r.enrollAge ?? header.enrollAge ?? null,

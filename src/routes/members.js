@@ -479,7 +479,7 @@ const buildCourseMemberList = async (db, c) => {
     .select('memberId', 'memberName', 'status', 'cancelReason', 'pauseStatus', 'waitlistPosition', 'cancelledAt',
       'payEnrollmentId', 'fee', 'paymentMethod', 'paymentStatus', 'paymentConfirmed', 'memberPaidAmount',
       'receivedAmountOverride', 'bankLastFive', 'paymentDate', 'enrolledAt', 'createdAt', 'enrollNote', 'healthNote',
-      'referralSource', 'staffNote')
+      'referralSource', 'staffNote', 'contactPhone', 'isGuest')
     .get();
   const seen = new Map();
   const payMap = {};
@@ -495,6 +495,9 @@ const buildCourseMemberList = async (db, c) => {
       // 已退費：報名資料保留在名單中供查詢，僅標註、不計入「有效人數」（呼叫端另以 !refunded 篩選 count）
       refunded: isRefunded, refundedAt: isRefunded ? (h.cancelledAt || null) : null,
       refundReason: isRefunded ? (h.cancelReason || null) : null,
+      // 免登入公開報名（guest_ 開頭的假 memberId，members 集合查無此人）：電話存在報名當下填的 contactPhone，
+      // 非會員資料——供下方電話補齊 fallback 用（2026-09-03 查獲：公開報名學員在名單一律缺電話號碼）。
+      isGuest: h.isGuest === true, contactPhone: h.contactPhone || '',
     });
     payMap[h.memberId] = {
       enrollmentId: h.payEnrollmentId,
@@ -514,12 +517,12 @@ const buildCourseMemberList = async (db, c) => {
     };
   });
   let members = [...seen.values()].map(m => ({ ...m, ...(payMap[m.memberId] || {}) }));
-  // 電話以 members 集合權威補齊
+  // 電話以 members 集合權威補齊；guest_ 開頭的訪客報名查無會員文件，退回報名當下填的 contactPhone
   if (members.length) {
     const mdocs = await db.getAll(...members.map(m => db.collection('members').doc(m.memberId)));
     const phoneMap = {};
     mdocs.forEach(d => { if (d.exists) phoneMap[d.id] = d.data().phone || ''; });
-    members = members.map(m => ({ ...m, memberPhone: phoneMap[m.memberId] || '' }));
+    members = members.map(m => ({ ...m, memberPhone: phoneMap[m.memberId] || m.contactPhone || '' }));
   }
   // 正取排前、候補排後（候補內依候補順位）；正取內依報名時間排序（越後面越新，2026-09-03 改為此規則、原為姓名筆劃排序）
   const enrolledAtMs = (v) => {

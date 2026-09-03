@@ -1726,7 +1726,8 @@ router.get('/:courseId/enrollments',
             .where('courseId', '==', courseId).where('memberId', 'in', batch)
             // header 內嵌簽名圖，只取名單顯示欄位（2026-08-27 補投影，與下方 headerMap 取用欄位一一對應）
             .select('memberId', 'paymentStatus', 'receivedAmountOverride', 'payEnrollmentId', 'fee', 'paymentMethod',
-              'bankLastFive', 'paymentDate', 'memberPaidAmount', 'enrolledAt', 'enrollNote', 'healthNote', 'referralSource', 'staffNote')
+              'bankLastFive', 'paymentDate', 'memberPaidAmount', 'enrolledAt', 'enrollNote', 'healthNote', 'referralSource', 'staffNote',
+              'contactPhone', 'isGuest')
             .get();
           hSnap.forEach(hd => {
             const h = hd.data();
@@ -1735,6 +1736,9 @@ router.get('/:courseId/enrollments',
               fee: h.fee, paymentMethod: h.paymentMethod, bankLastFive: h.bankLastFive, paymentDate: h.paymentDate,
               memberPaidAmount: h.memberPaidAmount, enrolledAt: h.enrolledAt,
               enrollNote: h.enrollNote, healthNote: h.healthNote, referralSource: h.referralSource, staffNote: h.staffNote,
+              // 免登入公開報名（guest_ 開頭假 memberId，members 集合查無此人）：電話存在報名當下填的
+              // contactPhone——供下方電話補齊 fallback 用（2026-09-03 查獲：公開報名學員名單缺電話）。
+              contactPhone: h.contactPhone || '', isGuest: h.isGuest === true,
             };
           });
         }
@@ -1809,7 +1813,7 @@ router.get('/:courseId/enrollments',
         return {
           memberId: m.memberId,
           memberName: info.name || m.memberName || '',
-          memberPhone: info.phone || '',
+          memberPhone: info.phone || header.contactPhone || '',
           isWaitlist: m.isWaitlist,
           waitlistPosition: m.waitlistPosition,
           count: m.count,           // 此人這門課有幾筆場次報名（含請假），供前端顯示「N 堂」

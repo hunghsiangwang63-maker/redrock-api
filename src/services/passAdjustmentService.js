@@ -167,8 +167,23 @@ const getAllPassRequests = async (status) => {
     });
 };
 
+// ── 退費計算（單一真相，供審核前預覽與正式核准共用；不含重疊補償還原副作用，
+//    僅供顯示估算——正式核准時會先跑 revertAllOverlapForPass 才用「還原後」的 endDate 重算，
+//    數字可能因此略有差異，此函式只回傳依當下 pass.endDate 估算的結果）──
+const computePassRefundPreview = async (db, pass) => {
+  const today = dayjs();
+  const totalDays = dayjs(pass.endDate).diff(dayjs(pass.startDate), 'day');
+  const remainingDays = Math.max(0, dayjs(pass.endDate).diff(today, 'day'));
+  const passTypeDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(pass.passTypeId).get();
+  const originalPrice = passTypeDoc.exists ? passTypeDoc.data().price : 0;
+  const dailyRate = totalDays > 0 ? originalPrice / totalDays : 0;
+  const grossRefund = Math.round(dailyRate * remainingDays);
+  const netRefund = Math.max(0, grossRefund - REFUND_FEE);
+  return { totalDays, remainingDays, originalPrice, dailyRate: Math.round(dailyRate * 100) / 100, grossRefund, fee: REFUND_FEE, netRefund };
+};
+
 // ── 員工審核：核准 ────────────────────────────────────────────────
-const approvePassRequest = async ({ requestId, operatorId, operatorName, extensionMonths, hasInvoice }) => {
+const approvePassRequest = async ({ requestId, operatorId, operatorName, extensionMonths, hasInvoice, finalRefund: finalRefundOverride, refundSentDate, refundSentLastFive }) => {
   const db = getDb();
   const reqRef = db.collection(COLLECTIONS.PASS_REQUESTS).doc(requestId);
   const reqDoc = await reqRef.get();
@@ -226,24 +241,22 @@ const approvePassRequest = async ({ requestId, operatorId, operatorName, extensi
       const reverted = await require('./passOverlapService').revertAllOverlapForPass(pass.id);
       if (reverted && reverted.newEndDate) effEndDate = reverted.newEndDate;
     } catch (e) { console.error('重疊補償還原失敗（退費照原 endDate 計）:', e.message); }
-    const today = dayjs();
-    const totalDays = dayjs(effEndDate).diff(dayjs(pass.startDate), 'day');
-    const remainingDays = Math.max(0, dayjs(effEndDate).diff(today, 'day'));
-    const passTypeDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(pass.passTypeId).get();
-    const originalPrice = passTypeDoc.exists ? passTypeDoc.data().price : 0;
-    const dailyRate = totalDays > 0 ? originalPrice / totalDays : 0;
-    const grossRefund = Math.round(dailyRate * remainingDays);
-    const netRefund = Math.max(0, grossRefund - REFUND_FEE);
+    const preview = await computePassRefundPreview(db, { ...pass, endDate: effEndDate });
+    const { totalDays, remainingDays, originalPrice, dailyRate, grossRefund, netRefund } = preview;
+    // 實際退款金額：admin 可於審核當下手動調整（例如與會員協調的金額），未提供則採計算出的建議值；
+    // 仍以計算出的 grossRefund 為上限（不可無上限灌高，比照課程退費 finalRefund clamp 邏輯）
+    let finalRefund = Number.isFinite(finalRefundOverride) ? Number(finalRefundOverride) : netRefund;
+    finalRefund = Math.max(0, Math.min(finalRefund, grossRefund));
 
     await passRef.update({ status: 'cancelled', requestUsed: true, updatedAt: now });
     await logAdjustment({
       passId: pass.id, type: 'refund',
       beforeData: { status: pass.status, endDate: pass.endDate },
-      afterData: { status: 'cancelled', netRefund, grossRefund, fee: REFUND_FEE, remainingDays },
+      afterData: { status: 'cancelled', netRefund, grossRefund, fee: REFUND_FEE, remainingDays, finalRefund, refundSentDate: refundSentDate || null, refundSentLastFive: refundSentLastFive || null },
       reason: `會員申請退費核准：${request.reasonLabel}`,
       operatorId, operatorName, operatorType: 'staff',
     });
-    result = { grossRefund, fee: REFUND_FEE, netRefund, remainingDays };
+    result = { totalDays, remainingDays, originalPrice, dailyRate, grossRefund, fee: REFUND_FEE, netRefund, finalRefund, refundSentDate: refundSentDate || null, refundSentLastFive: refundSentLastFive || null };
 
   } else if (request.type === 'transfer') {
     // 優先用申請時已選定的接收會員 id（避免共用電話誤解析/誤轉）；舊申請無 id 才退回依電話查
@@ -429,7 +442,7 @@ module.exports = {
   REQUEST_REASONS, REFUND_FEE, TRANSFER_FEE, MAX_EXTENSION_MONTHS,
   logAdjustment, getPassAdjustmentHistory,
   createPassRequest, getMemberPassRequests, getAllPassRequests,
-  approvePassRequest, rejectPassRequest,
+  approvePassRequest, rejectPassRequest, computePassRefundPreview,
   editPass,
   unionDaysCount, daysBetweenInclusive, runHolidayBatchExtension,
 };

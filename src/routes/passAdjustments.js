@@ -130,6 +130,25 @@ router.get('/requests', authenticate, requireManagerOrStation, async (req, res) 
   }
 });
 
+// ── GET /pass-adjustments/requests/:id/refund-preview - 退費申請的計算過程預覽
+//    （審核核准前顯示用；估算基礎為「目前」pass.endDate，不含核准當下才會執行的
+//    重疊補償還原副作用，數字可能與正式核准後略有差異，僅供審核參考）──
+router.get('/requests/:id/refund-preview', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const reqDoc = await db.collection(COLLECTIONS.PASS_REQUESTS).doc(req.params.id).get();
+    if (!reqDoc.exists) return res.status(404).json({ error: 'NOT_FOUND' });
+    const request = reqDoc.data();
+    if (request.type !== 'refund') return res.status(400).json({ error: 'NOT_REFUND_TYPE', message: '此申請非退費類型' });
+    const passDoc = await db.collection(COLLECTIONS.MEMBER_PASSES).doc(request.passId).get();
+    if (!passDoc.exists) return res.status(404).json({ error: 'PASS_NOT_FOUND', message: '找不到對應的定期票' });
+    const preview = await passAdjustmentService.computePassRefundPreview(db, passDoc.data());
+    res.json({ preview });
+  } catch (err) {
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 // ── POST /pass-adjustments/requests/:id/approve - 核准申請（僅管理員/館別電腦）──
 router.post('/requests/:id/approve',
   authenticate, requireManagerOrStation,
@@ -168,6 +187,9 @@ router.post('/requests/:id/approve',
         operatorId: req.staff.id, operatorName: req.staff.name,
         extensionMonths: req.body.extensionMonths,
         hasInvoice: req.body.hasInvoice,
+        finalRefund: req.body.finalRefund !== undefined ? Number(req.body.finalRefund) : undefined,
+        refundSentDate: req.body.refundSentDate || null,
+        refundSentLastFive: req.body.refundSentLastFive || null,
       });
       res.json({ ...result, message: '申請已核准' });
     } catch (err) {

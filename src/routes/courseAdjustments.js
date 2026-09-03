@@ -377,6 +377,7 @@ router.post('/requests/:id/approve',
 
         await db.collection('courseAdjustmentRequests').doc(req.params.id).update({
           status: 'approved', finalRefund, finalDepositRefund, cancelledCount: cancelled,
+          refundSentDate: req.body.refundSentDate || null, refundSentLastFive: req.body.refundSentLastFive || null,
           approvedBy: req.staff.id, approvedByName: req.staff.name, approvedAt: new Date(), updatedAt: new Date(),
         });
         return res.json({

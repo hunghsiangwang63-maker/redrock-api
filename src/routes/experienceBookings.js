@@ -390,6 +390,7 @@ const MY_BOOKING_FIELDS = [
   'updatedAt', 'cancelReason', 'cancelledAt', 'paidAt',
   'wasReturned', 'lastReturnType', 'lastReturnReason', 'lastReturnByName', 'lastReturnAt',
   'refundRequested', 'refundAmount', 'refundAccount', 'refundBankCode', 'refundBankName', 'refundAccountName', 'refundHandlingFee',
+  'refundStatus', 'finalRefund', 'refundSentDate', 'refundSentLastFive',
 ];
 // 員工端主列表白名單：MY_BOOKING_FIELDS（會員端已核對過的欄位聯集）＋員工專屬欄位
 // （staffNote 員工備註、memberName 顯示是誰預約的）——同一份肥欄位排除原則。
@@ -737,6 +738,32 @@ router.put('/:id/staff-note', authenticate, async (req, res) => {
       staffNoteBy: req.staff.name || req.staff.id, staffNoteAt: new Date(), updatedAt: new Date(),
     });
     res.json({ success:true, message:'備註已儲存' });
+  } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
+});
+
+// ── POST /experience-bookings/:id/refund - 確認退款已實際處理（僅管理員/館別電腦） ──
+// 退費「申請」（refundRequested/refundAmount/refundBankCode 等）在取消當下（member-cancel／
+// 員工取消）就已寫入且已連動作廢發票，此端點只補「款項真的匯出去了」這道確認手續，不重複
+// 觸發任何金流/發票副作用。比照課程/比賽退費，實際退款金額可由 admin 調整、不強制等於估算值。
+router.post('/:id/refund', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection('experienceBookings').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error:'NOT_FOUND', message:'找不到此預約' });
+    const b = doc.data();
+    if (!b.refundRequested) return res.status(400).json({ error:'NO_REFUND_REQUESTED', message:'此預約無待處理的退款申請' });
+    if (b.refundStatus === 'done') return res.status(400).json({ error:'ALREADY_REFUNDED', message:'此筆已標記為已退款' });
+    const finalRefund = req.body.finalRefund !== undefined ? Number(req.body.finalRefund) : (b.refundAmount || 0);
+    if (!Number.isFinite(finalRefund) || finalRefund < 0) return res.status(400).json({ error:'INVALID_REFUND', message:'退款金額無效' });
+    await ref.update({
+      refundStatus: 'done', finalRefund,
+      refundSentDate: req.body.refundSentDate || null,
+      refundSentLastFive: req.body.refundSentLastFive || null,
+      refundedBy: req.staff.id, refundedByName: req.staff.name, refundedAt: new Date(),
+      updatedAt: new Date(),
+    });
+    res.json({ success:true, message:`已標記退款 NT$${finalRefund} 完成` });
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
 });
 

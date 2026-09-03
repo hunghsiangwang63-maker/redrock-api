@@ -61,7 +61,19 @@ router.post('/',
       return true;
     }),
     body('maxStudents').isInt({ min: 1 }).withMessage('請輸入最大人數'),
-    body('maxWaitlist').optional({ checkFalsy: true }).isInt({ min: 0 }).withMessage('候補上限須為 0 以上整數'),
+    // 候補上限 2026 拍板取消「留空＝不限」，一律須明確填數字（0＝不開放候補）
+    body('maxWaitlist').isInt({ min: 0 }).withMessage('請填寫候補上限（不開放候補請填 0）'),
+    body('gymAccessDays').isInt({ min: 1 }).withMessage('請填寫入館有效天數'),
+    body('startDate').notEmpty().withMessage('請填寫課程開始日期'),
+    body('endDate').notEmpty().withMessage('請填寫課程結束日期'),
+    body('startTime').notEmpty().withMessage('請填寫上課開始時間'),
+    body('endTime').notEmpty().withMessage('請填寫上課結束時間'),
+    body('instructor').trim().notEmpty().withMessage('請填寫教練'),
+    // 上課星期僅週課適用（工作坊無此概念、畫面也不顯示此欄位）
+    body('weekdays').custom((value, { req }) => {
+      if (req.body.type !== 'workshop' && (!Array.isArray(value) || value.length === 0)) throw new Error('請至少選擇一個上課星期');
+      return true;
+    }),
   ],
   validate,
   async (req, res) => {

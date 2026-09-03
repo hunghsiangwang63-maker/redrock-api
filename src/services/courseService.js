@@ -2608,7 +2608,43 @@ const getMemberEnrollments = async (memberId) => {
   const usedByCourse = {};
   enrollments.forEach(e => { if (e.status === 'leave') usedByCourse[e.courseId] = (usedByCourse[e.courseId] || 0) + 1; });
 
-  return enrollments.map(e => {
+  // 場次「停課」補齊（2026-09-03）：一般「取消場次」（updateSession）對正常正取學員完全不動其報名
+  // 快照，若該日期在會員報名批次建立當下就已是取消狀態（例如場次先被取消、之後才有人插班報名），
+  // 該會員的 courseEnrollments 根本不會有這一天的紀錄——現有畫面只認自己名下的紀錄，這種情況會員
+  // 完全看不到「這天停課」，只會看到自己的上課日期中間莫名跳過一週（實例：王登第 青少年進階班 9/26
+  // 該課程場次已取消、但他是後來才報名，沒有這天的個人紀錄）。
+  // 修法：對會員目前仍「有效在籍」（confirmed/leave/waitlist）的每個課程，查該課程全部已取消場次，
+  // 凡是會員名下沒有對應紀錄（不論原因為何取消）的日期，補一筆合成的「停課」通知列——沿用既有
+  // cancelReason:'closure' 判斷（前端「停課」清單只認這個值），語意上代表「這天沒有上到課」，
+  // 不細分是休館停課還是店員一般取消場次（會員角度不需要分辨，都是「這天沒課」）。
+  const activeCourseIds = [...new Set(enrollments.filter(e => ['confirmed', 'leave', 'waitlist'].includes(e.status)).map(e => e.courseId).filter(Boolean))];
+  const closureNotices = [];
+  if (activeCourseIds.length) {
+    const sessionIdsHad = new Set(enrollments.map(e => e.sessionId).filter(Boolean));
+    await Promise.all(activeCourseIds.map(async cid => {
+      const cancelledSnap = await db.collection(SESSION_COLLECTION)
+        .where('courseId', '==', cid).where('status', '==', 'cancelled')
+        .select('date', 'startTime', 'endTime').get();
+      if (cancelledSnap.empty) return;
+      const sample = enrollments.find(e => e.courseId === cid); // 借用同課程既有紀錄的 courseName/gymId，不必另外查課程文件
+      const datesNoticed = new Set(); // 同一天可能有多筆重複殘留的取消場次（如誤連按兩次新增場次），同課程同日期只補一則通知
+      cancelledSnap.docs.forEach(d => {
+        if (sessionIdsHad.has(d.id)) return; // 會員自己名下已有這場次的紀錄（不論狀態），不重複補通知
+        const s = d.data();
+        if (!s.date || datesNoticed.has(s.date)) return;
+        datesNoticed.add(s.date);
+        closureNotices.push({
+          id: `closurenotice_${d.id}`, courseId: cid, courseName: sample?.courseName || '', gymId: sample?.gymId || null,
+          memberId, sessionId: d.id, date: s.date, startTime: s.startTime || '', endTime: s.endTime || '',
+          status: 'cancelled', cancelReason: 'closure', isMakeup: false, isTrial: false, isSyntheticClosureNotice: true,
+          attendanceStatus: null, leaveLimit: courseMaxLeaves[cid] ?? RULE_DEFAULTS.maxLeaves,
+          leaveUsed: usedByCourse[cid] || 0, leaveRemaining: Math.max(0, (courseMaxLeaves[cid] ?? RULE_DEFAULTS.maxLeaves) - (usedByCourse[cid] || 0)),
+        });
+      });
+    }));
+  }
+
+  return [...enrollments.map(e => {
     // 插班學員 maxLeavesAllowed 覆蓋；否則用課程整期預設
     const leaveLimit = e.maxLeavesAllowed ?? courseMaxLeaves[e.courseId] ?? RULE_DEFAULTS.maxLeaves;
     const leaveUsed = usedByCourse[e.courseId] || 0;
@@ -2619,7 +2655,7 @@ const getMemberEnrollments = async (memberId) => {
       leaveUsed,
       leaveRemaining: Math.max(0, leaveLimit - leaveUsed),
     };
-  });
+  }), ...closureNotices];
 };
 
 // ── 查詢會員補課資格 ──────────────────────────────────────────────

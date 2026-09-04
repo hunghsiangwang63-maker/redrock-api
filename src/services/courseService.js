@@ -2723,11 +2723,22 @@ const getMemberMakeupRights = async (memberId) => {
 // 退回查 members.email；訪客報名（isGuest，2026-07-30 公開報名頁）的 email 只存在
 // courseEnrollments 逐場次副本的 contactEmail，故訪客另從那邊補（單一 where(courseId) 查詢、
 // 記憶體比對，避免 courseId+memberId in[...] 複合索引風險）。
-const getCourseParticipantEmails = async (courseId) => {
+// Firestore Timestamp（原生實例／JSON-wire 的 {_seconds}）統一換算毫秒，供「只補寄新加入」的日期比較用
+const _tsMillis = (v) => {
+  if (!v) return 0;
+  if (typeof v.toMillis === 'function') return v.toMillis();
+  const sec = v._seconds ?? v.seconds;
+  return sec ? sec * 1000 : 0;
+};
+
+// sinceDate：選填，只給定時提供才會被套用——只回傳 courseRegistrations header 建立於此時間點「之後」的報名者
+// （用於「開課前通知」的「只補寄給新加入的人」，sinceDate 通常帶該課程既有的 lastNoticeSentAt）
+const getCourseParticipantEmails = async (courseId, { sinceDate } = {}) => {
   const db = getDb();
+  const sinceMs = sinceDate ? _tsMillis(sinceDate) : 0;
   const [regSnap, enrSnap] = await Promise.all([
     db.collection('courseRegistrations').where('courseId', '==', courseId)
-      .select('memberId', 'memberName', 'status', 'isGuest').get(),
+      .select('memberId', 'memberName', 'status', 'isGuest', 'createdAt').get(),
     db.collection(ENROLLMENT_COLLECTION).where('courseId', '==', courseId)
       .select('memberId', 'contactEmail', 'isGuest').get(),
   ]);
@@ -2743,6 +2754,7 @@ const getCourseParticipantEmails = async (courseId) => {
   regSnap.docs.forEach(d => {
     const h = d.data();
     if (h.status === 'cancelled') return;
+    if (sinceMs && _tsMillis(h.createdAt) <= sinceMs) return; // 只補新：排除上次通知（含）以前就已報名的人
     if (seenMember.has(h.memberId)) return;
     seenMember.add(h.memberId);
     targets.push({ memberId: h.memberId, name: h.memberName || '', isGuest: !!h.isGuest });
@@ -2767,7 +2779,7 @@ const getCourseParticipantEmails = async (courseId) => {
 };
 
 const NOTICE_BCC_BATCH_SIZE = 40;
-const sendCourseNotice = async ({ courseId, subject, html, staffId, staffName }) => {
+const sendCourseNotice = async ({ courseId, subject, html, staffId, staffName, onlyNew }) => {
   const db = getDb();
   const courseRef = db.collection(COURSE_COLLECTION).doc(courseId);
   const courseDoc = await courseRef.get();
@@ -2776,8 +2788,15 @@ const sendCourseNotice = async ({ courseId, subject, html, staffId, staffName })
   if (!subject || !String(subject).trim()) throw { code: 'MISSING_SUBJECT', message: '請填寫信件主旨' };
   if (!html || !String(html).trim()) throw { code: 'MISSING_BODY', message: '請填寫信件內容' };
 
-  const list = await getCourseParticipantEmails(courseId);
-  if (!list.length) throw { code: 'NO_RECIPIENTS', message: '目前沒有可寄送的學員信箱（報名可能都還未填 email 或皆已取消）' };
+  // onlyNew：以此梯次上次成功發送的時間點為基準，只寄給那之後才報名的人；
+  // 從未發送過（lastNoticeSentAt 不存在）沒有「舊/新」可分，視同一般全寄
+  const sinceDate = onlyNew ? (course.lastNoticeSentAt || null) : null;
+  const list = await getCourseParticipantEmails(courseId, { sinceDate });
+  if (!list.length) {
+    throw sinceDate
+      ? { code: 'NO_RECIPIENTS', message: '目前沒有「上次通知後新加入」的學員可寄送' }
+      : { code: 'NO_RECIPIENTS', message: '目前沒有可寄送的學員信箱（報名可能都還未填 email 或皆已取消）' };
+  }
 
   let selfTo = process.env.FROM_EMAIL || 'noreply@redrocktaiwan.com';
   try {
@@ -2799,6 +2818,77 @@ const sendCourseNotice = async ({ courseId, subject, html, staffId, staffName })
   });
   if (failedBatches > 0) throw { code: 'SEND_FAILED', message: `寄送失敗：${errors.join('; ')}`, recipientCount: emails.length, batchesSent: sentBatches, batchesFailed: failedBatches };
   return { recipientCount: emails.length, batchesSent: sentBatches, batchesFailed: failedBatches };
+};
+
+// 多梯次一次發送同一份開課通知（如小蜘蛛人一次要發 10 個梯次，避免逐梯次重複操作）。
+// 各梯次名單各自套用 onlyNew 篩選（各梯次的 lastNoticeSentAt 不同，各自的「上次通知後」基準也不同）後
+// 合併去重（同一人若橫跨多個選定梯次只收一封）一次寄出；只更新「這次真的有找到收件人」的梯次
+// 的 lastNoticeSentAt，0 人梯次維持原本的最後發送時間點，避免之後「只補新」的判斷基準被平白往後推。
+const sendCourseNoticeBatch = async ({ courseIds, subject, html, staffId, staffName, onlyNew }) => {
+  const db = getDb();
+  if (!Array.isArray(courseIds) || !courseIds.length) throw { code: 'MISSING_COURSES', message: '請至少選擇一個梯次' };
+  if (!subject || !String(subject).trim()) throw { code: 'MISSING_SUBJECT', message: '請填寫信件主旨' };
+  if (!html || !String(html).trim()) throw { code: 'MISSING_BODY', message: '請填寫信件內容' };
+
+  const courseRefs = courseIds.map(id => db.collection(COURSE_COLLECTION).doc(id));
+  const courseDocs = await db.getAll(...courseRefs);
+  const missing = courseDocs.filter(d => !d.exists);
+  if (missing.length) throw { code: 'NOT_FOUND', message: `查無課程：${missing.map(d => d.id).join(', ')}` };
+
+  const seenEmail = new Set();
+  const mergedList = [];
+  // perCourseCount：該課程「自己這次應收到通知的人數」（未跨梯次去重），供 lastNoticeRecipientCount 稽核欄位、
+  // 以及「這梯次是否真的有被涵蓋到、要不要更新 lastNoticeSentAt」判斷用——刻意不用「對合併清單的新增貢獻數」，
+  // 否則同一人若橫跨兩個選定梯次，被去重排除掉的那個梯次會誤判成「這次沒人收到」而不更新時間點
+  const perCourseCount = {};
+  for (let i = 0; i < courseIds.length; i++) {
+    const courseId = courseIds[i];
+    const course = courseDocs[i].data();
+    const sinceDate = onlyNew ? (course.lastNoticeSentAt || null) : null;
+    const list = await getCourseParticipantEmails(courseId, { sinceDate });
+    perCourseCount[courseId] = list.length;
+    list.forEach(x => {
+      if (seenEmail.has(x.email)) return;
+      seenEmail.add(x.email);
+      mergedList.push(x);
+    });
+  }
+  if (!mergedList.length) {
+    throw onlyNew
+      ? { code: 'NO_RECIPIENTS', message: '所選梯次目前沒有「上次通知後新加入」的學員可寄送' }
+      : { code: 'NO_RECIPIENTS', message: '所選梯次目前沒有可寄送的學員信箱（報名可能都還未填 email 或皆已取消）' };
+  }
+
+  // selfTo：純寄件顯示欄位（BCC 收件人彼此看不到）——取第一個有設定館別信箱的梯次
+  let selfTo = process.env.FROM_EMAIL || 'noreply@redrocktaiwan.com';
+  try {
+    const firstGymId = courseDocs.find(d => d.exists && d.data().gymId)?.data()?.gymId;
+    if (firstGymId) { const g = await db.collection('gyms').doc(firstGymId).get(); if (g.exists && g.data().email) selfTo = g.data().email; }
+  } catch (e) {}
+
+  const emailService = require('./emailService');
+  const emails = mergedList.map(x => x.email);
+  let sentBatches = 0, failedBatches = 0;
+  const errors = [];
+  for (let i = 0; i < emails.length; i += NOTICE_BCC_BATCH_SIZE) {
+    const batch = emails.slice(i, i + NOTICE_BCC_BATCH_SIZE);
+    const r = await emailService.sendEmail({ to: selfTo, bcc: batch, subject, html });
+    if (r && !r.error) sentBatches++; else { failedBatches++; errors.push(r?.error || 'unknown error'); }
+  }
+
+  const now = new Date();
+  const writeBatch = db.batch();
+  courseIds.forEach(courseId => {
+    if (!perCourseCount[courseId]) return; // 這梯次這次沒找到任何收件人——不更新，避免把「上次通知」基準平白往後推
+    writeBatch.update(db.collection(COURSE_COLLECTION).doc(courseId), {
+      lastNoticeSentAt: now, lastNoticeSentBy: staffId || null, lastNoticeSentByName: staffName || '',
+      lastNoticeSubject: subject, lastNoticeRecipientCount: perCourseCount[courseId],
+    });
+  });
+  await writeBatch.commit();
+
+  if (failedBatches > 0) throw { code: 'SEND_FAILED', message: `寄送失敗：${errors.join('; ')}`, recipientCount: emails.length, batchesSent: sentBatches, batchesFailed: failedBatches };
+  return { recipientCount: emails.length, batchesSent: sentBatches, batchesFailed: failedBatches, courseCount: courseIds.length, perCourseCount };
 };
 
 module.exports = {
@@ -2842,4 +2932,5 @@ module.exports = {
   getMemberMakeupRights,
   getCourseParticipantEmails,
   sendCourseNotice,
+  sendCourseNoticeBatch,
 };

@@ -1274,9 +1274,15 @@ router.delete('/:courseId/permanent',
 
 // GET /courses/:courseId/participant-emails - 開課前通知用：目前有效報名者 email 清單
 // （完整比照 competitions.js 的賽前通知，見 courseService.getCourseParticipantEmails）
+// ?onlyNew=1 → 只預覽「上次通知後才報名」的名單（無上次通知紀錄則等同全部）
 router.get('/:courseId/participant-emails', authenticate, checkPermission('courses.manage'), async (req, res) => {
   try {
-    const list = await courseService.getCourseParticipantEmails(req.params.courseId);
+    let sinceDate = null;
+    if (req.query.onlyNew === '1') {
+      const doc = await getDb().collection('courses').doc(req.params.courseId).get();
+      sinceDate = doc.exists ? (doc.data().lastNoticeSentAt || null) : null;
+    }
+    const list = await courseService.getCourseParticipantEmails(req.params.courseId, { sinceDate });
     res.json({ recipients: list, count: list.length });
   } catch (err) {
     if (err.code) return res.status(400).json(err);
@@ -1287,12 +1293,50 @@ router.get('/:courseId/participant-emails', authenticate, checkPermission('cours
 // POST /courses/:courseId/send-notice - 開課前通知：櫃檯編輯草稿後發送給全部有效報名者（BCC）
 router.post('/:courseId/send-notice', authenticate, checkPermission('courses.manage'), async (req, res) => {
   try {
-    const { subject, body } = req.body;
+    const { subject, body, onlyNew } = req.body;
     const result = await courseService.sendCourseNotice({
-      courseId: req.params.courseId, subject, html: body,
+      courseId: req.params.courseId, subject, html: body, onlyNew: !!onlyNew,
       staffId: req.staff.id, staffName: req.staff.name,
     });
     res.json({ ...result, message: `已寄出給 ${result.recipientCount} 位學員` });
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+// GET /courses/participant-emails-batch?courseIds=a,b,c - 多梯次合併預覽收件名單（去重後）
+router.get('/participant-emails-batch', authenticate, checkPermission('courses.manage'), async (req, res) => {
+  try {
+    const courseIds = String(req.query.courseIds || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!courseIds.length) return res.status(400).json({ error: 'MISSING_COURSES', message: '請至少選擇一個梯次' });
+    const onlyNew = req.query.onlyNew === '1';
+    const db = getDb();
+    const docs = await db.getAll(...courseIds.map(id => db.collection('courses').doc(id)));
+    const seenEmail = new Set();
+    const recipients = [];
+    for (let i = 0; i < courseIds.length; i++) {
+      if (!docs[i].exists) continue;
+      const sinceDate = onlyNew ? (docs[i].data().lastNoticeSentAt || null) : null;
+      const list = await courseService.getCourseParticipantEmails(courseIds[i], { sinceDate });
+      list.forEach(x => { if (!seenEmail.has(x.email)) { seenEmail.add(x.email); recipients.push(x); } });
+    }
+    res.json({ recipients, count: recipients.length });
+  } catch (err) {
+    if (err.code) return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+// POST /courses/send-notice-batch - 多梯次一次發送同一份開課通知（合併名單去重、BCC 一次寄出）
+router.post('/send-notice-batch', authenticate, checkPermission('courses.manage'), async (req, res) => {
+  try {
+    const { courseIds, subject, body, onlyNew } = req.body;
+    const result = await courseService.sendCourseNoticeBatch({
+      courseIds, subject, html: body, onlyNew: !!onlyNew,
+      staffId: req.staff.id, staffName: req.staff.name,
+    });
+    res.json({ ...result, message: `已寄出給 ${result.recipientCount} 位學員（共 ${result.courseCount} 個梯次）` });
   } catch (err) {
     if (err.code) return res.status(400).json(err);
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

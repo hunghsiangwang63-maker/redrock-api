@@ -232,7 +232,7 @@ router.post('/', authenticateAny, async (req, res) => {
         const _gymCc2 = _gymDoc2.exists ? _gymDoc2.data().email : undefined;
         emailService.sendExperienceBookingReceived(
           _bookingEmail, contactName || req.member?.name || '',
-          { bookingDate, bookingTime, gymId, numParticipants: participants.length, totalFee: computedFee },
+          { bookingDate, bookingTime, gymId, numParticipants: participants.length, totalFee: computedFee, participants },
           { bank: _bank, cc: _gymCc2, insuranceFee: _settings.insuranceFee ?? 175 }
         ).catch(e => console.error('[Email] 體驗報名通知', e.message));
       } catch (e) { console.error('[Email] 體驗報名通知', e.message); }
@@ -315,6 +315,21 @@ router.post('/public', async (req, res) => {
       status: 'pending',
       createdAt: new Date(), updatedAt: new Date(),
     });
+    // 訪客報名原本完全沒有寄出任何確認信（畫面上的匯款資訊看完就沒了）——比照會員路徑補上，
+    // 這裡也是「每一位入場體驗的人都需要有個人資料」提醒最需要出現的地方（訪客多半還沒有帳號）。
+    if (contactEmail && String(contactEmail).trim()) {
+      try {
+        const _bankKey = gymId === 'gym-hsinchu' ? 'hsinchu' : 'shilin';
+        const _bank = (_settings.bankInfo || _settings.bank || {})[_bankKey] || null;
+        const _gymDoc3 = await db.collection('gyms').doc(gymId).get();
+        const _gymCc3 = _gymDoc3.exists ? _gymDoc3.data().email : undefined;
+        emailService.sendExperienceBookingReceived(
+          String(contactEmail).trim(), String(contactName).trim(),
+          { bookingDate, bookingTime: bookingTime || '', gymId, numParticipants: _n, totalFee: computedFee, participants },
+          { bank: _bank, cc: _gymCc3, insuranceFee: _settings.insuranceFee ?? 175 }
+        ).catch(e => console.error('[Email] 訪客體驗報名通知', e.message));
+      } catch (e) { console.error('[Email] 訪客體驗報名通知', e.message); }
+    }
     res.status(201).json({ success: true, id, totalFee: computedFee, message: '預約已送出！請於 3 日內完成匯款，我們確認後會與您聯繫。' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

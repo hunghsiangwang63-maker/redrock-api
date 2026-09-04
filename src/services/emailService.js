@@ -7,6 +7,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'noreply@redrocktaiwan.com';
 const FROM_NAME = '紅石攀岩 RedRock';
 const CLIENT_URL = process.env.CLIENT_URL || 'https://app.redrocktaiwan.com';
+const { isMinor } = require('../utils/age');
 
 // HTML 跳脫：避免使用者可控字串（姓名/課程名/項目名等）注入 HTML 進信件內容
 const esc = (s) => String(s ?? '')
@@ -233,12 +234,36 @@ const sendExperienceBookingConfirmation = async (memberEmail, memberName, bookin
 
 // ── 體驗課程「報名收到 / 繳費通知」（報名當下寄；含應繳金額＋該館匯款帳號；cc 該館）──
 // 應繳＝booking.totalFee（級距價格「已含保險」，不另加收）。
+// 每位入場體驗的人都需要有個人的會員資料（帳號當天入館比對用）——依參加者生日組成
+// （全成人／全未成年／成年+未成年混合）分三種措辭，未成年需家長代建「家庭成員」、成年需各自註冊。
+// 只依生日判斷，不論訪客(guest)或已登入會員預約，皆一體適用（多人預約時其他參加者未必都已有帳號）。
+const buildAttendeeProfileReminder = (participants) => {
+  const list = Array.isArray(participants) ? participants : [];
+  const n = list.length;
+  if (!n) return '';
+  const minorCount = list.filter(p => isMinor(p?.birthday)).length;
+  const adultCount = n - minorCount;
+  let body;
+  if (minorCount === 0) {
+    body = `提醒您：這次預約共 ${n} 人，<strong>每一位入場體驗的人都需要有個人的會員資料</strong>，館方當天入館時才能對應到已完成付款的預約紀錄。麻煩每位參加者都個別至 app.redrocktaiwan.com 註冊會員帳號（不是由一人代表註冊即可），姓名、生日請務必填寫正確。另外，帳號流程中有一段安全墜落測驗影片，請務必從頭以正常速度觀看、不要快轉跳看，也不要切換全螢幕播放，否則觀看進度會卡住、無法完成簽署。`;
+  } else if (adultCount === 0) {
+    body = `提醒您：這次預約共 ${n} 位小朋友，<strong>每一位入場體驗的小朋友都需要有個人資料</strong>，館方當天入館時才能對應到已完成付款的預約紀錄。由於小朋友沒有手機號碼無法自行註冊，請家長先至 app.redrocktaiwan.com 建立一個主帳號，再以「新增家庭成員」的方式，把每位小朋友的個人資料分別建立進去（姓名、生日務必填寫正確）。另外，帳號流程中有一段安全墜落測驗影片，請務必從頭以正常速度觀看、不要快轉跳看，也不要切換全螢幕播放，否則觀看進度會卡住、無法完成簽署。`;
+  } else {
+    body = `提醒您：這次預約共 ${n} 人，<strong>每一位入場體驗的人（含大人與小朋友）都需要有個人資料</strong>，館方當天入館時才能對應到已完成付款的預約紀錄。成年的參加者請個別至 app.redrocktaiwan.com 註冊會員帳號；小朋友沒有手機號碼無法自行註冊，請由家長在自己帳號中以「新增家庭成員」的方式，把小朋友的個人資料建立進去。姓名、生日都務必填寫正確。另外，帳號流程中有一段安全墜落測驗影片，請務必從頭以正常速度觀看、不要快轉跳看，也不要切換全螢幕播放，否則觀看進度會卡住、無法完成簽署。`;
+  }
+  return `
+        <div style="background:#FFF9EC;border:1px solid #E8D5A0;border-radius:8px;padding:16px;margin:12px 0;font-size:13px;line-height:1.9;color:#5A4826">
+          ${body}
+        </div>`;
+};
+
 const sendExperienceBookingReceived = async (memberEmail, memberName, booking, { bank, cc, insuranceFee = 175 } = {}) => {
   const gymName = booking.gymId === 'gym-hsinchu' ? '新竹館' : '士林館';
   const total = Number(booking.totalFee) || 0;
   const nP = Number(booking.numParticipants) || 0;
   const insTotal = nP * insuranceFee; // 保險費（已含在 total 內，僅標示）
   const money = (n) => `NT$${Number(n || 0).toLocaleString()}`;
+  const attendeeReminderBlock = buildAttendeeProfileReminder(booking.participants);
   const bankBlock = bank ? `
         <div style="background:#FBF5F5;border:1px solid #E8D5D5;border-radius:8px;padding:16px;margin:12px 0">
           <div style="font-weight:600;color:#8B1A1A;margin-bottom:6px">匯款帳號（${gymName}）</div>
@@ -265,6 +290,7 @@ const sendExperienceBookingReceived = async (memberEmail, memberName, booking, {
           <div style="font-size:16px;color:#8B1A1A"><strong>應繳總額：${money(total)}</strong></div>
           <div style="font-size:12px;color:#666;margin-top:3px">（${esc(nP)} 人 × 每人 ${money(nP ? Math.round(total / nP) : 0)}，費用已含保險 ${money(insTotal)}）</div>
         </div>
+        ${attendeeReminderBlock}
         ${bankBlock}
         <p style="font-size:13px;color:#666">匯款後請保留末五碼，或回覆本信告知，以利館方核對收款。</p>
         <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>

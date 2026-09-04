@@ -522,15 +522,17 @@ router.post('/public/sessions/:sessionId/enroll', async (req, res) => {
   try {
     const { guestName, guestPhone, guestEmail, guestBirthday, portraitSignature, guardianSignature,
       healthNote, referralSource, enrollGender, enrollAge, enrollNote,
-      bankLastFive, paymentDate } = req.body;
+      bankLastFive, bankName, paymentDate, paidAmount } = req.body;
     if (!guestName || !String(guestName).trim()) return res.status(400).json({ code:'MISSING_CONTACT', message:'請填寫姓名' });
     if (!guestPhone || !String(guestPhone).trim()) return res.status(400).json({ code:'MISSING_PHONE', message:'請填寫聯絡電話' });
     if (!guestBirthday) return res.status(400).json({ code:'MISSING_BIRTHDAY', message:'請填寫生日' });
     if (isUnder4(guestBirthday)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 4 歲無法報名課程' });
     if (!portraitSignature) return res.status(400).json({ code:'CONSENT_REQUIRED', message:'請先完成簽名' });
     if (isMinor(guestBirthday) && !guardianSignature) return res.status(400).json({ code:'GUARDIAN_SIGNATURE_REQUIRED', message:'未滿 18 歲需法定代理人簽名' });
-    if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code:'MISSING_TRANSFER', message:'請填寫匯款帳號末五碼' });
+    if (!bankName || !String(bankName).trim()) return res.status(400).json({ code:'MISSING_BANK_NAME', message:'請填寫匯款銀行名稱' });
     if (!paymentDate || !String(paymentDate).trim()) return res.status(400).json({ code:'MISSING_PAYMENT_DATE', message:'請填寫轉帳日期' });
+    if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code:'MISSING_TRANSFER', message:'請填寫匯款帳號末五碼' });
+    if (!(Number(paidAmount) > 0)) return res.status(400).json({ code:'MISSING_PAID_AMOUNT', message:'請填寫實際匯款金額' });
 
     const sessionDoc = await getDb().collection('courseSessions').doc(req.params.sessionId).get();
     if (!sessionDoc.exists) return res.status(404).json({ code:'SESSION_NOT_FOUND', message:'找不到此場次' });
@@ -544,12 +546,32 @@ router.post('/public/sessions/:sessionId/enroll', async (req, res) => {
       gymId: session.gymId,
       staffId: null, byStaff: false,
       enrollGender, enrollAge, enrollNote,
-      paymentDate, bankLastFive,
+      paymentDate, bankLastFive, bankName, paidAmount,
       healthNote, referralSource,
       confirmedLeavePolicy: req.body.confirmedLeavePolicy,
       confirmedRefundPolicy: req.body.confirmedRefundPolicy,
       portraitSignature, guardianSignature,
     });
+
+    // 訪客一律轉帳、無登入 session 無法呼叫 /transfers/upload，改由伺服器端直接建立待收款紀錄
+    // （否則驗證完的匯款資訊會被丟棄、館方看不到可確認的轉帳單，同 enroll-all 訪客路徑的修法）
+    if (!result.isWaitlist && result.enrollment?.enrollmentFee > 0) {
+      try {
+        const trId = uuidv4();
+        await getDb().collection('transferRecords').doc(trId).set({
+          id: trId, orderType: 'course', refId: result.enrollment.id,
+          memberId, memberName: String(guestName).trim(),
+          gymId: session.gymId,
+          courseId: session.courseId, courseName: session.courseName, orderName: session.courseName,
+          amount: result.enrollment.enrollmentFee, paymentMethod: 'transfer', status: 'pending',
+          bankName: (bankName || '').trim() || null,
+          bankLastFive: (bankLastFive || '').trim() || null,
+          paymentDate: paymentDate || null,
+          paidAmount: paidAmount ? Number(paidAmount) : null,
+          submittedAt: new Date(), createdAt: new Date(), updatedAt: new Date(),
+        });
+      } catch (e) { console.error('訪客工作坊轉帳待收款建立失敗', e.message); }
+    }
 
     // 報名收到通知信（非候補；運動按摩不附匯款帳號；非同步、失敗不阻斷）
     if (!result.isWaitlist) {
@@ -2270,7 +2292,9 @@ async function handleEnrollAll(req, res) {
       }
 
       // 課程報名一律經「待收款」核對（營收為 accrual、已於上方認列；此為收款確認追蹤）：
-      // 現金→值班 operator 確認；轉帳→管理員確認（轉帳的待收款由前端 /transfers/upload 建立，此處只建現金）
+      // 現金→值班 operator 確認；一般會員轉帳→管理員確認（轉帳的待收款由前端 /transfers/upload 建立，此處只建現金）；
+      // 訪客轉帳→訪客沒有登入 session、無法呼叫 /transfers/upload，故在此改由伺服器端直接建立（帶送出的匯款資訊），
+      // 否則訪客填的銀行/日期/末五碼/實際匯款金額會驗證完就被丟棄、館方完全看不到待確認的轉帳紀錄。
       if (fee > 0 && !isWaitlist && !req.body.deferPayment && !coursePlan && paymentMethod === 'cash') {
         try {
           const trId = uuidv4();
@@ -2283,6 +2307,22 @@ async function handleEnrollAll(req, res) {
             submittedAt: now, createdAt: now, updatedAt: now,
           });
         } catch (e) { console.error('現金待收款建立失敗', e.message); }
+      } else if (fee > 0 && !isWaitlist && !req.body.deferPayment && !coursePlan && isGuestEnroll && paymentMethod === 'transfer') {
+        try {
+          const trId = uuidv4();
+          await db.collection('transferRecords').doc(trId).set({
+            id: trId, orderType: 'course', refId: firstEnrollmentId,
+            memberId, memberName: req.body.memberName || '',
+            gymId: futureSessions[0].gymId || gymId,
+            courseId, courseName: course.name, orderName: course.name,
+            amount: fee, paymentMethod: 'transfer', status: 'pending',
+            bankName: (req.body.bankName || '').trim() || null,
+            bankLastFive: (req.body.bankLastFive || '').trim() || null,
+            paymentDate: req.body.paymentDate || null,
+            paidAmount: req.body.paidAmount ? Number(req.body.paidAmount) : null,
+            submittedAt: now, createdAt: now, updatedAt: now,
+          });
+        } catch (e) { console.error('訪客轉帳待收款建立失敗', e.message); }
       }
 
       // 報名收到通知信（非候補；非同步、失敗不阻斷；運動按摩不附匯款帳號）

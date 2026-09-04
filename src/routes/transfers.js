@@ -37,11 +37,14 @@ router.post('/upload', authenticateAny, upload.single('screenshot'), async (req,
     // 會員 token 一律用自己的 id，避免偽造他人 memberId
     const memberId = req.member?.id || req.body.memberId;
 
-    // 轉帳一律要求：末五碼 + 轉帳日期（截圖選填）
+    // 轉帳一律要求：銀行名稱 + 轉帳日期 + 末五碼 + 實際匯款金額（截圖選填）
     const last5 = (bankLastFive || '').trim();
     const payDate = (paymentDate || '').trim();
-    if (!last5) return res.status(400).json({ error: 'MISSING_BANK_LAST_FIVE', message: '請填寫匯款帳號末五碼' });
+    const bank = (bankName || '').trim();
+    if (!bank) return res.status(400).json({ error: 'MISSING_BANK_NAME', message: '請填寫匯款銀行名稱' });
     if (!payDate) return res.status(400).json({ error: 'MISSING_PAYMENT_DATE', message: '請填寫轉帳日期' });
+    if (!last5) return res.status(400).json({ error: 'MISSING_BANK_LAST_FIVE', message: '請填寫匯款帳號末五碼' });
+    if (!(Number(paidAmount) > 0)) return res.status(400).json({ error: 'MISSING_PAID_AMOUNT', message: '請填寫實際匯款金額' });
 
     const resolvedOrderType = orderType || (enrollmentId ? 'course' : null);
     const resolvedRefId = refId || enrollmentId || null;

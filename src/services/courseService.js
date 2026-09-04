@@ -671,7 +671,7 @@ const calcEnrollmentFee = (course) => {
 };
 
 const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paymentId,
-  paymentDate, bankLastFive, healthNote, referralSource,
+  paymentDate, bankLastFive, bankName, paidAmount, healthNote, referralSource,
   confirmedLeavePolicy, confirmedRefundPolicy, portraitSignature, guardianSignature,
   enrollGender, enrollAge, enrollNote,
   // 訪客（免登入公開報名，見 POST /courses/public/sessions/:sessionId/enroll）：memberId 為 guest_<uuid> 佔位字串，
@@ -787,6 +787,8 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     // 報名附加資訊
     paymentDate: paymentDate || null,
     bankLastFive: bankLastFive || null,
+    bankName: bankName || null,
+    memberPaidAmount: paidAmount ? Number(paidAmount) : null, // 訪客/會員自填實際匯款金額
     healthNote: healthNote || null,
     referralSource: referralSource || null,
     confirmedLeavePolicy: confirmedLeavePolicy || false,

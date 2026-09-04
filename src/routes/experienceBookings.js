@@ -25,7 +25,7 @@ const { notifyRoleInGym } = require('../services/notificationService');
 // memberId 恆為 null 時視為訪客：memberId 用不會碰撞的佔位字串 guest_<uuid>（而非字面 null），
 // 避免多位訪客報名同一場次時被 Firestore 的 where(memberId==null) 誤判成同一人（ALREADY_ENROLLED / 名額計算漂移）。
 async function handleTrialBooking(req, res, db, memberId) {
-  const { contactName, contactEmail, contactPhone, paymentDate, bankLastFive, notes } = req.body;
+  const { contactName, contactEmail, contactPhone, paymentDate, bankLastFive, bankName, paidAmount, notes } = req.body;
   const sDoc = await db.collection('courseSessions').doc(req.body.trialSessionId).get();
   if (!sDoc.exists) return res.status(404).json({ code:'SESSION_NOT_FOUND', message:'找不到試上場次' });
   const session = sDoc.data();
@@ -51,7 +51,10 @@ async function handleTrialBooking(req, res, db, memberId) {
     if (category?.group === 'youth' && !isMinor(guestBirthday)) return res.status(400).json({ code:'YOUTH_COURSE_AGE_LIMIT', message:'此課程限未滿 18 歲學員報名，請確認生日是否填寫正確' });
     if (!signatureData) return res.status(400).json({ code:'CONSENT_REQUIRED', message:'請先完成簽名' });
     if (isMinor(guestBirthday) && !guardianSignature) return res.status(400).json({ code:'GUARDIAN_SIGNATURE_REQUIRED', message:'未滿 18 歲需法定代理人簽名' });
+    if (!bankName || !String(bankName).trim()) return res.status(400).json({ code:'MISSING_BANK_NAME', message:'請填寫匯款銀行名稱' });
+    if (!paymentDate || !String(paymentDate).trim()) return res.status(400).json({ code:'MISSING_PAYMENT_DATE', message:'請填寫轉帳日期' });
     if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code:'MISSING_TRANSFER', message:'請填寫匯款帳號末五碼' });
+    if (!(Number(paidAmount) > 0)) return res.status(400).json({ code:'MISSING_PAID_AMOUNT', message:'請填寫實際匯款金額' });
 
     trialMemberId = `guest_${uuidv4()}`;
     trialName = String(guestName).trim();
@@ -119,9 +122,9 @@ async function handleTrialBooking(req, res, db, memberId) {
     participants: [{ name: trialName }],
     numParticipants: 1,
     totalFee: trialFee,
-    paymentDate: paymentDate||null, bankLastFive: bankLastFive||null,
+    paymentDate: paymentDate||null, bankLastFive: bankLastFive||null, bankName: bankName||null,
     paymentMethod: isGuestTrial ? 'transfer' : (req.body.paymentMethod || 'transfer'),
-    memberPaidAmount: req.body.paidAmount ? Number(req.body.paidAmount) : null, // 會員自填實際匯款金額
+    memberPaidAmount: paidAmount ? Number(paidAmount) : null, // 訪客/會員自填實際匯款金額
     consentSigned: true, needsInsurance: false,
     isGuest: isGuestTrial, source: isGuestTrial ? 'public' : null,
     consentSignatureUrl, guardianSignatureUrl,
@@ -130,6 +133,26 @@ async function handleTrialBooking(req, res, db, memberId) {
     isWaitlist, paymentDeadline,
     status: 'pending', createdAt: new Date(), updatedAt: new Date(),
   });
+
+  // 訪客一律轉帳、無登入 session 無法呼叫 /transfers/upload，改由伺服器端直接建立待收款紀錄
+  // （否則驗證完的匯款資訊會被丟棄、館方看不到可確認的轉帳單，同 courses.js 訪客路徑的修法）
+  if (isGuestTrial && !isWaitlist && trialFee > 0) {
+    try {
+      const trId = uuidv4();
+      await db.collection('transferRecords').doc(trId).set({
+        id: trId, orderType: 'experience', refId: id,
+        memberId: trialMemberId, memberName: trialName,
+        gymId: session.gymId, orderName: '課程試上',
+        amount: trialFee, paymentMethod: 'transfer', status: 'pending',
+        bankName: (bankName || '').trim() || null,
+        bankLastFive: (bankLastFive || '').trim() || null,
+        paymentDate: paymentDate || null,
+        paidAmount: paidAmount ? Number(paidAmount) : null,
+        submittedAt: new Date(), createdAt: new Date(), updatedAt: new Date(),
+      });
+    } catch (e) { console.error('訪客試上轉帳待收款建立失敗', e.message); }
+  }
+
   return res.status(201).json({
     success:true, id, isTrial:true, totalFee: trialFee,
     isWaitlist, paymentDeadline: paymentDeadline.toISOString(),
@@ -268,14 +291,17 @@ router.post('/public', async (req, res) => {
     const {
       gymId, bookingDate, bookingTime, courseType,
       contactName, contactEmail, contactPhone, facebookName,
-      participants, paymentDate, bankLastFive, paidAmount, notes, agreedTerms,
+      participants, paymentDate, bankLastFive, bankName, paidAmount, notes, agreedTerms,
     } = req.body;
     if (!contactName || !String(contactName).trim()) return res.status(400).json({ code:'MISSING_CONTACT', message:'請填寫聯絡人姓名' });
     if (!contactPhone || !String(contactPhone).trim()) return res.status(400).json({ code:'MISSING_PHONE', message:'請填寫聯絡電話' });
     if (!gymId) return res.status(400).json({ code:'MISSING_GYM', message:'請選擇場館' });
     if (!bookingDate) return res.status(400).json({ code:'MISSING_DATE', message:'請選擇體驗日期' });
     if (!participants?.length) return res.status(400).json({ code:'MISSING_PARTICIPANTS', message:'請填寫參加人員資料' });
+    if (!bankName || !String(bankName).trim()) return res.status(400).json({ code:'MISSING_BANK_NAME', message:'請填寫匯款銀行名稱' });
+    if (!paymentDate || !String(paymentDate).trim()) return res.status(400).json({ code:'MISSING_PAYMENT_DATE', message:'請填寫轉帳日期' });
     if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code:'MISSING_TRANSFER', message:'請填寫匯款帳號末五碼' });
+    if (!(Number(paidAmount) > 0)) return res.status(400).json({ code:'MISSING_PAID_AMOUNT', message:'請填寫實際匯款金額' });
     if (agreedTerms !== true) return res.status(400).json({ code:'TERMS_REQUIRED', message:'請閱讀並同意注意事項' });
 
     // 未滿 4 歲擋（參加者生日；公開頁送 ISO 西元 YYYY-MM-DD）
@@ -309,12 +335,33 @@ router.post('/public', async (req, res) => {
       paymentMethod: 'transfer',
       paymentDate: paymentDate || null,
       bankLastFive: String(bankLastFive).trim(),
+      bankName: String(bankName).trim(),
       memberPaidAmount: paidAmount ? Number(paidAmount) : null,
       notes: notes || '',
       agreedTerms: true,
       status: 'pending',
       createdAt: new Date(), updatedAt: new Date(),
     });
+
+    // 訪客一律轉帳、無登入 session 無法呼叫 /transfers/upload，改由伺服器端直接建立待收款紀錄
+    // （否則驗證完的匯款資訊會被丟棄、館方看不到可確認的轉帳單，同其他訪客路徑的修法）
+    if (computedFee > 0) {
+      try {
+        const trId = uuidv4();
+        await db.collection('transferRecords').doc(trId).set({
+          id: trId, orderType: 'experience', refId: id,
+          memberId: null, memberName: String(contactName).trim(),
+          gymId, orderName: '體驗課程',
+          amount: computedFee, paymentMethod: 'transfer', status: 'pending',
+          bankName: String(bankName).trim(),
+          bankLastFive: String(bankLastFive).trim(),
+          paymentDate: paymentDate || null,
+          paidAmount: paidAmount ? Number(paidAmount) : null,
+          submittedAt: new Date(), createdAt: new Date(), updatedAt: new Date(),
+        });
+      } catch (e) { console.error('訪客體驗轉帳待收款建立失敗', e.message); }
+    }
+
     // 訪客報名原本完全沒有寄出任何確認信（畫面上的匯款資訊看完就沒了）——比照會員路徑補上，
     // 這裡也是「每一位入場體驗的人都需要有個人資料」提醒最需要出現的地方（訪客多半還沒有帳號）。
     if (contactEmail && String(contactEmail).trim()) {

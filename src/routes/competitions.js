@@ -994,7 +994,11 @@ router.post('/registrations/:regId/payment-info', authenticateAny, async (req, r
     const today = taiwanToday();
     const maxDate = require('dayjs')(today).add(3, 'day').format('YYYY-MM-DD');
     if (!paymentDate) return res.status(400).json({ error: 'MISSING_PAYMENT_DATE', message: '請填寫繳費日期' });
-    if (paymentMethod === 'transfer' && !String(req.body.bankLastFive || '').trim()) return res.status(400).json({ error: 'MISSING_BANK_LAST_FIVE', message: '請填寫匯款帳號末五碼' });
+    if (paymentMethod === 'transfer') {
+      if (!String(req.body.bankName || '').trim()) return res.status(400).json({ error: 'MISSING_BANK_NAME', message: '請填寫匯款銀行名稱' });
+      if (!String(req.body.bankLastFive || '').trim()) return res.status(400).json({ error: 'MISSING_BANK_LAST_FIVE', message: '請填寫匯款帳號末五碼' });
+      if (!(Number(req.body.paidAmount) > 0)) return res.status(400).json({ error: 'MISSING_PAID_AMOUNT', message: '請填寫實際匯款金額' });
+    }
     if (paymentDate < today || paymentDate > maxDate) return res.status(400).json({ error: 'INVALID_PAYMENT_DATE', message: '繳費日期須為 3 日內' });
     await ref.update({
       paymentMethod,

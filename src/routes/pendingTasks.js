@@ -63,7 +63,7 @@ router.get('/', authenticate, async (req, res) => {
     const ticketApprovalPromise = withGym(db.collection('singleEntryTickets').where('status', '==', 'pending_approval')).get();
     const fallTestPromise = withGym(db.collection('fallTestBookings').where('status', '==', 'pending')).get();
     const installmentPromise = db.collection('installmentPlans').where('status', 'in', ['active', 'overdue']).get();
-    const inquiryPromise = db.collection('memberInquiries').where('status', '==', 'pending').get();
+    const inquiryPromise = withGym(db.collection('memberInquiries').where('status', '==', 'pending')).get();
     const courseRegPromise = db.collection('courseRegistrations').where('createdAt', '>=', sevenDaysAgo)
       .select('status', 'gymId', 'memberName', 'courseName', 'sessionCount', 'createdAt', 'courseId').get();
     const compRegPromise = db.collection('competitionRegistrations').where('registeredAt', '>=', sevenDaysAgo)
@@ -455,7 +455,7 @@ router.get('/', authenticate, async (req, res) => {
           desc: `${r.memberName} — ${r.subject}`,
           date: r.createdAt?._seconds ? new Date(r.createdAt._seconds*1000).toISOString().slice(0,10) : today,
           createdAt: r.createdAt?._seconds || 0,
-          gymId: null, memberName: r.memberName,
+          gymId: r.gymId || null, memberName: r.memberName,
           link: '/staff/pending-tasks',
           record: { id: d.id, ...r },
         });

@@ -19,6 +19,23 @@ const { body, validationResult } = require('express-validator');
 const { authenticate, authenticateMember } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
+const { notifyRoleInGym } = require('../services/notificationService');
+
+const GYM_IDS = ['gym-hsinchu', 'gym-shilin'];
+
+// 通知該館相關人員（gym_manager+super_admin，比照 courseService.notifyCourseManagers 同一套慣例）；
+// 逐一 try/catch、不阻斷提問本身送出成功。
+const notifyInquiryManagers = async ({ gymId, inquiryId, memberName, subject }) => {
+  for (const role of ['gym_manager', 'super_admin']) {
+    try {
+      await notifyRoleInGym({
+        gymId, role, type: 'member_inquiry',
+        title: '會員問題諮詢', body: `${memberName} — ${subject}`,
+        referenceId: inquiryId, referenceType: 'memberInquiry', link: '/staff/pending-tasks',
+      });
+    } catch (e) { console.error('notifyInquiryManagers 失敗', e.message); }
+  }
+};
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -71,9 +88,11 @@ router.get('/unread-count', authenticateMember, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// ── POST /member-inquiries：會員提出新問題（自訂標題+內容）；送出後進員工端待辦 ──
+// ── POST /member-inquiries：會員提出新問題（選擇相關場館+自訂標題+內容）；
+//    送出後進員工端待辦，並通知該館 gym_manager+super_admin ──
 router.post('/', authenticateMember,
   [
+    body('gymId').isIn(GYM_IDS).withMessage('請選擇相關場館'),
     body('subject').trim().notEmpty().isLength({ max: 60 }).withMessage('請填寫標題（60字以內）'),
     body('content').trim().notEmpty().isLength({ max: 1000 }).withMessage('請填寫內容（1000字以內）'),
   ],
@@ -85,11 +104,14 @@ router.post('/', authenticateMember,
       const now = new Date();
       const inquiry = {
         id, memberId: req.member.id, memberName: req.member.name || '', memberPhone: req.member.phone || '',
+        gymId: req.body.gymId,
         subject: req.body.subject.trim(), content: req.body.content.trim(),
         status: 'pending', reply: null, repliedAt: null, repliedByName: null, unread: false,
         createdAt: now, updatedAt: now,
       };
       await db.collection('memberInquiries').doc(id).set(inquiry);
+      notifyInquiryManagers({ gymId: inquiry.gymId, inquiryId: id, memberName: inquiry.memberName, subject: inquiry.subject })
+        .catch(e => console.error('[會員提問通知]', e.message));
       res.status(201).json({ success: true, inquiry });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }

@@ -322,14 +322,17 @@ const regSessionsBlock = (sessions) => {
 };
 
 // 報名收到 → 請完成繳費（transfer 且有 bank 才顯示匯款帳號；cash 顯示櫃檯繳費；bank=null 不顯示帳號）
-const sendRegistrationReceived = async (to, { cc, typeLabel, memberName, itemName, gymId, fee, paymentMethod, bank, sessions } = {}) => {
+// installmentInfo：{firstAmount, totalAmount, totalPeriods} — 有分期時 fee 傳入的已是「第一期」金額，
+// 這裡只是額外標明全期總額，避免會員誤以為 fee 就是全部要繳清的金額
+const sendRegistrationReceived = async (to, { cc, typeLabel, memberName, itemName, gymId, fee, paymentMethod, bank, sessions, installmentInfo } = {}) => {
   const gymName = REG_GYM_LABEL[gymId] || '';
   const money = (n) => `NT$${Number(n || 0).toLocaleString()}`;
   const isTransfer = paymentMethod === 'transfer';
   const hasFee = Number(fee) > 0;
   const payBlock = hasFee ? `
         <div style="background:#FFF6E9;border:1px solid #E0C08A;border-radius:8px;padding:16px;margin:12px 0">
-          <div style="font-size:16px;color:#8B1A1A"><strong>應繳金額：${money(fee)}</strong></div>
+          <div style="font-size:16px;color:#8B1A1A"><strong>應繳金額${installmentInfo ? '（簽約當下・第1期）' : ''}：${money(fee)}</strong></div>
+          ${installmentInfo ? `<div style="font-size:12px;color:#666;margin-top:2px">此課程為分期付款，共 ${installmentInfo.totalPeriods} 期，全期總額 ${money(installmentInfo.totalAmount)}，其餘各期將於到期時另行通知</div>` : ''}
           <div style="font-size:13px;color:#666;margin-top:4px">${isTransfer ? '請於 3 日內完成轉帳匯款' : '請至櫃檯完成繳費'}</div>
         </div>` : '';
   const bankBlock = (isTransfer && bank) ? `

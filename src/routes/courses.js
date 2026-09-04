@@ -491,14 +491,17 @@ router.post('/sessions/:sessionId/enroll',
           if (c) {
             const _rn = require('../services/registrationNotify');
             const mDoc = await db3.collection(COLLECTIONS.MEMBERS).doc(req.body.memberId).get();
+            // 分期時通知信「應繳金額」改顯示第一期（簽約當下實收），避免誤導成要一次繳全期總額
+            const _instInfo = installmentPlan ? { firstAmount: installmentPlan.installments[0].amount, totalAmount: installmentPlan.totalAmount, totalPeriods: installmentPlan.installments.length } : null;
             _rn.notifyRegReceived({
               memberId: req.body.memberId,
               memberName: mDoc.exists ? (mDoc.data().name || '') : '',
               typeLabel: c.type === 'workshop' ? '工作坊' : '課程',
               itemName: c.name, gymId: c.gymId || req.staff?.gymId || req.body.gymId,
-              fee: result.enrollment?.enrollmentFee ?? 0, paymentMethod: req.body.paymentMethod || 'transfer',
+              fee: _instInfo ? _instInfo.firstAmount : (result.enrollment?.enrollmentFee ?? 0), paymentMethod: req.body.paymentMethod || 'transfer',
               massage: _rn.isMassage(c.name),
               sessions: sd ? [{ date: sd.date, startTime: sd.startTime, endTime: sd.endTime }] : null,
+              installmentInfo: _instInfo,
             });
           }
         } catch (e) { console.error('[Email] 工作坊報名通知', e.message); }
@@ -1000,17 +1003,24 @@ router.post('/enrollments/:enrollmentId/resend-notification', authenticate, chec
       if (sDoc.exists) sessions = [{ date: sDoc.data().date, startTime: sDoc.data().startTime, endTime: sDoc.data().endTime }];
     }
     if (!sessions && e.date) sessions = [{ date: e.date, startTime: e.startTime, endTime: e.endTime }];
+    // 若此會員此課程有分期計畫，「應繳金額」改顯示第一期，避免補寄信誤導成要一次繳全期總額
+    const planSnap = await db.collection('installmentPlans')
+      .where('memberId', '==', e.memberId).where('relatedId', '==', e.courseId).get();
+    const plan = planSnap.docs.map(d => d.data()).find(p => p.status !== 'cancelled') || null;
+    const instInfo = plan ? { firstAmount: plan.installments[0].amount, totalAmount: plan.totalAmount, totalPeriods: plan.installments.length } : null;
+    const feeToShow = instInfo ? instInfo.firstAmount : (e.enrollmentFee ?? e.fee ?? 0);
     await _rn.notifyRegReceived({
       memberId: e.memberId,
       memberName: mDoc.exists ? (mDoc.data().name || '') : (e.memberName || ''),
       typeLabel: c.type === 'workshop' ? '工作坊' : '課程',
       itemName: c.name, gymId: c.gymId || e.gymId,
-      fee: e.enrollmentFee ?? e.fee ?? 0,
+      fee: feeToShow,
       paymentMethod: (c.paymentMethods && c.paymentMethods.length === 1) ? c.paymentMethods[0] : (e.paymentMethod && e.paymentMethod !== 'pending' ? e.paymentMethod : 'transfer'),
       massage: _rn.isMassage(c.name),
       sessions,
+      installmentInfo: instInfo,
     });
-    res.json({ success: true, fee: e.enrollmentFee ?? e.fee ?? 0 });
+    res.json({ success: true, fee: feeToShow });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -2279,14 +2289,17 @@ async function handleEnrollAll(req, res) {
       // 訪客沒有會員文件可查 email，直接帶 to 覆蓋（notifyRegReceived 的 to 優先於用 memberId 查會員 email）
       if (!isWaitlist) {
         const _rn = require('../services/registrationNotify');
+        // 分期時通知信「應繳金額」改顯示第一期（簽約當下實收），避免誤導成要一次繳全期總額
+        const _instInfo = coursePlan ? { firstAmount: coursePlan.installments[0].amount, totalAmount: coursePlan.totalAmount, totalPeriods: coursePlan.installments.length } : null;
         _rn.notifyRegReceived({
           memberId, memberName: req.body.memberName || req.member?.name || '', // 同上，優先用報名對象本名
           to: isGuestEnroll ? (req.body._guestEmail || null) : undefined,
           typeLabel: course.type === 'workshop' ? '工作坊' : '課程',
           itemName: course.name, gymId: futureSessions[0].gymId || gymId,
-          fee: req.body.deferPayment ? 0 : fee, paymentMethod,
+          fee: req.body.deferPayment ? 0 : (_instInfo ? _instInfo.firstAmount : fee), paymentMethod,
           massage: _rn.isMassage(course.name),
           sessions: futureSessions.map(s => ({ date: s.date, startTime: s.startTime, endTime: s.endTime })),
+          installmentInfo: _instInfo,
         });
       }
 

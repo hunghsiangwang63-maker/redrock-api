@@ -51,7 +51,8 @@ const resolveMemberEmails = async (db, memberId) => {
 };
 
 // 報名收到（請完成繳費）；sessions＝[{date,startTime,endTime}]（課程/工作坊帶場次清單）
-async function notifyRegReceived({ memberId, to, memberName, typeLabel, itemName, gymId, fee, paymentMethod, massage, sessions }) {
+// installmentInfo：{firstAmount, totalAmount, totalPeriods}——有分期時 fee 應傳入第一期金額
+async function notifyRegReceived({ memberId, to, memberName, typeLabel, itemName, gymId, fee, paymentMethod, massage, sessions, installmentInfo }) {
   try {
     const db = getDb();
     const emails = to ? (Array.isArray(to) ? to : [to]) : await resolveMemberEmails(db, memberId);
@@ -59,7 +60,7 @@ async function notifyRegReceived({ memberId, to, memberName, typeLabel, itemName
     const cc = [await resolveGymEmail(db, gymId), massage ? MASSAGE_CC : null].filter(Boolean);
     // 運動按摩不附匯款帳號
     const bank = (paymentMethod === 'transfer' && !massage) ? await resolveBank(db, gymId) : null;
-    await emailService.sendRegistrationReceived(emails, { cc, typeLabel, memberName, itemName, gymId, fee, paymentMethod, bank, sessions });
+    await emailService.sendRegistrationReceived(emails, { cc, typeLabel, memberName, itemName, gymId, fee, paymentMethod, bank, sessions, installmentInfo });
   } catch (e) { console.error('[Email] 報名收到通知', e.message); }
 }
 

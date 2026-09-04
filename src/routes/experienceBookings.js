@@ -409,7 +409,8 @@ const MY_BOOKING_FIELDS = [
 ];
 // 員工端主列表白名單：MY_BOOKING_FIELDS（會員端已核對過的欄位聯集）＋員工專屬欄位
 // （staffNote 員工備註、memberName 顯示是誰預約的）——同一份肥欄位排除原則。
-const STAFF_LIST_FIELDS = [...MY_BOOKING_FIELDS, 'staffNote', 'memberName', 'lastInsuranceSentAt', 'lastInsuranceSentBy', 'lastInsuranceSentByName'];
+const STAFF_LIST_FIELDS = [...MY_BOOKING_FIELDS, 'staffNote', 'memberName', 'lastInsuranceSentAt', 'lastInsuranceSentBy', 'lastInsuranceSentByName',
+  'insuranceFormStatus', 'insuranceFormStatusUpdatedAt', 'insuranceFormStatusUpdatedBy'];
 
 router.get('/my', authenticateAny, async (req, res) => {
   try {
@@ -1125,6 +1126,26 @@ router.post('/:id/send-insurance-email', authenticate, async (req, res) => {
     });
 
     res.json({ success: true, title, lastInsuranceSentAt: sentAt, message: result.skipped ? '已建立名冊並保存（Email 未設定 RESEND_API_KEY，未實際寄出）' : `已寄送至 ${to}` });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── POST /experience-bookings/:id/insurance-form-status - 記錄要保書收件狀態 ──
+// 0=待收要保書（預設）／1=已有要保書／2=無需保險（人工覆寫，獨立於系統判斷的
+// needsInsurance/ctNeedsInsurance——供實際上判定需要保險、但另有原因不用要保書的個案使用）。
+// 純記錄性質，比照旁邊「寄送保險」按鈕同樣不設角色限制，任何登入員工皆可操作。
+router.post('/:id/insurance-form-status', authenticate, async (req, res) => {
+  try {
+    const status = Number(req.body.status);
+    if (![0, 1, 2].includes(status)) return res.status(400).json({ error: 'INVALID_STATUS', message: '狀態值需為 0、1 或 2' });
+    const db = getDb();
+    const ref = db.collection('experienceBookings').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
+    await ref.update({
+      insuranceFormStatus: status,
+      insuranceFormStatusUpdatedAt: new Date(), insuranceFormStatusUpdatedBy: req.staff.name || '',
+    });
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

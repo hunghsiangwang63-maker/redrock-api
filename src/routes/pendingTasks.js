@@ -26,7 +26,7 @@ const isRestrictedPersonalStaff = (staff) => staff?.type === 'staff' && ['part_t
 const EXP_TASK_FIELDS = ['id', 'coachId', 'coachName', 'participants', 'contactName', 'contactPhone',
   'contactEmail', 'bookingDate', 'bookingTime', 'courseType', 'numParticipants', 'totalFee', 'gymId',
   'bankName', 'bankLastFive', 'paymentDate', 'facebookName', 'notes',
-  'status', 'ticketsIssued', 'createdAt'];
+  'status', 'ticketsIssued', 'createdAt', 'kind', 'courseName'];
 
 router.get('/', authenticate, async (req, res) => {
   try {
@@ -261,23 +261,27 @@ router.get('/', authenticate, async (req, res) => {
         if (r.bookingDate && r.bookingDate < today) return;        // 過了體驗日不再顯示
         const confirmed = r.status === 'confirmed';
         const ticketsIssued = r.ticketsIssued || 0;
+        const isTrial = r.kind === 'trial';
         // 單一參加者且與聯絡人不同（家長代子女/他人報名）→ 顯示真正參加者名，避免只看到代訂的聯絡人名字
         const singleParticipant = (r.participants || []).length === 1 ? r.participants[0]?.name : null;
         const displayName = singleParticipant && singleParticipant !== r.contactName
           ? `${singleParticipant}（${r.contactName}代訂）` : r.contactName;
+        // 課程試上（kind:'trial'）走既有課程/場次報名，非新建體驗課程——標題/內文/課程類型都要能跟一般體驗課程區分開，
+        // 否則待辦頁只看得到「NT$1183」這種跟一般體驗定價（975起）對不上的金額，看不出這是哪一堂課的試上。
+        const title = isTrial
+          ? (confirmed ? (ticketsIssued > 0 ? '課程試上（已確認）（已發放入場券）' : '課程試上（已確認）') : '課程試上申請')
+          : (confirmed ? (ticketsIssued > 0 ? '體驗預約（已確認）（已發放入場券）' : '體驗預約（已確認）') : '體驗課程預約申請');
         tasks.push({
           id: `exp_${d.id}`, type: 'experience', targetId: d.id,
-          title: confirmed
-            ? (ticketsIssued > 0 ? '體驗預約（已確認）（已發放入場券）' : '體驗預約（已確認）')
-            : '體驗課程預約申請',
-          desc: `${displayName} — ${dateWithWeekday(r.bookingDate)} ${r.bookingTime || ''} · ${r.numParticipants}人 NT$${r.totalFee}`,
+          title,
+          desc: `${displayName} — ${isTrial && r.courseName ? `${r.courseName}・` : ''}${dateWithWeekday(r.bookingDate)} ${r.bookingTime || ''} · ${r.numParticipants}人 NT$${r.totalFee}`,
           date: r.bookingDate || (r.createdAt?._seconds ? new Date(r.createdAt._seconds*1000).toISOString().slice(0,10) : today),
           bookingTime: r.bookingTime || '', // 供前端「今日提醒／預約」依時間排序用
           createdAt: r.createdAt?._seconds || 0,
           gymId: r.gymId, memberName: displayName,
           confirmed, ticketsIssued,
           link: '/staff/experience',
-          record: { id: d.id, ...r, courseTypeName: ctLabelMap[r.courseType] || '體驗課程' },
+          record: { id: d.id, ...r, courseTypeName: isTrial ? '課程試上' : (ctLabelMap[r.courseType] || '體驗課程') },
         });
       });
     } catch(e) {}

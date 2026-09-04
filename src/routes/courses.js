@@ -116,14 +116,19 @@ router.get('/public/:courseId', async (req, res) => {
     const enriched = all.find(c => c.id === req.params.courseId) || { id: req.params.courseId, ...raw };
 
     const today = taiwanToday();
+    // 免登入公開頁純供瀏覽（實際報名須登入）——完整場次清單（含已取消/已上課）供顯示排課全貌+停課標示，
+    // 與登入會員端 MemberCoursesPage 的「此梯次上課場次」同一套資料口徑（該頁走 GET /courses/sessions?courseId= 亦不過濾狀態/日期）
     const sessSnap = await db.collection('courseSessions')
       .where('courseId', '==', req.params.courseId)
-      .where('status', '==', 'scheduled')
       .get();
-    const sessions = sessSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-      .filter(s => s.date >= today)
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .map(s => ({ id: s.id, date: s.date, startTime: s.startTime, endTime: s.endTime, gymId: s.gymId }));
+    const allSessions = sessSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const sessions = allSessions.map(s => ({
+      id: s.id, date: s.date, startTime: s.startTime, endTime: s.endTime, gymId: s.gymId,
+      status: s.status || 'scheduled', instructor: s.instructor || null,
+    }));
+    // 費用試算用：僅未來、未取消場次（與實際報名扣款口徑一致，不受上面完整清單影響）
+    const futureActiveCount = allSessions.filter(s => s.status !== 'cancelled' && s.date >= today).length;
 
     res.json({
       course: {
@@ -137,6 +142,7 @@ router.get('/public/:courseId', async (req, res) => {
         enrollOpenDate: enriched.enrollOpenDate || null,
       },
       sessions,
+      futureActiveCount,
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

@@ -42,7 +42,7 @@ const RULE_DEFAULTS = {
   trialPrice: 0,               // 試上費
   perSessionDeduction: 850,    // 退費：開課後每堂扣除
   handlingFeeRate: 0.2,        // 退費：開課後手續費率（預設 20%，班別/梯次可調）
-  preStartFeeRate: 0.05,       // 退費：開課前手續費率（預設 5%，班別/梯次可調）
+  preStartFeeRate: 0,          // 退費：開課前手續費率（預設 0%，班別/梯次可調）
 };
 const resolveRules = (course, category) => {
   const pick = (k) => {
@@ -2191,7 +2191,7 @@ const getCourses = async (gymId) => {
       enrollNoteLabel: c.enrollNoteLabel || null,      // 自訂備註欄標題（如「想要特別處理的部位」）
       enrollNoteRequired: c.enrollNoteRequired === true,
       refundFeeRate: _rules.handlingFeeRate ?? 0.2, // 開課後退費手續費率（預設 20%，班別/梯次可調）
-      refundPreStartFeeRate: _rules.preStartFeeRate ?? 0.05, // 開課前退費手續費率（預設 5%，班別/梯次可調）
+      refundPreStartFeeRate: _rules.preStartFeeRate ?? 0, // 開課前退費手續費率（預設 0%，班別/梯次可調）
       ruleMaxLeaves: _rules.maxLeaves,                       // 整期可請假次數（報名規則方框顯示）
       ruleLeaveDeadlineHours: _rules.leaveDeadlineHours,     // 請假截止（課前 N 小時）
       ruleMakeupDeadlineDays: _rules.makeupDeadlineDays,     // 補課期限（結束後 N 天）

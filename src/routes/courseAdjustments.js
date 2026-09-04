@@ -118,7 +118,7 @@ router.post('/enrollments/:enrollmentId/refund-request',
       } else {
         // 週課退費（2026-07-18 改版）：退費＝剩餘堂數價金 − 手續費（剩餘價金 × 費率）
         // 每堂單價＝已繳金額 ÷ 總堂數；剩餘堂數＝總堂數 − 已開課堂數（日期已過，不論出席/請假）。
-        // 費率雙軌（皆班別/梯次可調）：開課前 preStartFeeRate 預設 5%；開課後 handlingFeeRate 預設 20%。
+        // 費率雙軌（皆班別/梯次可調）：開課前 preStartFeeRate 預設 0%；開課後 handlingFeeRate 預設 20%。
         const _refundRules = courseService.resolveRules(course || {}, await courseService.getCategoryOf(db, course?.categoryId));
         perSessionDeduction = _refundRules.perSessionDeduction;
         handlingFeeRate = _refundRules.handlingFeeRate;
@@ -132,7 +132,7 @@ router.post('/enrollments/:enrollmentId/refund-request',
         const perSession = paidAmount / totalSessions;
         remainingValue = Math.round(perSession * remainingSessions);
         const preStart = courseStartDate ? (today < courseStartDate) : (heldSessions === 0); // 開課前判定（無起始日以已開課堂數推）
-        feeRate = preStart ? (_refundRules.preStartFeeRate ?? 0.05) : (handlingFeeRate ?? 0.2); // 開課前預設 5%／開課後預設 20%，皆班別/梯次可調
+        feeRate = preStart ? (_refundRules.preStartFeeRate ?? 0) : (handlingFeeRate ?? 0.2); // 開課前預設 0%／開課後預設 20%，皆班別/梯次可調
         fee = Math.round(remainingValue * feeRate);
         const rawSuggestedRefund = Math.max(0, remainingValue - fee);
         // 退款上限＝實際已收金額（分期未繳完時），避免退得比實收的錢還多；一次付清情境 actuallyPaid===paidAmount，不受影響

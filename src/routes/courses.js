@@ -2378,12 +2378,14 @@ router.post('/:courseId/enroll-all', authenticateAny, handleEnrollAll);
 // 一律轉帳、無分期、無舊生/隊員折扣（訪客沒有既有會員關係，這些折扣天生就不會命中，見上方 handleEnrollAll 共用邏輯）；
 // 未成年一律要求本人+法定代理人皆線上完成簽名。把 guest 欄位塞進 req.body 後直接委派給共用核心邏輯。
 router.post('/public/:courseId/enroll-all', async (req, res) => {
-  const { guestName, guestPhone, guestEmail, guestBirthday, bankLastFive, paymentDate } = req.body;
+  const { guestName, guestPhone, guestEmail, guestBirthday, bankLastFive, bankName, paymentDate, paidAmount } = req.body;
   if (!guestName || !String(guestName).trim()) return res.status(400).json({ code: 'MISSING_CONTACT', message: '請填寫姓名' });
   if (!guestPhone || !String(guestPhone).trim()) return res.status(400).json({ code: 'MISSING_PHONE', message: '請填寫聯絡電話' });
   if (!guestBirthday) return res.status(400).json({ code: 'MISSING_BIRTHDAY', message: '請填寫生日' });
-  if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code: 'MISSING_TRANSFER', message: '請填寫匯款帳號末五碼' });
+  if (!bankName || !String(bankName).trim()) return res.status(400).json({ code: 'MISSING_BANK_NAME', message: '請填寫匯款銀行名稱' });
   if (!paymentDate || !String(paymentDate).trim()) return res.status(400).json({ code: 'MISSING_PAYMENT_DATE', message: '請填寫轉帳日期' });
+  if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code: 'MISSING_TRANSFER', message: '請填寫匯款帳號末五碼' });
+  if (!(Number(paidAmount) > 0)) return res.status(400).json({ code: 'MISSING_PAID_AMOUNT', message: '請填寫實際匯款金額' });
 
   req.body.memberId = `guest_${uuidv4()}`;
   req.body.memberName = String(guestName).trim();

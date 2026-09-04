@@ -531,6 +531,40 @@ router.delete('/:id', authenticate, routeEditorGate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── POST /climbing-routes/bulk-delete：批次刪除（路線管理整區/選取部分路線一起刪除）──
+// 逐筆比照單筆刪除規則（跨館擋、已有完攀記錄擋），回傳成功/略過清單供前端顯示結果摘要；
+// 略過的路線不影響其餘路線刪除（部分成功也算 200，細節看 skipped 陣列）。
+router.post('/bulk-delete', authenticate, routeEditorGate,
+  [body('ids').isArray({ min: 1 }).withMessage('請至少選擇一條路線')],
+  validate,
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const ids = [...new Set(req.body.ids)].slice(0, 200); // 上限防呆，避免單次刪除過量
+      const deleted = [];
+      const skipped = [];
+      for (const id of ids) {
+        const ref = db.collection('climbingRoutes').doc(id);
+        const doc = await ref.get();
+        if (!doc.exists) { skipped.push({ id, reason: 'NOT_FOUND' }); continue; }
+        const r = doc.data();
+        if (req.staff.role !== 'super_admin' && req.staff.gymId && r.gymId !== req.staff.gymId) {
+          skipped.push({ id, reason: 'CROSS_GYM_FORBIDDEN', area: r.area, color: r.color, grade: r.grade });
+          continue;
+        }
+        const cnt = await db.collection('routeAscents').where('routeId', '==', id).count().get();
+        if (cnt.data().count > 0) {
+          skipped.push({ id, reason: 'ROUTE_HAS_ASCENTS', area: r.area, color: r.color, grade: r.grade });
+          continue;
+        }
+        await ref.delete();
+        deleted.push(id);
+      }
+      res.json({ success: true, deletedCount: deleted.length, deleted, skipped });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
 // ── POST /climbing-routes/:id/ascents：會員記錄完攀（今日於該館入場才可；重複記錄＝更新層級）──
 // targetMemberId（選填，未帶＝本人）：家長可代子會員記錄（子會員無獨立登入、入場檢查看子女自己
 // 今日是否有入場，非家長）；代記錄時另存 recordedByMemberId 供稽核（比照體驗預約 bookedByMemberId）。

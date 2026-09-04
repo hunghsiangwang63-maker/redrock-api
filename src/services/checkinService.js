@@ -36,4 +36,6 @@ module.exports = {
   getRentalAddonDoc: flow.getRentalAddonDoc,
   scanRentalAddon: flow.scanRentalAddon,
   confirmRentalAddon: flow.confirmRentalAddon,
+  correctPaymentMethod: flow.correctPaymentMethod,
+  CHECKIN_PAYMENT_METHODS: flow.CHECKIN_PAYMENT_METHODS,
 };

@@ -2,7 +2,7 @@
  * checkin/flow.js — QR 入場流程：createPendingCheckIn・scanQrCode・confirmCheckIn・今日統計
  * 由 checkinService.js 拆分（2026-07-13 refactor）；函式本體逐字搬移、行為不變。
  */
-const { taiwanToday } = require('../../utils/taiwanDate');
+const { taiwanToday, dateInTaiwan } = require('../../utils/taiwanDate');
 const { getDb, COLLECTIONS } = require('../../config/firebase');
 const { getMember } = require('../memberService');
 const { useDiscountCard } = require('../discountCardService');
@@ -889,7 +889,115 @@ const confirmRentalAddon = async (token, staffId, staffName, staffGymId = null, 
     checkinAlreadyInvoiced };
 };
 
+// ── 更正入場付款方式（2026-09-04，「陳奕亘」個案引出）───────────────────────────────
+// 已確認入場後才發現付款方式選錯（如原以 LinePay 產生 QR，櫃檯實際改收現金卻沒同步更正）：
+// 過去只能人工直接改 Firestore，已印出的發票、已結帳的快照都不會跟著動，造成「入場紀錄查得到
+// 現金，結帳報表卻沒有現金」的落差（真實案例：士林館差 300 元）。此函式一次修正三處：
+//   1) checkIns 本身的 paymentMethod（＋稽核欄位，記錄原值/操作人/原因）
+//   2) 對應的 type:'checkin' 交易記錄（可能不只一筆：入場本身 + 事後補租器材各一筆）
+//   3) 若已開立且仍作用中（未作廢）的發票，一併同步（無則略過，非真列印館別本就無此紀錄）
+// 若「今天」（台灣時間）已有該館的正式結帳快照（status:'settled'）→ 額外把 payment.<舊方式>／
+// <新方式> 做精確金額搬移、重算 expectedCashBalance/difference（手動輸入模式下數字由人工填寫，
+// 略過不動、請人工核對）。過去日期的已結帳快照不自動回補（跨日牽動前日餘額鏈，風險較高，維持
+// 人工個案處理，見歷史「補結」案例）；今天尚無記錄或仍是暫存檔＝下次載入頁面就會自動重算，
+// 同樣不需要另外處理。
+// 僅限管理員（super_admin/gym_manager）呼叫（見路由層 requireManager）——付款方式異動涉及現金
+// 結帳，比照轉帳確認付款方式更正（3.398.1）同一收斂範圍。
+const CHECKIN_PAYMENT_METHODS = ['cash', 'linepay', 'jkopay', 'taiwanpay'];
+const PAYMENT_KEY_MAP = { linepay: 'linePay', jkopay: 'jko', taiwanpay: 'taiwanPay', cash: 'cash' };
+const correctPaymentMethod = async (checkInId, newMethod, { staffId, staffName, reason } = {}) => {
+  if (!CHECKIN_PAYMENT_METHODS.includes(newMethod)) {
+    throw { code: 'INVALID_PAYMENT_METHOD', message: '付款方式不正確' };
+  }
+  const db = getDb();
+  const ref = db.collection(COLLECTIONS.CHECK_INS).doc(checkInId);
+  const doc = await ref.get();
+  if (!doc.exists) throw { code: 'NOT_FOUND', message: '找不到此入場紀錄' };
+  const c = doc.data();
+  if (c.isCancelled) throw { code: 'ALREADY_CANCELLED', message: '此入場已取消，無法更正付款方式' };
+  if (!(c.amountPaid > 0)) throw { code: 'NOTHING_TO_CORRECT', message: '此筆入場未實際收款，無付款方式可更正' };
+
+  const oldMethod = c.paymentMethod || 'cash';
+  if (oldMethod === newMethod) return { noChange: true, oldMethod, newMethod };
+  const amount = Number(c.amountPaid) || 0;
+  const now = new Date();
+
+  await ref.update({
+    paymentMethod: newMethod,
+    paymentMethodCorrectedFrom: oldMethod,
+    paymentMethodCorrectedAt: now,
+    paymentMethodCorrectedBy: staffId || null,
+    paymentMethodCorrectedByName: staffName || null,
+    paymentMethodCorrectionReason: reason || null,
+    updatedAt: now,
+  });
+
+  // 對應的 type:'checkin' 交易記錄一併同步（可能不只一筆）
+  const txnSnap = await db.collection('transactions')
+    .where('type', '==', 'checkin').where('relatedId', '==', checkInId).get();
+  if (txnSnap.size) {
+    const batch = db.batch();
+    txnSnap.docs.forEach(d => batch.update(d.ref, { paymentMethod: newMethod, updatedAt: now }));
+    await batch.commit();
+  }
+
+  // 已開立且仍作用中（未作廢）的發票一併同步
+  let invoiceUpdated = false;
+  const invSnap = await db.collection('invoices')
+    .where('sourceType', '==', 'checkin').where('refId', '==', checkInId).where('status', '==', 'issued')
+    .limit(1).get();
+  if (!invSnap.empty) {
+    await invSnap.docs[0].ref.update({
+      paymentMethod: newMethod, paymentMethodCorrectedFrom: oldMethod, updatedAt: now,
+    });
+    invoiceUpdated = true;
+  }
+
+  // 今日（台灣時間）且已正式結帳的快照才需要回補；draft/尚無記錄下次載入自動重算，過去日期不自動回補
+  let settlementPatched = false;
+  let settlementSkippedReason = null;
+  const entryDate = c.checkedInAt ? dateInTaiwan(c.checkedInAt.toDate ? c.checkedInAt.toDate() : c.checkedInAt) : null;
+  if (entryDate !== taiwanToday()) {
+    settlementSkippedReason = '此筆入場非今日，已結帳快照不自動回補，如需回補請人工核對歷史結帳記錄';
+  } else {
+    const setSnap = await db.collection('dailySettlements')
+      .where('gymId', '==', c.gymId).where('date', '==', entryDate).limit(1).get();
+    if (setSnap.empty) {
+      settlementSkippedReason = '今日尚無結帳記錄，下次載入結帳頁會自動用最新資料重算';
+    } else {
+      const setDoc = setSnap.docs[0];
+      const s = setDoc.data();
+      if (s.status !== 'settled') {
+        settlementSkippedReason = '今日結帳仍為暫存檔，下次載入會自動重算';
+      } else if (s.paymentManual != null) {
+        settlementSkippedReason = '今日結帳為付款方式手動輸入模式，數字由人工填寫，請自行核對更正';
+      } else {
+        const payment = { ...(s.payment || {}) };
+        const oldKey = PAYMENT_KEY_MAP[oldMethod] || 'other';
+        const newKey = PAYMENT_KEY_MAP[newMethod] || 'other';
+        payment[oldKey] = (payment[oldKey] || 0) - amount;
+        payment[newKey] = (payment[newKey] || 0) + amount;
+        payment.electronic = (payment.linePay || 0) + (payment.jko || 0) + (payment.taiwanPay || 0);
+        // netAdjust 計算式與 POST / 結帳送出端點（dailySettlements.js）逐字一致：sign '+' 加入抽屜、
+        // 其餘（含舊資料無 sign）一律視為 '-'（減）
+        const netAdjust = (s.deductions || []).reduce((sum, d) => sum + ((d.sign === '+' ? 1 : -1) * (Number(d.amount) || 0)), 0);
+        const expectedCashBalance = (s.prevCashBalance || 0) + (payment.cash || 0) + netAdjust;
+        const difference = (s.actualCashBalance || 0) - expectedCashBalance;
+        await setDoc.ref.update({
+          payment, expectedCashBalance, difference,
+          differenceAlert: Math.abs(difference) > 200,
+          correctionNote: `[${entryDate} 系統修正] 會員${c.memberName}入場（checkIn ${checkInId}）付款方式由${oldMethod}更正為${newMethod}，已回補結帳快照 NT$${amount}。${s.correctionNote ? '｜' + s.correctionNote : ''}`,
+        });
+        settlementPatched = true;
+      }
+    }
+  }
+
+  return { ok: true, oldMethod, newMethod, amount, invoiceUpdated, settlementPatched, settlementSkippedReason };
+};
+
 module.exports = {
   GYM_NAMES, createPendingCheckIn, scanQrCode, confirmCheckIn, countByEntryType, getTodayStats, addRentalToCheckIn,
-  requestRentalAddon, getRentalAddonDoc, scanRentalAddon, confirmRentalAddon,
+  requestRentalAddon, getRentalAddonDoc, scanRentalAddon, confirmRentalAddon, correctPaymentMethod,
+  CHECKIN_PAYMENT_METHODS,
 };

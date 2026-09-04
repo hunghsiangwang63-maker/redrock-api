@@ -5,7 +5,7 @@ const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
-const { authenticate, authenticateAny, authenticateMember, checkPermission, requireManagerOrStation } = require('../middleware/auth');
+const { authenticate, authenticateAny, authenticateMember, checkPermission, requireManagerOrStation, requireManager } = require('../middleware/auth');
 const checkinService = require('../services/checkinService');
 const memberService = require('../services/memberService');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
@@ -312,6 +312,27 @@ router.post('/:checkInId/invoices', authenticate, requireManagerOrStation, async
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }
 });
+
+// ── 更正入場付款方式（2026-09-04）：已確認入場後才發現付款方式選錯，一次同步 checkIn／對應
+// 交易記錄／已開立發票（若有），並在「今天」的正式結帳快照仍為 settled 時精確回補現金/電子支付
+// 分類（見 checkin/flow.js correctPaymentMethod 完整說明）。僅限管理員（現金結帳敏感動作，
+// 比照轉帳確認付款方式更正 3.398.1 同一收斂範圍）。
+router.put('/:checkInId/payment-method', authenticate, requireManager,
+  [body('paymentMethod').isIn(checkinService.CHECKIN_PAYMENT_METHODS).withMessage('付款方式不正確')],
+  validate,
+  async (req, res) => {
+    try {
+      const result = await checkinService.correctPaymentMethod(req.params.checkInId, req.body.paymentMethod, {
+        staffId: req.staff.id, staffName: req.staff.name, reason: req.body.reason,
+      });
+      res.json({ success: true, ...result });
+    } catch (err) {
+      const map = { NOT_FOUND: 404, ALREADY_CANCELLED: 400, NOTHING_TO_CORRECT: 400, INVALID_PAYMENT_METHOD: 400 };
+      if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
 
 // ── 補租器材開立發票（手動記帳版，比照上面入場開立發票同一套；作廢共用下方 /invoices/:id/void，
 //    該端點不分 sourceType，不用另外寫）。底層共用 invoiceService（sourceType:'rental_addon'，

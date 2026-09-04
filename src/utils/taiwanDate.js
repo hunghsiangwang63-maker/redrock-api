@@ -11,4 +11,11 @@ function taiwanToday() {
   return new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
 }
 
-module.exports = { taiwanToday };
+// 任意時間點（Date／毫秒數）換算成當下台灣日期字串 YYYY-MM-DD（同一套 UTC+8 位移公式，供需要
+// 判斷「某個過去時戳落在台灣哪一天」的地方共用，避免各處各自手寫）
+function dateInTaiwan(dateOrMs) {
+  const ms = dateOrMs instanceof Date ? dateOrMs.getTime() : Number(dateOrMs);
+  return new Date(ms + 8 * 3600000).toISOString().slice(0, 10);
+}
+
+module.exports = { taiwanToday, dateInTaiwan };

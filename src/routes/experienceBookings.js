@@ -394,7 +394,7 @@ const MY_BOOKING_FIELDS = [
 ];
 // 員工端主列表白名單：MY_BOOKING_FIELDS（會員端已核對過的欄位聯集）＋員工專屬欄位
 // （staffNote 員工備註、memberName 顯示是誰預約的）——同一份肥欄位排除原則。
-const STAFF_LIST_FIELDS = [...MY_BOOKING_FIELDS, 'staffNote', 'memberName'];
+const STAFF_LIST_FIELDS = [...MY_BOOKING_FIELDS, 'staffNote', 'memberName', 'lastInsuranceSentAt', 'lastInsuranceSentBy', 'lastInsuranceSentByName'];
 
 router.get('/my', authenticateAny, async (req, res) => {
   try {
@@ -1063,12 +1063,13 @@ router.post('/:id/send-insurance-email', authenticate, async (req, res) => {
     // 副本收件人（選填；逗號/分號/空白分隔多個）
     const cc = String(settings.insuranceCcEmails || '').split(/[,;\s]+/).map(s => s.trim()).filter(s => /.+@.+\..+/.test(s));
 
-    // 標題：紅石攀岩{館}{年}年{月}月{日}日{首位姓名}等{N}人保險名冊
+    // 標題：{館}紅石：{年}年{月}月{日}日{首位姓名}等{N}人保險名冊（如「士林紅石：2026年8月23日王小明等5人保險名冊」）
     const gymName = b.gymId === 'gym-hsinchu' ? '新竹館' : b.gymId === 'gym-shilin' ? '士林館' : '';
+    const gymPrefix = b.gymId === 'gym-hsinchu' ? '新竹紅石：' : b.gymId === 'gym-shilin' ? '士林紅石：' : '';
     const [yy, mm, dd] = String(b.bookingDate || '').split('-');
     const firstName = (b.participants && b.participants[0]?.name) || b.contactName || '';
     const count = b.numParticipants || (b.participants || []).length || 0;
-    const title = `紅石攀岩${gymName}${yy || ''}年${mm ? parseInt(mm) : ''}月${dd ? parseInt(dd) : ''}日${firstName}等${count}人保險名冊`;
+    const title = `${gymPrefix}${yy || ''}年${mm ? parseInt(mm) : ''}月${dd ? parseInt(dd) : ''}日${firstName}等${count}人保險名冊`;
 
     const tpl = settings.insuranceEmailTemplate || '{title}';
     const body = tpl.replace(/{title}/g, title).replace(/{gym}/g, gymName)
@@ -1102,8 +1103,13 @@ router.post('/:id/send-insurance-email', authenticate, async (req, res) => {
       emailId: result.id || null, skipped: !!result.skipped,
       sentBy: req.staff.id, sentByName: req.staff.name, createdAt: new Date(),
     });
+    // 記在預約本身，供列表按鈕顯示「MM/DD 已寄保險」（不用另外查 insuranceExports 才知道寄過沒有）
+    const sentAt = new Date();
+    await db.collection('experienceBookings').doc(b.id).update({
+      lastInsuranceSentAt: sentAt, lastInsuranceSentBy: req.staff.id, lastInsuranceSentByName: req.staff.name,
+    });
 
-    res.json({ success: true, title, message: result.skipped ? '已建立名冊並保存（Email 未設定 RESEND_API_KEY，未實際寄出）' : `已寄送至 ${to}` });
+    res.json({ success: true, title, lastInsuranceSentAt: sentAt, message: result.skipped ? '已建立名冊並保存（Email 未設定 RESEND_API_KEY，未實際寄出）' : `已寄送至 ${to}` });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

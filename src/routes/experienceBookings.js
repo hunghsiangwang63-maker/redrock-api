@@ -253,7 +253,7 @@ router.get('/public-settings', async (req, res) => {
     const gymsSnap = await db.collection('gyms').get();
     const gyms = gymsSnap.docs.map(d => ({ id: d.id, name: d.data().name })).filter(g => g.name);
     const bank = settings.bankInfo || settings.bank || null; // 匯款帳號資訊（若有設定）
-    res.json({ courseTypes, gyms, insuranceFee: settings.insuranceFee ?? 175, bankInfo: bank });
+    res.json({ courseTypes, gyms, insuranceFee: settings.insuranceFee ?? 175, bankInfo: bank, description: settings.description || '' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

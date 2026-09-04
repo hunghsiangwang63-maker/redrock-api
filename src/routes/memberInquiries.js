@@ -130,11 +130,17 @@ router.post('/:id/read', authenticateMember, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// ── GET /member-inquiries：員工端待回覆清單（供 pendingTasks.js 沿用同一份資料）──
+// ── GET /member-inquiries：員工端提問記錄（待辦頁「❓ 問題諮詢記錄」用；預設回全部含已回覆，
+//    ?status=pending|replied 可篩選）——依角色館別範圍：super_admin 全部或帶 ?gymId= 指定館別，
+//    其餘員工固定回自己所屬館別，跟其他待辦追蹤清單（課程/定期票相關）同一套權限慣例。
 router.get('/', authenticate, async (req, res) => {
   try {
     const db = getDb();
-    const snap = await db.collection('memberInquiries').where('status', '==', 'pending').get();
+    const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
+    let query = db.collection('memberInquiries');
+    if (gymId) query = query.where('gymId', '==', gymId);
+    if (req.query.status) query = query.where('status', '==', req.query.status);
+    const snap = await query.get();
     const items = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => (b.createdAt?._seconds || 0) - (a.createdAt?._seconds || 0));
     res.json({ items });

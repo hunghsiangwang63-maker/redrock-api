@@ -162,9 +162,10 @@ const createCourse = async ({ gymId, staffId, data }) => {
     weekdays: data.weekdays || [],
     // 插班加成（剩餘堂數低於一半時）
     midpointSurcharge: data.midpointSurcharge || 1.05,
-    // 分期規則（此課程可分期＋各期比例/間隔）：報名時會員可選一次付清或分期
+    // 分期規則（此課程可分期＋各期比例/到期堂數）：報名時會員可選一次付清或分期。
+    // dueAtSession：0＝報名當天、N(>=1)＝第N堂課到期（見 installmentService.buildCoursePeriodsFromConfig）
     installment: (data.installment && data.installment.enabled)
-      ? { enabled: true, periods: (data.installment.periods || []).map(p => ({ percent: Number(p.percent) || 0, dueOffsetDays: Number(p.dueOffsetDays) || 0 })) }
+      ? { enabled: true, periods: (data.installment.periods || []).map(p => ({ percent: Number(p.percent) || 0, dueAtSession: Number(p.dueAtSession) || 0 })) }
       : { enabled: false, periods: [] },
     // 狀態
     status: 'active',

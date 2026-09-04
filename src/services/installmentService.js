@@ -31,6 +31,28 @@ const buildPeriodsFromConfig = (config, totalPrice, startDateStr) => {
   });
 };
 
+// ── 課程分期專用：到期日改用「第幾堂課」而非天數（2026-09 起，僅課程使用；定期票分期仍用上面
+// buildPeriodsFromConfig 的天數制，兩者刻意分開、互不影響）。
+// config = { enabled, periods:[{ percent, dueAtSession }] }；dueAtSession：0＝報名當天、
+// N(>=1)＝該次報名「未來場次」清單中第N堂課的日期（依日期升冪排序、已取消場次不列入；
+// 超出實際堂數時夾在最後一堂，避免設定值大於總堂數時出錯）。
+// sessionDates：該次報名對應的場次日期陣列（YYYY-MM-DD 字串，需已按日期升冪排序）。
+const buildCoursePeriodsFromConfig = (config, totalPrice, enrollDateStr, sessionDates) => {
+  const periods = (config?.periods || []).filter(p => (Number(p.percent) || 0) > 0);
+  if (periods.length < 2 || !(totalPrice > 0)) return null;
+  const enrollDate = enrollDateStr || taiwanToday();
+  const dates = Array.isArray(sessionDates) ? sessionDates.filter(Boolean) : [];
+  let allocated = 0;
+  return periods.map((p, i) => {
+    const isLast = i === periods.length - 1;
+    const amount = isLast ? (totalPrice - allocated) : Math.round(totalPrice * (Number(p.percent) || 0) / 100);
+    allocated += amount;
+    const n = Number(p.dueAtSession) || 0;
+    const dueDate = (n <= 0 || dates.length === 0) ? enrollDate : dates[Math.min(n, dates.length) - 1];
+    return { amount, dueDate };
+  });
+};
+
 // 續約分期：前 n-1 期照原價比例、續約折扣的差價全部集中在最後一期扣掉。
 // 例：半年票 7600、9折(6840)、3期(40/40/20%) → 3040/3040/760 → 折後 3040/3040/(6840-6080)=760
 //     使用者確認之例（第1期2534/第2期2533/第3期1773）為早期 round 的另一組比例；本函式一律「前期原價、末期吸收折扣」。
@@ -347,6 +369,7 @@ const getAllInstallmentPlans = async (status) => {
 
 module.exports = {
   buildPeriodsFromConfig,
+  buildCoursePeriodsFromConfig,
   buildRenewalPeriods,
   createInstallmentPlan,
   cancelInstallmentPlan,

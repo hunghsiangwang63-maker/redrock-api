@@ -460,7 +460,10 @@ router.post('/sessions/:sessionId/enroll',
           if (c?.installment?.enabled) {
             const installmentService = require('../services/installmentService');
             const today = taiwanToday();
-            const periods = installmentService.buildPeriodsFromConfig(c.installment, result.enrollment.enrollmentFee, today);
+            const courseSessionsSnap = await db2.collection('courseSessions')
+              .where('courseId', '==', sDoc.data().courseId).where('status', '==', 'scheduled').get();
+            const sessionDates = courseSessionsSnap.docs.map(d => d.data().date).filter(d => d >= today).sort();
+            const periods = installmentService.buildCoursePeriodsFromConfig(c.installment, result.enrollment.enrollmentFee, today, sessionDates);
             if (periods) {
               const mDoc = await db2.collection(COLLECTIONS.MEMBERS).doc(req.body.memberId).get();
               installmentPlan = await installmentService.createInstallmentPlan({
@@ -1424,11 +1427,11 @@ router.put('/:courseId',
       if (req.body.depositAmount !== undefined) {
         updates.depositAmount = req.body.depositAmount !== '' ? (Number(req.body.depositAmount) || 0) : 0;
       }
-      // 分期規則
+      // 分期規則（dueAtSession：0＝報名當天、N(>=1)＝第N堂課到期）
       if (req.body.installment !== undefined) {
         const inst = req.body.installment;
         updates.installment = (inst && inst.enabled)
-          ? { enabled: true, periods: (inst.periods || []).map(p => ({ percent: Number(p.percent) || 0, dueOffsetDays: Number(p.dueOffsetDays) || 0 })) }
+          ? { enabled: true, periods: (inst.periods || []).map(p => ({ percent: Number(p.percent) || 0, dueAtSession: Number(p.dueAtSession) || 0 })) }
           : { enabled: false, periods: [] };
       }
 
@@ -2223,7 +2226,7 @@ async function handleEnrollAll(req, res) {
       if (fee > 0 && useCourseInstallment) {
         const installmentService = require('../services/installmentService');
         const today = taiwanToday();
-        const periods = installmentService.buildPeriodsFromConfig(course.installment, fee, today);
+        const periods = installmentService.buildCoursePeriodsFromConfig(course.installment, fee, today, futureSessions.map(s => s.date));
         if (periods) {
           coursePlan = await installmentService.createInstallmentPlan({
             // 家長代子女報名時 req.body.memberName 才是報名對象（子女）本名，req.member?.name 是登入者（家長）——

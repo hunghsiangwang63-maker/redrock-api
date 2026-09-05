@@ -889,13 +889,20 @@ const confirmRentalAddon = async (token, staffId, staffName, staffGymId = null, 
     checkinAlreadyInvoiced };
 };
 
-// ── 更正入場付款方式（2026-09-04，「陳奕亘」個案引出）───────────────────────────────
-// 已確認入場後才發現付款方式選錯（如原以 LinePay 產生 QR，櫃檯實際改收現金卻沒同步更正）：
-// 過去只能人工直接改 Firestore，已印出的發票、已結帳的快照都不會跟著動，造成「入場紀錄查得到
-// 現金，結帳報表卻沒有現金」的落差（真實案例：士林館差 300 元）。此函式一次修正三處：
+// ── 更正入場付款方式（2026-09-04，「陳奕亘」個案引出；2026-09-05「Chi-Tien Hsieh」個案擴充）──
+// 已確認入場後才發現付款方式選錯，過去只能人工直接改 Firestore，已印出的發票、已結帳的快照都
+// 不會跟著動，造成「入場紀錄查得到現金，結帳報表卻沒有現金」的落差。此函式一次修正三處：
 //   1) checkIns 本身的 paymentMethod（＋稽核欄位，記錄原值/操作人/原因）
 //   2) 對應的 type:'checkin' 交易記錄（可能不只一筆：入場本身 + 事後補租器材各一筆）
 //   3) 若已開立且仍作用中（未作廢）的發票，一併同步（無則略過，非真列印館別本就無此紀錄）
+// ⚠️ 這三處各自獨立比對、各自獨立更新（2026-09-05 修正，原本只看 checkIn 是否需要改，若已相符
+// 就整個提早 return noChange——真實案例「Chi-Tien Hsieh」：checkIn/交易從頭到尾都正確記 linepay，
+// 只有開票時發票本身選錯印成 cash，結帳（真列印館別依發票為準）因此少算了這筆 linepay。若沿用
+// 舊邏輯呼叫 correctPaymentMethod(id,'linepay')會被誤判「跟 checkIn 現有值相同、不用做事」而完全
+// 不會去檢查、修正發票，等於這個功能對「只有發票印錯、checkIn 本身沒問題」這種情況完全無效）。
+// 結帳快照回補的「目前分類」一律以已開立發票的付款方式為準（真列印館別的結帳權威來源就是發票，
+// 見 computeTodayInvoiceAuthority）；沒有已開立發票時才退回以 checkIn/交易的原值為準（非真列印
+// 館別／該筆尚未開票的情況，settlement 走即時依 transactions 重算，只要下次載入就會自動反映）。
 // 若「今天」（台灣時間）已有該館的正式結帳快照（status:'settled'）→ 額外把 payment.<舊方式>／
 // <新方式> 做精確金額搬移、重算 expectedCashBalance/difference（手動輸入模式下數字由人工填寫，
 // 略過不動、請人工核對）。過去日期的已結帳快照不自動回補（跨日牽動前日餘額鏈，風險較高，維持
@@ -917,47 +924,65 @@ const correctPaymentMethod = async (checkInId, newMethod, { staffId, staffName, 
   if (c.isCancelled) throw { code: 'ALREADY_CANCELLED', message: '此入場已取消，無法更正付款方式' };
   if (!(c.amountPaid > 0)) throw { code: 'NOTHING_TO_CORRECT', message: '此筆入場未實際收款，無付款方式可更正' };
 
-  const oldMethod = c.paymentMethod || 'cash';
-  if (oldMethod === newMethod) return { noChange: true, oldMethod, newMethod };
+  const checkinOldMethod = c.paymentMethod || 'cash';
   const amount = Number(c.amountPaid) || 0;
   const now = new Date();
 
-  await ref.update({
-    paymentMethod: newMethod,
-    paymentMethodCorrectedFrom: oldMethod,
-    paymentMethodCorrectedAt: now,
-    paymentMethodCorrectedBy: staffId || null,
-    paymentMethodCorrectedByName: staffName || null,
-    paymentMethodCorrectionReason: reason || null,
-    updatedAt: now,
-  });
-
-  // 對應的 type:'checkin' 交易記錄一併同步（可能不只一筆）
+  // 三處各自獨立檢查是否需要更新（皆與 checkIn 本身的值無關，各自比對各自現值）
   const txnSnap = await db.collection('transactions')
     .where('type', '==', 'checkin').where('relatedId', '==', checkInId).get();
-  if (txnSnap.size) {
-    const batch = db.batch();
-    txnSnap.docs.forEach(d => batch.update(d.ref, { paymentMethod: newMethod, updatedAt: now }));
-    await batch.commit();
-  }
+  const txnMismatches = txnSnap.docs.filter(d => (d.data().paymentMethod || 'cash') !== newMethod);
 
-  // 已開立且仍作用中（未作廢）的發票一併同步
-  let invoiceUpdated = false;
   const invSnap = await db.collection('invoices')
     .where('sourceType', '==', 'checkin').where('refId', '==', checkInId).where('status', '==', 'issued')
     .limit(1).get();
-  if (!invSnap.empty) {
-    await invSnap.docs[0].ref.update({
-      paymentMethod: newMethod, paymentMethodCorrectedFrom: oldMethod, updatedAt: now,
+  const invDoc = invSnap.empty ? null : invSnap.docs[0];
+  const invoiceOldMethod = invDoc ? (invDoc.data().paymentMethod || 'cash') : null;
+
+  const checkinNeedsUpdate = checkinOldMethod !== newMethod;
+  const invoiceNeedsUpdate = !!invDoc && invoiceOldMethod !== newMethod;
+
+  if (!checkinNeedsUpdate && !invoiceNeedsUpdate && !txnMismatches.length) {
+    return { noChange: true, oldMethod: checkinOldMethod, newMethod };
+  }
+
+  if (checkinNeedsUpdate) {
+    await ref.update({
+      paymentMethod: newMethod,
+      paymentMethodCorrectedFrom: checkinOldMethod,
+      paymentMethodCorrectedAt: now,
+      paymentMethodCorrectedBy: staffId || null,
+      paymentMethodCorrectedByName: staffName || null,
+      paymentMethodCorrectionReason: reason || null,
+      updatedAt: now,
+    });
+  }
+
+  if (txnMismatches.length) {
+    const batch = db.batch();
+    txnMismatches.forEach(d => batch.update(d.ref, { paymentMethod: newMethod, updatedAt: now }));
+    await batch.commit();
+  }
+
+  let invoiceUpdated = false;
+  if (invoiceNeedsUpdate) {
+    await invDoc.ref.update({
+      paymentMethod: newMethod, paymentMethodCorrectedFrom: invoiceOldMethod, updatedAt: now,
     });
     invoiceUpdated = true;
   }
+
+  // 結帳快照「目前實際採計」的付款方式：有已開立發票時以發票為準（真列印館別的結帳權威來源），
+  // 沒有發票時退回以 checkIn 原值為準（非真列印館別／尚未開票，settlement 本就即時重算）。
+  const settlementOldMethod = invDoc ? invoiceOldMethod : checkinOldMethod;
 
   // 今日（台灣時間）且已正式結帳的快照才需要回補；draft/尚無記錄下次載入自動重算，過去日期不自動回補
   let settlementPatched = false;
   let settlementSkippedReason = null;
   const entryDate = c.checkedInAt ? dateInTaiwan(c.checkedInAt.toDate ? c.checkedInAt.toDate() : c.checkedInAt) : null;
-  if (entryDate !== taiwanToday()) {
+  if (settlementOldMethod === newMethod) {
+    settlementSkippedReason = '結帳快照原本採計的分類本就正確，無需回補';
+  } else if (entryDate !== taiwanToday()) {
     settlementSkippedReason = '此筆入場非今日，已結帳快照不自動回補，如需回補請人工核對歷史結帳記錄';
   } else {
     const setSnap = await db.collection('dailySettlements')
@@ -973,7 +998,7 @@ const correctPaymentMethod = async (checkInId, newMethod, { staffId, staffName, 
         settlementSkippedReason = '今日結帳為付款方式手動輸入模式，數字由人工填寫，請自行核對更正';
       } else {
         const payment = { ...(s.payment || {}) };
-        const oldKey = PAYMENT_KEY_MAP[oldMethod] || 'other';
+        const oldKey = PAYMENT_KEY_MAP[settlementOldMethod] || 'other';
         const newKey = PAYMENT_KEY_MAP[newMethod] || 'other';
         payment[oldKey] = (payment[oldKey] || 0) - amount;
         payment[newKey] = (payment[newKey] || 0) + amount;
@@ -986,14 +1011,14 @@ const correctPaymentMethod = async (checkInId, newMethod, { staffId, staffName, 
         await setDoc.ref.update({
           payment, expectedCashBalance, difference,
           differenceAlert: Math.abs(difference) > 200,
-          correctionNote: `[${entryDate} 系統修正] 會員${c.memberName}入場（checkIn ${checkInId}）付款方式由${oldMethod}更正為${newMethod}，已回補結帳快照 NT$${amount}。${s.correctionNote ? '｜' + s.correctionNote : ''}`,
+          correctionNote: `[${entryDate} 系統修正] 會員${c.memberName}入場（checkIn ${checkInId}）付款分類由${settlementOldMethod}更正為${newMethod}，已回補結帳快照 NT$${amount}。${s.correctionNote ? '｜' + s.correctionNote : ''}`,
         });
         settlementPatched = true;
       }
     }
   }
 
-  return { ok: true, oldMethod, newMethod, amount, invoiceUpdated, settlementPatched, settlementSkippedReason };
+  return { ok: true, oldMethod: checkinOldMethod, newMethod, amount, invoiceUpdated, settlementPatched, settlementSkippedReason };
 };
 
 module.exports = {

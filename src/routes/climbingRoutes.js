@@ -380,21 +380,29 @@ router.get('/member', authenticateMember, async (req, res) => {
 // tag 記錄時（見 maskName）。排除會員自己、上限 10 筆。
 // excludeMemberId（選填）：家長代子女發起標記時，前端會帶目前操作對象的 id 一併排除（不讓子女出現
 // 在自己的搜尋結果裡）——單純過濾用途、不需驗證擁有權（只會讓結果變少，不會多曝光任何資料）。
+// 2026-09-05：name 參數同時精確比對「本名」與「暱稱」兩個欄位（前端無法區分使用者打的是本名還是
+// 暱稱，故兩個欄位都查、依 doc id 去重合併）——暱稱本就是會員自己選的公開稱呼、非隱私欄位，用同一套
+// 「完全比對、不做模糊/前綴」的安全規則即可，不需要額外的長度門檻（跟 name 一致）。
 router.get('/search-member', authenticateMember, async (req, res) => {
   try {
     const db = getDb();
     const phone = String(req.query.phone || '').trim();
     const name = String(req.query.name || '').trim();
     const excludeId = String(req.query.excludeMemberId || '').trim();
-    if (!phone && !name) return res.status(400).json({ error: 'MISSING_QUERY', message: '請輸入電話或姓名' });
+    if (!phone && !name) return res.status(400).json({ error: 'MISSING_QUERY', message: '請輸入電話、姓名或暱稱' });
     if (phone && phone.length < 7) return res.status(400).json({ error: 'PHONE_TOO_SHORT', message: '電話請輸入至少 7 碼' });
     let docs = [];
     if (phone) {
       const snap = await db.collection('members').where('phone', '==', phone).limit(10).get();
       docs = snap.docs;
     } else {
-      const snap = await db.collection('members').where('name', '==', name).limit(10).get();
-      docs = snap.docs;
+      const [nameSnap, nickSnap] = await Promise.all([
+        db.collection('members').where('name', '==', name).limit(10).get(),
+        db.collection('members').where('nickname', '==', name).limit(10).get(),
+      ]);
+      const seen = new Map();
+      [...nameSnap.docs, ...nickSnap.docs].forEach(d => { if (!seen.has(d.id)) seen.set(d.id, d); });
+      docs = [...seen.values()].slice(0, 10);
     }
     const results = docs
       .filter(d => d.id !== req.member.id && d.id !== excludeId)

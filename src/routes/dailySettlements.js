@@ -202,10 +202,40 @@ async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
     // 分組，涵蓋所有 sourceType，不限無來源發票），與 income 的課程/體驗收入（已於上方改依發票金額）
     // 使用同一個日期基準、同一批事件，兩者才會互相一致。定期票(pass)購買目前無對應真列印發票，此類
     // 收入的付款方式統計仍只能沿用 transactions(recognitionDate) 這條路（見 GET /today 呼叫端）。
-    issued.forEach(i => {
+    issued.filter(i => i.sourceType !== 'checkin_merged').forEach(i => {
       const m = i.paymentMethod || 'cash';
       result.byMethod[m] = (result.byMethod[m] || 0) + (Number(i.amount) || 0);
     });
+    // 合併發票（checkin_merged，多筆入場合開一張，如同行朋友一起付款）本身只存「一個」paymentMethod
+    // 欄位（見 invoices.js print-record，開票時預設抓清單第一筆的付款方式），無法反映混合付款——真實
+    // 案例（2026-09-05）：許錦鴻(現金400)＋姜恩媞(linepay400)合併開一張 NT$800 發票，整張被記成
+    // cash，導致當日現金多算 400、LinePay 少算 400（發票總金額 800 本身沒錯，只有付款方式分類跑掉，
+    // 拿系統數字對 LinePay 商家後台會兜不起來）。改為一律依 mergedCheckinIds 回頭查各自 checkIns 的
+    // 真實 paymentMethod／amountPaid 分開累加，不採信發票本身那個單一欄位（此欄位僅供人工瀏覽發票列表
+    // 時參考、開票當下決定要不要開錢櫃用，跟結帳統計脫鉤）。找不到入場記錄或加總對不起發票金額（如
+    // 金額被人工改過）時安全退回舊行為（整張算單一付款方式），確保金額絕不會漏算，只是那種例外情況下
+    // 分類精確度退回原本的整張單一分類。
+    const mergedInvoices = issued.filter(i => i.sourceType === 'checkin_merged' && Array.isArray(i.mergedCheckinIds) && i.mergedCheckinIds.length);
+    if (mergedInvoices.length) {
+      const allCheckinIds = [...new Set(mergedInvoices.flatMap(i => i.mergedCheckinIds))];
+      const checkinDocs = await db.getAll(...allCheckinIds.map(id => db.collection('checkIns').doc(id)));
+      const checkinMap = {};
+      checkinDocs.forEach(d => { if (d.exists) checkinMap[d.id] = d.data(); });
+      mergedInvoices.forEach(i => {
+        const parts = i.mergedCheckinIds.map(cid => checkinMap[cid]).filter(Boolean);
+        const partsSum = parts.reduce((s, ci) => s + (Number(ci.amountPaid) || 0), 0);
+        const consistent = parts.length === i.mergedCheckinIds.length && partsSum === (Number(i.amount) || 0);
+        if (consistent) {
+          parts.forEach(ci => {
+            const m = ci.paymentMethod || 'cash';
+            result.byMethod[m] = (result.byMethod[m] || 0) + (Number(ci.amountPaid) || 0);
+          });
+        } else {
+          const m = i.paymentMethod || 'cash';
+          result.byMethod[m] = (result.byMethod[m] || 0) + (Number(i.amount) || 0);
+        }
+      });
+    }
     // ── 預收款（延後開立發票代表的舊款）併入「其他」（2026-08-27 拍板：轉帳金額維持不動，
     //    現金/LinePay/街口/台灣Pay 補開的舊款改歸「其他」，不獨立一項）────────────────────────
     // 課程/體驗/比賽發票延後開立（見 checkInvoiceIssuanceTiming）——底層報名/預約當初實際收款的那

@@ -55,6 +55,7 @@ const createRegistrationHeader = async (db, data) => {
     enrollGender: data.enrollGender || null,
     enrollAge: data.enrollAge != null ? data.enrollAge : null,
     confirmedLeavePolicy: !!data.confirmedLeavePolicy,
+    confirmedExtensionPolicy: !!data.confirmedExtensionPolicy,
     confirmedRefundPolicy: !!data.confirmedRefundPolicy,
     portraitSignature: data.portraitSignature || null,
     guardianSignature: data.guardianSignature || null,

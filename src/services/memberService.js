@@ -237,7 +237,7 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
             // 課程層/場次名單讀取皆已改為 header-first、slot 只是 idx0 快照。
             paymentDate: null, bankLastFive: i === 0 ? (claim.bankLastFive || null) : null,
             healthNote: i === 0 ? (claim.healthNote || null) : null, referralSource: null,
-            confirmedLeavePolicy: false, confirmedRefundPolicy: false, portraitSignature: null, guardianSignature: null,
+            confirmedLeavePolicy: false, confirmedExtensionPolicy: false, confirmedRefundPolicy: false, portraitSignature: null, guardianSignature: null,
             memberPaidAmount: i === 0 ? (claim.paidAmount ?? null) : null,   // BeClass 等外部名單帶入的實際匯款金額（名單顯示用）
             notes: claim.paymentNote ? `名單預留自動認領；${claim.paymentNote}` : '名單預留自動認領（註冊時姓名比對加入）', createdAt: now, updatedAt: now,
           });

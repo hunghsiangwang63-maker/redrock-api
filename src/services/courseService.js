@@ -672,7 +672,7 @@ const calcEnrollmentFee = (course) => {
 
 const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paymentId,
   paymentDate, bankLastFive, bankName, paidAmount, healthNote, referralSource,
-  confirmedLeavePolicy, confirmedRefundPolicy, portraitSignature, guardianSignature,
+  confirmedLeavePolicy, confirmedExtensionPolicy, confirmedRefundPolicy, portraitSignature, guardianSignature,
   enrollGender, enrollAge, enrollNote,
   // 訪客（免登入公開報名，見 POST /courses/public/sessions/:sessionId/enroll）：memberId 為 guest_<uuid> 佔位字串，
   // 沒有會員文件可讀 → 跳過 getMember，用呼叫端傳入的聯絡資訊組一個最小 member 物件，隊員/員工優惠一律不適用。
@@ -792,6 +792,7 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     healthNote: healthNote || null,
     referralSource: referralSource || null,
     confirmedLeavePolicy: confirmedLeavePolicy || false,
+    confirmedExtensionPolicy: confirmedExtensionPolicy || false,
     confirmedRefundPolicy: confirmedRefundPolicy || false,
     portraitSignature: portraitSignature || null,
     guardianSignature: guardianSignature || null,
@@ -826,7 +827,7 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
       bankLastFive, paymentDate,
       healthNote, referralSource, enrollNote, enrollGender,
       enrollAge: enrollment.enrollAge,
-      confirmedLeavePolicy, confirmedRefundPolicy, portraitSignature, guardianSignature,
+      confirmedLeavePolicy, confirmedExtensionPolicy, confirmedRefundPolicy, portraitSignature, guardianSignature,
       waitlistPosition: enrollment.waitlistPosition,
       sessionCount: 1,
       sourceEnrollmentIds: [enrollmentId],

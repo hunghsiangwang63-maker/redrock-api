@@ -2357,6 +2357,31 @@ async function handleEnrollAll(req, res) {
         });
       }
 
+      // 課程服務同意書（合約）PDF——僅週課（非工作坊/體驗）、非候補；非同步、失敗不阻斷報名本身。
+      // 退費手續費率比照 getCourses() 同一套算法（resolveRules，班別繼承+梯次覆寫）——handleEnrollAll 的
+      // course 為原始 Firestore 文件（未經 getCourses 附掛），本身沒有 refundFeeRate 欄位，故另算一次；
+      // category 沿用本函式上方（防呆用）已查過的同一份，避免重複讀 Firestore。
+      if (!isWaitlist && course.type !== 'workshop') {
+        (async () => {
+          try {
+            const contractRules = courseService.resolveRules(course, category);
+            await require('../services/courseContractService').issueCourseContract({
+              memberId, memberName: req.body.memberName || req.member?.name || '',
+              isGuest: isGuestEnroll,
+              guestEmail: isGuestEnroll ? (req.body._guestEmail || null) : null,
+              guestPhone: isGuestEnroll ? (req.body._guestPhone || null) : null,
+              guestBirthday: isGuestEnroll ? (req.body._guestBirthday || null) : null,
+              course, futureSessions, fee, paymentMethod, coursePlan,
+              refundFeeRate: contractRules.handlingFeeRate ?? 0.2,
+              refundPreStartFeeRate: contractRules.preStartFeeRate ?? 0,
+              gymId: futureSessions[0].gymId || gymId,
+              portraitSignature: req.body.portraitSignature || null,
+              guardianSignature: req.body.guardianSignature || null,
+            });
+          } catch (e) { console.error('[課程合約] 呼叫失敗:', e.message); }
+        })();
+      }
+
       res.status(201).json({
         enrollmentId: firstEnrollmentId,
         installmentPlan: coursePlan,

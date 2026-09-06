@@ -377,6 +377,26 @@ const sendRegistrationConfirmed = async (to, { cc, typeLabel, memberName, itemNa
   });
 };
 
+// 課程服務同意書（合約）PDF——報名完成後（僅週課，非工作坊/體驗）自動寄送，附件為簽署後的合約 PDF
+const sendCourseContractPdf = async ({ to, cc, memberName, courseName, pdfBuffer }) => {
+  return sendEmail({
+    to, cc: (cc && cc.length) ? cc : undefined,
+    subject: `【紅石攀岩】${courseName} 課程服務同意書`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">課程服務同意書</h2>
+        <p>親愛的 ${esc(memberName)}，</p>
+        <p>附件為您報名「<strong>${esc(courseName)}</strong>」的課程服務同意書 PDF（依報名資訊自動產生），請妥善保存，如有疑問請聯繫館方。</p>
+        <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+    attachments: [{
+      filename: `課程服務同意書_${courseName}.pdf`,
+      content: pdfBuffer.toString('base64'),
+    }],
+  });
+};
+
 // ── 家長 Waiver 簽署連結 ─────────────────────────────────────────
 const sendParentWaiverLink = async (memberId, memberName, parentEmail, parentName, token) => {
   const url = `${CLIENT_URL}/waiver/parent/${token}`;
@@ -507,4 +527,5 @@ module.exports = {
   sendDeviceVerificationCode,
   sendTrialCancelledNotice,
   sendCompetitionRegistrationModified,
+  sendCourseContractPdf,
 };

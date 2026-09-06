@@ -35,6 +35,44 @@ router.put('/bank-accounts/:gymId',
   }
 );
 
+// ── 場館合約基本資料（履約地點/坪數/容納人數/公共意外責任險等，純參考記錄用，
+//    比照 bank-accounts 同一套 systemSettings 單一文件、依 gymId 為 key 的存法）─────
+const GYM_CONTRACT_FIELDS = [
+  'venueName', 'personInCharge', 'contractLocation', 'areaPing', 'maxCapacity',
+  'expectedMembers', 'contactPhone', 'contactEmail', 'businessRegistrationNo',
+  'liabilityInsurancePeriod', 'perPersonInjuryLiability',
+];
+
+// GET /settings/gym-contracts
+router.get('/gym-contracts', authenticate, checkPermission('settings.manage'), async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('systemSettings').doc('gymContracts').get();
+    res.json({ contracts: snap.exists ? snap.data() : {} });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// PUT /settings/gym-contracts/:gymId
+router.put('/gym-contracts/:gymId',
+  authenticate, checkPermission('settings.manage'),
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const { gymId } = req.params;
+      const entry = {};
+      GYM_CONTRACT_FIELDS.forEach(k => { entry[k] = req.body[k] || ''; });
+      entry.updatedAt = new Date();
+      entry.updatedBy = req.staff.id;
+      const ref = db.collection('systemSettings').doc('gymContracts');
+      const snap = await ref.get();
+      const current = snap.exists ? snap.data() : {};
+      current[gymId] = entry;
+      await ref.set(current);
+      res.json({ message: '合約基本資料已更新', data: current[gymId] });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
 // GET /settings/bank-accounts/member - 會員可以取得（不需要 staff token）
 router.get('/bank-accounts/member', async (req, res) => {
   try {

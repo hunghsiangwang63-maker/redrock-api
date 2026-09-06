@@ -138,7 +138,8 @@ function termsBlock({ refundFeeRate, refundPreStartFeeRate }) {
 
 function signatureBlock({ portraitSignature, guardianSignature, isMinor }) {
   const sigCell = (src, w = 160, h = 50) => src ? { image: src, width: w, height: h, margin: [0, 4, 0, 4] } : { text: '（未附簽名檔）', color: '#999', margin: [0, 4, 0, 4] };
-  const vendorSig = fs.existsSync(VENDOR_SIGNATURE_PATH) ? { image: VENDOR_SIGNATURE_PATH, width: 100, height: 40, margin: [0, 4, 0, 4] } : null;
+  // 店章為近正方形圖檔（圓戳），只給 width、讓 pdfmake 依比例算 height，避免被拉伸變形。
+  const vendorSig = fs.existsSync(VENDOR_SIGNATURE_PATH) ? { image: VENDOR_SIGNATURE_PATH, width: 60, margin: [0, 4, 0, 4] } : null;
   const rows = [
     [{ text: '消費者(簡稱甲方)：', bold: true }, sigCell(portraitSignature)],
   ];

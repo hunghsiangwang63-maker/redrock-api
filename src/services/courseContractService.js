@@ -40,15 +40,18 @@ async function resolveGuardianName(db, member) {
  * @param {string} o.gymId
  * @param {string} [o.portraitSignature] 學員本人簽名（base64 data URI）
  * @param {string} [o.guardianSignature] 法定代理人簽名（未成年才有）
+ * @param {boolean} [o.dryRun] true 時只解析欄位＋產生 PDF 就回傳（不上傳 Storage／不寫 courseContracts／不寄信），
+ *   且錯誤會直接 throw 給呼叫端（供預覽/測試用；正式報名流程呼叫時不要帶這個參數）。
  */
 const issueCourseContract = async ({
   memberId, memberName, isGuest, guestEmail, guestPhone, guestBirthday,
   course, futureSessions, fee, paymentMethod, coursePlan,
   refundFeeRate, refundPreStartFeeRate, gymId,
-  portraitSignature, guardianSignature,
+  portraitSignature, guardianSignature, dryRun,
 }) => {
   const db = getDb();
-  try {
+
+  const build = async () => {
     const contractSnap = await db.collection('systemSettings').doc('gymContracts').get();
     const gymContract = (contractSnap.exists ? (contractSnap.data() || {}) : {})[gymId] || {};
 
@@ -98,6 +101,14 @@ const issueCourseContract = async ({
       portraitSignature: portraitSignature || null,
       guardianSignature: studentIsMinor ? (guardianSignature || null) : null,
     });
+
+    return { pdfBuffer, email };
+  };
+
+  if (dryRun) return build(); // 供預覽/測試：不吞錯誤、不觸發任何上傳/寫入/寄信
+
+  try {
+    const { pdfBuffer, email } = await build();
 
     const contractId = uuidv4();
     let pdfUrl = null;

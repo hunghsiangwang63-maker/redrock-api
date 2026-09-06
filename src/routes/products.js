@@ -575,6 +575,55 @@ router.get('/stocktake/history', authenticate, checkPermission('products.manage'
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /products/stocktake/draft - 讀取盤點暫存（按館別，一館一份）───
+// 只存「已核對」的品項（見 PUT）；前端重新打開盤點視窗時，用這份暫存覆蓋新建的品項清單，
+// 恢復上次核對到哪裡、實際盤點數量填了多少，不用重新核對已經算過的品項。
+router.get('/stocktake/draft', authenticate, checkPermission('products.manage'), async (req, res) => {
+  try {
+    const db = getDb();
+    const gymId = req.query.gymId || req.staff?.gymId;
+    if (!gymId) return res.json({ draft: null });
+    const doc = await db.collection('stocktakeDrafts').doc(gymId).get();
+    if (!doc.exists) return res.json({ draft: null });
+    const d = doc.data();
+    res.json({
+      draft: {
+        items: d.items || [],
+        staffName: d.staffName || '',
+        updatedAt: d.updatedAt?.toDate ? d.updatedAt.toDate().toISOString() : null,
+      },
+    });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── PUT /products/stocktake/draft - 儲存盤點暫存（按館別，一館一份，整份覆蓋）──
+// 只送「已核對」的品項（例：已盤點10項，只存這10項），未核對的不佔暫存空間、下次打開時
+// 依目前商品清單重新產生、不影響已存的10項。
+router.put('/stocktake/draft', authenticate, checkPermission('products.manage'), async (req, res) => {
+  try {
+    const db = getDb();
+    const gymId = req.body.gymId || req.staff?.gymId;
+    if (!gymId) return res.status(400).json({ error: 'MISSING_GYM', message: '缺少館別' });
+    const items = Array.isArray(req.body.items) ? req.body.items.map(i => ({
+      productId: i.productId, variantId: i.variantId, actualStock: parseInt(i.actualStock) || 0,
+    })) : [];
+    await db.collection('stocktakeDrafts').doc(gymId).set({
+      gymId, items, staffId: req.staff.id, staffName: req.staff.name || '', updatedAt: new Date(),
+    });
+    res.json({ message: `已暫存 ${items.length} 項`, count: items.length });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── DELETE /products/stocktake/draft - 清除盤點暫存（取消盤點／確認盤點完成後呼叫）──
+router.delete('/stocktake/draft', authenticate, checkPermission('products.manage'), async (req, res) => {
+  try {
+    const db = getDb();
+    const gymId = req.query.gymId || req.staff?.gymId;
+    if (gymId) await db.collection('stocktakeDrafts').doc(gymId).delete();
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── POST /products/stocktake - 庫存盤點（按館別）────────────────
 router.post('/stocktake', authenticate, checkPermission('products.manage'), async (req, res) => {
   try {
@@ -627,6 +676,9 @@ router.post('/stocktake', authenticate, checkPermission('products.manage'), asyn
       });
       await notifBatch.commit();
     }
+
+    // 正式送出盤點結果後，暫存檔已無用（本次已完整記入 stockLogs 正式歷史），順手清掉避免殘留誤導下次盤點
+    try { await db.collection('stocktakeDrafts').doc(gymId).delete(); } catch (e) { /* 不影響本次盤點結果 */ }
 
     res.json({
       message: discrepancies.length > 0

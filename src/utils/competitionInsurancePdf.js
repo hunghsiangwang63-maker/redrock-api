@@ -8,7 +8,10 @@ const URLResolver = require('pdfmake/js/URLResolver.js').default;
 const fs = require('fs');
 
 const FONT_PATH = path.join(__dirname, '..', 'assets', 'fonts', 'NotoSansTC-Regular.ttf');
-const FONTS = { NotoSansTC: { normal: FONT_PATH, bold: FONT_PATH, italics: FONT_PATH, bolditalics: FONT_PATH } };
+// 粗體改用實際靜態 700 字重（見 courseContractPdf.js 同一批修復）：原本 bold 指向 Regular 檔，
+// pdfmake/PDFKit 無自動加粗，bold:true 對標題列/表頭完全無視覺效果。
+const BOLD_FONT_PATH = path.join(__dirname, '..', 'assets', 'fonts', 'NotoSansTC-Bold.ttf');
+const FONTS = { NotoSansTC: { normal: FONT_PATH, bold: BOLD_FONT_PATH, italics: FONT_PATH, bolditalics: BOLD_FONT_PATH } };
 
 const ROWS_PER_PAGE = 20; // 每頁選手數
 

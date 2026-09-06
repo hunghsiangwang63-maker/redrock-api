@@ -53,6 +53,7 @@ router.post('/:planId/pay',
         planId: req.params.planId,
         seq: parseInt(req.body.seq),
         paymentMethod: req.body.paymentMethod,
+        note: req.body.note || null,
         staffId: req.staff.id,
         staffName: req.staff.name,
       });

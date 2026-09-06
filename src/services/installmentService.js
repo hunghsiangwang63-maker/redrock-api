@@ -184,7 +184,7 @@ const cancelInstallmentPlan = async (db, planId, { reason = '取消', skipPaidRe
 };
 
 // ── 標記某期已繳款 ────────────────────────────────────────────────
-const markInstallmentPaid = async ({ planId, seq, paymentMethod, staffId, staffName }) => {
+const markInstallmentPaid = async ({ planId, seq, paymentMethod, staffId, staffName, note }) => {
   if (!VALID_PAYMENT_METHODS.includes(paymentMethod)) {
     throw { code: 'INVALID_PAYMENT_METHOD', message: '付款方式不正確' };
   }
@@ -199,8 +199,9 @@ const markInstallmentPaid = async ({ planId, seq, paymentMethod, staffId, staffN
   if (target.status === 'paid') throw { code: 'ALREADY_PAID', message: '此期已繳款，無需重複操作' };
 
   const now = new Date();
+  // note：選填，供轉帳時記匯款銀行等備註（供之後對帳／稽核，不影響金流計算）
   const updatedInstallments = plan.installments.map(i =>
-    i.seq === seq ? { ...i, status: 'paid', paidAt: now, paymentMethod, paidBy: staffId } : i
+    i.seq === seq ? { ...i, status: 'paid', paidAt: now, paymentMethod, paidBy: staffId, note: note || i.note || '' } : i
   );
   const allPaid = updatedInstallments.every(i => i.status === 'paid');
   // 仍有其他期逾期/已過到期未繳 → 維持 overdue（避免補一期就解除入場限制）

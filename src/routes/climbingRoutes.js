@@ -341,12 +341,15 @@ router.get('/member', authenticateMember, async (req, res) => {
       .map(r => {
         const likes = r.likes || {};
         const { likes: _drop, ...rest } = r; // 不把完整 likes map（含所有按讚者 memberId）回傳給前端，只給統計值
+        const routeTags = tagsByRoute[r.id] || [];
         return {
           ...rest,
           basePoints: Number(cfg.gradePoints[r.grade]) || 0,
           likeCount: Object.keys(likes).length,
           liked: likes[req.member.id] === true,
-          tags: tagsByRoute[r.id] || [],
+          shareCount: r.shareCount || 0,
+          tags: routeTags,
+          tagCount: routeTags.length, // 「被標記次數」排序用（與 tags 陣列同一份資料，明確給數字避免前端各自 .length）
         };
       })
       .sort((a, b) => (a.area || '').localeCompare(b.area || '', 'zh-Hant') || GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade));
@@ -433,7 +436,7 @@ router.get('/', authenticate, async (req, res) => {
     const routes = snap.docs.map(d => {
       const r = d.data();
       const { likes, ...rest } = r; // 不把完整 likes map（含所有按讚者 memberId）回傳給員工端，比照會員端 /member 的既有做法
-      return { id: d.id, ...rest, likeCount: Object.keys(likes || {}).length, ascentCount: countByRoute[d.id] || 0 };
+      return { id: d.id, ...rest, likeCount: Object.keys(likes || {}).length, shareCount: rest.shareCount || 0, ascentCount: countByRoute[d.id] || 0 };
     })
       .filter(r => includeArchived ? true : r.status !== 'archived')
       .sort((a, b) => (a.area || '').localeCompare(b.area || '', 'zh-Hant') || GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade));
@@ -639,6 +642,20 @@ router.post('/:id/like', authenticateMember, async (req, res) => {
     const newLikes = { ...likes };
     if (already) delete newLikes[req.member.id]; else newLikes[req.member.id] = true;
     res.json({ success: true, liked: !already, likeCount: Object.keys(newLikes).length });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── POST /climbing-routes/:id/share：分享次數 +1（不限入館；純計數，無 toggle——同一人多次分享皆計入，
+//   反映「這條路線被分享了幾次」而非「幾個人分享過」，與讚(likes，去重收藏)語意不同）──
+router.post('/:id/share', authenticateMember, async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection('climbingRoutes').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'ROUTE_NOT_FOUND', message: '路線不存在' });
+    const admin = require('firebase-admin');
+    await ref.update({ shareCount: admin.firestore.FieldValue.increment(1), updatedAt: new Date() });
+    res.json({ success: true, shareCount: (doc.data().shareCount || 0) + 1 });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

@@ -2208,6 +2208,7 @@ async function handleEnrollAll(req, res) {
             confirmedLeavePolicy: idx === 0 ? !!req.body.confirmedLeavePolicy : false,
             confirmedExtensionPolicy: idx === 0 ? !!req.body.confirmedExtensionPolicy : false,
             confirmedRefundPolicy: idx === 0 ? !!req.body.confirmedRefundPolicy : false,
+            confirmedContractTerms: idx === 0 ? !!req.body.confirmedContractTerms : false, // 已詳閱同意合約完整條款
             portraitSignature: idx === 0 ? (req.body.portraitSignature || null) : null,
             guardianSignature: idx === 0 ? (req.body.guardianSignature || null) : null,
             isGuest: isGuestEnroll,
@@ -2250,6 +2251,7 @@ async function handleEnrollAll(req, res) {
           confirmedLeavePolicy: !!req.body.confirmedLeavePolicy,
           confirmedExtensionPolicy: !!req.body.confirmedExtensionPolicy,
           confirmedRefundPolicy: !!req.body.confirmedRefundPolicy,
+          confirmedContractTerms: !!req.body.confirmedContractTerms,
           portraitSignature: req.body.portraitSignature || null,
           guardianSignature: req.body.guardianSignature || null,
           waitlistPosition: isWaitlist ? waitlistPosition : null,

@@ -57,6 +57,8 @@ const createRegistrationHeader = async (db, data) => {
     confirmedLeavePolicy: !!data.confirmedLeavePolicy,
     confirmedExtensionPolicy: !!data.confirmedExtensionPolicy,
     confirmedRefundPolicy: !!data.confirmedRefundPolicy,
+    confirmedContractTerms: !!data.confirmedContractTerms, // 已詳閱同意合約完整條款（僅週課報名步驟出現，2026-09-06 新增）
+
     portraitSignature: data.portraitSignature || null,
     guardianSignature: data.guardianSignature || null,
     waitlistPosition: data.waitlistPosition != null ? data.waitlistPosition : null,

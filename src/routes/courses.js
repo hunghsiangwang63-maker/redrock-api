@@ -1810,7 +1810,7 @@ router.get('/:courseId/enrollments',
           const hSnap = await db.collection('courseRegistrations')
             .where('courseId', '==', courseId).where('memberId', 'in', batch)
             // header 內嵌簽名圖，只取名單顯示欄位（2026-08-27 補投影，與下方 headerMap 取用欄位一一對應）
-            .select('memberId', 'paymentStatus', 'receivedAmountOverride', 'payEnrollmentId', 'fee', 'paymentMethod',
+            .select('memberId', 'paymentStatus', 'receivedAmountOverride', 'payEnrollmentId', 'fee', 'originalFee', 'feeCalcNote', 'paymentMethod',
               'bankLastFive', 'paymentDate', 'memberPaidAmount', 'enrolledAt', 'enrollNote', 'healthNote', 'referralSource', 'staffNote',
               'contactPhone', 'isGuest')
             .get();
@@ -1818,7 +1818,8 @@ router.get('/:courseId/enrollments',
             const h = hd.data();
             headerMap[h.memberId] = {
               paymentStatus: h.paymentStatus || '', receivedAmountOverride: h.receivedAmountOverride ?? null, payEnrollmentId: h.payEnrollmentId || null,
-              fee: h.fee, paymentMethod: h.paymentMethod, bankLastFive: h.bankLastFive, paymentDate: h.paymentDate,
+              fee: h.fee, originalFee: h.originalFee ?? null, feeCalcNote: h.feeCalcNote || null,
+              paymentMethod: h.paymentMethod, bankLastFive: h.bankLastFive, paymentDate: h.paymentDate,
               memberPaidAmount: h.memberPaidAmount, enrolledAt: h.enrolledAt,
               enrollNote: h.enrollNote, healthNote: h.healthNote, referralSource: h.referralSource, staffNote: h.staffNote,
               // 免登入公開報名（guest_ 開頭假 memberId，members 集合查無此人）：電話存在報名當下填的
@@ -1915,6 +1916,8 @@ router.get('/:courseId/enrollments',
           paymentDate,
           enrolledAt: header.enrolledAt || m.fallbackEnrolledAt || null,
           fee,
+          originalFee: header.originalFee ?? null, // 折扣前原價（供「詳細」彈窗顯示計算過程）
+          feeCalcNote: header.feeCalcNote || null, // 續報/隊員折扣擇優結果的計算過程文字
           // 報名備註：一律讀 header（單一真相；idx0-only 寫入後場次副本不再可靠，見 courseService.js getSessionRoster 的同型 fallback）
           enrollNote: header.enrollNote || null,
           healthNote: header.healthNote || null,
@@ -2104,7 +2107,7 @@ async function handleEnrollAll(req, res) {
       } catch (e) { /* 查無會員不影響報名，視為非隊員 */ }
 
       const {
-        fee, baseFee, renewalDiscount, renewalDiscountType, discountResult,
+        fee, baseFee, renewalDiscount, renewalDiscountType, renewalRate, teamDiscount, discountResult, feeCalcNote,
       } = courseService.computeWeeklyCourseFee(course, { completedCount, totalCount, alumni, isTeam, categoryGroup: category?.group });
 
       const willInstallment = course.installment?.enabled && req.body.paymentPlan === 'installment' && !req.body.deferPayment;
@@ -2179,8 +2182,12 @@ async function handleEnrollAll(req, res) {
             waitlistPosition: isWaitlist ? waitlistPosition : null,
             // 候補不收費（遞補為正取後才收）；正取維持原本第一筆收費、其餘 0
             enrollmentFee: isWaitlist ? 0 : (idx === 0 ? fee : 0),
-            renewalDiscount: idx === 0 && renewalDiscount > 0 ? renewalDiscount : null, // 續報折抵（稽核）
+            originalFee: idx === 0 ? baseFee : null, // 折扣前原價（稽核／確認收款畫面顯示計算過程用）
+            renewalDiscount: idx === 0 && renewalDiscount > 0 ? renewalDiscount : null, // 續報折抵（稽核，與隊員折擇優不疊加）
             renewalDiscountType: idx === 0 && renewalDiscount > 0 ? renewalDiscountType : null, // full_term_renewal | alumni
+            renewalRate: idx === 0 && renewalDiscount > 0 ? renewalRate : null,
+            teamDiscount: idx === 0 && teamDiscount > 0 ? teamDiscount : null, // 隊員折抵（稽核，與續報折擇優不疊加）
+            feeCalcNote: idx === 0 ? (feeCalcNote || null) : null, // 計算過程文字，供管理員確認收款畫面顯示
             paymentMethod: (isWaitlist || idx !== 0) ? null : paymentMethod,
             paymentStatus: isWaitlist ? 'na' : (idx === 0 ? 'pending' : 'na'),
             // 付款期限只掛在主報名（idx===0）；sweep 依此取消整門課、釋放各場次名額
@@ -2228,7 +2235,10 @@ async function handleEnrollAll(req, res) {
           fee: isWaitlist ? 0 : fee, originalFee: baseFee,
           renewalDiscount: renewalDiscount > 0 ? renewalDiscount : null,
           renewalDiscountType: renewalDiscount > 0 ? renewalDiscountType : null,
+          renewalRate: renewalDiscount > 0 ? renewalRate : null,
           teamDiscountApplied: !isWaitlist && discountResult.applied,
+          teamDiscount: !isWaitlist && teamDiscount > 0 ? teamDiscount : null,
+          feeCalcNote: feeCalcNote || null,
           healthNote: req.body.healthNote || null,
           referralSource: req.body.referralSource || null,
           enrollNote: req.body.enrollNote || null,

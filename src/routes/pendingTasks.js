@@ -333,6 +333,9 @@ router.get('/', authenticate, async (req, res) => {
         // course→enrollNote/healthNote/referralSource（合併顯示）、experience→notes、competition→memberNote、
         // rental/team_member 目前無會員自填備註欄位。
         let memberWrittenNote = null;
+        // 課程費用計算過程（原價／續報或隊員折扣擇優結果）——供確認收款彈窗顯示，讓管理員看得到
+        // 「8,400 × 90%（續報優惠）＝ 7,560」這類算式，不用自己回頭核對規則（2026-09-06）。
+        let courseFeeCalc = null;
         if (orderDoc) {
           if (t.orderType === 'course') {
             memberWrittenNote = [
@@ -340,6 +343,13 @@ router.get('/', authenticate, async (req, res) => {
               orderDoc.healthNote ? `健康備註：${orderDoc.healthNote}` : null,
               orderDoc.referralSource ? `如何得知：${orderDoc.referralSource}` : null,
             ].filter(Boolean).join('｜') || null;
+            if (orderDoc.feeCalcNote || orderDoc.originalFee != null) {
+              courseFeeCalc = {
+                baseFee: orderDoc.originalFee ?? null,
+                fee: orderDoc.enrollmentFee ?? null,
+                note: orderDoc.feeCalcNote || null,
+              };
+            }
           } else if (t.orderType === 'experience') {
             memberWrittenNote = orderDoc.notes || null;
           } else if (t.orderType === 'competition') {
@@ -356,7 +366,7 @@ router.get('/', authenticate, async (req, res) => {
           gymId: t.gymId, memberName: displayMemberName, amount: t.amount,
           partnerGym, partnerGymPending,
           link: '/staff/pending-tasks',
-          record: { id: d.id, ...t, memberName: displayMemberName, payerName: t.memberName, partnerGym, partnerGymPending, notes: memberWrittenNote },
+          record: { id: d.id, ...t, memberName: displayMemberName, payerName: t.memberName, partnerGym, partnerGymPending, notes: memberWrittenNote, courseFeeCalc },
         });
       }
     } catch(e) { console.error('transfer_confirm tasks error:', e.message); }

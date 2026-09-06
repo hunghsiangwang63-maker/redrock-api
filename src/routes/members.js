@@ -477,7 +477,7 @@ const buildCourseMemberList = async (db, c) => {
   // ⚠️ header 也內嵌兩張簽名圖（createRegistrationHeader），只取名單/付款欄位（2026-08-27 補投影）
   const hSnap = await db.collection('courseRegistrations').where('courseId', '==', c.id)
     .select('memberId', 'memberName', 'status', 'cancelReason', 'pauseStatus', 'waitlistPosition', 'cancelledAt',
-      'payEnrollmentId', 'fee', 'paymentMethod', 'paymentStatus', 'paymentConfirmed', 'memberPaidAmount',
+      'payEnrollmentId', 'fee', 'originalFee', 'feeCalcNote', 'paymentMethod', 'paymentStatus', 'paymentConfirmed', 'memberPaidAmount',
       'receivedAmountOverride', 'bankLastFive', 'paymentDate', 'enrolledAt', 'createdAt', 'enrollNote', 'healthNote',
       'referralSource', 'staffNote', 'contactPhone', 'isGuest')
     .get();
@@ -502,6 +502,8 @@ const buildCourseMemberList = async (db, c) => {
     payMap[h.memberId] = {
       enrollmentId: h.payEnrollmentId,
       fee: h.fee ?? 0,
+      originalFee: h.originalFee ?? null,
+      feeCalcNote: h.feeCalcNote || null,
       paymentMethod: h.paymentMethod || '',
       paymentStatus: h.paymentStatus || '',
       paymentConfirmed: h.paymentConfirmed !== false,

@@ -227,6 +227,48 @@ const markInstallmentPaid = async ({ planId, seq, paymentMethod, staffId, staffN
   return { allPaid, plan: { ...plan, installments: updatedInstallments, status: newStatus } };
 };
 
+// ── 整筆標記一次繳清（實際上已一次性收款，非依原訂各期時間分次繳，管理員直接登記結清）───
+// 未繳清的各期一次性標記為已繳（各自沿用原金額分開記帳，稽核可對到原分期金額）、計畫狀態→completed，
+// 一旦 completed，sendInstallmentReminders 的查詢條件（status in ['active','overdue']）本就不會再選到
+// 這筆計畫，不會再發任何到期/逾期提醒信或管理員預警——不需要另外處理「停止通知」。
+const markInstallmentPlanPaidInFull = async ({ planId, paymentMethod, staffId, staffName, note }) => {
+  if (!VALID_PAYMENT_METHODS.includes(paymentMethod)) {
+    throw { code: 'INVALID_PAYMENT_METHOD', message: '付款方式不正確' };
+  }
+  const db = getDb();
+  const ref = db.collection(COLLECTIONS.INSTALLMENT_PLANS).doc(planId);
+  const doc = await ref.get();
+  if (!doc.exists) throw { code: 'NOT_FOUND', message: '找不到此分期計畫' };
+  const plan = doc.data();
+  if (plan.status === 'cancelled') throw { code: 'PLAN_CANCELLED', message: '此分期計畫已取消，無法標記繳清' };
+  if (plan.status === 'completed') throw { code: 'ALREADY_PAID', message: '此分期計畫已結清，無需重複操作' };
+
+  const now = new Date();
+  const unpaid = (plan.installments || []).filter(i => i.status !== 'paid');
+  if (!unpaid.length) throw { code: 'ALREADY_PAID', message: '此分期計畫已結清，無需重複操作' };
+
+  const updatedInstallments = plan.installments.map(i =>
+    i.status === 'paid' ? i : { ...i, status: 'paid', paidAt: now, paymentMethod, paidBy: staffId, markedPaidInFull: true }
+  );
+
+  await ref.update({
+    installments: updatedInstallments, status: 'completed', updatedAt: now,
+    paidInFullAt: now, paidInFullBy: staffId, paidInFullByName: staffName || '', paidInFullNote: note || null,
+  });
+
+  // 逐一補記帳（僅未繳清的期數；已繳的期數在各自繳款當下早已記過，不重複記）
+  let recordedCount = 0;
+  for (const p of unpaid) {
+    try {
+      const period = updatedInstallments.find(i => i.seq === p.seq);
+      await recordInstallmentRevenue(db, { ...plan, installments: updatedInstallments }, period, paymentMethod, staffId, staffName);
+      recordedCount++;
+    } catch (e) { console.error(`[分期] 一次繳清記帳失敗 plan=${planId} seq=${p.seq}`, e.message); }
+  }
+
+  return { plan: { ...plan, installments: updatedInstallments, status: 'completed' }, recordedCount };
+};
+
 // ── 每日批次：將已過到期日但未繳款的期數標記為逾期 ─────────────────
 // （手動觸發版本，未來可接外部排程定時呼叫）
 const runOverdueCheck = async () => {
@@ -374,6 +416,7 @@ module.exports = {
   createInstallmentPlan,
   cancelInstallmentPlan,
   markInstallmentPaid,
+  markInstallmentPlanPaidInFull,
   runOverdueCheck,
   sendInstallmentReminders,
   hasOverdueInstallment,

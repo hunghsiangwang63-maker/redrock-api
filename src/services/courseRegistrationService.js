@@ -35,7 +35,10 @@ const createRegistrationHeader = async (db, data) => {
     originalFee: data.originalFee != null ? data.originalFee : null,
     renewalDiscount: data.renewalDiscount || null,
     renewalDiscountType: data.renewalDiscountType || null,
+    renewalRate: data.renewalRate ?? null,
     teamDiscountApplied: !!data.teamDiscountApplied,
+    teamDiscount: data.teamDiscount || null,
+    feeCalcNote: data.feeCalcNote || null, // 計算過程文字（單一折扣擇優結果），供確認收款畫面顯示
     installmentPlanId: data.installmentPlanId || null,
     healthNote: data.healthNote || null,
     staffNote: data.staffNote || null, // 管理員收款確認時填的內部備註（會員看不到）

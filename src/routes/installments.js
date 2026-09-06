@@ -67,6 +67,30 @@ router.post('/:planId/pay',
   }
 );
 
+// ── POST /installments/:planId/mark-paid-in-full - 整筆標記已一次繳清（非依原分期時間分次繳）──
+router.post('/:planId/mark-paid-in-full',
+  authenticate, checkPermission('installments.manage'),
+  [
+    body('paymentMethod').isIn(installmentService.VALID_PAYMENT_METHODS).withMessage('付款方式不正確'),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const result = await installmentService.markInstallmentPlanPaidInFull({
+        planId: req.params.planId,
+        paymentMethod: req.body.paymentMethod,
+        note: req.body.note || null,
+        staffId: req.staff.id,
+        staffName: req.staff.name,
+      });
+      res.json({ message: `已標記整筆分期計畫繳清（補記 ${result.recordedCount} 期帳）`, ...result });
+    } catch (err) {
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // ── GET /installments/member/:memberId - 查詢會員的分期計畫 ────────
 router.get('/member/:memberId', authenticateAny, async (req, res) => {
   try {

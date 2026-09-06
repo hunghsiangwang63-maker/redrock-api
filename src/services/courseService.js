@@ -1394,7 +1394,9 @@ const promoteWaitlistForCourse = async (courseId) => {
   let isTeam = false;
   try { isTeam = isActiveTeamMember(await getMember(winnerMemberId)); } catch (e) { /* 查無會員視為非隊員 */ }
   const promoteCategory = await getCategoryOf(db, course.categoryId);
-  const { fee } = computeWeeklyCourseFee(course, { completedCount, totalCount, alumni, isTeam, categoryGroup: promoteCategory?.group });
+  const {
+    fee, baseFee, renewalDiscount, renewalDiscountType, renewalRate, teamDiscount, feeCalcNote,
+  } = computeWeeklyCourseFee(course, { completedCount, totalCount, alumni, isTeam, categoryGroup: promoteCategory?.group });
 
   const { FieldValue } = require('firebase-admin').firestore;
   let firstDoc = null;
@@ -1403,6 +1405,12 @@ const promoteWaitlistForCourse = async (courseId) => {
     await d.ref.update({
       status: 'confirmed', waitlistPosition: null, promotedAt: now, updatedAt: now,
       enrollmentFee: i === 0 ? fee : 0,
+      originalFee: i === 0 ? baseFee : null,
+      renewalDiscount: i === 0 && renewalDiscount > 0 ? renewalDiscount : null,
+      renewalDiscountType: i === 0 && renewalDiscount > 0 ? renewalDiscountType : null,
+      renewalRate: i === 0 && renewalDiscount > 0 ? renewalRate : null,
+      teamDiscount: i === 0 && teamDiscount > 0 ? teamDiscount : null,
+      feeCalcNote: i === 0 ? (feeCalcNote || null) : null,
       paymentMethod: null,
       paymentStatus: i === 0 ? (fee > 0 ? 'pending' : null) : 'na',
     });
@@ -1429,7 +1437,16 @@ const promoteWaitlistForCourse = async (courseId) => {
   // 雙寫 header（courseRegistrations）
   try {
     const { updateRegistrationStatusByCourseMember } = require('./courseRegistrationService');
-    await updateRegistrationStatusByCourseMember(db, winnerMemberId, courseId, { status: 'confirmed', promotedAt: now });
+    await updateRegistrationStatusByCourseMember(db, winnerMemberId, courseId, {
+      status: 'confirmed', promotedAt: now,
+      fee, originalFee: baseFee,
+      renewalDiscount: renewalDiscount > 0 ? renewalDiscount : null,
+      renewalDiscountType: renewalDiscount > 0 ? renewalDiscountType : null,
+      renewalRate: renewalDiscount > 0 ? renewalRate : null,
+      teamDiscountApplied: teamDiscount > 0,
+      teamDiscount: teamDiscount > 0 ? teamDiscount : null,
+      feeCalcNote: feeCalcNote || null,
+    });
   } catch (e) { console.error('[雙寫] header 遞補狀態更新失敗:', e.message); }
 
   // 通知同館管理員（會員本人透過 /members/my/alerts 讀 promotedAt 顯示首頁提醒，見 members.js）
@@ -1978,7 +1995,9 @@ const computeAlumniStatus = async (db, course, courseId, memberId) => {
 };
 
 // ── 週課單一報名對象的費用計算（純函式）─────────────────────────────
-// 插班直接按剩餘場次計、無加成；續報/舊生為乘法折扣（各自開關+比率，續報優先、不疊加）；最後套隊員9折。
+// 插班直接按剩餘場次計、無加成；續報/舊生折扣（各自開關+比率，續報優先於舊生，兩者互斥）與攀岩隊員
+// 9 折兩者【擇優（取較低價）、不疊加】——皆從 baseFee 各自算候選價，同時符合資格時取較低者，不會
+// 出現 0.9×0.9=0.81 這種複合折扣（2026-09-06 修正：原本是續報折後再疊隊員折，會多折一次）。
 // 專班課程（categoryGroup==='special'，如個人化的「XX專班」）政策一律不適用隊員9折與續報/舊生優惠，
 // 後端強制關閉、不管單一課程 fullTermRenewalDiscountEnabled/alumniDiscountEnabled 設定為何。
 // ⚠ 全系統唯一算式，quote 端點與 courses.js handleEnrollAll 皆呼叫此函式，勿在別處重寫。
@@ -1991,25 +2010,52 @@ const computeWeeklyCourseFee = (course, { completedCount, totalCount, alumni, is
   const remainingCount = totalCount - completedCount;
   const baseFee = Math.round(pricePerSession * (isLateJoin ? remainingCount : totalCount));
 
+  // 候選一：續報/舊生比率折扣（續報優先於舊生，互斥；皆從 baseFee 算）
   const renewalOpen = !course.renewalDeadline || today <= course.renewalDeadline;
-  let renewalDiscountType = null, renewalRate = null;
+  let renewalCandType = null, renewalCandRate = null;
   if (!isSpecial && renewalOpen && alumni.isFullTermRenewal && course.fullTermRenewalDiscountEnabled) {
-    renewalRate = course.fullTermRenewalDiscountRate ?? 0.9; renewalDiscountType = 'full_term_renewal';
+    renewalCandRate = course.fullTermRenewalDiscountRate ?? 0.9; renewalCandType = 'full_term_renewal';
   } else if (!isSpecial && renewalOpen && alumni.isAlumni && course.alumniDiscountEnabled) {
-    renewalRate = course.alumniDiscountRate ?? 0.95; renewalDiscountType = 'alumni';
+    renewalCandRate = course.alumniDiscountRate ?? 0.95; renewalCandType = 'alumni';
   }
-  const feeAfterRenewal = renewalRate != null ? Math.round(baseFee * renewalRate) : baseFee;
-  const renewalDiscount = baseFee - feeAfterRenewal;
+  const renewalCandFee = renewalCandRate != null ? Math.round(baseFee * renewalCandRate) : null;
 
-  const teamRes = applyTeamDiscount(feeAfterRenewal, isTeam && !isSpecial);
-  const fee = teamRes.discounted;
-  const teamDiscount = feeAfterRenewal - fee;
+  // 候選二：攀岩隊員 9 折（同樣從 baseFee 算，不疊加續報折扣）
+  const teamCand = applyTeamDiscount(baseFee, isTeam && !isSpecial);
+  const teamCandFee = teamCand.applied ? teamCand.discounted : null;
+
+  // 擇優：兩者皆符合資格時取較低價（平手取續報）；只有一種符合就用那個；皆不符合則原價
+  let winner = null;
+  if (renewalCandFee != null && teamCandFee != null) winner = renewalCandFee <= teamCandFee ? 'renewal' : 'team';
+  else if (renewalCandFee != null) winner = 'renewal';
+  else if (teamCandFee != null) winner = 'team';
+  const fee = winner === 'renewal' ? renewalCandFee : (winner === 'team' ? teamCandFee : baseFee);
+
+  const renewalDiscountType = winner === 'renewal' ? renewalCandType : null;
+  const renewalRate = winner === 'renewal' ? renewalCandRate : null;
+  const renewalDiscount = winner === 'renewal' ? (baseFee - fee) : 0;
+  const teamApplied = winner === 'team';
+  const teamDiscount = teamApplied ? (baseFee - fee) : 0;
+
+  // 單一計算過程文字，供管理員確認收款畫面／會員報名畫面顯示（例：「NT$8,400 × 90%（續報優惠）= NT$7,560」）
+  let feeCalcNote = null;
+  if (winner === 'renewal') {
+    const label = renewalCandType === 'full_term_renewal' ? '續報優惠' : '舊生優惠';
+    feeCalcNote = `NT$${baseFee.toLocaleString()} × ${Math.round(renewalCandRate * 100)}%（${label}）= NT$${fee.toLocaleString()}`;
+  } else if (winner === 'team') {
+    feeCalcNote = `NT$${baseFee.toLocaleString()} × ${Math.round(teamCand.rate * 100)}%（攀岩隊員優惠）= NT$${fee.toLocaleString()}`;
+  }
+  if (renewalCandFee != null && teamCandFee != null) {
+    const otherLabel = winner === 'renewal' ? '攀岩隊員9折' : (renewalCandType === 'full_term_renewal' ? '續報優惠' : '舊生優惠');
+    feeCalcNote = (feeCalcNote || `NT$${baseFee.toLocaleString()}`) + `（同時符合${otherLabel}資格，依規定擇優、不疊加使用）`;
+  }
 
   return {
     fee, baseFee,
     renewalDiscount, renewalDiscountType, renewalRate,
-    isTeam, teamApplied: teamDiscount > 0, teamDiscount,
-    discountResult: teamRes, // 原始隊員折扣結果物件（{original,discounted,discount,applied,...}），供呼叫端相容既有欄位名
+    isTeam, teamApplied, teamDiscount,
+    discountResult: teamApplied ? teamCand : { original: baseFee, discounted: baseFee, discount: 0, applied: false }, // 相容既有欄位名
+    feeCalcNote,
     isLateJoin, completedCount, totalCount, remainingCount,
   };
 };

@@ -93,6 +93,23 @@ router.get('/bank-accounts/member', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// GET /settings/gym-contracts/member - 會員可取得（不需要 staff token），供報名步驟「合約條款」顯示合約
+// 基本資料用；只回傳 GYM_CONTRACT_FIELDS 白名單欄位（比照 bank-accounts/member，不外洩 updatedBy 等內部欄位）。
+router.get('/gym-contracts/member', async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('systemSettings').doc('gymContracts').get();
+    const data = snap.exists ? snap.data() : {};
+    const safe = {};
+    Object.entries(data).forEach(([gymId, info]) => {
+      const entry = {};
+      GYM_CONTRACT_FIELDS.forEach(k => { entry[k] = info[k] || ''; });
+      safe[gymId] = entry;
+    });
+    res.json({ contracts: safe });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /settings/entry-types ────────────────────────────────────
 router.get('/entry-types', async (req, res) => {
   try {

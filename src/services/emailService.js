@@ -285,13 +285,13 @@ const buildAttendeeProfileReminder = (participants) => {
         </div>`;
 };
 
-const sendExperienceBookingReceived = async (memberEmail, memberName, booking, { bank, cc, insuranceFee = 175 } = {}) => {
+// booking.kind==='trial' 走專屬內容（2026-09-07，同 sendExperienceBookingConfirmation 分支原則）：
+// 加課程名稱、單一試上費（不套一般體驗的人數×單價與保險加總）、繳費期限（trial 有明確 deadline，
+// 逾期名額會釋出）；只有訪客（無帳號）試上才顯示「請註冊會員」提醒，已登入會員/選定子女報名時
+// 本就已有帳號，顯示會很奇怪。
+const sendExperienceBookingReceived = async (memberEmail, memberName, booking, { bank, cc, insuranceFee = 175, deadline } = {}) => {
   const gymName = booking.gymId === 'gym-hsinchu' ? '新竹館' : '士林館';
-  const total = Number(booking.totalFee) || 0;
-  const nP = Number(booking.numParticipants) || 0;
-  const insTotal = nP * insuranceFee; // 保險費（已含在 total 內，僅標示）
   const money = (n) => `NT$${Number(n || 0).toLocaleString()}`;
-  const attendeeReminderBlock = buildAttendeeProfileReminder(booking.participants);
   const bankBlock = bank ? `
         <div style="background:#FBF5F5;border:1px solid #E8D5D5;border-radius:8px;padding:16px;margin:12px 0">
           <div style="font-weight:600;color:#8B1A1A;margin-bottom:6px">匯款帳號（${gymName}）</div>
@@ -299,6 +299,40 @@ const sendExperienceBookingReceived = async (memberEmail, memberName, booking, {
           <div><strong>帳號：</strong>${esc(bank.account || '')}</div>
           <div><strong>戶名：</strong>${esc(bank.accountName || '')}</div>
         </div>` : '';
+  if (booking.kind === 'trial') {
+    const deadlineText = deadline ? require('dayjs')(deadline).format('MM/DD HH:mm') : '';
+    const attendeeReminderBlock = booking.isGuest ? buildAttendeeProfileReminder(booking.participants) : '';
+    return sendEmail({
+      to: memberEmail,
+      cc: cc || undefined,
+      subject: '【紅石攀岩】試上預約成功，請完成匯款',
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+          <h2 style="color:#8B1A1A">試上預約成功</h2>
+          <p>親愛的 ${esc(memberName)}，</p>
+          <p>已收到您報名的<strong>「${esc(booking.courseName || '')}」</strong>試上，請於${deadlineText ? `<strong> ${deadlineText} 前</strong>` : ' <strong>期限內</strong>'}完成匯款；館方確認收款後將再寄出正式確認信，逾期名額將釋出。</p>
+          <div style="background:#F7F3F3;border-radius:8px;padding:16px;margin:16px 0">
+            <div><strong>課程：</strong>${esc(booking.courseName || '')}</div>
+            <div><strong>日期：</strong>${esc(booking.bookingDate)}</div>
+            <div><strong>時間：</strong>${esc(booking.bookingTime)}</div>
+            <div><strong>場館：</strong>${gymName}</div>
+          </div>
+          <div style="background:#FFF6E9;border:1px solid #E0C08A;border-radius:8px;padding:16px;margin:12px 0">
+            <div style="font-size:16px;color:#8B1A1A"><strong>應繳試上費：${money(booking.totalFee)}</strong></div>
+          </div>
+          <p style="font-size:13px;color:#666">試上為常態課程單堂體驗，<strong>保險請自行投保</strong>，費用不含在試上費之中。</p>
+          ${attendeeReminderBlock}
+          ${bankBlock}
+          <p style="font-size:13px;color:#666">匯款後請保留末五碼，或回覆本信告知，以利館方核對收款。</p>
+          <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
+        </div>
+      `,
+    });
+  }
+  const total = Number(booking.totalFee) || 0;
+  const nP = Number(booking.numParticipants) || 0;
+  const insTotal = nP * insuranceFee; // 保險費（已含在 total 內，僅標示）
+  const attendeeReminderBlock = buildAttendeeProfileReminder(booking.participants);
   return sendEmail({
     to: memberEmail,
     cc: cc || undefined,

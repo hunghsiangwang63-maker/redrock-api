@@ -153,6 +153,24 @@ async function handleTrialBooking(req, res, db, memberId) {
     } catch (e) { console.error('訪客試上轉帳待收款建立失敗', e.message); }
   }
 
+  // 報名收到 → 寄「繳費通知」給聯絡人（cc 該館）；候補/免費不寄（候補尚不用繳費）。
+  // 非同步、失敗不阻斷（2026-09-07：試上原本從未寄過此信，比照一般體驗補齊）。
+  if (!isWaitlist && trialFee > 0 && trialEmail) {
+    try {
+      const _settingsDoc = await db.collection('systemSettings').doc('experienceCourses').get();
+      const _settings = _settingsDoc.exists ? _settingsDoc.data() : defaultSettings();
+      const _bankKey = session.gymId === 'gym-hsinchu' ? 'hsinchu' : 'shilin';
+      const _bank = (_settings.bankInfo || _settings.bank || {})[_bankKey] || null;
+      const _gymDoc = await db.collection('gyms').doc(session.gymId).get();
+      const _gymCc = _gymDoc.exists ? _gymDoc.data().email : undefined;
+      emailService.sendExperienceBookingReceived(
+        trialEmail, trialName,
+        { kind: 'trial', courseName: session.courseName, bookingDate: session.date, bookingTime: `${session.startTime || ''}~${session.endTime || ''}`, gymId: session.gymId, totalFee: trialFee, isGuest: isGuestTrial, participants: [{ name: trialName }] },
+        { bank: _bank, cc: _gymCc, deadline: paymentDeadline },
+      ).catch(e => console.error('[Email] 試上報名通知', e.message));
+    } catch (e) { console.error('[Email] 試上報名通知', e.message); }
+  }
+
   return res.status(201).json({
     success:true, id, isTrial:true, totalFee: trialFee,
     isWaitlist, paymentDeadline: paymentDeadline.toISOString(),

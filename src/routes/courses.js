@@ -2352,44 +2352,70 @@ async function handleEnrollAll(req, res) {
 
       // 報名收到通知信（非候補；非同步、失敗不阻斷；運動按摩不附匯款帳號）
       // 訪客沒有會員文件可查 email，直接帶 to 覆蓋（notifyRegReceived 的 to 優先於用 memberId 查會員 email）
+      // 2026-09-07 起：週課（非工作坊）不再獨立寄「課程服務同意書」信，改把 PDF 當附件夾進本信一起寄出；
+      // 場次清單同步改列「整梯完整場次」（含已停課、標紅「（停課）」），標頭堂數只算未停課的那幾堂。
       if (!isWaitlist) {
-        const _rn = require('../services/registrationNotify');
-        // 分期時通知信「應繳金額」改顯示第一期（簽約當下實收），避免誤導成要一次繳全期總額
-        const _instInfo = coursePlan ? { firstAmount: coursePlan.installments[0].amount, totalAmount: coursePlan.totalAmount, totalPeriods: coursePlan.installments.length } : null;
-        _rn.notifyRegReceived({
-          memberId, memberName: req.body.memberName || req.member?.name || '', // 同上，優先用報名對象本名
-          to: isGuestEnroll ? (req.body._guestEmail || null) : undefined,
-          typeLabel: course.type === 'workshop' ? '工作坊' : '課程',
-          itemName: course.name, gymId: futureSessions[0].gymId || gymId,
-          fee: req.body.deferPayment ? 0 : (_instInfo ? _instInfo.firstAmount : fee), paymentMethod,
-          massage: _rn.isMassage(course.name),
-          sessions: futureSessions.map(s => ({ date: s.date, startTime: s.startTime, endTime: s.endTime })),
-          installmentInfo: _instInfo,
-        });
-      }
-
-      // 課程服務同意書（合約）PDF——僅週課（非工作坊/體驗）、非候補；非同步、失敗不阻斷報名本身。
-      // 退費手續費率比照 getCourses() 同一套算法（resolveRules，班別繼承+梯次覆寫）——handleEnrollAll 的
-      // course 為原始 Firestore 文件（未經 getCourses 附掛），本身沒有 refundFeeRate 欄位，故另算一次；
-      // category 沿用本函式上方（防呆用）已查過的同一份，避免重複讀 Firestore。
-      if (!isWaitlist && course.type !== 'workshop') {
         (async () => {
           try {
-            const contractRules = courseService.resolveRules(course, category);
-            await require('../services/courseContractService').issueCourseContract({
-              memberId, memberName: req.body.memberName || req.member?.name || '',
-              isGuest: isGuestEnroll,
-              guestEmail: isGuestEnroll ? (req.body._guestEmail || null) : null,
-              guestPhone: isGuestEnroll ? (req.body._guestPhone || null) : null,
-              guestBirthday: isGuestEnroll ? (req.body._guestBirthday || null) : null,
-              course, futureSessions, fee, paymentMethod, coursePlan,
-              refundFeeRate: contractRules.handlingFeeRate ?? 0.2,
-              refundPreStartFeeRate: contractRules.preStartFeeRate ?? 0,
-              gymId: futureSessions[0].gymId || gymId,
-              portraitSignature: req.body.portraitSignature || null,
-              guardianSignature: req.body.guardianSignature || null,
+            const _rn = require('../services/registrationNotify');
+            // 分期時通知信「應繳金額」改顯示第一期（簽約當下實收），避免誤導成要一次繳全期總額
+            const _instInfo = coursePlan ? { firstAmount: coursePlan.installments[0].amount, totalAmount: coursePlan.totalAmount, totalPeriods: coursePlan.installments.length } : null;
+            let notifySessions = futureSessions.map(s => ({ date: s.date, startTime: s.startTime, endTime: s.endTime }));
+            let attachments;
+            let contractId = null;
+
+            if (course.type !== 'workshop') {
+              // 整梯完整場次（含已停課）：不受「本次報名涵蓋場次」限制，另查一次該課程全部場次
+              try {
+                const allSnap = await db.collection('courseSessions').where('courseId', '==', courseId).get();
+                notifySessions = allSnap.docs
+                  .map(d => d.data())
+                  .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.startTime || '').localeCompare(b.startTime || ''))
+                  .map(s => ({ date: s.date, startTime: s.startTime, endTime: s.endTime, cancelled: s.status === 'cancelled' }));
+              } catch (e) { console.error('[課程合約] 整梯場次查詢失敗（改以本次報名場次顯示）:', e.message); }
+
+              // 課程服務同意書（合約）PDF——退費手續費率比照 getCourses() 同一套算法（resolveRules，
+              // 班別繼承+梯次覆寫）；category 沿用本函式上方（防呆用）已查過的同一份，避免重複讀 Firestore。
+              try {
+                const contractRules = courseService.resolveRules(course, category);
+                const contractResult = await require('../services/courseContractService').issueCourseContract({
+                  memberId, memberName: req.body.memberName || req.member?.name || '',
+                  isGuest: isGuestEnroll,
+                  guestEmail: isGuestEnroll ? (req.body._guestEmail || null) : null,
+                  guestPhone: isGuestEnroll ? (req.body._guestPhone || null) : null,
+                  guestBirthday: isGuestEnroll ? (req.body._guestBirthday || null) : null,
+                  course, futureSessions, fee, paymentMethod, coursePlan,
+                  refundFeeRate: contractRules.handlingFeeRate ?? 0.2,
+                  refundPreStartFeeRate: contractRules.preStartFeeRate ?? 0,
+                  gymId: futureSessions[0].gymId || gymId,
+                  portraitSignature: req.body.portraitSignature || null,
+                  guardianSignature: req.body.guardianSignature || null,
+                  attachOnly: true,
+                });
+                contractId = contractResult?.contractId || null;
+                if (contractResult?.pdfBuffer) {
+                  attachments = [{ filename: `課程服務同意書_${course.name}.pdf`, content: contractResult.pdfBuffer.toString('base64') }];
+                }
+              } catch (e) { console.error('[課程合約] 呼叫失敗:', e.message); }
+            }
+
+            await _rn.notifyRegReceived({
+              memberId, memberName: req.body.memberName || req.member?.name || '', // 同上，優先用報名對象本名
+              to: isGuestEnroll ? (req.body._guestEmail || null) : undefined,
+              typeLabel: course.type === 'workshop' ? '工作坊' : '課程',
+              itemName: course.name, gymId: futureSessions[0].gymId || gymId,
+              fee: req.body.deferPayment ? 0 : (_instInfo ? _instInfo.firstAmount : fee), paymentMethod,
+              massage: _rn.isMassage(course.name),
+              sessions: notifySessions,
+              installmentInfo: _instInfo,
+              attachments,
             });
-          } catch (e) { console.error('[課程合約] 呼叫失敗:', e.message); }
+
+            // 稽核紀錄（非精確驗證寄信是否真的送達，比照本專案既有樂觀標記慣例）：附件已交給寄信函式，樂觀標記已寄出。
+            if (contractId) {
+              db.collection('courseContracts').doc(contractId).update({ emailedAt: new Date(), emailedVia: 'registration-notification' }).catch(() => {});
+            }
+          } catch (e) { console.error('[報名通知/合約] 整體流程失敗:', e.message); }
         })();
       }
 

@@ -7,6 +7,12 @@ const { isMinor } = require('../utils/age');
 const { buildCourseContractPdfBuffer } = require('../utils/courseContractPdf');
 const { sendCourseContractPdf } = require('./emailService');
 
+const resolveGymEmail = async (db, gymId) => {
+  if (!gymId) return null;
+  const d = await db.collection('gyms').doc(gymId).get();
+  return d.exists ? (d.data().email || null) : null;
+};
+
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
 
 // 未成年學員的法定代理人姓名：自助註冊未成年會員存 parentName；子帳號（isChildAccount）則反查家長會員的姓名。
@@ -42,12 +48,16 @@ async function resolveGuardianName(db, member) {
  * @param {string} [o.guardianSignature] 法定代理人簽名（未成年才有）
  * @param {boolean} [o.dryRun] true 時只解析欄位＋產生 PDF 就回傳（不上傳 Storage／不寫 courseContracts／不寄信），
  *   且錯誤會直接 throw 給呼叫端（供預覽/測試用；正式報名流程呼叫時不要帶這個參數）。
+ * @param {boolean} [o.attachOnly] true 時建立 PDF＋上傳 Storage＋寫 courseContracts 稽核紀錄（emailTo 有值、
+ *   emailedAt 留空），但不在此處自己寄信——回傳 {contractId, pdfBuffer, email} 供呼叫端把 PDF 當附件
+ *   夾進「課程報名成功通知信」一起寄出（2026-09-07 起：課程合約不再獨立寄送，改附於報名通知信；
+ *   呼叫端寄出成功後應自行把該 contractId 的 emailedAt 補上）。錯誤仍會 throw（同 dryRun）。
  */
 const issueCourseContract = async ({
   memberId, memberName, isGuest, guestEmail, guestPhone, guestBirthday,
   course, futureSessions, fee, paymentMethod, coursePlan,
   refundFeeRate, refundPreStartFeeRate, gymId,
-  portraitSignature, guardianSignature, dryRun,
+  portraitSignature, guardianSignature, dryRun, attachOnly,
 }) => {
   const db = getDb();
 
@@ -124,6 +134,31 @@ const issueCourseContract = async ({
 
   if (dryRun) return build(); // 供預覽/測試：不吞錯誤、不觸發任何上傳/寫入/寄信
 
+  if (attachOnly) {
+    // 供「附於報名成功通知信」用：建檔＋上傳＋稽核紀錄，不在此處寄信（呼叫端寄出後自行補 emailedAt）
+    const { pdfBuffer, email } = await build();
+    const contractId = uuidv4();
+    let pdfUrl = null;
+    try {
+      const bucket = getStorage().bucket();
+      const file = bucket.file(`course-contracts/${contractId}.pdf`);
+      await file.save(pdfBuffer, { contentType: 'application/pdf' });
+      const [url] = await file.getSignedUrl({ action: 'read', expires: '2035-01-01' });
+      pdfUrl = url;
+    } catch (e) {
+      console.error('[課程合約] 上傳 Storage 失敗（仍會回傳 PDF 附件供寄信）:', e.message);
+    }
+    await db.collection('courseContracts').doc(contractId).set({
+      id: contractId,
+      memberId, memberName, isGuest: !!isGuest,
+      courseId: course.id, courseName: course.name, gymId,
+      fee, paymentMethod,
+      pdfUrl, emailTo: email || null,
+      createdAt: new Date(),
+    });
+    return { contractId, pdfBuffer, email };
+  }
+
   try {
     const { pdfBuffer, email } = await build();
 
@@ -150,7 +185,8 @@ const issueCourseContract = async ({
 
     if (email) {
       try {
-        await sendCourseContractPdf({ to: email, memberName, courseName: course.name, pdfBuffer });
+        const cc = [await resolveGymEmail(db, gymId)].filter(Boolean);
+        await sendCourseContractPdf({ to: email, cc, memberName, courseName: course.name, pdfBuffer });
         await db.collection('courseContracts').doc(contractId).update({ emailedAt: new Date() });
       } catch (e) {
         console.error('[課程合約] 寄信失敗:', e.message);

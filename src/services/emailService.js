@@ -310,13 +310,20 @@ const fmtRegSession = (s) => {
   const time = s.startTime ? `${s.startTime}${s.endTime ? `–${s.endTime}` : ''}` : '';
   return `${md}${wd ? `（${wd}）` : ''}${time ? ` ${time}` : ''}`.trim();
 };
-// 場次清單區塊（sessions＝[{date,startTime,endTime}]，已排序）
+// 場次清單區塊（sessions＝[{date,startTime,endTime,cancelled?}]，已排序）
+// 2026-09-07：支援已停課場次——整梯完整場次都列出（含已停課），已停課的紅字標「（停課）」；
+// 標頭堂數只算未停課的（=course.totalSessions 語意），不含已停課那幾堂。
 const regSessionsBlock = (sessions) => {
   if (!Array.isArray(sessions) || !sessions.length) return '';
-  const rows = sessions.map(s => `<div>${esc(fmtRegSession(s))}</div>`).join('');
+  const validCount = sessions.filter(s => !s.cancelled).length;
+  const rows = sessions.map(s => s.cancelled
+    ? `<div style="color:#C0392B">${esc(fmtRegSession(s))}（停課）</div>`
+    : `<div>${esc(fmtRegSession(s))}</div>`
+  ).join('');
+  const countLabel = validCount < sessions.length ? `共 ${validCount} 堂，不含已停課場次` : `共 ${validCount} 堂`;
   return `
         <div style="background:#F7F3F3;border-radius:8px;padding:16px;margin:12px 0;font-size:13px;line-height:1.9;text-align:left">
-          <div style="font-weight:600;color:#8B1A1A;margin-bottom:6px">課程場次（共 ${sessions.length} 堂）</div>
+          <div style="font-weight:600;color:#8B1A1A;margin-bottom:6px">課程場次（${countLabel}）</div>
           ${rows}
         </div>`;
 };
@@ -324,7 +331,7 @@ const regSessionsBlock = (sessions) => {
 // 報名收到 → 請完成繳費（transfer 且有 bank 才顯示匯款帳號；cash 顯示櫃檯繳費；bank=null 不顯示帳號）
 // installmentInfo：{firstAmount, totalAmount, totalPeriods} — 有分期時 fee 傳入的已是「第一期」金額，
 // 這裡只是額外標明全期總額，避免會員誤以為 fee 就是全部要繳清的金額
-const sendRegistrationReceived = async (to, { cc, typeLabel, memberName, itemName, gymId, fee, paymentMethod, bank, sessions, installmentInfo } = {}) => {
+const sendRegistrationReceived = async (to, { cc, typeLabel, memberName, itemName, gymId, fee, paymentMethod, bank, sessions, installmentInfo, attachments } = {}) => {
   const gymName = REG_GYM_LABEL[gymId] || '';
   const money = (n) => `NT$${Number(n || 0).toLocaleString()}`;
   const isTransfer = paymentMethod === 'transfer';
@@ -342,6 +349,10 @@ const sendRegistrationReceived = async (to, { cc, typeLabel, memberName, itemNam
           <div><strong>帳號：</strong>${esc(bank.account || '')}</div>
           <div><strong>戶名：</strong>${esc(bank.accountName || '')}</div>
         </div>` : '';
+  // 2026-09-07：課程報名（週課，非工作坊）附課程服務同意書 PDF——不再另外獨立寄送，直接附於本信。
+  const contractNote = (Array.isArray(attachments) && attachments.length)
+    ? '<p style="font-size:13px;color:#666">附件為本次報名之課程服務同意書 PDF（依報名資訊自動產生），請妥善保存。</p>'
+    : '';
   return sendEmail({
     to, cc: (cc && cc.length) ? cc : undefined,
     subject: `【紅石攀岩】${typeLabel}報名成功${hasFee ? '，請完成繳費' : ''}`,
@@ -352,9 +363,11 @@ const sendRegistrationReceived = async (to, { cc, typeLabel, memberName, itemNam
         <p>已收到您的${esc(typeLabel)}報名：<strong>「${esc(itemName)}」</strong>${gymName ? `（${gymName}）` : ''}。${(isTransfer && hasFee) ? '館方確認收款後將再寄出確認信。' : ''}</p>
         ${regSessionsBlock(sessions)}${payBlock}${bankBlock}
         ${(isTransfer && bank) ? '<p style="font-size:13px;color:#666">匯款後請保留末五碼，或於「我的課程／我的比賽」上傳，以利館方核對。</p>' : ''}
+        ${contractNote}
         <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
       </div>
     `,
+    attachments: (Array.isArray(attachments) && attachments.length) ? attachments : undefined,
   });
 };
 

@@ -8,6 +8,12 @@ const { isMinor } = require('../utils/age');
 const { buildPassContractPdfBuffer } = require('../utils/passContractPdf');
 const { sendPassContractPdf } = require('./emailService');
 
+const resolveGymEmail = async (db, gymId) => {
+  if (!gymId) return null;
+  const d = await db.collection('gyms').doc(gymId).get();
+  return d.exists ? (d.data().email || null) : null;
+};
+
 // 未成年會員的法定代理人姓名：自助註冊未成年會員存 parentName；子帳號（isChildAccount）則反查家長會員的姓名。
 async function resolveGuardianName(db, member) {
   if (!member) return '';
@@ -111,7 +117,8 @@ const issuePassContract = async ({
 
     if (email) {
       try {
-        await sendPassContractPdf({ to: email, memberName, passTypeName, pdfBuffer });
+        const cc = [await resolveGymEmail(db, gymId)].filter(Boolean);
+        await sendPassContractPdf({ to: email, cc, memberName, passTypeName, pdfBuffer });
         await db.collection('passContracts').doc(contractId).update({ emailedAt: new Date() });
       } catch (e) {
         console.error('[定期票合約] 寄信失敗:', e.message);

@@ -9,6 +9,19 @@ const courseService = require('../services/courseService');
 const courseRegistrationService = require('../services/courseRegistrationService');
 const { recordTransaction } = require('../utils/revenueLedger');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
+const { REQUEST_REASONS } = require('../services/adjustmentReasons');
+const { isChild, isMinor } = require('../utils/age');
+
+// 課程轉讓手續費——與定期票轉讓（passAdjustmentService.js TRANSFER_FEE）同為 600 元，純記錄用途，
+// 不透過任何 ledger 交易實際收取（比照定期票既有作法：轉讓費由館方另行現場收取，系統只記錄留痕）。
+const COURSE_TRANSFER_FEE = 600;
+
+// ══════════════════════════════════════════════════════
+// GET /course-adjustments/reasons - 暫停/退費/轉讓申請理由清單（同定期票 REQUEST_REASONS 共用）
+// ══════════════════════════════════════════════════════
+router.get('/reasons', authenticateAny, (req, res) => {
+  res.json({ reasons: REQUEST_REASONS });
+});
 
 // ══════════════════════════════════════════════════════
 // GET /course-adjustments/requests - 取得所有課程調整申請
@@ -31,10 +44,17 @@ router.get('/requests', authenticate, requireManagerOrStation, async (req, res) 
 // ══════════════════════════════════════════════════════
 router.post('/enrollments/:enrollmentId/refund-request',
   authenticateAny,
-  [body('reason').notEmpty().withMessage('請填寫退費原因')],
+  [body('reasonKey').notEmpty().withMessage('請選擇事由')],
   async (req, res) => {
     try {
       const db = getDb();
+      // 2026-09-07：理由改為結構化（同定期票 REQUEST_REASONS 六項共用清單），reasonDetail 為選填
+      // 補充說明（'other' 其他事由時可用來寫明實際原因）；reason 欄位保留（label+detail 組字串），
+      // 供既有讀取 request.reason 的畫面（如舊審核紀錄列表）不用跟著改。
+      const reasonMeta = REQUEST_REASONS.find(r => r.key === req.body.reasonKey);
+      if (!reasonMeta) return res.status(400).json({ error: 'INVALID_REASON', message: '請選擇事由' });
+      const reasonDetail = String(req.body.reasonDetail || '').trim();
+      const reasonText = reasonMeta.label + (reasonDetail ? `：${reasonDetail}` : '');
       // 支援家長代子女：優先用 body.memberId（前端傳報名對象），驗擁有權；否則用登入者本人
       const memberId = req.body.memberId || req.member?.id;
       const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
@@ -176,7 +196,8 @@ router.post('/enrollments/:enrollmentId/refund-request',
         totalSessions, heldSessions, remainingSessions, remainingValue, feeRate, fee, // 政府公式明細（週課專用，工作坊為 null）
         perSessionDeduction,
         handlingFeeRate,
-        reason: req.body.reason,
+        reasonKey: req.body.reasonKey, reasonLabel: reasonMeta.label, reasonDetail,
+        reason: reasonText,
         status: 'pending',
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -199,10 +220,14 @@ router.post('/enrollments/:enrollmentId/refund-request',
 // ══════════════════════════════════════════════════════
 router.post('/enrollments/:enrollmentId/pause-request',
   authenticateAny,
-  [body('reason').notEmpty().withMessage('請填寫暫停原因')],
+  [body('reasonKey').notEmpty().withMessage('請選擇事由')],
   async (req, res) => {
     try {
       const db = getDb();
+      const reasonMeta = REQUEST_REASONS.find(r => r.key === req.body.reasonKey);
+      if (!reasonMeta) return res.status(400).json({ error: 'INVALID_REASON', message: '請選擇事由' });
+      const reasonDetail = String(req.body.reasonDetail || '').trim();
+      const reasonText = reasonMeta.label + (reasonDetail ? `：${reasonDetail}` : '');
       // 支援家長代子女：優先 body.memberId + 驗擁有權
       const memberId = req.body.memberId || req.member?.id;
       const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
@@ -253,12 +278,104 @@ router.post('/enrollments/:enrollmentId/pause-request',
         courseName: enrollment.courseName || course?.name || '',
         memberId: enrollment.memberId,
         memberName: enrollment.memberName || '',
-        reason: req.body.reason,
+        reasonKey: req.body.reasonKey, reasonLabel: reasonMeta.label, reasonDetail,
+        reason: reasonText,
         status: 'pending',
         createdAt: new Date(),
         updatedAt: new Date(),
       });
       res.status(201).json({ success: true, requestId: reqId });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
+// ══════════════════════════════════════════════════════
+// POST /course-adjustments/enrollments/:enrollmentId/transfer-request
+// 2026-09-07 新增：課程轉讓申請，比照定期票轉讓（passAdjustmentService.js type==='transfer'）——
+// 手續費 600 元（僅記錄，館方現場另行收取，不透過 ledger 扣款）；轉讓對象須通過此課程原本的
+// 報名資格檢查（目前唯一既有規則：青少年類課程限未滿18歲，見 handleEnrollAll 的 YOUTH_COURSE_AGE_LIMIT）。
+// 核准後：把「尚未上課」的場次報名（含候補）改記到新會員名下（原場次文件直接過戶，不重建），
+// 原 header 標記 status:'transferred'（非 cancelled——歷史上並非取消，僅移轉；報表 status 篩選皆為
+// 明確列舉 ['confirmed','leave','waitlist'] 之類白名單，未知值天生不會被誤算進「目前有效」）並保留
+// 已上過的場次於原會員名下不動；為新會員另建一筆 header（fee:0——金流已由雙方私下結清，系統不重收）。
+// 較之定期票轉讓（單一文件直接過戶 memberId），課程受限於「每場次一筆」的既有資料模型，故做法不同；
+// 屬本次新增、無既有先例可完全比照，實作後請覆核轉讓後的名單/報表顯示是否符合預期。
+// ══════════════════════════════════════════════════════
+router.post('/enrollments/:enrollmentId/transfer-request',
+  authenticateAny,
+  [body('reasonKey').notEmpty().withMessage('請選擇事由'), body('transferToMemberId').notEmpty().withMessage('請選擇轉讓對象')],
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const reasonMeta = REQUEST_REASONS.find(r => r.key === req.body.reasonKey);
+      if (!reasonMeta) return res.status(400).json({ error: 'INVALID_REASON', message: '請選擇事由' });
+      const reasonDetail = String(req.body.reasonDetail || '').trim();
+      const reasonText = reasonMeta.label + (reasonDetail ? `：${reasonDetail}` : '');
+      const memberId = req.body.memberId || req.member?.id;
+      const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
+      if (deny) return res.status(deny.status).json(deny.body);
+
+      let courseId = req.params.enrollmentId;
+      const directDoc = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).doc(req.params.enrollmentId).get();
+      if (directDoc.exists) courseId = directDoc.data().courseId;
+
+      const allSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+        .where('courseId', '==', courseId)
+        .where('memberId', '==', memberId)
+        .where('status', 'in', ['confirmed', 'leave', 'waitlist'])
+        .get();
+      if (allSnap.empty) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到有效的報名記錄' });
+      const all = allSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (all.every(e => e.isMakeup || e.isTrial)) {
+        return res.status(400).json({ error: 'MAKEUP_NO_ADJUST', message: '補課／試上場次不可申請轉讓' });
+      }
+      const rep = all[0];
+      if (rep.pauseStatus === 'paused') return res.status(400).json({ error: 'IS_PAUSED', message: '暫停中的課程請先恢復再申請轉讓' });
+      if (rep.refundPending) return res.status(400).json({ error: 'REFUND_PENDING', message: '此課程退費申請審核中，暫不可申請轉讓' });
+
+      const dupSnap = await db.collection('courseAdjustmentRequests')
+        .where('courseId', '==', courseId).where('memberId', '==', memberId).get();
+      if (dupSnap.docs.some(d => d.data().status === 'pending')) {
+        return res.status(409).json({ error: 'REQUEST_PENDING', message: '此課程已有審核中的申請，請等待審核結果' });
+      }
+
+      // 驗證轉讓對象：存在、非本人；未滿13歲不可接收（與優惠卡/定期票轉讓一致）
+      if (req.body.transferToMemberId === memberId) return res.status(400).json({ error: 'CANNOT_TRANSFER_SELF', message: '不能轉讓給自己' });
+      const targetDoc = await db.collection(COLLECTIONS.MEMBERS).doc(req.body.transferToMemberId).get();
+      if (!targetDoc.exists) return res.status(404).json({ error: 'TARGET_MEMBER_NOT_FOUND', message: '找不到轉讓對象會員，請確認' });
+      const targetMember = targetDoc.data();
+      if (isChild(targetMember)) return res.status(400).json({ error: 'CHILD_NOT_ALLOWED', message: '未滿 13 歲無法接收課程轉讓' });
+
+      const courseDoc = await db.collection('courses').doc(courseId).get();
+      const course = courseDoc.exists ? courseDoc.data() : null;
+      // 課程本身的報名資格限制（目前唯一既有規則：青少年類課程限未滿18歲）也套用在轉讓對象身上，
+      // 避免轉讓後產生一筆不符資格的名單紀錄
+      if (course?.type === 'weekly' && course.categoryId) {
+        const category = await courseService.getCategoryOf(db, course.categoryId);
+        if (category?.group === 'youth' && !isMinor(targetMember)) {
+          return res.status(400).json({ error: 'YOUTH_COURSE_AGE_LIMIT', message: '此課程限未滿 18 歲學員，轉讓對象不符資格' });
+        }
+      }
+
+      const reqId = `ctransfer_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+      await db.collection('courseAdjustmentRequests').doc(reqId).set({
+        id: reqId,
+        type: 'transfer',
+        enrollmentId: rep.id,
+        courseId,
+        courseName: rep.courseName || course?.name || '',
+        gymId: rep.gymId || null,
+        memberId, memberName: rep.memberName || '',
+        transferToMemberId: req.body.transferToMemberId,
+        transferToName: targetMember.name || '',
+        transferToPhone: targetMember.phone || '',
+        reasonKey: req.body.reasonKey, reasonLabel: reasonMeta.label, reasonDetail,
+        reason: reasonText,
+        status: 'pending',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      res.status(201).json({ success: true, requestId: reqId, fee: COURSE_TRANSFER_FEE });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );
@@ -411,6 +528,64 @@ router.post('/requests/:id/approve',
           approvedBy: req.staff.id, approvedByName: req.staff.name, approvedAt: new Date(), updatedAt: new Date(),
         });
         return res.json({ success: true, message: `課程已暫停（${paused} 堂未來場次）` });
+      }
+
+      if (request.type === 'transfer') {
+        const targetDoc = await db.collection(COLLECTIONS.MEMBERS).doc(request.transferToMemberId).get();
+        if (!targetDoc.exists) return res.status(404).json({ error: 'TARGET_MEMBER_NOT_FOUND', message: '找不到轉讓對象會員，請確認' });
+        const targetMember = targetDoc.data();
+        if (isChild(targetMember)) return res.status(400).json({ error: 'CHILD_NOT_ALLOWED', message: '未滿 13 歲無法接收課程轉讓' });
+        const courseDoc = await db.collection('courses').doc(request.courseId).get();
+        const course = courseDoc.exists ? courseDoc.data() : null;
+        if (course?.type === 'weekly' && course.categoryId) {
+          const category = await courseService.getCategoryOf(db, course.categoryId);
+          if (category?.group === 'youth' && !isMinor(targetMember)) {
+            return res.status(400).json({ error: 'YOUTH_COURSE_AGE_LIMIT', message: '此課程限未滿 18 歲學員，轉讓對象不符資格' });
+          }
+        }
+
+        const today = taiwanToday();
+        const now = new Date();
+        // 過戶「尚未上課」的場次報名（含候補）——已上過的堂維持在原會員名下（歷史出席不可轉讓）
+        const snap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+          .where('courseId', '==', request.courseId)
+          .where('memberId', '==', request.memberId)
+          .where('status', 'in', ['confirmed', 'leave', 'waitlist'])
+          .get();
+        const toTransfer = snap.docs.filter(d => !(d.data().date && d.data().date < today) && !d.data().isMakeup && !d.data().isTrial);
+        const batch = db.batch();
+        toTransfer.forEach(d => batch.update(d.ref, {
+          memberId: request.transferToMemberId, memberName: targetMember.name || '',
+          transferredFrom: request.memberId, transferredFromName: request.memberName || '',
+          transferredAt: dayjs(now).format('YYYY-MM-DD'), updatedAt: now,
+        }));
+        await batch.commit();
+
+        // header：原 header 標記 transferred（非 cancelled，供稽核區分「轉讓」與「取消」）；
+        // 新會員另建一筆 header 承接（fee:0——轉讓費由館方現場另收，系統不重複記帳）
+        try {
+          const hSnap = await db.collection('courseRegistrations')
+            .where('courseId', '==', request.courseId).where('memberId', '==', request.memberId).get();
+          const oldHeader = hSnap.docs.find(d => d.data().status !== 'cancelled' && d.data().status !== 'transferred');
+          if (oldHeader) {
+            const oh = oldHeader.data();
+            await oldHeader.ref.update({ status: 'transferred', transferredTo: request.transferToMemberId, transferredToName: targetMember.name || '', updatedAt: now });
+            await courseRegistrationService.createRegistrationHeader(db, {
+              memberId: request.transferToMemberId, memberName: targetMember.name || '',
+              courseId: request.courseId, courseName: request.courseName || oh.courseName || '',
+              gymId: request.gymId || oh.gymId || null,
+              status: 'confirmed', fee: 0, paymentMethod: oh.paymentMethod || null, paymentStatus: 'confirmed',
+              sourceEnrollmentIds: toTransfer.map(d => d.id),
+              enrolledBy: request.transferToMemberId,
+            });
+          }
+        } catch (e) { console.error('header 轉讓同步失敗（場次已過戶）:', e.message); }
+
+        await db.collection('courseAdjustmentRequests').doc(req.params.id).update({
+          status: 'approved', transferredCount: toTransfer.length, fee: COURSE_TRANSFER_FEE,
+          approvedBy: req.staff.id, approvedByName: req.staff.name, approvedAt: new Date(), updatedAt: new Date(),
+        });
+        return res.json({ success: true, message: `課程已轉讓予 ${targetMember.name}（過戶 ${toTransfer.length} 堂未上場次），轉讓費 NT$${COURSE_TRANSFER_FEE} 請館方現場收取` });
       }
 
       res.status(400).json({ error: 'UNKNOWN_TYPE' });

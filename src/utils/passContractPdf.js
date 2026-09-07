@@ -7,15 +7,9 @@
 // 純版面元件（場館資料/框線/簽名欄/字型）與課程合約共用，見 contractPdfShared.js。
 const fs = require('fs');
 const {
-  getPrinter, money, sectionHeader, fieldTable, gymInfoBlock, partyBox, signatureCell, paymentBlock,
+  getPrinter, money, sectionHeader, fieldTable, gymInfoBlock, partyBox, signatureCell, paymentBlock, termsSections,
   ACCENT, CELL_BORDER, LABEL_BG, CM_TO_PT, VENDOR_SIGNATURE_PATH,
 } = require('./contractPdfShared');
-
-// ⚠️ 2026-09-07 待確認：使用者提供的合約模板寫轉讓手續費 600 元，但系統 passAdjustmentService.js
-// 現行 TRANSFER_FEE 實際收 300 元——使用者已拍板「先不用（改系統），記下來待確認」，故本檔暫時
-// 沿用系統現行的 300 元（與實際收費一致，避免合約承諾與實際收費不符）。若之後確認要改 600，
-// 這裡與 passAdjustmentService.js 的 TRANSFER_FEE 需一併更新。
-const TRANSFER_FEE_PENDING_CONFIRM = 300;
 
 const SCOPE_LABEL = { shared: '全館', 'gym-hsinchu': '新竹館', 'gym-shilin': '士林館' };
 
@@ -57,47 +51,11 @@ function passContentBlock({ passTypeName, scope, targetGymId, startDate, endDate
   return [sectionHeader('定期票服務內容'), fieldTable(rows, 110)];
 }
 
-function passTermsBlock() {
-  const T = 8.5;
-  return [
-    sectionHeader('相關條款及注意事項(符合 111 年體育局所制定定型化契約內容相關規範)'),
-    { text: '1. 服務相關條款皆有三天審閱期，未開始使用前可全額退費。', margin: [0, 1, 0, 1], fontSize: T },
-    { text: '2. 乙方於營業時間內，應提供下列服務內容：', margin: [0, 1, 0, 1], fontSize: T },
-    { ul: ['合格可供正常使用之運動器材設備、中文標示及使用說明。', '各種設備於明顯處所張貼不當使用可能產生危險之警告標示及緊急處理危險方法之說明。'], margin: [10, 0, 0, 3], fontSize: T },
-    { text: '3. 乙方除經甲方同意外，不得調高上述已約定之費用。', margin: [0, 1, 0, 3], fontSize: T },
-    { text: '4. 甲方若遇以下事項可辦理暫停與展延，甲方須事先提出相關文件證明/釋明下列事由之一者，乙方應於七工作日內辦理暫停會籍，會籍有效期間順延：', margin: [0, 1, 0, 1], fontSize: T },
-    {
-      ul: [
-        '出國逾一個月。',
-        '受傷、疾病或身體不適致不宜運動。',
-        '懷孕、育嬰、侍親之需要。',
-        '服兵役致難以履約。',
-        '職務異動或遷居致難以履約。',
-        '其他事由致難以履約',
-      ], margin: [10, 0, 0, 3], fontSize: T,
-    },
-    { text: '5. 契約終止', margin: [0, 1, 0, 1], fontSize: T },
-    {
-      ul: [
-        '可歸責甲方事由之契約終止，扣除手續費 600 元後，依未到期時間比例計算餘額退還予甲方，退款於 10 個工作天內匯入甲方指定之金融帳戶。',
-        '不可歸責甲方事由之契約終止，不扣除手續費，依未到期時間比例計算餘額退還予甲方，退款於 10 個工作天內匯入甲方指定之金融帳戶。',
-      ], margin: [10, 0, 0, 3], fontSize: T,
-    },
-    { text: '6. 終止契約之通知：甲方得以線上填單通知乙方。', margin: [0, 1, 0, 3], fontSize: T },
-    { text: '7. 契約讓與第三人', margin: [0, 1, 0, 1], fontSize: T },
-    {
-      ul: [
-        '甲方於契約期間屆滿前經業者同意，得讓與契約予第三人，契約之內容不因讓與而受影響。',
-        `乙方以有約定者為限，得向甲方請求因處理前項讓與所生之必要費用 ${TRANSFER_FEE_PENDING_CONFIRM} 元。`,
-      ], margin: [10, 0, 0, 3], fontSize: T,
-    },
-    { text: '8. 乙方服務之異動通知：乙方所提供服務內容與時間如有異動，須事先通知，且應與原定開始服務時間相距24個小時以上，其通知方式約定如下：', margin: [0, 1, 0, 1], fontSize: T },
-    { ul: ['公告於乙方網：app.redrocktaiwan.com', '若乙方未依前項約定時間方式通知，甲方得請求乙方於限期 7 日內提供甲方同意之補償方案。'], margin: [10, 0, 0, 3], fontSize: T },
-    { text: '9. 贈品約款及其效果: 無贈品', margin: [0, 1, 0, 3], fontSize: T },
-    { text: '10. 會籍轉點：無轉點需求。', margin: [0, 1, 0, 3], fontSize: T },
-    { text: '11. 消費資訊及廣告：乙方之廣告，均為契約內容。乙方應確保其廣告內容真實，其對甲方所應負義務不得低於前項廣告內容。', margin: [0, 1, 0, 3], fontSize: T },
-    { text: '12. 合意管轄：因本契約發生訴訟時，雙方同意以新竹地方法院為第一審管轄法院，但不得排除消費者保護法第四十七條或民事訴訟法第二十八條第二項、第四百三十六條之九規定之小額訴訟管轄法院之適用。', margin: [0, 1, 0, 1], fontSize: T },
-  ];
+// 2026-09-07：條款文字改由 systemSettings/contractTerms 設定頁提供（見 passContractService.js
+// 呼叫端即時讀取、DEFAULT_PASS_TERMS 為 fallback），此處只負責樣板變數代入＋排版（termsSections）。
+// 轉讓手續費已由使用者拍板改為 600 元（與課程一致，2026-09-07 修正，取代原本的 300 元待確認註記）。
+function passTermsBlock({ sections, refundFee, transferFee }) {
+  return termsSections(sections, { refundFee: refundFee ?? 600, transferFee: transferFee ?? 600 });
 }
 
 function passSignatureBlock({ portraitSignature, guardianSignature, isMinor }) {

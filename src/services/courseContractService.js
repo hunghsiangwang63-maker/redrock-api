@@ -54,6 +54,11 @@ const issueCourseContract = async ({
   const build = async () => {
     const contractSnap = await db.collection('systemSettings').doc('gymContracts').get();
     const gymContract = (contractSnap.exists ? (contractSnap.data() || {}) : {})[gymId] || {};
+    // 合約條款文字（2026-09-07 起設定頁可編輯，二館共用）：即時讀取，無設定時 fallback 預設內容
+    const { DEFAULT_COURSE_TERMS } = require('../utils/contractTermsDefaults');
+    const termsSnap = await db.collection('systemSettings').doc('contractTerms').get();
+    const termsData = termsSnap.exists ? termsSnap.data() : {};
+    const sections = Array.isArray(termsData.course) ? termsData.course : DEFAULT_COURSE_TERMS;
 
     let phone = guestPhone || '';
     let email = guestEmail || '';
@@ -98,6 +103,7 @@ const issueCourseContract = async ({
       installments: coursePlan?.installments || null,
       refundFeeRate,
       refundPreStartFeeRate,
+      sections, transferFee: 600,
       portraitSignature: portraitSignature || null,
       guardianSignature: studentIsMinor ? (guardianSignature || null) : null,
     });

@@ -10,24 +10,22 @@
  * 業務規則（90日票適用範例，依館方公告為準）：
  * - 展延：以一次為限，展延期間不得逾6個月
  * - 退費：持發票辦理，扣除手續費NT$600後按剩餘天數比例退費（四捨五入），天數自退費日「隔日」起算
- * - 轉讓：手續費NT$300，原權益不變
+ * - 轉讓：手續費NT$600，原權益不變
  * - 三者擇一，且每張票限申請一次（年假批次展延不算在此限制內）
+ *
+ * 2026-09-07：轉讓手續費由 300 元更正為 600 元（與合約文字一致，passContractPdf.js/courseContractPdf.js
+ * 同步）；REQUEST_REASONS 六項理由與 courseAdjustmentService.js 共用同一份定義（見該檔 REQUEST_REASONS
+ * re-export），課程/定期票暫停・退費・轉讓申請單使用同一套理由清單。
  */
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
 const { v4: uuidv4 } = require('uuid');
 const { isChild } = require('../utils/age');
+const { REQUEST_REASONS } = require('./adjustmentReasons');
 
 const REFUND_FEE = 600;
-const TRANSFER_FEE = 300;
+const TRANSFER_FEE = 600;
 const MAX_EXTENSION_MONTHS = 6;
-
-const REQUEST_REASONS = [
-  { key:'abroad', label:'因出國逾2個月以上' },
-  { key:'health', label:'因傷害、疾病或身體不適致不宜運動' },
-  { key:'pregnancy', label:'因懷孕或有育養出生未逾6個月嬰兒之需要' },
-  { key:'relocation', label:'因職務異動或遷居致難以行使其權利' },
-];
 
 // ── 記錄一筆異動歷史（共用於所有異動類型）──────────────────────────
 const logAdjustment = async ({ passId, type, beforeData, afterData, reason, operatorId, operatorName, operatorType }) => {

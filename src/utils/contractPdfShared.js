@@ -143,7 +143,29 @@ function paymentBlock({ paymentMethod, installments }) {
   return content;
 }
 
+// 動態合約條款區塊（課程/定期票共用）——sections 來自 systemSettings/contractTerms（設定頁可編輯，
+// 見 routes/settings.js /contract-terms），每 section {title, body}；body 支援 {{token}} 樣板變數
+// （見 contractTermsDefaults.js fillTemplate）與「・」開頭轉條列的既有排版慣例。
+const { fillTemplate } = require('./contractTermsDefaults');
+function termsSections(sections, vars) {
+  const blocks = [sectionHeader('相關條款及注意事項(符合 111 年體育局所制定定型化契約內容相關規範)')];
+  (sections || []).forEach(s => {
+    blocks.push({ text: fillTemplate(s.title, vars), bold: true, fontSize: 9, margin: [0, 6, 0, 2] });
+    const lines = fillTemplate(s.body, vars).split('\n');
+    let bulletBuf = [];
+    const flush = () => { if (bulletBuf.length) { blocks.push({ ul: bulletBuf.slice(), margin: [10, 0, 0, 3], fontSize: 8.5 }); bulletBuf = []; } };
+    lines.forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      if (trimmed.startsWith('・')) bulletBuf.push(trimmed.slice(1).trim());
+      else { flush(); blocks.push({ text: trimmed, margin: [0, 1, 0, 1], fontSize: 8.5 }); }
+    });
+    flush();
+  });
+  return blocks;
+}
+
 module.exports = {
-  FONTS, getPrinter, money, sectionHeader, fieldTable, gymInfoBlock, partyBox, signatureCell, paymentBlock,
+  FONTS, getPrinter, money, sectionHeader, fieldTable, gymInfoBlock, partyBox, signatureCell, paymentBlock, termsSections,
   ACCENT, CELL_BORDER, LABEL_BG, CM_TO_PT, VENDOR_SIGNATURE_PATH, PAY_METHOD_LABEL,
 };

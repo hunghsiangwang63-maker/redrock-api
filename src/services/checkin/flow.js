@@ -457,6 +457,7 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
           passTypeName: pt.name, scope: pt.scope, targetGymId: pt.targetGymId || null,
           startDate, endDate, fee: buyPassPrice, paymentMethod: pending.paymentMethod,
           gymId: pending.gymId,
+          installments: passPlan?.installments || null, // 分期購買時合約 PDF 列「按月逐月繳」期別表（2026-09-07）
           portraitSignature: pending.passContractPortraitSignature || null,
           guardianSignature: pending.passContractGuardianSignature || null,
         });

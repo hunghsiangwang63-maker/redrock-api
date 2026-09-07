@@ -40,13 +40,18 @@ async function resolveGuardianName(db, member) {
  */
 const issuePassContract = async ({
   memberId, memberName, passTypeName, scope, targetGymId, startDate, endDate,
-  fee, paymentMethod, gymId, portraitSignature, guardianSignature, dryRun,
+  fee, paymentMethod, gymId, portraitSignature, guardianSignature, installments, dryRun,
 }) => {
   const db = getDb();
 
   const build = async () => {
     const contractSnap = await db.collection('systemSettings').doc('gymContracts').get();
     const gymContract = (contractSnap.exists ? (contractSnap.data() || {}) : {})[gymId] || {};
+    // 合約條款文字（2026-09-07 起設定頁可編輯，二館共用）：即時讀取，無設定時 fallback 預設內容
+    const { DEFAULT_PASS_TERMS } = require('../utils/contractTermsDefaults');
+    const termsSnap = await db.collection('systemSettings').doc('contractTerms').get();
+    const termsData = termsSnap.exists ? termsSnap.data() : {};
+    const sections = Array.isArray(termsData.pass) ? termsData.pass : DEFAULT_PASS_TERMS;
 
     const memberSnap = await db.collection('members').doc(memberId).get();
     const member = memberSnap.exists ? memberSnap.data() : null;
@@ -69,6 +74,8 @@ const issuePassContract = async ({
       passTypeName, scope, targetGymId, startDate, endDate,
       totalFee: fee,
       paymentMethod,
+      installments: installments || null, // 分期購買時列「按月逐月繳」期別表，比照課程合約（2026-09-07）
+      sections, refundFee: 600, transferFee: 600,
       portraitSignature: portraitSignature || null,
       guardianSignature: memberIsMinor ? (guardianSignature || null) : null,
     });

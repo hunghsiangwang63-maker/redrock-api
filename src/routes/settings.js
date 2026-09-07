@@ -110,6 +110,63 @@ router.get('/gym-contracts/member', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── 合約條款內容（課程/定期票，二館共用，非依 gymId）─────────────────────
+// systemSettings/contractTerms = { course: [{title,body}], pass: [{title,body}] }；尚未編輯過時
+// 回傳 contractTermsDefaults.js 的預設內容（與現行 courseContractPdf.js/passContractPdf.js 條款
+// 文字一致），確保設定頁第一次開啟時看到的就是「目前實際在用」的內容，而非空白。
+const { DEFAULT_COURSE_TERMS, DEFAULT_PASS_TERMS } = require('../utils/contractTermsDefaults');
+const CONTRACT_TERMS_TYPES = ['course', 'pass'];
+
+function validTermsArray(arr) {
+  return Array.isArray(arr) && arr.every(s => s && typeof s.title === 'string' && typeof s.body === 'string');
+}
+
+// GET /settings/contract-terms（員工端設定頁用）
+router.get('/contract-terms', authenticate, checkPermission('settings.manage'), async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('systemSettings').doc('contractTerms').get();
+    const data = snap.exists ? snap.data() : {};
+    res.json({
+      course: Array.isArray(data.course) ? data.course : DEFAULT_COURSE_TERMS,
+      pass: Array.isArray(data.pass) ? data.pass : DEFAULT_PASS_TERMS,
+      updatedAt: data.updatedAt || null, updatedBy: data.updatedByName || null,
+    });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// PUT /settings/contract-terms（限 super_admin——合約法律文字影響全站，不比照一般 settings.manage 開放場館管理員）
+router.put('/contract-terms', authenticate, async (req, res) => {
+  try {
+    if (req.staff.role !== 'super_admin') return res.status(403).json({ error: 'SUPER_ADMIN_REQUIRED', message: '僅系統管理員可編輯合約條款' });
+    const db = getDb();
+    const update = { updatedAt: new Date(), updatedBy: req.staff.id, updatedByName: req.staff.name || '' };
+    CONTRACT_TERMS_TYPES.forEach(k => {
+      if (req.body[k] === undefined) return;
+      if (!validTermsArray(req.body[k])) throw { code: 'INVALID_TERMS', message: `${k} 條款格式不正確（須為 [{title,body}] 陣列）` };
+      update[k] = req.body[k].map(s => ({ title: String(s.title || ''), body: String(s.body || '') }));
+    });
+    await db.collection('systemSettings').doc('contractTerms').set(update, { merge: true });
+    res.json({ message: '合約條款已更新' });
+  } catch (err) {
+    if (err.code === 'INVALID_TERMS') return res.status(400).json(err);
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+// GET /settings/contract-terms/member - 會員可取得（不需要 staff token），供報名/購票合約條款檢閱步驟
+router.get('/contract-terms/member', async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('systemSettings').doc('contractTerms').get();
+    const data = snap.exists ? snap.data() : {};
+    res.json({
+      course: Array.isArray(data.course) ? data.course : DEFAULT_COURSE_TERMS,
+      pass: Array.isArray(data.pass) ? data.pass : DEFAULT_PASS_TERMS,
+    });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /settings/entry-types ────────────────────────────────────
 router.get('/entry-types', async (req, res) => {
   try {

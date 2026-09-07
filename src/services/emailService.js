@@ -208,8 +208,36 @@ const sendInstallmentOverdueNotice = async ({ email, memberName, itemName, seq, 
   });
 };
 
-// ── 體驗課程確認信 ────────────────────────────────────────────────
+// ── 體驗課程確認信（試上 kind==='trial' 另走專屬內容，2026-09-07）───────────
+// 試上與一般體驗雖共用 experienceBookings 集合，但性質不同：試上是「特定課程單堂體驗」、
+// 單人報名、保險自理；一般體驗是「不限課程的多人抱石體驗」、依人數計費、保費含在總額內——
+// 沿用同一份內容會漏掉課程名稱、且誤植「保險已含」的說法（試上其實保險自理），故分開處理。
 const sendExperienceBookingConfirmation = async (memberEmail, memberName, booking, cc) => {
+  const gymName = booking.gymId === 'gym-hsinchu' ? '新竹館' : '士林館';
+  if (booking.kind === 'trial') {
+    return sendEmail({
+      to: memberEmail,
+      cc: cc || undefined,
+      subject: '【紅石攀岩】試上預約確認',
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+          <h2 style="color:#8B1A1A">試上預約確認</h2>
+          <p>親愛的 ${esc(memberName)}，</p>
+          <p>您報名的<strong>「${esc(booking.courseName || '')}」</strong>試上已確認收款！</p>
+          <div style="background:#E6F4EB;border-radius:8px;padding:16px;margin:16px 0">
+            <div><strong>課程：</strong>${esc(booking.courseName || '')}</div>
+            <div><strong>日期：</strong>${esc(booking.bookingDate)}</div>
+            <div><strong>時間：</strong>${esc(booking.bookingTime)}</div>
+            <div><strong>場館：</strong>${gymName}</div>
+            <div><strong>試上費：</strong>NT$${Number(booking.totalFee || 0).toLocaleString()}</div>
+          </div>
+          <p style="font-size:13px;color:#666">試上為常態課程單堂體驗，<strong>保險請自行投保</strong>，費用不含在試上費之中。</p>
+          <p>期待與您見面！如有疑問請聯繫館方。</p>
+          <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
+        </div>
+      `,
+    });
+  }
   return sendEmail({
     to: memberEmail,
     cc: cc || undefined,
@@ -222,7 +250,7 @@ const sendExperienceBookingConfirmation = async (memberEmail, memberName, bookin
         <div style="background:#E6F4EB;border-radius:8px;padding:16px;margin:16px 0">
           <div><strong>日期：</strong>${esc(booking.bookingDate)}</div>
           <div><strong>時間：</strong>${esc(booking.bookingTime)}</div>
-          <div><strong>場館：</strong>${booking.gymId === 'gym-hsinchu' ? '新竹館' : '士林館'}</div>
+          <div><strong>場館：</strong>${gymName}</div>
           <div><strong>人數：</strong>${esc(booking.numParticipants)} 人</div>
         </div>
         <p>期待與您見面！如有疑問請聯繫館方。</p>

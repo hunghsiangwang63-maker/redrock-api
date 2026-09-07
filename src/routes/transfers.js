@@ -351,8 +351,17 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
       // 比賽/課程/入隊「臨櫃現金」收款確認 → 金額寫入該館當日結帳加減項（＋現金補入，note＝人名＋活動名）
       if (pm === 'cash' && ['course', 'competition', 'team_member'].includes(t.orderType)) { // 用更正後的方式判斷（改成電子支付就不寫現金補入；改成現金則要寫）
         try {
+          // 工作坊保證金：t.amount 為「課程費用＋保證金」合計（見 courses.js dueThisTime），但保證金
+          // 已由上面獨立的「+保證金收取」記過一次（不管 t.amount 帶了什麼，恆讀 en.depositAmount）——
+          // 這裡只記「純課程費用」那一份，扣掉保證金再寫，避免同一筆保證金被兩個加減項各算一次。
+          let cashInAmount = t.amount;
+          if (t.orderType === 'course' && t.refId) {
+            const _enDoc = await db.collection('courseEnrollments').doc(t.refId).get();
+            const _depositAmt = _enDoc.exists ? (Number(_enDoc.data().depositAmount) || 0) : 0;
+            if (_depositAmt > 0) cashInAmount = Math.max(0, Number(t.amount) - _depositAmt);
+          }
           await require('../services/settlementService').addCashAdjustment({
-            gymId: t.gymId, amount: t.amount,
+            gymId: t.gymId, amount: cashInAmount,
             note: `${t.memberName || ''} ${t.orderName || t.courseName || (t.orderType === 'team_member' ? '入隊隊費' : '')}`.trim(),
           });
           // 2026-08-27：抽屜現金由上面這筆「+現金補入」唯一負責——課程/比賽發票（延後開立，見

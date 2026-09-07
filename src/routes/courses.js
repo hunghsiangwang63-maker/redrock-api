@@ -482,6 +482,31 @@ router.post('/sessions/:sessionId/enroll',
         }
       } catch (planErr) { console.error('[分期串接] 插班分期計畫建立失敗', planErr.message); }
 
+      // 工作坊保證金（免費工作坊也可收）：一律全額隨這次一併收取、不併入分期（比照前端 handleEnroll
+      // 的 PaymentSection amount 算法）。深層原因——depositCollectedAdjDone 只在 transfers.js 的
+      // course 收款確認分支才會被設成 true，若此次應收金額(含保證金)從未進到任何待收款/確認流程，
+      // 保證金收取永遠不會被記帳，退還/沒收也會被 DEPOSIT_NOT_COLLECTED 永遠擋下。
+      const depositAmt = Number(result.enrollment?.depositAmount) || 0;
+      const dueThisTime = (installmentPlan ? installmentPlan.installments[0].amount : (result.enrollment?.enrollmentFee || 0)) + depositAmt;
+
+      // 現金待收款（比照 enroll-all 的「現金也走待收款」，2026-07-09 段；此路徑原本完全沒有這段邏輯——
+      // 是本次「保證金沒有待收款確認」回報的根因：不只保證金，工作坊現金報名本身也從未進過待收款）。
+      // 轉帳付款由前端 handleEnroll 呼叫 /transfers/upload 建立（同一原則，金額已併入保證金）。
+      if (!result.isWaitlist && dueThisTime > 0 && req.body.paymentMethod === 'cash') {
+        try {
+          const trId = uuidv4();
+          await getDb().collection('transferRecords').doc(trId).set({
+            id: trId, orderType: 'course', refId: result.enrollment.id,
+            memberId: req.body.memberId, memberName: req.body.memberName || req.member?.name || '',
+            gymId: result.enrollment.gymId,
+            courseId: result.enrollment.courseId, courseName: result.enrollment.courseName,
+            orderName: result.enrollment.courseName,
+            amount: dueThisTime, paymentMethod: 'cash', status: 'pending',
+            submittedAt: new Date(), createdAt: new Date(), updatedAt: new Date(),
+          });
+        } catch (e) { console.error('工作坊現金待收款建立失敗', e.message); }
+      }
+
       // 報名收到通知信（工作坊/課程單場；非候補；運動按摩不附匯款帳號；非同步、失敗不阻斷）
       if (!result.isWaitlist) {
         try {
@@ -499,7 +524,7 @@ router.post('/sessions/:sessionId/enroll',
               memberName: mDoc.exists ? (mDoc.data().name || '') : '',
               typeLabel: c.type === 'workshop' ? '工作坊' : '課程',
               itemName: c.name, gymId: c.gymId || req.staff?.gymId || req.body.gymId,
-              fee: _instInfo ? _instInfo.firstAmount : (result.enrollment?.enrollmentFee ?? 0), paymentMethod: req.body.paymentMethod || 'transfer',
+              fee: (_instInfo ? _instInfo.firstAmount : (result.enrollment?.enrollmentFee ?? 0)) + depositAmt, paymentMethod: req.body.paymentMethod || 'transfer',
               massage: _rn.isMassage(c.name),
               sessions: sd ? [{ date: sd.date, startTime: sd.startTime, endTime: sd.endTime }] : null,
               installmentInfo: _instInfo,
@@ -557,7 +582,10 @@ router.post('/public/sessions/:sessionId/enroll', async (req, res) => {
 
     // 訪客一律轉帳、無登入 session 無法呼叫 /transfers/upload，改由伺服器端直接建立待收款紀錄
     // （否則驗證完的匯款資訊會被丟棄、館方看不到可確認的轉帳單，同 enroll-all 訪客路徑的修法）
-    if (!result.isWaitlist && result.enrollment?.enrollmentFee > 0) {
+    // 保證金（免費工作坊也可收）一律併入這次應收金額，理由同會員路徑（見上方 dueThisTime 註解）。
+    const guestDepositAmt = Number(result.enrollment?.depositAmount) || 0;
+    const guestDueThisTime = (Number(result.enrollment?.enrollmentFee) || 0) + guestDepositAmt;
+    if (!result.isWaitlist && guestDueThisTime > 0) {
       try {
         const trId = uuidv4();
         await getDb().collection('transferRecords').doc(trId).set({
@@ -565,7 +593,7 @@ router.post('/public/sessions/:sessionId/enroll', async (req, res) => {
           memberId, memberName: String(guestName).trim(),
           gymId: session.gymId,
           courseId: session.courseId, courseName: session.courseName, orderName: session.courseName,
-          amount: result.enrollment.enrollmentFee, paymentMethod: 'transfer', status: 'pending',
+          amount: guestDueThisTime, paymentMethod: 'transfer', status: 'pending',
           bankName: (bankName || '').trim() || null,
           bankLastFive: (bankLastFive || '').trim() || null,
           paymentDate: paymentDate || null,
@@ -586,7 +614,7 @@ router.post('/public/sessions/:sessionId/enroll', async (req, res) => {
             to: (guestEmail||'').trim(), memberId, memberName: String(guestName).trim(),
             typeLabel: c.type === 'workshop' ? '工作坊' : '課程',
             itemName: c.name, gymId: c.gymId || session.gymId,
-            fee: result.enrollment?.enrollmentFee ?? 0, paymentMethod: 'transfer',
+            fee: guestDueThisTime, paymentMethod: 'transfer',
             massage: _rn.isMassage(c.name),
             sessions: [{ date: session.date, startTime: session.startTime, endTime: session.endTime }],
           });

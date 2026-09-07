@@ -13,7 +13,7 @@ const scheduleService = require('../services/scheduleService');
 const memberService = require('../services/memberService');
 const { uploadSignature } = require('../services/waiverService');
 const { COURSE_TYPES, parseBookingTime, courseTypeLabel, addExperienceToCourseAndSchedule, reassignExperienceCoach,
-        updateExperienceSchedule,
+        updateExperienceSchedule, EXP_TICKET_COLL,
         cleanupExperienceCourseAndSchedule, syncExperienceTickets, voidExperienceTickets, buildInsuranceXlsBuffer,
         defaultSettings, recordExperienceRevenue, reverseExperienceRevenue } = require('../services/experienceService');
 const { isUnder4, isMinor } = require('../utils/age');
@@ -764,13 +764,26 @@ router.put('/:id/member-edit', authenticateAny, async (req, res) => {
         await courseService.removeTrialEnrollment(booking.trialEnrollmentId).catch(e => console.error('[試上改期] 移除原名單失敗', e.message || e.code));
       }
       const isWaitlist = trial.status === 'waitlist';
+      const newBookingDate = sess.date || booking.bookingDate;
       await ref.update({
         sessionId: newSessionId, courseId: sess.courseId || booking.courseId,
-        bookingDate: sess.date || booking.bookingDate,
+        bookingDate: newBookingDate,
         bookingTime: `${sess.startTime||''}~${sess.endTime||''}`,
         trialEnrollmentId: trial.enrollmentId, isWaitlist,
         editedAt: new Date(), editedBy: req.member.id, editedByName: req.member.name || '', updatedAt: new Date(),
       });
+      // 2026-09-07 修復：改期試上原本漏同步已發入場券的 validDate/expiresAt（比照一般體驗改期
+      // updateExperienceSchedule 步驟4）——導致券仍停在舊場次日期，之後用券入場或查詢會一直顯示舊日期
+      // （真實案例：康晟恩試上券改期後仍卡在改期前的日期，看起來像「又變回舊日期」）。
+      try {
+        const tk = await db.collection(EXP_TICKET_COLL)
+          .where('experienceBookingId', '==', booking.id).where('status', '==', 'active').get();
+        if (!tk.empty) {
+          const tb = db.batch();
+          tk.forEach(d => tb.update(d.ref, { validDate: newBookingDate, expiresAt: newBookingDate, updatedAt: new Date() }));
+          await tb.commit();
+        }
+      } catch (e) { console.error('[試上改期] 同步入場券日期失敗（不阻斷改期）', e.message || e.code); }
       return res.json({ success:true, isWaitlist,
         message: isWaitlist ? '已改期（該場次額滿，已列入候補）' : '已改期至新場次' });
     }

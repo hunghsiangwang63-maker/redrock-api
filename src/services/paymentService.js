@@ -115,6 +115,22 @@ const orderHandlers = {
         renewedAt: new Date(), invoicePending: true, before,
       },
     });
+    // 定期票服務同意書（合約）PDF——比照 buy_pass（checkin/flow.js），線上續約完成後自動產生並寄送；
+    // 非同步、失敗不阻斷續約本身。orderRef 由前端(MemberPassesPage.jsx)原樣送出並存在 payment 上，
+    // 簽名資料（confirmedContractTerms 僅前端顯示層把關，後端不需驗證，比照週課報名既有慣例）。
+    (async () => {
+      try {
+        await require('./passContractService').issuePassContract({
+          memberId: payment.memberId, memberName: payment.memberName || cur.memberName || '',
+          passTypeName: pt.name, scope: cur.scope, targetGymId: cur.targetGymId || null,
+          startDate: cur.startDate, endDate: newEndDate,
+          fee: payment.amount, paymentMethod: payment.provider,
+          gymId: payment.gymId,
+          portraitSignature: payment.orderRef?.portraitSignature || null,
+          guardianSignature: payment.orderRef?.guardianSignature || null,
+        });
+      } catch (e) { console.error('[定期票合約] 續約呼叫失敗:', e.message); }
+    })();
     return { relatedId: id };
   },
   installment: async (db, payment) => {

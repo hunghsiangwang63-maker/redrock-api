@@ -24,6 +24,7 @@ const createPendingCheckIn = async ({
   rentShoes, shoesPrice,
   rentChalk, chalkPrice,
   renewPassId, renewPaymentPlan,
+  passContractPortraitSignature, passContractGuardianSignature, // 買定期票(buy_pass)合約書簽名，2026-09-07 新增
 }) => {
   const db = getDb();
   const member = await getMember(memberId);
@@ -211,6 +212,8 @@ const createPendingCheckIn = async ({
     shoesPrice: rentShoes ? (shoesPrice != null ? shoesPrice : PRICES.shoes_rental) : 0,
     rentChalk: rentChalk || false,
     chalkPrice: rentChalk ? (chalkPrice != null ? chalkPrice : 50) : 0,
+    passContractPortraitSignature: entryType === 'buy_pass' ? (passContractPortraitSignature || null) : null,
+    passContractGuardianSignature: entryType === 'buy_pass' ? (passContractGuardianSignature || null) : null,
     status: 'pending',
     createdAt: now,
     expiresAt,
@@ -446,6 +449,19 @@ const confirmCheckIn = async (qrToken, staffId, staffName, staffGymId = null, is
     // 定期票 × 課程免費期間重疊補償（買票方向；買者已是課程學員 → 新票期間重疊即延長，冪等不阻斷）
     try { await require('../passOverlapService').applyCourseOverlapForMember(pending.memberId); }
     catch (e) { console.error('課程重疊補償失敗（票已開立）:', e.message); }
+    // 定期票服務同意書（合約）PDF——比照課程合約，入場購買定期票完成後自動產生並寄送；非同步、失敗不阻斷入場本身。
+    (async () => {
+      try {
+        await require('../passContractService').issuePassContract({
+          memberId: pending.memberId, memberName: pending.memberName || '',
+          passTypeName: pt.name, scope: pt.scope, targetGymId: pt.targetGymId || null,
+          startDate, endDate, fee: buyPassPrice, paymentMethod: pending.paymentMethod,
+          gymId: pending.gymId,
+          portraitSignature: pending.passContractPortraitSignature || null,
+          guardianSignature: pending.passContractGuardianSignature || null,
+        });
+      } catch (e) { console.error('[定期票合約] 呼叫失敗:', e.message); }
+    })();
   } else if (pending.entryType === 'discount_card' && pending.discountCardId) {
     await useDiscountCard(pending.discountCardId, pending.gymId);
   } else if (pending.entryType === 'black_card' && pending.blackCardId) {

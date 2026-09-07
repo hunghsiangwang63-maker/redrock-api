@@ -397,6 +397,26 @@ const sendCourseContractPdf = async ({ to, cc, memberName, courseName, pdfBuffer
   });
 };
 
+// 定期票服務同意書（合約）PDF——買定期票(buy_pass)/線上續約(pass_renewal)完成後自動寄送
+const sendPassContractPdf = async ({ to, cc, memberName, passTypeName, pdfBuffer }) => {
+  return sendEmail({
+    to, cc: (cc && cc.length) ? cc : undefined,
+    subject: `【紅石攀岩】${passTypeName} 定期票服務同意書`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">定期票服務同意書</h2>
+        <p>親愛的 ${esc(memberName)}，</p>
+        <p>附件為您購買/續約「<strong>${esc(passTypeName)}</strong>」的定期票服務同意書 PDF（依交易資訊自動產生），請妥善保存，如有疑問請聯繫館方。</p>
+        <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+    attachments: [{
+      filename: `定期票服務同意書_${passTypeName}.pdf`,
+      content: pdfBuffer.toString('base64'),
+    }],
+  });
+};
+
 // ── 家長 Waiver 簽署連結 ─────────────────────────────────────────
 const sendParentWaiverLink = async (memberId, memberName, parentEmail, parentName, token) => {
   const url = `${CLIENT_URL}/waiver/parent/${token}`;
@@ -528,4 +548,5 @@ module.exports = {
   sendTrialCancelledNotice,
   sendCompetitionRegistrationModified,
   sendCourseContractPdf,
+  sendPassContractPdf,
 };

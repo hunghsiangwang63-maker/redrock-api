@@ -79,6 +79,7 @@ router.post('/qr/create',
         paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, partnerVendor, partnerGymMember, paymentPlan,
         rentShoes, shoesPrice, rentChalk, chalkPrice,
         renewPassId, renewPaymentPlan,
+        passContractPortraitSignature, passContractGuardianSignature,
       } = req.body;
 
       // 親子帳號：家長可為「自己的子會員」產生入場 QR（需驗證擁有權）
@@ -104,6 +105,7 @@ router.post('/qr/create',
         paymentMethod, amount, originalAmount, isTeamDiscount, legacyDiscountCard, partnerVendor, partnerGymMember, paymentPlan,
         rentShoes, shoesPrice, rentChalk, chalkPrice,
         renewPassId, renewPaymentPlan,
+        passContractPortraitSignature, passContractGuardianSignature,
       });
 
       res.status(201).json(result);

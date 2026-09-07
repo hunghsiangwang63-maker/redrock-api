@@ -1180,6 +1180,7 @@ router.delete('/:courseId',
       // 課程標記為已取消（保留歷史紀錄，不再硬刪除）
       batch.update(db.collection('courses').doc(courseId), { status: 'cancelled', cancelledAt: now, cancelledBy: req.staff.id, updatedAt: now });
       await batch.commit();
+      courseService.invalidateCoursesCache();
 
       // 將未來場次的 enrollment 標記為 course_cancelled，保留名單供退費作業
       const enrollSnap = await db.collection('courseEnrollments')
@@ -1288,6 +1289,7 @@ router.post('/:courseId/reopen',
         status: 'active', cancelledAt: null, cancelledBy: null,
         reopenedAt: now, reopenedBy: req.staff.id, updatedAt: now,
       });
+      courseService.invalidateCoursesCache();
 
       res.json({ message: '課程已重新開啟', sessionsReopened, enrollmentsRestored });
     } catch (err) {
@@ -1329,6 +1331,7 @@ router.delete('/:courseId/permanent',
         }
       }
       await db.collection('courses').doc(courseId).delete();
+      courseService.invalidateCoursesCache();
 
       res.json({ success: true, message: '課程已永久刪除', deletedDocs: deleted });
     } catch (err) {
@@ -1498,6 +1501,7 @@ router.put('/:courseId',
       }
 
       await db.collection('courses').doc(req.params.courseId).update(updates);
+      courseService.invalidateCoursesCache();
       // maxStudents 變更 → 同步旗下未取消場次（場次名額是建立時快照；不同步會讓 報名/候補遞補/銷假 的
       // 名額判定停留在舊值——實例：課程 6→7 後場次仍 6，銷假被誤擋 SESSION_FULL）
       if (updates.maxStudents !== undefined) {

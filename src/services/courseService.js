@@ -175,6 +175,7 @@ const createCourse = async ({ gymId, staffId, data }) => {
   };
 
   await db.collection(COURSE_COLLECTION).doc(id).set(course);
+  invalidateCoursesCache();
   return course;
 };
 
@@ -550,6 +551,7 @@ const createWeeklySessions = async ({ courseId, gymId, staffId, confirm = false 
       .add(course.gymAccessDays != null ? Number(course.gymAccessDays) : 60, 'day').format('YYYY-MM-DD');
   }
   await db.collection(COURSE_COLLECTION).doc(courseId).update(updates);
+  invalidateCoursesCache();
 
   return {
     preview: false,
@@ -2137,7 +2139,27 @@ const computeStatusLabel = (course, enrolledCount) => {
   return 'enrolling';
 };
 
+// ⚠️ 2026-09-08 查 Firestore 查詢洞察資料發現：getCourses() 內的 courseEnrollments/courseSessions
+// 兩條分批查詢（依 courseId in 分批，見下方）合計佔全站單日 Read Ops 約 45%（304,606+53,634／
+// 79萬）——來源主要是會員端「課程總覽」（MemberCoursesPage.jsx）呼叫 GET /courses 完全不帶
+// gymId，每次頁面載入/切換分頁都對全系統（兩館）重新掃描一次全部有效課程的報名/場次資料。
+// 課程瀏覽的報名人數/名額顯示本就不需要秒級即時（實際名額判定在報名當下由後端權威覆核，
+// 見 enrollCourse/handleEnrollAll），改為短 TTL 記憶體快取——同一 gymId（含未指定＝'__all__'）
+// 20 秒內的重複呼叫共用同一份結果，大幅降低短時間內大量重複載入的讀取量。單一 Railway
+// instance 執行、無跨機器快取一致性疑慮；不做「寫入時清快取」（enrollment 異動點分散在
+// 十幾處呼叫端，逐一補寫入侵性高且容易漏），過期時間夠短、風險可接受。
+const _coursesCache = new Map(); // key: gymId || '__all__' → { data, expiresAt }
+const COURSES_CACHE_TTL_MS = 20000;
+// 課程文件本身異動（建立/取消/重開/刪除/改設定，皆為低頻、少數幾個呼叫點）主動清快取，
+// 避免這類明顯、使用者剛做完動作就會回頭查看的變更也要等 TTL 過期才生效；報名/場次人數
+// 變動（呼叫點多、分散在十幾處）則不主動清，交給 TTL 自然過期（見上方 getCourses 註解）。
+const invalidateCoursesCache = () => _coursesCache.clear();
+
 const getCourses = async (gymId) => {
+  const _cacheKey = gymId || '__all__';
+  const _cached = _coursesCache.get(_cacheKey);
+  if (_cached && _cached.expiresAt > Date.now()) return _cached.data;
+
   const db = getDb();
   let ref = db.collection(COURSE_COLLECTION).where('status', 'in', ['active', 'cancelled']);
   if (gymId) ref = ref.where('gymId', '==', gymId);
@@ -2213,7 +2235,7 @@ const getCourses = async (gymId) => {
     } catch (e) { /* 場次查詢失敗不阻斷課程列表 */ }
   }
 
-  return courses.map(c => {
+  const result = courses.map(c => {
     const realEnrolled = enrolledByCourse[c.id]?.size || 0;
     const enrolledCount = realEnrolled;
     const waitlistCount = waitlistByCourse[c.id]?.size || 0;
@@ -2252,6 +2274,8 @@ const getCourses = async (gymId) => {
       anySessionOpen: c.type === 'workshop' ? !!workshopAnyOpen[c.id] : undefined,
     };
   });
+  _coursesCache.set(_cacheKey, { data: result, expiresAt: Date.now() + COURSES_CACHE_TTL_MS });
+  return result;
 };
 
 // ── 查詢場次列表 ──────────────────────────────────────────────────
@@ -2969,6 +2993,7 @@ module.exports = {
   markTodayCourseAttendanceOnEntry,
   getSessionRoster,
   getCourses,
+  invalidateCoursesCache,
   computeCourseFeeForMember,
   computeWeeklyCourseFee,
   computeWorkshopRefund,

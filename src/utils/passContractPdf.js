@@ -88,7 +88,7 @@ async function buildPassContractPdfBuffer(data) {
       ...passPartiesBlock(data),
       ...passContentBlock(data),
       ...paymentBlock(data),
-      ...passTermsBlock(),
+      ...passTermsBlock(data),
       ...passSignatureBlock(data),
     ],
   };

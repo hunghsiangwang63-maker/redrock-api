@@ -111,14 +111,18 @@ router.get('/gym-contracts/member', async (req, res) => {
 });
 
 // ── 合約條款內容（課程/定期票，二館共用，非依 gymId）─────────────────────
-// systemSettings/contractTerms = { course: [{title,body}], pass: [{title,body}] }；尚未編輯過時
+// systemSettings/contractTerms = { course: '整段純文字', pass: '整段純文字' }；尚未編輯過時
 // 回傳 contractTermsDefaults.js 的預設內容（與現行 courseContractPdf.js/passContractPdf.js 條款
 // 文字一致），確保設定頁第一次開啟時看到的就是「目前實際在用」的內容，而非空白。
+// 2026-09-07 改版：課程/定期票各自只用「一個大文字框」（純字串），不再是逐條 [{title,body}]
+// 管理——員工直接編輯整段條款文字，換行/「・」條列/空白斷段由渲染端（contractPdfShared.js
+// termsSections、前端 ContractTermsSections.jsx）依既有排版慣例解析，不需要另外拆欄位維護。
 const { DEFAULT_COURSE_TERMS, DEFAULT_PASS_TERMS } = require('../utils/contractTermsDefaults');
 const CONTRACT_TERMS_TYPES = ['course', 'pass'];
+const CONTRACT_TERMS_MAX_LEN = 20000; // 防呆上限，正常條款文字遠低於此
 
-function validTermsArray(arr) {
-  return Array.isArray(arr) && arr.every(s => s && typeof s.title === 'string' && typeof s.body === 'string');
+function validTermsText(v) {
+  return typeof v === 'string' && v.length > 0 && v.length <= CONTRACT_TERMS_MAX_LEN;
 }
 
 // GET /settings/contract-terms（員工端設定頁用）
@@ -128,8 +132,8 @@ router.get('/contract-terms', authenticate, checkPermission('settings.manage'), 
     const snap = await db.collection('systemSettings').doc('contractTerms').get();
     const data = snap.exists ? snap.data() : {};
     res.json({
-      course: Array.isArray(data.course) ? data.course : DEFAULT_COURSE_TERMS,
-      pass: Array.isArray(data.pass) ? data.pass : DEFAULT_PASS_TERMS,
+      course: typeof data.course === 'string' && data.course ? data.course : DEFAULT_COURSE_TERMS,
+      pass: typeof data.pass === 'string' && data.pass ? data.pass : DEFAULT_PASS_TERMS,
       updatedAt: data.updatedAt || null, updatedBy: data.updatedByName || null,
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
@@ -143,8 +147,8 @@ router.put('/contract-terms', authenticate, async (req, res) => {
     const update = { updatedAt: new Date(), updatedBy: req.staff.id, updatedByName: req.staff.name || '' };
     CONTRACT_TERMS_TYPES.forEach(k => {
       if (req.body[k] === undefined) return;
-      if (!validTermsArray(req.body[k])) throw { code: 'INVALID_TERMS', message: `${k} 條款格式不正確（須為 [{title,body}] 陣列）` };
-      update[k] = req.body[k].map(s => ({ title: String(s.title || ''), body: String(s.body || '') }));
+      if (!validTermsText(req.body[k])) throw { code: 'INVALID_TERMS', message: `${k} 條款格式不正確（須為非空字串，長度上限 ${CONTRACT_TERMS_MAX_LEN} 字）` };
+      update[k] = String(req.body[k]);
     });
     await db.collection('systemSettings').doc('contractTerms').set(update, { merge: true });
     res.json({ message: '合約條款已更新' });
@@ -161,8 +165,8 @@ router.get('/contract-terms/member', async (req, res) => {
     const snap = await db.collection('systemSettings').doc('contractTerms').get();
     const data = snap.exists ? snap.data() : {};
     res.json({
-      course: Array.isArray(data.course) ? data.course : DEFAULT_COURSE_TERMS,
-      pass: Array.isArray(data.pass) ? data.pass : DEFAULT_PASS_TERMS,
+      course: typeof data.course === 'string' && data.course ? data.course : DEFAULT_COURSE_TERMS,
+      pass: typeof data.pass === 'string' && data.pass ? data.pass : DEFAULT_PASS_TERMS,
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

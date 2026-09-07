@@ -51,7 +51,7 @@ const issuePassContract = async ({
     const { DEFAULT_PASS_TERMS } = require('../utils/contractTermsDefaults');
     const termsSnap = await db.collection('systemSettings').doc('contractTerms').get();
     const termsData = termsSnap.exists ? termsSnap.data() : {};
-    const sections = Array.isArray(termsData.pass) ? termsData.pass : DEFAULT_PASS_TERMS;
+    const termsText = typeof termsData.pass === 'string' && termsData.pass ? termsData.pass : DEFAULT_PASS_TERMS;
 
     const memberSnap = await db.collection('members').doc(memberId).get();
     const member = memberSnap.exists ? memberSnap.data() : null;
@@ -75,7 +75,7 @@ const issuePassContract = async ({
       totalFee: fee,
       paymentMethod,
       installments: installments || null, // 分期購買時列「按月逐月繳」期別表，比照課程合約（2026-09-07）
-      sections, refundFee: 600, transferFee: 600,
+      termsText, refundFee: 600, transferFee: 600,
       portraitSignature: portraitSignature || null,
       guardianSignature: memberIsMinor ? (guardianSignature || null) : null,
     });

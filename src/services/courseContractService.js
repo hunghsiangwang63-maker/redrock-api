@@ -52,13 +52,24 @@ const issueCourseContract = async ({
   const db = getDb();
 
   const build = async () => {
+    // 自我修復 fallback（2026-09-07）：呼叫端沒帶 coursePlan（如 header.installmentPlanId 曾經斷過連結、
+    // 或日後任何重寄/稽核工具），直接依 memberId+courseId 反查是否真的有分期計畫，不依賴任何中間連結欄位。
+    let resolvedPlan = coursePlan || null;
+    if (!resolvedPlan && !isGuest && memberId && course?.id) {
+      try {
+        const planSnap = await db.collection('installmentPlans')
+          .where('relatedType', '==', 'course').where('relatedId', '==', course.id).where('memberId', '==', memberId).get();
+        resolvedPlan = planSnap.docs.map(d => d.data()).find(p => p.status !== 'cancelled') || null;
+      } catch (e) { console.error('[課程合約] 分期計畫 fallback 查詢失敗:', e.message); }
+    }
+
     const contractSnap = await db.collection('systemSettings').doc('gymContracts').get();
     const gymContract = (contractSnap.exists ? (contractSnap.data() || {}) : {})[gymId] || {};
     // 合約條款文字（2026-09-07 起設定頁可編輯，二館共用）：即時讀取，無設定時 fallback 預設內容
     const { DEFAULT_COURSE_TERMS } = require('../utils/contractTermsDefaults');
     const termsSnap = await db.collection('systemSettings').doc('contractTerms').get();
     const termsData = termsSnap.exists ? termsSnap.data() : {};
-    const sections = Array.isArray(termsData.course) ? termsData.course : DEFAULT_COURSE_TERMS;
+    const termsText = typeof termsData.course === 'string' && termsData.course ? termsData.course : DEFAULT_COURSE_TERMS;
 
     let phone = guestPhone || '';
     let email = guestEmail || '';
@@ -100,10 +111,10 @@ const issueCourseContract = async ({
       totalSessions: futureSessions.length,
       totalFee: fee,
       paymentMethod,
-      installments: coursePlan?.installments || null,
+      installments: resolvedPlan?.installments || null,
       refundFeeRate,
       refundPreStartFeeRate,
-      sections, transferFee: 600,
+      termsText, transferFee: 600,
       portraitSignature: portraitSignature || null,
       guardianSignature: studentIsMinor ? (guardianSignature || null) : null,
     });

@@ -54,8 +54,8 @@ function passContentBlock({ passTypeName, scope, targetGymId, startDate, endDate
 // 2026-09-07：條款文字改由 systemSettings/contractTerms 設定頁提供（見 passContractService.js
 // 呼叫端即時讀取、DEFAULT_PASS_TERMS 為 fallback），此處只負責樣板變數代入＋排版（termsSections）。
 // 轉讓手續費已由使用者拍板改為 600 元（與課程一致，2026-09-07 修正，取代原本的 300 元待確認註記）。
-function passTermsBlock({ sections, refundFee, transferFee }) {
-  return termsSections(sections, { refundFee: refundFee ?? 600, transferFee: transferFee ?? 600 });
+function passTermsBlock({ termsText, refundFee, transferFee }) {
+  return termsSections(termsText, { refundFee: refundFee ?? 600, transferFee: transferFee ?? 600 });
 }
 
 function passSignatureBlock({ portraitSignature, guardianSignature, isMinor }) {

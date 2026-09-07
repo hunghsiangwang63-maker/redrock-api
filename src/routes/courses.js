@@ -2228,9 +2228,10 @@ async function handleEnrollAll(req, res) {
 
       // ── 雙寫（Phase 1，課程報名資料模型重構）：與上方 courseEnrollments 平行建立 courseRegistrations header ──
       // 純新增、不讀取、不影響任何既有功能；失敗只記 log、絕不阻斷報名本身。
+      let regHeader = null;
       try {
         const { createRegistrationHeader } = require('../services/courseRegistrationService');
-        await createRegistrationHeader(db, {
+        regHeader = await createRegistrationHeader(db, {
           memberId, memberName: req.body.memberName || req.member?.name || '',
           courseId, courseName: course.name, gymId: futureSessions[0]?.gymId || gymId,
           status: enrollStatus,
@@ -2288,6 +2289,14 @@ async function handleEnrollAll(req, res) {
             staffId: req.staff?.id || null, staffName: req.staff?.name || '',
           });
         }
+      }
+      // 2026-09-07 修復：header 建立時（上方）分期計畫尚未產生，installmentPlanId 一直沒補回去——
+      // 導致之後任何依 header.installmentPlanId 查分期計畫的地方（如合約 PDF 重寄/稽核工具）都查不到，
+      // 即使當下這封自動寄出的合約信因直接吃記憶體裡的 coursePlan 而正確，仍應把關聯補齊。不阻斷報名本身。
+      if (coursePlan && regHeader) {
+        db.collection('courseRegistrations').doc(regHeader.id)
+          .update({ installmentPlanId: coursePlan.id })
+          .catch(e => console.error('[雙寫] header.installmentPlanId 回補失敗:', e.message));
       }
       // 記錄交易（一次付清；分期改由計畫逐期記帳，此處略過；deferPayment 由付款 callback 記）候補不記帳
       if (fee > 0 && !isWaitlist && !req.body.deferPayment && !coursePlan) {

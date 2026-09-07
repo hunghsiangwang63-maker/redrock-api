@@ -50,10 +50,10 @@ function courseContentBlock({ courseName, startDate, endDate, weekdayLabel, star
 
 // 2026-09-07：條款文字改由 systemSettings/contractTerms 設定頁提供（見 courseContractService.js
 // 呼叫端即時讀取、DEFAULT_COURSE_TERMS 為 fallback），此處只負責樣板變數代入＋排版（termsSections）。
-function courseTermsBlock({ sections, refundFeeRate, refundPreStartFeeRate, transferFee }) {
+function courseTermsBlock({ termsText, refundFeeRate, refundPreStartFeeRate, transferFee }) {
   const postRate = Math.round((refundFeeRate ?? 0.2) * 100);
   const preRate = Math.round((refundPreStartFeeRate ?? 0) * 100);
-  return termsSections(sections, { postStartFeeRate: postRate, preStartFeeRate: preRate, transferFee: transferFee ?? 600 });
+  return termsSections(termsText, { postStartFeeRate: postRate, preStartFeeRate: preRate, transferFee: transferFee ?? 600 });
 }
 
 // 學員(甲方)簽名／(未成年)法定代理人簽名／場館(乙方)店章 三格左右併排，各自加框線；店章固定寬 4 公分。

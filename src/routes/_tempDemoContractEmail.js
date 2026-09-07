@@ -60,6 +60,11 @@ router.post('/course', authenticate, async (req, res) => {
       portraitSignature: null, guardianSignature: null,
       dryRun: true,
     });
+    if (req.query.raw === '1') {
+      res.set('Content-Type', 'application/pdf');
+      return res.send(pdfBuffer);
+    }
+
     await sendCourseContractPdf({ to: demoEmail, memberName: member.name, courseName: course.name, pdfBuffer });
     res.json({
       ok: true, bytes: pdfBuffer.length, sentTo: demoEmail, memberName: member.name, courseName: course.name,

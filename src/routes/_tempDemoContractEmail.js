@@ -74,4 +74,36 @@ router.post('/course', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message, stack: err.stack }); }
 });
 
+router.post('/pass', authenticate, async (req, res) => {
+  try {
+    if (req.staff.role !== 'super_admin') return res.status(403).json({ error: 'FORBIDDEN' });
+    const db = getDb();
+    const { memberId, passId, demoEmail } = req.body;
+    const { issuePassContract } = require('../services/passContractService');
+    const { sendPassContractPdf } = require('../services/emailService');
+
+    const memberSnap = await db.collection('members').doc(memberId).get();
+    const member = memberSnap.data();
+    const passSnap = await db.collection('memberPasses').doc(passId).get();
+    const pass = passSnap.data();
+
+    const { pdfBuffer } = await issuePassContract({
+      memberId, memberName: member.name,
+      passTypeName: pass.passTypeName, scope: pass.scope, targetGymId: pass.targetGymId,
+      startDate: pass.startDate, endDate: pass.effectiveEndDate || pass.endDate,
+      fee: 0, paymentMethod: 'cash', gymId: pass.gymId,
+      portraitSignature: null, guardianSignature: null,
+      dryRun: true,
+    });
+
+    if (req.query.raw === '1') {
+      res.set('Content-Type', 'application/pdf');
+      return res.send(pdfBuffer);
+    }
+
+    await sendPassContractPdf({ to: demoEmail, memberName: member.name, passTypeName: pass.passTypeName, pdfBuffer });
+    res.json({ ok: true, bytes: pdfBuffer.length, sentTo: demoEmail, memberName: member.name, passTypeName: pass.passTypeName });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message, stack: err.stack }); }
+});
+
 module.exports = router;

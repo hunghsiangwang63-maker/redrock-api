@@ -31,9 +31,9 @@ const money = (n) => `新臺幣 ${Number(n || 0).toLocaleString()} 元`;
 // 分段色塊標題（品牌色底、白字）。
 function sectionHeader(text) {
   return {
-    table: { widths: ['*'], body: [[{ text, bold: true, fontSize: 11, color: '#fff', fillColor: ACCENT, margin: [7, 3, 7, 3] }]] },
+    table: { widths: ['*'], body: [[{ text, bold: true, fontSize: 10.5, color: '#fff', fillColor: ACCENT, margin: [7, 2, 7, 2] }]] },
     layout: 'noBorders',
-    margin: [0, 7, 0, 4],
+    margin: [0, 5, 0, 3],
   };
 }
 
@@ -45,8 +45,8 @@ function fieldTable(rows, labelWidth = 110) {
       { text: val || '' },
     ]) },
     layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => CELL_BORDER, vLineColor: () => CELL_BORDER,
-      paddingLeft: () => 6, paddingRight: () => 6, paddingTop: () => 3, paddingBottom: () => 3 },
-    margin: [0, 0, 0, 4],
+      paddingLeft: () => 6, paddingRight: () => 6, paddingTop: () => 2, paddingBottom: () => 2 },
+    margin: [0, 0, 0, 3],
   };
 }
 
@@ -97,13 +97,13 @@ function partyBox(title, lines) {
 // 簽名欄一個方格：上方置中標籤（淺灰底）、下方置中圖片（或留白提示），四周加框線。
 function signatureCell(label, imgSrc, imgWidth) {
   const body = imgSrc
-    ? { image: imgSrc, width: imgWidth, alignment: 'center', margin: [0, 5, 0, 5] }
-    : { text: '（未附檔）', color: '#999', alignment: 'center', fontSize: 9, margin: [0, 18, 0, 18] };
+    ? { image: imgSrc, width: imgWidth, alignment: 'center', margin: [0, 3, 0, 3] }
+    : { text: '（未附檔）', color: '#999', alignment: 'center', fontSize: 9, margin: [0, 12, 0, 12] };
   return {
     table: {
       widths: ['*'],
       body: [
-        [{ text: label, bold: true, alignment: 'center', fillColor: LABEL_BG, fontSize: 9, margin: [2, 3, 2, 3] }],
+        [{ text: label, bold: true, alignment: 'center', fillColor: LABEL_BG, fontSize: 9, margin: [2, 2, 2, 2] }],
         [body],
       ],
     },
@@ -119,7 +119,7 @@ function paymentBlock({ paymentMethod, installments }) {
     fieldTable([['本次付款方式', PAY_METHOD_LABEL[paymentMethod] || paymentMethod || '']], 100),
   ];
   if (Array.isArray(installments) && installments.length) {
-    content.push({ text: `按月逐月繳：分 ${installments.length} 期付款，各期金額與繳款期限如下：`, margin: [0, 0, 0, 3], fontSize: 9 });
+    content.push({ text: `按月逐月繳：分 ${installments.length} 期付款，各期金額與繳款期限如下：`, margin: [0, 0, 0, 2], fontSize: 8.5 });
     content.push({
       table: {
         widths: ['auto', 'auto', 'auto'],
@@ -135,9 +135,9 @@ function paymentBlock({ paymentMethod, installments }) {
         ],
       },
       layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => CELL_BORDER, vLineColor: () => CELL_BORDER,
-        paddingLeft: () => 6, paddingRight: () => 6, paddingTop: () => 1.5, paddingBottom: () => 1.5 },
-      fontSize: 9,
-      margin: [0, 0, 0, 3],
+        paddingLeft: () => 5, paddingRight: () => 5, paddingTop: () => 1, paddingBottom: () => 1 },
+      fontSize: 8.5,
+      margin: [0, 0, 0, 2],
     });
   }
   return content;
@@ -150,15 +150,15 @@ const { fillTemplate } = require('./contractTermsDefaults');
 function termsSections(sections, vars) {
   const blocks = [sectionHeader('相關條款及注意事項(符合 111 年體育局所制定定型化契約內容相關規範)')];
   (sections || []).forEach(s => {
-    blocks.push({ text: fillTemplate(s.title, vars), bold: true, fontSize: 9, margin: [0, 6, 0, 2] });
+    blocks.push({ text: fillTemplate(s.title, vars), fontSize: 8.5, margin: [0, 3, 0, 1] });
     const lines = fillTemplate(s.body, vars).split('\n');
     let bulletBuf = [];
-    const flush = () => { if (bulletBuf.length) { blocks.push({ ul: bulletBuf.slice(), margin: [10, 0, 0, 3], fontSize: 8.5 }); bulletBuf = []; } };
+    const flush = () => { if (bulletBuf.length) { blocks.push({ ul: bulletBuf.slice(), margin: [10, 0, 0, 2], fontSize: 8 }); bulletBuf = []; } };
     lines.forEach(line => {
       const trimmed = line.trim();
       if (!trimmed) return;
       if (trimmed.startsWith('・')) bulletBuf.push(trimmed.slice(1).trim());
-      else { flush(); blocks.push({ text: trimmed, margin: [0, 1, 0, 1], fontSize: 8.5 }); }
+      else { flush(); blocks.push({ text: trimmed, margin: [0, 0.5, 0, 0.5], fontSize: 8 }); }
     });
     flush();
   });

@@ -60,31 +60,36 @@ function passTermsBlock({ sections, refundFee, transferFee }) {
 
 function passSignatureBlock({ portraitSignature, guardianSignature, isMinor }) {
   const vendorSig = fs.existsSync(VENDOR_SIGNATURE_PATH) ? VENDOR_SIGNATURE_PATH : null;
-  const vendorStampWidthPt = Math.round(4 * CM_TO_PT);
+  const vendorStampWidthPt = Math.round(3.2 * CM_TO_PT); // 印章寬度 3.2 公分（2026-09-07 由 4cm 縮小，配合合約維持 2 頁內）
 
   const boxes = [signatureCell('消費者（簡稱甲方）簽名', portraitSignature, 130)];
   if (isMinor) boxes.push(signatureCell('法定代理人簽名', guardianSignature, 130));
   boxes.push(signatureCell('業者（簡稱乙方與上課教練代表）', vendorSig, vendorStampWidthPt));
 
   return [
-    { text: '茲為甲方於乙方所提供定期票服務事宜，經甲乙雙方同意依本契約履行，並同意上列條款，於下方簽名確認', margin: [0, 6, 0, 5], fontSize: 9 },
-    { columns: boxes.map(b => ({ width: '*', ...b })), columnGap: 10 },
+    {
+      unbreakable: true,
+      stack: [
+        { text: '茲為甲方於乙方所提供定期票服務事宜，經甲乙雙方同意依本契約履行，並同意上列條款，於下方簽名確認', margin: [0, 4, 0, 4], fontSize: 8.5 },
+        { columns: boxes.map(b => ({ width: '*', ...b })), columnGap: 10 },
+      ],
+    },
   ];
 }
 
 async function buildPassContractPdfBuffer(data) {
   const printer = getPrinter();
   const docDefinition = {
-    defaultStyle: { font: 'NotoSansTC', fontSize: 10, lineHeight: 1.22 },
+    defaultStyle: { font: 'NotoSansTC', fontSize: 9.5, lineHeight: 1.12 },
     pageSize: 'A4',
-    pageMargins: [36, 32, 36, 40],
+    pageMargins: [32, 24, 32, 28],
     footer: (currentPage, pageCount) => ({
-      text: `第 ${currentPage} 頁，共 ${pageCount} 頁`, alignment: 'center', fontSize: 8, color: '#999', margin: [0, 6, 0, 0],
+      text: `第 ${currentPage} 頁，共 ${pageCount} 頁`, alignment: 'center', fontSize: 8, color: '#999', margin: [0, 4, 0, 0],
     }),
     content: [
       gymInfoBlock(data.gymContract || {}),
-      { text: '紅石攀岩館 定期票服務同意書', bold: true, fontSize: 15, alignment: 'center', color: ACCENT, margin: [0, 0, 0, 3] },
-      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 523, y2: 0, lineWidth: 1.5, lineColor: ACCENT }], margin: [0, 0, 0, 6] },
+      { text: '紅石攀岩館 定期票服務同意書', bold: true, fontSize: 14, alignment: 'center', color: ACCENT, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 531, y2: 0, lineWidth: 1.5, lineColor: ACCENT }], margin: [0, 0, 0, 4] },
       ...passPartiesBlock(data),
       ...passContentBlock(data),
       ...paymentBlock(data),

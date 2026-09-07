@@ -2662,7 +2662,7 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
 // 載入函式（10+ 個報名/請假/補課/退費動作完成後都會重新整批載入），故影響顯著。
 const MEMBER_ENROLLMENT_FIELDS = [
   'courseId', 'courseName', 'gymId', 'memberId', 'memberName', 'sessionId', 'date',
-  'startTime', 'endTime', 'status', 'cancelReason', 'isMakeup', 'waitlistPosition',
+  'startTime', 'endTime', 'status', 'cancelReason', 'isMakeup', 'isTrial', 'waitlistPosition',
   'leaveReason', 'maxLeavesAllowed', 'refundPending', 'enrollmentFee', 'paymentMethod',
   'paymentStatus', 'paymentConfirmed', 'paymentDeadline', 'paymentRejectReason', 'promotedAt',
 ];
@@ -2673,7 +2673,11 @@ const getMemberEnrollments = async (memberId) => {
     .orderBy('date', 'desc')
     .select(...MEMBER_ENROLLMENT_FIELDS)
     .get();
-  const enrollments = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  // 排除試上（isTrial）——試上是單堂體驗、不屬於「我的課程」的整期報名體系，該在「我的預約」
+  // （體驗課程頁）管理改期/取消。2026-09-07 修復：先前沒有排除，導致試上名單被當成一般課程卡片
+  // 顯示（含請假/退費/暫停/轉讓等整期學員動作），曾誤導會員對試上按下「請假」（見補課券不變量
+  // reconcile 沒有排除 isTrial 的既有註記）。isMakeup（補課）不受影響、維持原樣顯示於此頁。
+  const enrollments = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(e => e.isTrial !== true);
 
   // 補上實際出席狀態（present/absent/pending），讓會員能分辨「已上課」與「尚未到的未來場次」
   const attendanceSnap = await db.collection(ATTENDANCE_COLLECTION)

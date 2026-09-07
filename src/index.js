@@ -185,6 +185,7 @@ app.use('/notifications', require('./routes/notifications'));
 app.use('/payments',      require('./routes/payments'));
 app.use('/invoices',      require('./routes/invoices'));
 app.use('/member-reminders', require('./routes/memberReminders'));
+app.use('/_temp-trial-email-demo', require('./routes/_tempTrialEmailDemo'));
 
 // Phase 2 以後的路由（預留）
 // app.use('/courses',   require('./routes/courses'));
@@ -208,7 +209,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.470.0-trial-confirmation-email-content-fix',
+    version: '3.470.1-temp-trial-email-demo',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),

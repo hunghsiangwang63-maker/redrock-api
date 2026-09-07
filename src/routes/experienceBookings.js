@@ -682,7 +682,14 @@ router.post('/:id/member-cancel', authenticateAny, async (req, res) => {
     const g = await memberBookingGuard(req, res);
     if (!g) return;
     const { ref, booking } = g;
-    const paid = ['confirmed','paid'].includes(booking.paymentStatus);
+    // ⚠️ 2026-09-07 修復：原本讀 booking.paymentStatus 判斷「是否已繳費」，但 experienceBookings
+    // 文件本身只有透過 PUT /transfers/:id/confirm（轉帳待收款佇列）確認收款時才會寫入這個欄位；
+    // 走 POST /experience-bookings/:id/confirm（員工「確認收款」按鈕，試上唯一、一般體驗也常用的
+    // 路徑）只會把 paymentStatus 寫進關聯的 courseEnrollments 文件，booking 本身完全沒有這欄位，
+    // 導致這條路徑確認過款的預約取消時 paid 恆為 false——完全不會要求填退款帳號、不會建立退費追蹤、
+    // 不會通知管理員（真實案例：朱智萩兩筆已繳費試上皆走此路徑取消、皆漏記退費）。改用 booking.status
+    // ==='confirmed'（兩條確認路徑皆會設定此欄位，是唯一可靠的「已確認收款」訊號）。
+    const paid = booking.status === 'confirmed';
     const upd = { status:'cancelled', cancelReason:'會員自行取消', cancelledAt:new Date(), cancelledBy:'member', updatedAt:new Date() };
     let refundAmount = 0, fee = 0;
     if (paid && (booking.totalFee || 0) > 0) {

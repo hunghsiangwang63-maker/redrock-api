@@ -276,6 +276,14 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
                 await db.collection('courseEnrollments').doc(t.refId).update({ depositCollectedAdjDone: true, updatedAt: now });
               } catch (e3) { console.error('保證金收取記帳失敗（收款已確認）:', e3.message); }
             }
+            // 工作坊「含入場」：收款確認當下自動發一張當天有效入場券（僅一般價/友館價設了 includesEntry
+            // 才會走到這；冪等，見 en.entryTicketIssued）
+            if (en.needsEntryTicket && !en.entryTicketIssued) {
+              try {
+                await require('../services/courseService').issueCourseEntryTicket(db, { ...en, id: t.refId });
+                await db.collection('courseEnrollments').doc(t.refId).update({ entryTicketIssued: true, updatedAt: now });
+              } catch (e4) { console.error('工作坊入場券發放失敗（收款已確認）:', e4.message); }
+            }
           }
         } catch (e) { console.error('課程重疊補償失敗（收款已確認）:', e.message); }
         // 課程/工作坊確認收款通知信（運動按摩附注意事項；附場次清單）

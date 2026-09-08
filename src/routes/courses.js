@@ -401,6 +401,7 @@ router.post('/sessions/:sessionId/enroll',
         confirmedRefundPolicy: req.body.confirmedRefundPolicy,
         portraitSignature: req.body.portraitSignature,
         guardianSignature: req.body.guardianSignature,
+        partnerGymId: req.body.partnerGymId,
       });
 
       // ── 課程練習期遞延：若課程有無限練習期，且會員有有效定期票，自動建立遞延申請 ──
@@ -578,6 +579,7 @@ router.post('/public/sessions/:sessionId/enroll', async (req, res) => {
       confirmedExtensionPolicy: req.body.confirmedExtensionPolicy,
       confirmedRefundPolicy: req.body.confirmedRefundPolicy,
       portraitSignature, guardianSignature,
+      partnerGymId: req.body.partnerGymId,
     });
 
     // 訪客一律轉帳、無登入 session 無法呼叫 /transfers/upload，改由伺服器端直接建立待收款紀錄
@@ -804,6 +806,24 @@ router.post('/enrollments/:enrollmentId/forfeit-deposit',
       });
       res.json({ success: true, message: `保證金 NT$${e.depositAmount} 已沒收（會員未出席）` });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
+// ── POST /courses/enrollments/:enrollmentId/verify-partner-gym - 友館價人工核對（值班/管理員）──
+// 比照 competitions 的 verify-partner-gym：approved:true→核准（維持折後價）；false→駁回、改回一般價。
+router.post('/enrollments/:enrollmentId/verify-partner-gym',
+  authenticate, auditLog('course.verify_partner_gym'),
+  async (req, res) => {
+    try {
+      const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+      const isStationMode = ['operator', 'station'].includes(req.staff?.type);
+      if (!isManager && !isStationMode) return res.status(403).json({ error: 'MANAGER_OR_STATION_REQUIRED', message: '友館價核對限值班人員或管理員' });
+      const result = await courseService.verifyCoursePartnerGym(req.params.enrollmentId, !!req.body.approved, req.staff);
+      res.json({ success: true, message: req.body.approved ? '友館價已核准' : '友館價已取消，費用改回一般價', ...result });
+    } catch (err) {
+      if (err.code) return res.status(err.code === 'NOT_FOUND' ? 404 : 400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
   }
 );
 
@@ -1452,8 +1472,9 @@ router.put('/:courseId',
         'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays', 'makeupDeadlineDate', 'handlingFeeRate', 'preStartFeeRate',
         'enrollOpenDate', 'alumniOpenDate', 'fullTermRenewalDiscount', 'alumniDiscount', 'renewalDeadline',
         'fullTermRenewalDiscountEnabled', 'fullTermRenewalDiscountRate', 'alumniDiscountEnabled', 'alumniDiscountRate',
-        'teamOpenDate', 'generalOpenDate', 'teamPrice',
-        'skipSignature', 'collectGenderAge', 'enrollNoteLabel', 'enrollNoteRequired', 'refundTiers', 'depositAmount',
+        'teamOpenDate', 'generalOpenDate', 'teamPrice', 'partnerGymPrice',
+        'teamIncludesEntry', 'generalIncludesEntry', 'partnerGymIncludesEntry',
+        'skipSignature', 'collectGenderAge', 'enrollNoteLabel', 'enrollNoteRequired', 'refundTiers', 'teamDepositAmount',
         'midpointSurcharge', 'gymAccessDaysAfter', 'gymAccessDaysBefore', 'status',
         'unlimitedPracticeStart', 'unlimitedPracticeEnd',
         'allowTrial', 'trialPrice', 'trialTarget', 'makeupTarget', 'isActive', 'paymentMethods', // isActive：停用/啟用（會員課程總覽隱藏，不通知、不動報名）
@@ -1489,8 +1510,11 @@ router.put('/:courseId',
           ? req.body.refundTiers.map(t => ({ daysBefore: Number(t.daysBefore) || 0, rate: Number(t.rate) || 0 }))
           : null;
       }
-      if (req.body.depositAmount !== undefined) {
-        updates.depositAmount = req.body.depositAmount !== '' ? (Number(req.body.depositAmount) || 0) : 0;
+      if (req.body.teamDepositAmount !== undefined) {
+        updates.teamDepositAmount = req.body.teamDepositAmount !== '' ? (Number(req.body.teamDepositAmount) || 0) : 0;
+      }
+      if (req.body.partnerGymPrice !== undefined) {
+        updates.partnerGymPrice = (req.body.partnerGymPrice === '' || req.body.partnerGymPrice === null) ? null : Number(req.body.partnerGymPrice);
       }
       // 分期規則（dueAtSession：0＝報名當天、N(>=1)＝第N堂課到期）
       if (req.body.installment !== undefined) {
@@ -1817,7 +1841,9 @@ router.get('/:courseId/enrollments',
         .where('courseId', '==', courseId)
         .select('memberId', 'memberName', 'status', 'isMakeup', 'isTrial', 'waitlistPosition',
           'maxLeavesAllowed', 'enrolledAt', 'createdAt', 'depositAmount',
-          'depositCollectedAdjDone', 'depositResolved', 'depositResolution')
+          'depositCollectedAdjDone', 'depositResolved', 'depositResolution',
+          'partnerGymApplied', 'partnerGym', 'partnerGymPending', 'enrollmentFee',
+          'needsEntryTicket', 'entryTicketIssued')
         .get();
       // 課程層名單＝「常態學員」：confirmed/leave + 候補(waitlist)、排除已取消與補課/試上（單堂行為在場次名單看）
       // —— confirmed/leave 與課程列表人數（3.72.0）同口徑；候補另外附上供名單顯示，不計入正取人數
@@ -1898,8 +1924,10 @@ router.get('/:courseId/enrollments',
           memberId: e.memberId, memberName: e.memberName || '',
           count: 0, leaveUsed: 0, isWaitlist: false, waitlistPosition: null, maxLeavesAllowed: null,
           fallbackEnrolledAt: null,
-          // 保證金（僅工作坊有意義；工作坊一人一筆 enrollment，第一筆即唯一一筆，first-wins 天然正確）
+          // 保證金／友館價（僅工作坊有意義；工作坊一人一筆 enrollment，第一筆即唯一一筆，first-wins 天然正確）
           enrollmentId: null, depositAmount: 0, depositCollectedAdjDone: false, depositResolved: false, depositResolution: null,
+          workshopFee: null, partnerGymApplied: false, partnerGym: null, partnerGymPending: false,
+          needsEntryTicket: false, entryTicketIssued: false,
         };
         m.count++;
         if (e.status === 'waitlist') { m.isWaitlist = true; if (e.waitlistPosition != null) m.waitlistPosition = e.waitlistPosition; }
@@ -1912,6 +1940,12 @@ router.get('/:courseId/enrollments',
           m.depositCollectedAdjDone = !!e.depositCollectedAdjDone;
           m.depositResolved = !!e.depositResolved;
           m.depositResolution = e.depositResolution || null;
+          m.workshopFee = e.enrollmentFee != null ? Number(e.enrollmentFee) : null;
+          m.partnerGymApplied = !!e.partnerGymApplied;
+          m.partnerGym = e.partnerGym || null;
+          m.partnerGymPending = !!e.partnerGymPending;
+          m.needsEntryTicket = !!e.needsEntryTicket;
+          m.entryTicketIssued = !!e.entryTicketIssued;
         }
         byMember.set(e.memberId, m);
       });
@@ -1957,10 +1991,12 @@ router.get('/:courseId/enrollments',
           healthNote: header.healthNote || null,
           referralSource: header.referralSource || null,
           staffNote: header.staffNote || null,   // 管理員收款確認時填的備註
-          // 工作坊保證金（週課恆為 0/false，前端只在 course.type==='workshop' 時顯示）
+          // 工作坊保證金／友館價（週課恆為 0/false/null，前端只在 course.type==='workshop' 時顯示）
           enrollmentId: m.enrollmentId,
           depositAmount: m.depositAmount, depositCollectedAdjDone: m.depositCollectedAdjDone,
           depositResolved: m.depositResolved, depositResolution: m.depositResolution,
+          partnerGymApplied: m.partnerGymApplied, partnerGym: m.partnerGym, partnerGymPending: m.partnerGymPending,
+          needsEntryTicket: m.needsEntryTicket, entryTicketIssued: m.entryTicketIssued,
         };
       });
       // 依報名時間排序（越後面越新；原註解誤寫 desc，實際比較式為 asc，修正註解與行為一致）

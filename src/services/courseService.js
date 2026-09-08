@@ -116,6 +116,14 @@ const createCourse = async ({ gymId, staffId, data }) => {
     teamOpenDate: data.teamOpenDate || null,
     generalOpenDate: data.generalOpenDate || null,
     teamPrice: (data.teamPrice === '' || data.teamPrice === null || data.teamPrice === undefined) ? null : Number(data.teamPrice),
+    // 友館隊員價（僅 workshop；null＝不開放友館價，此時報名時即使選了友館也視為一般價）——與 teamPrice
+    // 三選一互斥（隊員優先＞友館(需選定友館且核對)＞一般），非「取最低價」式疊加，見 enrollCourse 的 tier 判斷。
+    partnerGymPrice: (data.partnerGymPrice === '' || data.partnerGymPrice === null || data.partnerGymPrice === undefined) ? null : Number(data.partnerGymPrice),
+    // 各價格層級是否「含入場」（含＝收款確認當下自動發一張當天有效的入場券，見 issueCourseEntryTicket；
+    // 不含＝完全不處理，會員仍需自行走一般入場流程）。三者互相獨立、可重複套用於未來任何工作坊。
+    teamIncludesEntry: data.teamIncludesEntry === true,
+    generalIncludesEntry: data.generalIncludesEntry === true,
+    partnerGymIncludesEntry: data.partnerGymIncludesEntry === true,
     // 報名流程客製（如運動按摩）：略過簽名、收集性別/年齡、自訂必填備註欄
     skipSignature: data.skipSignature === true,
     collectGenderAge: data.collectGenderAge === true,
@@ -125,9 +133,12 @@ const createCourse = async ({ gymId, staffId, data }) => {
     refundTiers: Array.isArray(data.refundTiers) && data.refundTiers.length
       ? data.refundTiers.map(t => ({ daysBefore: Number(t.daysBefore) || 0, rate: Number(t.rate) || 0 }))
       : null,
-    // 工作坊保證金（僅 workshop 用；0/null＝不收保證金。免費工作坊仍可收保證金，報到後由店員退還/沒收；
-    // 提前取消時比照 refundTiers 同一套時間分級比例部分退還，見 computeWorkshopRefund 呼叫端）
-    depositAmount: data.depositAmount != null && data.depositAmount !== '' ? Number(data.depositAmount) || 0 : 0,
+    // 隊員保證金（僅 workshop 用、且僅在使用 teamPrice 時收取；0/null＝不收保證金）——2026-09-08 起改為
+    // 「僅隊員價適用」（原 depositAmount 為全體適用，改名反映新語意；一般價/友館價不收保證金、直接開發票、
+    // 不退還，見 enrollCourse）。報到後由店員退還/沒收；提前取消時比照 refundTiers 同一套時間分級比例
+    // 部分退還，見 computeWorkshopRefund 呼叫端。⚠️ enrollment 快照欄位仍叫 depositAmount（不改，
+    // refund-deposit/forfeit-deposit/courseAdjustments 等既有讀取端不受影響）。
+    teamDepositAmount: data.teamDepositAmount != null && data.teamDepositAmount !== '' ? Number(data.teamDepositAmount) || 0 : 0,
     // 課程層可限定付款方式（如運動按摩僅接受現場現金，不論隊員或非隊員）：null＝預設現金+轉帳皆可；
     // 陣列且不含 'transfer' 時，前端隱藏轉帳選項、後端 /transfers/upload 權威擋下轉帳提交
     paymentMethods: Array.isArray(data.paymentMethods) && data.paymentMethods.length ? data.paymentMethods : null,
@@ -679,6 +690,8 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
   // 訪客（免登入公開報名，見 POST /courses/public/sessions/:sessionId/enroll）：memberId 為 guest_<uuid> 佔位字串，
   // 沒有會員文件可讀 → 跳過 getMember，用呼叫端傳入的聯絡資訊組一個最小 member 物件，隊員/員工優惠一律不適用。
   isGuestBooking = false, guestName, guestPhone, guestEmail,
+  // 友館隊員價（僅 workshop、僅在非隊員時生效；選定的友館 id，需存在 systemSettings/partnerGyms 名單中）
+  partnerGymId,
 }) => {
   const db = getDb();
 
@@ -745,10 +758,31 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
       }
     }
   }
-  // 隊員優惠價（工作坊；隊員任何時候報名都用 teamPrice）；否則沿用 feeInfo
+  // 三級收費（僅 workshop；2026-09-08）：隊員價／一般價／友館隊員價，三選一互斥（依身分決定適用
+  // 哪一級，非「取最低價」式疊加）——① 當期隊員優先，任何時候報名都用 teamPrice（含隊員保證金）
+  // ② 非隊員但選定友館且該工作坊有開放友館價 → 友館價（需人工核對，見 verify-partner-gym）
+  // ③ 皆不符 → 一般價（沿用 feeInfo/course.price）。各級可各自設定是否「含入場」（見 course.*IncludesEntry）。
   let _fee = feeInfo.fee, _first = feeInfo.firstPayment, _second = feeInfo.secondPayment, _inst = feeInfo.installment, _teamPriceApplied = false;
+  let _depositAmt = 0, _needsEntryTicket = false;
+  let _partnerGymApplied = false, _partnerGymPending = false, _partnerGymName = null;
   if (course.type === 'workshop' && _isTeam && course.teamPrice != null && course.teamPrice >= 0) {
     _fee = course.teamPrice; _first = course.teamPrice; _second = 0; _inst = false; _teamPriceApplied = true;
+    _depositAmt = Number(course.teamDepositAmount) || 0;
+    _needsEntryTicket = course.teamIncludesEntry === true;
+  } else if (course.type === 'workshop' && partnerGymId && course.partnerGymPrice != null && course.partnerGymPrice >= 0) {
+    try {
+      const pgDoc = await db.collection('systemSettings').doc('partnerGyms').get();
+      const list = pgDoc.exists && Array.isArray(pgDoc.data().gyms) ? pgDoc.data().gyms : [];
+      const hit = list.find(g => g.id === partnerGymId);
+      if (hit) {
+        _fee = course.partnerGymPrice; _first = course.partnerGymPrice; _second = 0; _inst = false;
+        _partnerGymApplied = true; _partnerGymPending = true; _partnerGymName = hit.name;
+        _needsEntryTicket = course.partnerGymIncludesEntry === true;
+      }
+    } catch (e) { /* 讀取失敗不套友館價，落回一般價 */ }
+  }
+  if (!_teamPriceApplied && !_partnerGymApplied) {
+    _needsEntryTicket = course.type === 'workshop' && course.generalIncludesEntry === true;
   }
 
   const enrollment = {
@@ -774,14 +808,24 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     secondPayment: _second,
     teamPriceApplied: _teamPriceApplied,   // 工作坊隊員優惠價
     isTeamMemberEnroll: _isTeam,
+    // 友館隊員價（僅 workshop；需人工核對，見 verify-partner-gym）
+    partnerGymApplied: _partnerGymApplied,
+    partnerGym: _partnerGymApplied ? _partnerGymName : null,
+    partnerGymId: _partnerGymApplied ? partnerGymId : null,
+    partnerGymPending: _partnerGymPending,   // 核對通過後由員工清除
     paymentStatus: 'pending',
-    // 保證金（快照自 course.depositAmount；免費工作坊也可收）。實際收取（settlement 加減項）在收款確認當下才記，
-    // 見 transfers.js course 分支；退還/沒收為店員獨立動作，見 refund-deposit/forfeit-deposit 端點。
-    depositAmount: course.depositAmount || 0,
+    // 保證金（僅隊員價適用，見 course.teamDepositAmount；2026-09-08 起一般價/友館價不收保證金）。
+    // 實際收取（settlement 加減項）在收款確認當下才記，見 transfers.js course 分支；退還/沒收為
+    // 店員獨立動作，見 refund-deposit/forfeit-deposit 端點。
+    depositAmount: _depositAmt,
     depositCollectedAdjDone: false,
     depositResolved: false,
     depositResolution: null,   // 'refunded' | 'forfeited' | 'cancel_partial'（提前取消依分級比例部分退還）
     depositRefundedAmount: 0,
+    // 「含入場」：此價格層級是否應在收款確認當下自動發一張當天有效入場券（見 transfers.js
+    // 收款確認分支 + issueCourseEntryTicket）。僅工作坊生效、依三級各自設定。
+    needsEntryTicket: _needsEntryTicket,
+    entryTicketIssued: false,
     gymAccessStart,
     gymAccessEnd,
     enrolledBy: staffId || memberId,
@@ -847,6 +891,65 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
       ? `已加入候補名單（第 ${session.waitlistCount + 1} 位）`
       : `報名成功，應繳 NT$${_first}${_inst ? `（共兩期，第二期 NT$${_second}）` : ''}`,
   };
+};
+
+// ── 工作坊「含入場」：收款確認當下自動發一張當天有效的入場券 ─────────────
+// ⚠️ ticketType 刻意用 'course'（非 'experience'）——'experience' 在入場關卡（checkin/gates.js）
+// 有「持券者當日豁免墜落測驗」的例外規則，是專為攀岩體驗設計；工作坊涵蓋運動按摩/肢體評估等非攀岩
+// 項目，不應該一律連動豁免安全門檻。保守起見：此券只免「入場費用」，墜測/waiver 仍走一般關卡。
+// 若確認某工作坊本身即為攀岩相關、需要一併豁免墜測，屆時再個案調整。冪等由呼叫端的
+// entryTicketIssued 旗標把關，此函式本身不重複檢查。
+const issueCourseEntryTicket = async (db, enrollment) => {
+  const id = uuidv4();
+  const now = new Date();
+  const todayTW = taiwanToday();
+  await db.collection('singleEntryTickets').doc(id).set({
+    id, memberId: enrollment.memberId, memberName: enrollment.memberName,
+    gymId: enrollment.gymId, ticketType: 'course',
+    validDate: enrollment.date || todayTW, courseEnrollmentId: enrollment.id,
+    issuedAt: todayTW, expiresAt: enrollment.date || todayTW,
+    amount: 0, paymentMethod: 'free', status: 'active',
+    approvalDeadline: null, approvedAt: now, approvedBy: null,
+    cancelledAt: null, cancelledBy: null, cancelReason: null,
+    transferHistory: [], usedAt: null, usedCheckInId: null,
+    soldByStaffId: null, soldByStaffName: '',
+    notes: `工作坊入場券：${enrollment.courseName || ''}（${enrollment.date || ''}）`,
+    createdAt: now, updatedAt: now,
+  });
+  return id;
+};
+
+// ── 友館隊員價 人工核對（值班/管理員；比照 competitionService 的 verify-partner-gym）────
+// approved:true → 清 pending（核對通過、維持折後價）；false → 移除友館價、重算為一般價
+// （不動已收款金額，如需追差額由店員另行處理，同競賽端既有設計）。
+const verifyCoursePartnerGym = async (enrollmentId, approved, staff) => {
+  const db = getDb();
+  const ref = db.collection(ENROLLMENT_COLLECTION).doc(enrollmentId);
+  const doc = await ref.get();
+  if (!doc.exists) throw { code: 'NOT_FOUND', message: '找不到報名' };
+  const en = doc.data();
+  if (!en.partnerGymApplied) throw { code: 'NO_PARTNER_DISCOUNT', message: '此報名未使用友館價' };
+  const now = new Date();
+  if (approved) {
+    await ref.update({ partnerGymPending: false, partnerGymVerifiedBy: staff?.id || null, partnerGymVerifiedAt: now, updatedAt: now });
+    return { registrationFee: en.enrollmentFee };
+  }
+  const courseDoc = await db.collection(COURSE_COLLECTION).doc(en.courseId).get();
+  const course = courseDoc.exists ? courseDoc.data() : {};
+  const newFee = course.price || 0;
+  await ref.update({
+    partnerGymApplied: false, partnerGym: null, partnerGymId: null, partnerGymPending: false,
+    partnerGymRejectedBy: staff?.id || null, partnerGymRejectedAt: now,
+    enrollmentFee: newFee, firstPayment: newFee, secondPayment: 0,
+    needsEntryTicket: course.generalIncludesEntry === true,
+    updatedAt: now,
+  });
+  // 同步 courseRegistrations header 的 fee（雙寫、報名名單「詳細」彈窗讀 header，不讀 enrollment）
+  try {
+    const { updateRegistrationStatusByCourseMember } = require('./courseRegistrationService');
+    await updateRegistrationStatusByCourseMember(db, en.memberId, en.courseId, { fee: newFee, originalFee: course.price || 0 });
+  } catch (e) { console.error('[友館價駁回] header 同步失敗（不影響本次駁回）:', e.message); }
+  return { registrationFee: newFee };
 };
 
 // ── 補課額度重算（不變量，政策 2026-07-17）────────────────────────
@@ -2976,6 +3079,8 @@ module.exports = {
   createCourse,
   createSession,
   enrollCourse,
+  issueCourseEntryTicket,
+  verifyCoursePartnerGym,
   requestLeave,
   cancelLeave,
   precheckCancelLeave,

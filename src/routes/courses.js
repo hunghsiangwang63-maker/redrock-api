@@ -719,6 +719,28 @@ router.post('/enrollments/:enrollmentId/cancel-makeup',
   }
 );
 
+// POST /courses/enrollments/:enrollmentId/cancel - 取消工作坊報名（會員自助；僅限尚未付款，已付款請走「申請退費」）
+router.post('/enrollments/:enrollmentId/cancel',
+  authenticateAny,
+  auditLog('course.cancel_workshop_enrollment'),
+  async (req, res) => {
+    try {
+      let memberId = req.body.memberId || req.member?.id;
+      const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 'allow' });
+      if (deny) return res.status(deny.status).json(deny.body);
+      const result = await courseService.cancelWorkshopEnrollment({
+        enrollmentId: req.params.enrollmentId,
+        memberId,
+        reason: req.body.reason,
+      });
+      res.json(result);
+    } catch (err) {
+      if (err.code) return res.status(err.code === 'ENROLLMENT_NOT_FOUND' ? 404 : 400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // POST /courses/enrollments/:enrollmentId/choose-cash - 候補遞補為正取後選擇現金付款（走既有待收款流程）
 // 轉帳付款走既有 /transfers/upload（不用此端點）；此端點僅供「候補遞補、尚未選擇付款方式」時
 // 選現金——比照 enroll-all 現金分支，直接建 transferRecords 待收款單，供值班/管理員在櫃檯確認收款。

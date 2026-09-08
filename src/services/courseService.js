@@ -1398,6 +1398,50 @@ const cancelMakeup = async ({ enrollmentId, memberId }) => {
   return { message: '已取消補課，補課資格已退回，可重新選擇場次' };
 };
 
+// ── 工作坊取消報名（會員自助、即時生效，僅限「尚未付款」）─────────────────
+// 已付款(paymentStatus:'confirmed')的工作坊報名一律走 course-adjustments 的「申請退費」（依 refundTiers
+// 分級比例、需店員審核）——那條路徑才會正確算保證金/開課天數比例退款。此函式只處理「還沒付錢」的情況
+// （含免費隊員價但保證金尚未收款確認），故單純釋放名額即可、不涉及任何金流沖銷或退款計算。
+const cancelWorkshopEnrollment = async ({ enrollmentId, memberId, reason }) => {
+  const db = getDb();
+  const enrollDoc = await db.collection(ENROLLMENT_COLLECTION).doc(enrollmentId).get();
+  if (!enrollDoc.exists) throw { code: 'ENROLLMENT_NOT_FOUND' };
+  const enrollment = enrollDoc.data();
+  if (enrollment.memberId !== memberId) throw { code: 'FORBIDDEN' };
+  if (enrollment.status !== 'confirmed') throw { code: 'INVALID_STATUS', message: '此報名狀態無法取消（候補請用取消候補）' };
+  const courseDoc = await db.collection(COURSE_COLLECTION).doc(enrollment.courseId).get();
+  if (!courseDoc.exists || courseDoc.data().type !== 'workshop') {
+    throw { code: 'NOT_WORKSHOP', message: '此功能僅限工作坊，週課請使用「申請退費／暫停」' };
+  }
+  if (enrollment.paymentStatus === 'confirmed') {
+    throw { code: 'ALREADY_PAID', message: '已完成付款，請改用「申請退費」' };
+  }
+
+  const now = new Date();
+  await enrollDoc.ref.update({ status: 'cancelled', cancelReason: reason || 'member_cancel', cancelledAt: now, updatedAt: now });
+  const sd = await db.collection(SESSION_COLLECTION).doc(enrollment.sessionId).get();
+  if (sd.exists) await sd.ref.update({ enrolledCount: Math.max(0, (sd.data().enrolledCount || 0) - 1), updatedAt: now });
+
+  // 雙寫（Phase 1）：header 狀態同步（查無 header 屬正常，不阻斷）
+  try {
+    const { updateRegistrationStatusByCourseMember } = require('./courseRegistrationService');
+    await updateRegistrationStatusByCourseMember(db, memberId, enrollment.courseId, { status: 'cancelled', cancelledAt: now, cancelReason: reason || 'member_cancel' });
+  } catch (e) { console.error('[雙寫] header 取消狀態更新失敗（不影響取消）:', e.message); }
+
+  // 作廢此報名尚未確認的待收款單（避免取消後仍殘留在店員的待收款清單）
+  try {
+    const trSnap = await db.collection('transferRecords').where('refId', '==', enrollmentId).where('status', '==', 'pending').get();
+    const b = db.batch();
+    trSnap.docs.forEach(d => b.update(d.ref, { status: 'cancelled', updatedAt: now }));
+    if (!trSnap.empty) await b.commit();
+  } catch (e) { console.error('取消工作坊報名作廢待收款單失敗:', e.message); }
+
+  // 遞補候補（單一場次，非整門課；工作坊每個場次各自獨立候補）
+  try { await promoteWaitlist(enrollment.sessionId); } catch (e) { console.error('promoteWaitlist 失敗（工作坊取消報名）:', e.message); }
+
+  return { message: '已取消報名，名額已釋出' };
+};
+
 // ── 自動遞補候補 ──────────────────────────────────────────────────
 const promoteWaitlist = async (sessionId) => {
   const db = getDb();
@@ -3085,6 +3129,7 @@ module.exports = {
   cancelLeave,
   precheckCancelLeave,
   cancelMakeup,
+  cancelWorkshopEnrollment,
   closureCancelSession,
   reconcileMakeupEntitlement,
   promoteWaitlist,

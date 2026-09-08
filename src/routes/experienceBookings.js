@@ -56,7 +56,10 @@ async function handleTrialBooking(req, res, db, memberId) {
     if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code:'MISSING_TRANSFER', message:'請填寫匯款帳號末五碼' });
     if (!(Number(paidAmount) > 0)) return res.status(400).json({ code:'MISSING_PAID_AMOUNT', message:'請填寫實際匯款金額' });
 
-    trialMemberId = `guest_${uuidv4()}`;
+    // 電話比對既有會員命中即直接歸戶（避免忘記登入的已註冊會員被永久卡在無主的訪客佔位 id 上，
+    // 詳見 memberService.resolveGuestOrMemberId 註解）；isGuestTrial 維持 true——此旗標控制的是
+    // 「這是免登入表單送出」這件事本身（決定要不要伺服器端代建待收款單等），與有沒有找到真實身分無關。
+    trialMemberId = (await memberService.resolveGuestOrMemberId(db, guestPhone)).memberId;
     trialName = String(guestName).trim();
     trialEmail = (guestEmail || '').trim();
     trialPhone = String(guestPhone).trim();
@@ -299,7 +302,8 @@ router.get('/public-settings', async (req, res) => {
 });
 
 // ── POST /experience-bookings/public - 公開預約（免登入、訪客、先轉帳；IP 限流見 index.js）──
-// 非會員也能預約體驗課；不建帳號（memberId:null、isGuest），之後註冊用電話認領。金額後端權威。
+// 非會員也能預約體驗課；不建帳號。填的電話若已是註冊會員則直接歸戶（見 resolveGuestOrMemberId），
+// 否則 memberId:null，之後註冊用電話認領（claimGuestExperienceBookings）。金額後端權威。
 router.post('/public', async (req, res) => {
   try {
     const db = getDb();
@@ -340,9 +344,14 @@ router.post('/public', async (req, res) => {
     } else { _unit = _ct.price || 0; }
     const computedFee = _unit * _n;
 
+    // 電話比對既有會員命中即直接歸戶（否則沿用原本的 memberId:null 訪客佔位；一般體驗預約無
+    // guest_<uuid> 那套機制，見 memberService.resolveGuestOrMemberId 註解）；isGuest 維持 true——
+    // 表示「這是免登入表單送出」，與有沒有找到真實身分無關。
+    const { memberId: _resolvedMemberId } = await memberService.resolveGuestOrMemberId(db, contactPhone, null);
+
     const id = `exp_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
     await db.collection('experienceBookings').doc(id).set({
-      id, memberId: null, isGuest: true, source: 'public',
+      id, memberId: _resolvedMemberId, isGuest: true, source: 'public',
       gymId, bookingDate, bookingTime: bookingTime || '', courseType: courseType || 'general',
       contactName: String(contactName).trim(),
       contactEmail: (contactEmail || '').trim(),
@@ -368,7 +377,7 @@ router.post('/public', async (req, res) => {
         const trId = uuidv4();
         await db.collection('transferRecords').doc(trId).set({
           id: trId, orderType: 'experience', refId: id,
-          memberId: null, memberName: String(contactName).trim(),
+          memberId: _resolvedMemberId, memberName: String(contactName).trim(),
           gymId, orderName: '體驗課程',
           amount: computedFee, paymentMethod: 'transfer', status: 'pending',
           bankName: String(bankName).trim(),

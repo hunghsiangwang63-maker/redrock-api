@@ -460,6 +460,26 @@ const claimPendingExperienceTickets = async (db, memberId, member) => {
   } catch (e) { console.error('claimPendingExperienceTickets 失敗（不阻斷建立會員）:', e.message); }
 };
 
+// ── 公開報名（免登入）送出前：填的電話是不是已經是註冊會員？───────────────
+// 背景（2026-09-08）：訪客報名原本一律建 guest_<uuid>（或 experienceBookings 的 memberId:null）佔位，
+// 若填的電話其實是「已註冊會員」（忘記登入、或直接點分享連結），這筆報名會永遠是無主的「幽靈」記錄——
+// 下面的 claimGuestXxx 系列只在「新會員完成註冊」那一刻觸發，對「早就註冊過」的人永遠不會補跑；之後任何
+// 把這個佔位 id 當真實會員 id 查詢的地方（如櫃檯「今日課程學員」快速入場 /checkin/phone）都會出錯——
+// 已實際發生多起（課程 3 起、體驗 3 起）並個別手動修正資料。故公開報名一律先查電話，命中就直接歸戶到
+// 真實會員（沿用會員身分＝隊員價/黑名單擋等權威判斷皆自動生效，比維持訪客身分更正確），查無才退回訪客
+// 流程（fallbackPrefix 由呼叫端決定佔位格式：課程/試上用 'guest_<uuid>' 字串、一般體驗預約用 null）。
+// 比對邏輯（僅比電話）與既有 claimGuestXxx 系列一致，不額外要求姓名相符。
+const resolveGuestOrMemberId = async (db, phone, fallbackPrefix = 'guest_') => {
+  const trimmed = String(phone || '').trim();
+  const fallback = fallbackPrefix === null ? null : `${fallbackPrefix}${uuidv4()}`;
+  if (!trimmed) return { memberId: fallback, isGuestBooking: true };
+  try {
+    const snap = await db.collection(COLLECTIONS.MEMBERS).where('phone', '==', trimmed).limit(1).get();
+    if (!snap.empty) return { memberId: snap.docs[0].id, isGuestBooking: false };
+  } catch (e) { console.error('[公開報名] 電話比對既有會員失敗（改走訪客流程）:', e.message); }
+  return { memberId: fallback, isGuestBooking: true };
+};
+
 // ── 認領公開訪客課程/工作坊/試上報名 ───────────────────────────────
 // 免登入公開報名頁（週課整期/單堂工作坊/試上）建立時 memberId 為 guest_<uuid> 佔位字串（非 null，避免
 // 與其他訪客同場次/同梯次誤判重複報名，見 courses.js handleEnrollAll / experienceBookings.js handleTrialBooking
@@ -954,6 +974,7 @@ const promoteChildToMember = async (childId, { phone, email, password }, actor =
 module.exports = {
   createMember,
   claimLegacyFallTest,
+  resolveGuestOrMemberId,
   searchMembers,
   invalidateMemberSearchCache,
   getMember,

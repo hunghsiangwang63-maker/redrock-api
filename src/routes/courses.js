@@ -542,24 +542,6 @@ router.post('/sessions/:sessionId/enroll',
   }
 );
 
-// ── 公開報名前查詢：填的電話是否已是註冊會員？（2026-09-08）────────────────────
-// 背景：訪客報名原本一律建 guest_<uuid> 佔位 memberId；若填的電話其實是「已註冊會員」（例如忘記登入、
-// 或直接點分享連結），這筆報名會永遠是無主的「幽靈」記錄——電話+姓名比對認領（claimGuestCourseEnrollments）
-// 只在「新會員完成註冊」那一刻觸發，對「早就註冊過」的人永遠不會補跑，之後任何把 memberId 當真實會員
-// 查詢的地方（如櫃檯「今日課程學員」快速入場 /checkin/phone）都會回「會員不存在」——已實際發生 3 起
-// （2026-09-08 查獲並手動修正）。故公開報名一律先查電話，命中就直接歸戶到真實會員（沿用會員身分＝隊員價/
-// 黑名單擋等權威判斷皆自動生效，比維持訪客身分更正確），查無才退回訪客流程。比對邏輯（僅比電話）與既有
-// claimGuestCourseEnrollments 一致，不額外要求姓名相符。
-const resolveGuestOrMemberId = async (db, phone) => {
-  const trimmed = String(phone || '').trim();
-  if (!trimmed) return { memberId: `guest_${uuidv4()}`, isGuestBooking: true };
-  try {
-    const snap = await db.collection(COLLECTIONS.MEMBERS).where('phone', '==', trimmed).limit(1).get();
-    if (!snap.empty) return { memberId: snap.docs[0].id, isGuestBooking: false };
-  } catch (e) { console.error('[公開報名] 電話比對既有會員失敗（改走訪客流程）:', e.message); }
-  return { memberId: `guest_${uuidv4()}`, isGuestBooking: true };
-};
-
 // ── POST /courses/public/sessions/:sessionId/enroll - 訪客報名單堂工作坊（免登入，先轉帳）────
 // 不建帳號（memberId 用不會碰撞的 guest_<uuid> 佔位字串，避免與其他訪客誤判重複報名/名額計算漂移）；
 // 一律轉帳、無分期/無定期票練習期遞延（訪客沒有既有票券關係）；未成年一律要求本人+法定代理人皆線上簽名。
@@ -583,7 +565,7 @@ router.post('/public/sessions/:sessionId/enroll', async (req, res) => {
     if (!sessionDoc.exists) return res.status(404).json({ code:'SESSION_NOT_FOUND', message:'找不到此場次' });
     const session = sessionDoc.data();
 
-    const { memberId, isGuestBooking } = await resolveGuestOrMemberId(getDb(), guestPhone);
+    const { memberId, isGuestBooking } = await memberService.resolveGuestOrMemberId(getDb(), guestPhone);
     const result = await courseService.enrollCourse({
       memberId,
       isGuestBooking, guestName: String(guestName).trim(), guestPhone: String(guestPhone).trim(), guestEmail: (guestEmail||'').trim(),
@@ -2574,7 +2556,7 @@ router.post('/public/:courseId/enroll-all', async (req, res) => {
   // ⚠️ 此路由無登入 session（req.member 不存在），handleEnrollAll 靠 _isGuestEnroll 決定是否走
   // checkMemberOwnership（需要 req.member）——即使電話比對命中既有會員，仍必須維持 _isGuestEnroll:true，
   // 只替換 memberId 本身，否則會誤觸 ownership 檢查、對公開路由必定回 403。詳見 resolveGuestOrMemberId 註解。
-  const { memberId } = await resolveGuestOrMemberId(getDb(), guestPhone);
+  const { memberId } = await memberService.resolveGuestOrMemberId(getDb(), guestPhone);
   req.body.memberId = memberId;
   req.body.memberName = String(guestName).trim();
   req.body.paymentMethod = 'transfer';

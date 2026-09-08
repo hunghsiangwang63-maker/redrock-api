@@ -688,6 +688,7 @@ const createMember = async (memberData, staffId, options = {}) => {
   };
 
   await db.collection(COLLECTIONS.MEMBERS).doc(memberId).set(member);
+  invalidateMemberSearchCache(); // 讓剛建立的會員立刻可被搜尋到（見 searchMembers 上方註解）
 
   // 舊系統墜測效期自動認領（電話+姓名比對，命中即免重測）→ 在算封鎖狀態前完成，避免被誤判需墜測
   await claimLegacyFallTest(db, memberId, member);
@@ -753,6 +754,16 @@ const sanitizeMemberForList = (m) => {
 const SEARCH_LIST_FIELDS = ['name', 'phone', 'email', 'isChildAccount', 'memberType', 'waiverSigned', 'fallTestPassed', 'fallTestExpiresAt', 'createdAt', 'isTeamMember', 'teamMemberSince', 'teamMemberUntil'];
 
 // ── 搜尋會員 ─────────────────────────────────────────────────────
+// ⚠️ 2026-09-08 查 Firestore 查詢洞察資料發現：query 分支的全表掃描（見下方）單一查詢型態
+// 佔全站單日 Read Ops 約 6.5%（35 次搜尋、每次讀約 1473 筆＝幾乎整個 members 集合）。搜尋詞
+// 不影響「要撈哪些文件」（一律整表掃描、只有搜尋詞不同時的記憶體過濾結果不同），故用單一
+// 全域快取鍵存「整份投影後的會員清單」——20 秒內不論搜什麼字，都重用同一份清單只在記憶體
+// 篩選（篩選本身不耗 Firestore 讀取）。⚠️ 唯一風險：剛註冊/剛建立的會員在快取視窗內搜不到
+// （像系統故障，比「資料顯示稍舊」嚴重）——createMember() 寫入會員文件後主動清快取解決；
+// 其餘欄位變動（如剛簽完 waiver）在快取視窗內顯示稍舊可接受，不逐一補清快取。
+const _memberSearchCache = { data: null, expiresAt: 0 };
+const invalidateMemberSearchCache = () => { _memberSearchCache.data = null; _memberSearchCache.expiresAt = 0; };
+
 const searchMembers = async ({ query, gymId, role, limit = 20, cursor }) => {
   const db = getDb();
   let ref = db.collection(COLLECTIONS.MEMBERS);
@@ -761,6 +772,13 @@ const searchMembers = async ({ query, gymId, role, limit = 20, cursor }) => {
   // 實際上線建議使用 Algolia 或 Typesense（會員數大到影響效能/成本時再評估）
   let snapshot;
   if (query) {
+    if (_memberSearchCache.data && _memberSearchCache.expiresAt > Date.now()) {
+      return _memberSearchCache.data.filter(m =>
+        m.name?.includes(query) ||
+        m.phone?.includes(query) ||
+        m.email?.includes(query)
+      ).slice(0, limit).map(sanitizeMemberForList);
+    }
     // ⚠️ 原本只取「最近建立的 1000 筆」做本地過濾（省成本的權宜做法）——會員數超過 1000 後，
     // 較早建立的會員會直接被排除在候選範圍外，變成不管搜電話或姓名都完全查不到（非搜尋條件本身
     // 的問題）。2026-08-11 發現：真實案例（會員數來到 1031 筆時，一位 7/13 建立的會員突然搜不到）。
@@ -772,6 +790,8 @@ const searchMembers = async ({ query, gymId, role, limit = 20, cursor }) => {
     // 不變（Firestore 讀取計費看筆數、非投影後省的欄位），但傳輸量大幅下降。
     snapshot = await ref.select(...SEARCH_LIST_FIELDS).get();
     const all = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+    _memberSearchCache.data = all;
+    _memberSearchCache.expiresAt = Date.now() + 20000;
     return all.filter(m =>
       m.name?.includes(query) ||
       m.phone?.includes(query) ||
@@ -935,6 +955,7 @@ module.exports = {
   createMember,
   claimLegacyFallTest,
   searchMembers,
+  invalidateMemberSearchCache,
   getMember,
   getMemberByQRCode,
   getMemberByPhone,

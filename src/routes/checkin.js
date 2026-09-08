@@ -857,6 +857,7 @@ router.get('/today',
 
 // ── GET /checkin/monthly-daily-counts?gymId=&month=YYYY-MM ────────────
 // 入場頁折線圖：本月與上月「每日入場數」（依台灣日期、排除取消）
+const _monthlyCheckinCache = new Map(); // key: month(YYYY-MM) → { data: rawRecords[], expiresAt }（見下方查詢處註解）
 router.get('/monthly-daily-counts', authenticate, checkPermission('checkin.read'), async (req, res) => {
   try {
     const db = getDb();
@@ -868,14 +869,29 @@ router.get('/monthly-daily-counts', authenticate, checkPermission('checkin.read'
     const prevStart = `${prevMonth}-01`;
     const curEnd = dayjs(curStart).endOf('month').format('YYYY-MM-DD');
 
-    // 單欄位範圍（checkedInAt）＋記憶體過濾 gym/取消，避複合索引
-    const snap = await db.collection('checkIns')
-      .where('checkedInAt', '>=', new Date(`${prevStart}T00:00:00+08:00`))
-      .where('checkedInAt', '<=', new Date(`${curEnd}T23:59:59+08:00`)).get();
+    // ⚠️ 2026-09-08 查 Firestore 查詢洞察資料發現：此查詢（月份範圍、無 gymId 篩選——每次都掃
+    // 全兩館）單一查詢型態佔全站單日 Read Ops 約 14%（本月範圍即讀約 2300 筆，接近 checkIns
+    // 總筆數的七成），主因是入場頁「每日入場數」折線圖每次頁面載入/切頁都重新查一次、無快取。
+    // 這純粹是顯示用趨勢圖、無需秒級即時，改為 60 秒 TTL 快取「原始查詢結果」（不快取最終依
+    // gymId 算好的回應——キャッシュ鍵僅用 month，讓 super_admin/兩館站台電腦共用同一份查詢，
+    // 不論請求帶哪個 gymId 都只需查一次；gymId 篩選在快取命中後、記憶體中重新跑一次即可）。
+    const _cacheKey = month;
+    const _cached = _monthlyCheckinCache.get(_cacheKey);
+    let rawRecords;
+    if (_cached && _cached.expiresAt > Date.now()) {
+      rawRecords = _cached.data;
+    } else {
+      // 單欄位範圍（checkedInAt）＋記憶體過濾 gym/取消，避複合索引
+      const snap = await db.collection('checkIns')
+        .where('checkedInAt', '>=', new Date(`${prevStart}T00:00:00+08:00`))
+        .where('checkedInAt', '<=', new Date(`${curEnd}T23:59:59+08:00`))
+        .select('checkedInAt', 'isCancelled', 'status', 'gymId').get();
+      rawRecords = snap.docs.map(d => d.data());
+      _monthlyCheckinCache.set(_cacheKey, { data: rawRecords, expiresAt: Date.now() + 60000 });
+    }
     const countMap = {};
     const gymCountMap = { 'gym-hsinchu': {}, 'gym-shilin': {} }; // 本月各館每日（不受 gymId 過濾，供 super_admin 兩館分線）
-    snap.docs.forEach(d => {
-      const r = d.data();
+    rawRecords.forEach(r => {
       if (r.isCancelled === true || r.status === 'cancelled') return;
       if (!r.checkedInAt) return;
       const dt = new Date(r.checkedInAt.toDate().getTime() + 8 * 3600000).toISOString().slice(0, 10);

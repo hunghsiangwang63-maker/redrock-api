@@ -229,8 +229,12 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
             const bk = { id: bkDoc.id, ...bkDoc.data() };
             const { recordExperienceRevenue, syncExperienceTickets } = require('../services/experienceService');
             await recordExperienceRevenue(db, bkRef, bk, req.staff);
-            // 試上：確認收款自動發 1 張當日體驗券（冪等；當日豁免墜測）。一般體驗維持員工手動發放。
-            if (bk.kind === 'trial') await syncExperienceTickets(db, bk, req.staff, true).catch(e => console.error('[試上發券/transfers]', e.message));
+            // 確認收款當下逐參加者發放入場券（試上/一般體驗皆自動發，比照 POST /experience-bookings/:id/confirm
+            // 那條路徑的現行政策——冪等、失敗不阻斷；發放入場券手動鈕仍保留供補發/名單調整後補發）。
+            // 2026-09-09 修正：原本這裡「一般體驗維持員工手動發放」，與 /confirm 端點已改自動發放不一致，
+            // 導致黃筱婷案例——透過待收款頁確認轉帳的一般體驗預約，收款確認後從未自動發券，員工也沒
+            // 另外手動點發放，直到會員反映才發現。
+            await syncExperienceTickets(db, bk, req.staff, true).catch(e => console.error('[體驗發券/transfers]', e.message));
             if (!wasAlreadyConfirmed && bk.contactEmail) {
               const gymDoc = await db.collection('gyms').doc(bk.gymId).get();
               const gymCc = gymDoc.exists ? gymDoc.data().email : undefined;

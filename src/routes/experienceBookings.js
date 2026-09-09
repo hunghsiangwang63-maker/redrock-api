@@ -98,8 +98,11 @@ async function handleTrialBooking(req, res, db, memberId) {
   const trialFee = courseService.getEffectiveTrialPrice(course, trialRules);
   const id = `trial_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
 
-  // 報名當下即佔名額（pending 待繳費）：滿→候補；逾繳費期限由排程釋放並候補轉正
-  const paymentDeadline = courseService.trialPaymentDeadline(session);
+  // 報名當下即佔名額（pending 待繳費）：滿→候補。
+  // 政策（2026-09-09）：不再設自動取消用的繳費期限——sweepExpiredTrialPayments 已停止排程
+  // （陳君秀案例：已在期限內轉帳，只是館方沒點確認收款，就被自動取消整筆試上），改一律人工
+  // 在待收款頁確認/處理。courseService.trialPaymentDeadline() 函式本體保留、暫不使用。
+  const paymentDeadline = null;
   let trialEnroll;
   try {
     trialEnroll = await courseService.enrollTrial({

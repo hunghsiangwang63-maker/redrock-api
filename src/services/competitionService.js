@@ -497,11 +497,10 @@ const registerForCompetition = async ({
     const willWaitlist = cCount >= maxParticipants;
     registration.status = willWaitlist ? 'waitlist' : 'confirmed';
     registration.waitlistPosition = willWaitlist ? wCount + 1 : null;
-    // 繳款期限：正取且有費用 → 報名日 + N 天內須完成繳費（含臨櫃繳款），逾期由排程自動剔除。候補不設（遞補時才設）。
-    if (!willWaitlist && registrationFee > 0) {
-      const N = competition.paymentDeadlineDays || 3;
-      registration.paymentDeadline = dayjs(now).add(N, 'day').toDate();
-    }
+    // 政策（2026-09-09）：不再設自動取消用的繳款期限——sweepExpiredCompetitionPayments 已停止
+    // 排程（比照課程 2026-07-27 政策、與陳君秀試上案例同一種誤傷風險考量），改一律人工在待收款
+    // 頁確認/處理。competition.paymentDeadlineDays 設定值保留（供畫面顯示「請於 N 天內繳費」提醒
+    // 用），只是不再據此寫入會觸發自動取消的 registration.paymentDeadline。
     tx.set(regRef, registration);
     // 重新報名同賽事 → 舊的「已駁回」首頁通知一併消失（沿用上面已取得的 dupTx，含所有狀態，不多查一次）
     dupTx.docs.forEach(d => {
@@ -672,13 +671,8 @@ const promoteNextWaitlist = async (competitionId, divisionId) => {
         (a.waitlistPosition || 9999) - (b.waitlistPosition || 9999) ||
         ((a.registeredAt?.seconds || a.registeredAt?._seconds || 0) - (b.registeredAt?.seconds || b.registeredAt?._seconds || 0)));
     const next = sorted[0];
-    // 遞補為正取 → 起算繳款期限（報名日制不適用，改以遞補日 + N 天）；已收款或免費者不設
+    // 政策（2026-09-09）：候補遞補為正取不再設自動取消用的繳款期限（同上，sweep 已停止排程）。
     const promoteUpdate = { status: 'confirmed', waitlistPosition: null, promotedAt: new Date(), updatedAt: new Date() };
-    if (next.paymentStatus !== 'confirmed' && (next.registrationFee || 0) > 0) {
-      const comp = (await tx.get(db.collection(COLLECTIONS.COMPETITIONS).doc(competitionId))).data();
-      const N = (comp && comp.paymentDeadlineDays) || 3;
-      promoteUpdate.paymentDeadline = dayjs().add(N, 'day').toDate();
-    }
     tx.update(next.ref, promoteUpdate);
     // 其餘候補位置往前遞移
     for (let i = 1; i < sorted.length; i++) {

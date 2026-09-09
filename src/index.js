@@ -208,7 +208,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.480.0-guest-experience-phone-match',
+    version: '3.481.0-disable-trial-competition-payment-autocancel',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
@@ -260,11 +260,10 @@ if (require.main === module) {
     // 政策（2026-07-27）：課程轉帳逾期自動取消排程已移除——曾誤傷已上傳證明只是櫃檯忘記確認的
     // 會員（整期報名被自動取消）。改為一律人工：待收款頁由管理員/值班「確認」或「退回」，
     // sweepExpiredCoursePayments 函式與手動觸發端點 POST /courses/sweep-expired-payments 保留但不排程。
-    // 比賽報名逾繳款期限未填匯款資料：自動取消、釋名額、遞補候補
-    try {
-      const r = await require('./services/competitionService').sweepExpiredCompetitionPayments();
-      if (r.cancelled > 0) console.log(`[比賽逾期] 取消 ${r.cancelled} 筆未繳費報名`);
-    } catch (e) { console.error('[比賽逾期排程] 失敗', e.message); }
+    // 政策（2026-09-09）：比賽報名逾期自動取消排程一併移除——陳君秀試上案例發現同一種誤傷風險
+    // （會員已在期限內填妥匯款資訊，只是館方沒點確認）在比賽這邊雖有「已填匯款資料不剔除」的
+    // 安全閥，使用者仍決定與課程政策看齊、全面改人工，不倚賴任何自動取消。sweepExpiredCompetitionPayments
+    // 函式本體保留，只是不再排程呼叫（如需手動清可另補觸發端點，比照課程 sweep-expired-payments）。
     // 結帳暫存檔（draft）清理：只保留今天與最近三天，刪更舊的未結帳暫存（settled 永不刪）
     try {
       await require('./services/settlementService').sweepStaleSettlementDrafts();
@@ -301,10 +300,10 @@ if (require.main === module) {
       runShiftReminderJob();
     }
     runCardTransferExpiry(); // 每小時掃一次逾期移轉
-    // 試上逾期未繳費：釋放名額 + 取消預約 + 候補轉正（每小時）
-    require('./services/courseService').sweepExpiredTrialPayments()
-      .then(r => { if (r.cancelled > 0) console.log(`[試上逾期] 釋放 ${r.cancelled} 筆、遞補 ${r.promotedSessions} 場次`); })
-      .catch(e => console.error('[試上逾期] 失敗', e.message));
+    // 政策（2026-09-09）：試上逾期未繳費自動釋放排程已移除——陳君秀案例：她在 48 小時期限內已
+    // 提交轉帳資訊（末五碼、金額全額吻合），只是館方沒點確認收款，就被排程自動取消整筆試上。
+    // 比照 2026-07-27 課程政策改為一律人工：待收款頁由管理員/值班「確認」或處理，不再自動取消。
+    // sweepExpiredTrialPayments 函式本體保留，只是不再排程呼叫。
     // 單次入場券逾時未審核自動取消（每小時；取代已刪除的 Firebase Cloud Function autoExpireSingleEntryTickets）
     require('./routes/passes').sweepExpiredTicketApprovals()
       .then(r => { if (r.cancelled > 0) console.log(`[單次券逾期] 自動取消 ${r.cancelled} 筆未審核票券`); })

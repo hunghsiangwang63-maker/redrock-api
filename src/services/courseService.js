@@ -1470,13 +1470,10 @@ const promoteWaitlist = async (sessionId) => {
     updatedAt: new Date(),
   });
 
-  // 試上候補轉正且尚未繳費 → 給「新的繳費期限」（遞補時起算，min(+48h, 上課前)），逾期同樣由 sweep 釋放
+  // 政策（2026-09-09）：試上候補轉正不再給自動取消用的繳費期限——sweepExpiredTrialPayments
+  // 已停止排程（見 index.js 同日註解，陳君秀案例：已繳費只是館方沒點確認就被自動取消），
+  // 遞補後改一律人工在待收款頁確認/處理，不再倚賴期限自動釋出名額。
   const promoted = first.data();
-  if (promoted.isTrial === true && promoted.paymentStatus === 'pending') {
-    const sd = sessionDoc.data();
-    const deadline = trialPaymentDeadline(sd);
-    await first.ref.update({ paymentDeadline: deadline, updatedAt: new Date() });
-  }
 
   // TODO: 發 Email 通知遞補成功
   console.log(`✅ 候補遞補：${promoted.memberName} → confirmed`);

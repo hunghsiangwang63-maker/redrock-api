@@ -399,7 +399,8 @@ router.put('/:id/reject', authenticate, async (req, res) => {
     });
     // 退回＝標記底層訂單「待補正」（course/experience/competition/rental 共用同一組欄位）：
     // 【保留訂單狀態、不釋放名額/不作廢】、【course 不動 paymentDeadline】（沿用原期限）。
-    // → 會員可重新上傳轉帳（走 /transfers/upload）；course 期限一過仍未確認由 sweep 自動取消。
+    // → 會員可重新上傳轉帳（走 /transfers/upload）；course/trial/competition 皆已改一律人工
+    // 在待收款頁確認/處理（2026-07-27 課程、2026-09-09 試上與比賽），不再有排程自動取消。
     try {
       if (t.orderType && t.refId && REJECTABLE_COLL[t.orderType]) {
         const orderRef = db.collection(REJECTABLE_COLL[t.orderType]).doc(t.refId);

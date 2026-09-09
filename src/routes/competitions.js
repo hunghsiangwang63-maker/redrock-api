@@ -1281,7 +1281,6 @@ router.post('/registrations/:regId/reregister', authenticateAny, async (req, res
     const rrTeamDiscount = quote.teamDiscountApplied;
     const rrPartner = quote.partnerGymApplied;
     const rrPartnerName = rrPartner ? quote.partnerGymName : (reg.partnerGym || null);
-    const N = comp.paymentDeadlineDays || 3;
     const now = new Date();
     let finalStatus, waitlistPosition = null;
     await db.runTransaction(async (tx) => {
@@ -1308,7 +1307,8 @@ router.post('/registrations/:regId/reregister', authenticateAny, async (req, res
         cancelReason: null, paymentExpiredAt: null, cancelledAt: null,
         bankLastFive: null, bankName: null, paymentDate: null,   // 需重新繳費
         reregisteredAt: now, updatedAt: now,
-        paymentDeadline: (!willWaitlist && registrationFee > 0) ? dayjs(now).add(N, 'day').toDate() : null,
+        // 政策（2026-09-09）：不再設自動取消用的繳款期限（sweepExpiredCompetitionPayments 已停止排程）。
+        paymentDeadline: null,
       };
       tx.update(ref, update);
     });

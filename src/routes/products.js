@@ -631,6 +631,7 @@ router.post('/stocktake', authenticate, checkPermission('products.manage'), asyn
     const gymId = req.body.gymId || req.staff?.gymId;
     const { items } = req.body;
     const discrepancies = [];
+    const staleItems = [];
     const now = new Date();
 
     for (const item of items) {
@@ -641,6 +642,18 @@ router.post('/stocktake', authenticate, checkPermission('products.manage'), asyn
       const variant = product.variants.find(v => v.id === item.variantId);
       if (!variant) continue;
       const systemStock = getGymStock(variant, gymId);
+      // 防呆（2026-09-09）：若前端核對當下記得的帳面庫存（item.systemStock）跟現在的即時庫存不同，
+      // 代表核對後期間有其他異動（如被售出），此品項的實際盤點數量已經跟現況脫節——不能直接覆蓋
+      // 寫入（會把那筆異動的扣庫存效果蓋掉），改列入 staleItems 請前端要求重新核對，此品項本次
+      // 不寫入庫存、不記 stockLogs。未帶 item.systemStock（如舊版前端）則不做此檢查、維持原行為。
+      if (item.systemStock != null && Number(item.systemStock) !== systemStock) {
+        staleItems.push({
+          productId: item.productId, productName: product.name,
+          variantId: item.variantId, size: variant.size, color: variant.color,
+          expectedStock: Number(item.systemStock), currentStock: systemStock, actualStock: item.actualStock,
+        });
+        continue;
+      }
       const diff = item.actualStock - systemStock;
       if (diff !== 0) {
         discrepancies.push({
@@ -677,14 +690,22 @@ router.post('/stocktake', authenticate, checkPermission('products.manage'), asyn
       await notifBatch.commit();
     }
 
-    // 正式送出盤點結果後，暫存檔已無用（本次已完整記入 stockLogs 正式歷史），順手清掉避免殘留誤導下次盤點
-    try { await db.collection('stocktakeDrafts').doc(gymId).delete(); } catch (e) { /* 不影響本次盤點結果 */ }
+    // 正式送出盤點結果後，暫存檔已無用（本次已完整記入 stockLogs 正式歷史），順手清掉避免殘留誤導下次盤點。
+    // 若有 staleItems（部分品項因庫存異動被擋下未處理），代表這次盤點尚未真正完成，保留暫存檔
+    // 供之後回來針對這幾項重新核對（其餘已成功處理的品項重新打開盤點時會用最新帳面重新比對，
+    // 不會受影響；已用掉的暫存項目留著僅供之後補核對參考）。
+    if (staleItems.length === 0) {
+      try { await db.collection('stocktakeDrafts').doc(gymId).delete(); } catch (e) { /* 不影響本次盤點結果 */ }
+    }
 
     res.json({
-      message: discrepancies.length > 0
+      message: staleItems.length > 0
+        ? `已完成 ${items.length - staleItems.length} 項；${staleItems.length} 項在您核對後庫存已被異動（可能是售出），請重新核對後再送出`
+        : discrepancies.length > 0
         ? `盤點完成，發現 ${discrepancies.length} 項差異，已通知管理員`
         : '盤點完成，庫存無差異',
       discrepancies,
+      staleItems,
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

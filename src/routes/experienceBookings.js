@@ -179,7 +179,7 @@ async function handleTrialBooking(req, res, db, memberId) {
 
   return res.status(201).json({
     success:true, id, isTrial:true, totalFee: trialFee,
-    isWaitlist, paymentDeadline: paymentDeadline.toISOString(),
+    isWaitlist, paymentDeadline, // 2026-09-09 起一律 null（不再自動取消，見上方 handleTrialBooking 開頭註解）
     message: isWaitlist
       ? '此場次已額滿，已為您排入候補；有名額釋出將依序轉正'
       : '試上預約已送出，名額已為您保留，請於期限內完成付款',

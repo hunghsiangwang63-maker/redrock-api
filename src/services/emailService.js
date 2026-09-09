@@ -73,7 +73,10 @@ const sendEmailVerification = async (memberId, email, name) => {
     emailVerifyExpiry: expiry,   // 效期一律展延 24 小時
   });
 
-  const verifyUrl = `${process.env.API_URL || 'https://redrock-api-production.up.railway.app'}/members/verify-email/${token}`;
+  // 修正：改用自訂網域（與 linepay.js/jkopay.js 的 API_URL fallback 一致）——
+  // 舊的 Railway 原始網址 fallback 是自訂網域遷移前的殘留，萬一日後 DDoS 應變開啟
+  // EDGE_ENFORCE，信箱裡尚未點擊的舊連結會直接失效；此為單一權威來源，不留兩套寫法。
+  const verifyUrl = `${process.env.API_URL || 'https://api.redrocktaiwan.com'}/members/verify-email/${token}`;
 
   return sendEmail({
     to: email,
@@ -86,6 +89,10 @@ const sendEmailVerification = async (memberId, email, name) => {
         <a href="${verifyUrl}" style="display:inline-block;margin:20px 0;padding:12px 28px;background:#8B1A1A;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold">
           ✉ 驗證 Email
         </a>
+        <p style="color:#999;font-size:12px">
+          按鈕點不開嗎？請複製下方網址貼到瀏覽器開啟：<br>
+          <a href="${verifyUrl}" style="color:#8B1A1A;word-break:break-all">${verifyUrl}</a>
+        </p>
         <p style="color:#999;font-size:12px">此連結 24 小時內有效。若非本人操作請忽略此信。</p>
       </div>
     `,

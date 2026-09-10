@@ -14,7 +14,7 @@ const { taiwanToday } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
-const { authenticate, authenticateAny, authenticateMember, checkPermission, auditLog } = require('../middleware/auth');
+const { authenticate, authenticateAny, authenticateMember, checkPermission, auditLog, requireManagerOrStation } = require('../middleware/auth');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const courseService = require('../services/courseService');
 const { createWeeklySessions, updateSession } = courseService;
@@ -1115,6 +1115,36 @@ router.post('/enrollments/:enrollmentId/resend-notification', authenticate, chec
       installmentInfo: instInfo,
     });
     res.json({ success: true, fee: feeToShow });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// POST /courses/enrollments/:enrollmentId/deposit-reminder - 寄送工作坊保證金繳交提醒信
+// （管理員/值班皆可；僅在保證金尚未收取(depositCollectedAdjDone!==true)時可寄，避免已繳的人收到誤導提醒）
+router.post('/enrollments/:enrollmentId/deposit-reminder', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const enrollDoc = await db.collection('courseEnrollments').doc(req.params.enrollmentId).get();
+    if (!enrollDoc.exists) return res.status(404).json({ error: 'ENROLLMENT_NOT_FOUND' });
+    const e = enrollDoc.data();
+    if (!(Number(e.depositAmount) > 0)) return res.status(400).json({ error: 'NO_DEPOSIT', message: '此報名無保證金' });
+    if (e.depositCollectedAdjDone) return res.status(400).json({ error: 'ALREADY_COLLECTED', message: '保證金已收取，無需提醒' });
+    const courseDoc = await db.collection('courses').doc(e.courseId).get();
+    const c = courseDoc.exists ? courseDoc.data() : {};
+    const mDoc = await db.collection('members').doc(e.memberId).get();
+    let sessionDate = e.date, sessionTime = e.startTime;
+    if (e.sessionId) {
+      const sDoc = await db.collection('courseSessions').doc(e.sessionId).get();
+      if (sDoc.exists) { sessionDate = sDoc.data().date; sessionTime = sDoc.data().startTime; }
+    }
+    const result = await require('../services/registrationNotify').notifyDepositReminder({
+      memberId: e.memberId,
+      memberName: mDoc.exists ? (mDoc.data().name || '') : (e.memberName || ''),
+      itemName: c.name || e.courseName || '活動',
+      gymId: c.gymId || e.gymId,
+      sessionDate, sessionTime,
+      amount: e.depositAmount,
+    });
+    res.json({ success: true, result });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

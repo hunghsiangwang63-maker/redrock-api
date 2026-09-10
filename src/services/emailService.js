@@ -192,6 +192,28 @@ const sendInstallmentDueReminder = async ({ email, memberName, itemName, seq, to
   });
 };
 
+// ── 工作坊保證金繳交提醒（隊員價專屬，2026-09-08 起新增）────────────
+const sendWorkshopDepositReminder = async (to, { cc, memberName, itemName, sessionDate, sessionTime, amount } = {}) => {
+  return sendEmail({
+    to, cc,
+    subject: `【紅石攀岩】保證金繳交提醒 - ${itemName}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">保證金繳交提醒</h2>
+        <p>親愛的 ${esc(memberName)}，</p>
+        <p>提醒您報名的活動尚有保證金未繳交，請於開課前完成繳費（現場現金即可）：</p>
+        <div style="background:#FBF5F5;border-radius:8px;padding:16px;margin:16px 0">
+          <div><strong>活動：</strong>${esc(itemName)}</div>
+          ${sessionDate ? `<div><strong>時間：</strong>${esc(sessionDate)}${sessionTime ? ' ' + esc(sessionTime) : ''}</div>` : ''}
+          <div><strong>保證金：</strong>NT$${esc(Number(amount).toLocaleString())}</div>
+        </div>
+        <p>報到後由現場工作人員確認並退還（未出席將沒收保證金），謝謝。</p>
+        <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+  });
+};
+
 // ── 分期：會員逾期通知（物件參數，含期數）────────────────────────
 const sendInstallmentOverdueNotice = async ({ email, memberName, itemName, seq, totalSeq, amount, dueDate }) => {
   return sendEmail({
@@ -619,6 +641,7 @@ module.exports = {
   sendInstallmentOverdueAlert,
   sendInstallmentDueReminder,
   sendInstallmentOverdueNotice,
+  sendWorkshopDepositReminder,
   sendExperienceBookingConfirmation,
   sendExperienceBookingReceived,
   sendRegistrationReceived,

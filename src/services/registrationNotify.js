@@ -79,4 +79,15 @@ async function notifyRegConfirmed({ memberId, to, memberName, typeLabel, itemNam
   } catch (e) { console.error('[Email] 報名確認通知', e.message); }
 }
 
-module.exports = { notifyRegReceived, notifyRegConfirmed, isMassage };
+// 保證金繳交提醒（工作坊隊員價專屬）；sessionDate/sessionTime 選填，供信中顯示活動時間
+async function notifyDepositReminder({ memberId, to, memberName, itemName, gymId, sessionDate, sessionTime, amount }) {
+  try {
+    const db = getDb();
+    const emails = to ? (Array.isArray(to) ? to : [to]) : await resolveMemberEmails(db, memberId);
+    if (!emails.length) return { skipped: true, reason: 'NO_EMAIL' };
+    const cc = [await resolveGymEmail(db, gymId)].filter(Boolean);
+    return await emailService.sendWorkshopDepositReminder(emails, { cc, memberName, itemName, sessionDate, sessionTime, amount });
+  } catch (e) { console.error('[Email] 保證金繳交提醒', e.message); return { error: e.message }; }
+}
+
+module.exports = { notifyRegReceived, notifyRegConfirmed, notifyDepositReminder, isMassage };

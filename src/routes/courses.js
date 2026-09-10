@@ -2246,13 +2246,17 @@ async function handleEnrollAll(req, res) {
       await db.runTransaction(async (tx) => {
         // 讀取（交易內所有讀取須在寫入之前）
         // 去重：本課程已有 confirmed / waitlist / leave（請假中）報名 → 擋（避免重複報名+重複收費）
+        // 試上/補課單堂佔位不算「已報名整期」（比照下方名額計算同一套排除慣例，見 isMakeup||isTrial）——
+        // 曾發生試上過的會員之後想報名整期被永久擋下的真實案例（2026-09-10 康晟恩：試上過的
+        // confirmed 紀錄命中此檢查，永遠無法完成整期報名，須手動排查才發現）。
         const dupSnap = await tx.get(
           db.collection('courseEnrollments')
             .where('memberId', '==', memberId)
             .where('courseId', '==', courseId)
             .where('status', 'in', ['confirmed', 'waitlist', 'leave'])
         );
-        if (!dupSnap.empty) { const e = new Error('您已報名此課程，請勿重複報名'); e.code = 'ALREADY_ENROLLED'; throw e; }
+        const hasRealDup = dupSnap.docs.some(d => { const x = d.data(); return !x.isMakeup && !x.isTrial; });
+        if (hasRealDup) { const e = new Error('您已報名此課程，請勿重複報名'); e.code = 'ALREADY_ENROLLED'; throw e; }
 
         // 名額 / 候補（以整門課「不重複會員數」為準）：滿 maxStudents → 候補；候補也滿(maxWaitlist；null=不限) → COURSE_FULL
         const courseEnrollSnap = await tx.get(

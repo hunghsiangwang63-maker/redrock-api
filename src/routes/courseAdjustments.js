@@ -428,7 +428,8 @@ router.post('/requests/:id/approve',
             finalDepositRefund = req.body.finalDepositRefund !== undefined ? Number(req.body.finalDepositRefund) : Number(request.suggestedDepositRefund) || 0;
             finalDepositRefund = Math.max(0, Math.min(finalDepositRefund, Number(dep.depositAmount)));
             try {
-              if (finalDepositRefund > 0) {
+              // 同上：只有原本實際以現金收取，退還才需要從抽屜拿出現金。
+              if (finalDepositRefund > 0 && dep.paymentMethod === 'cash') {
                 await require('../services/settlementService').addCashAdjustment({
                   gymId: dep.gymId, sign: '-', type: '保證金退還', amount: finalDepositRefund,
                   note: `${dep.memberName || ''}（${dep.courseName || ''}・提前取消）`,

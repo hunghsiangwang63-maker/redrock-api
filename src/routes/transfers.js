@@ -270,13 +270,19 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
                 ...(noteUpdate.staffNote !== undefined ? { staffNote: noteUpdate.staffNote } : {}),
               });
             } catch (e2) { console.error('[雙寫] header 付款確認更新失敗（不影響收款確認）:', e2.message); }
-            // 工作坊保證金：收款確認當下才記入抽屜（比照器材租借押金收取時機，非報名當下）；冪等
+            // 工作坊保證金：收款確認當下才記入抽屜（比照器材租借押金收取時機，非報名當下）；冪等。
+            // ⚠️ 只有實際以現金收取才進「當日結帳」現金加減項——轉帳/線上支付的保證金錢從未進過
+            // 抽屜，若無條件當現金記，會讓當日現金虛增（陳錦漩案例：轉帳付款卻被記成＋現金200）。
+            // `en.paymentMethod` 讀的是本次確認後的最終值（含上面的 pmOverride 更正），故管理員
+            // 若在確認收款當下把付款方式改成轉帳，這裡會正確跟著不記現金。
             if (Number(en.depositAmount) > 0 && !en.depositCollectedAdjDone) {
               try {
-                await require('../services/settlementService').addCashAdjustment({
-                  gymId: en.gymId, sign: '+', type: '保證金收取', amount: en.depositAmount,
-                  note: `${en.memberName || ''}（${en.courseName || ''}）`,
-                });
+                if (en.paymentMethod === 'cash') {
+                  await require('../services/settlementService').addCashAdjustment({
+                    gymId: en.gymId, sign: '+', type: '保證金收取', amount: en.depositAmount,
+                    note: `${en.memberName || ''}（${en.courseName || ''}）`,
+                  });
+                }
                 await db.collection('courseEnrollments').doc(t.refId).update({ depositCollectedAdjDone: true, updatedAt: now });
               } catch (e3) { console.error('保證金收取記帳失敗（收款已確認）:', e3.message); }
             }

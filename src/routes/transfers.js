@@ -277,12 +277,12 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
             // 若在確認收款當下把付款方式改成轉帳，這裡會正確跟著不記現金。
             if (Number(en.depositAmount) > 0 && !en.depositCollectedAdjDone) {
               try {
-                if (en.paymentMethod === 'cash') {
-                  await require('../services/settlementService').addCashAdjustment({
-                    gymId: en.gymId, sign: '+', type: '保證金收取', amount: en.depositAmount,
-                    note: `${en.memberName || ''}（${en.courseName || ''}）`,
-                  });
-                }
+                // 2026 整併第二階段：改呼叫共用 recordDepositMovement，「非現金不記」的判斷收斂在該函式內。
+                await require('../services/paymentRecording').recordDepositMovement({
+                  gymId: en.gymId, sign: '+', type: '保證金收取', amount: en.depositAmount,
+                  paymentMethod: en.paymentMethod,
+                  note: `${en.memberName || ''}（${en.courseName || ''}）`,
+                });
                 await db.collection('courseEnrollments').doc(t.refId).update({ depositCollectedAdjDone: true, updatedAt: now });
               } catch (e3) { console.error('保證金收取記帳失敗（收款已確認）:', e3.message); }
             }
@@ -378,8 +378,10 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
             const _depositAmt = _enDoc.exists ? (Number(_enDoc.data().depositAmount) || 0) : 0;
             if (_depositAmt > 0) cashInAmount = Math.max(0, Number(t.amount) - _depositAmt);
           }
-          await require('../services/settlementService').addCashAdjustment({
-            gymId: t.gymId, amount: cashInAmount,
+          // 2026 整併第二階段：改呼叫共用 recordDepositMovement（外層 pm==='cash' 已判斷過，這裡
+          // 一併帶入 paymentMethod 供該函式再次確認，避免只靠外層條件式）。
+          await require('../services/paymentRecording').recordDepositMovement({
+            gymId: t.gymId, amount: cashInAmount, paymentMethod: pm,
             note: `${t.memberName || ''} ${t.orderName || t.courseName || (t.orderType === 'team_member' ? '入隊隊費' : '')}`.trim(),
           });
           // 2026-08-27：抽屜現金由上面這筆「+現金補入」唯一負責——課程/比賽發票（延後開立，見

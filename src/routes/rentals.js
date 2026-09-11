@@ -184,10 +184,14 @@ router.post('/:id/confirm', authenticate, checkPermission('rentals.manage'), asy
     try { await recordRentalRevenue(db, req.params.id, { staffId: req.staff.id, staffName: req.staff.name }); }
     catch (e) { console.error('器材租借記帳失敗', e.message); }
     // 押金收取（現金持有）→ 當日結帳加減項（＋押金收取，可於結帳頁編輯/移除；冪等）；非現金付款不進現金加減項
+    // （2026 整併第二階段：改呼叫共用 recordDepositMovement，「非現金不記」的判斷收斂在該函式內；
+    // 外層 paymentMethod==='cash' 判斷保留，避免非現金租借也被標記 depositCashAdjDone:true——
+    // 萬一日後付款方式被更正為現金，仍能正確補記這筆押金收取。）
     if (Number(r.totalDeposit) > 0 && !r.depositCashAdjDone && r.paymentMethod === 'cash') {
       try {
-        await require('../services/settlementService').addCashAdjustment({
+        await require('../services/paymentRecording').recordDepositMovement({
           gymId: r.gymId, sign: '+', type: '押金收取', amount: r.totalDeposit,
+          paymentMethod: r.paymentMethod,
           note: `${r.memberName || ''} 器材押金`.trim(),
         });
         await ref.update({ depositCashAdjDone: true });
@@ -214,8 +218,9 @@ router.post('/:id/return', authenticate, checkPermission('rentals.manage'), asyn
     // 當場退押金（現金取出）→ 當日結帳加減項（−押金退還，部分退可於結帳頁改金額；冪等）；非現金付款不進現金加減項
     if (willReturn && Number(r.totalDeposit) > 0 && !r.depositReturnAdjDone && r.paymentMethod === 'cash') {
       try {
-        await require('../services/settlementService').addCashAdjustment({
+        await require('../services/paymentRecording').recordDepositMovement({
           gymId: r.gymId, sign: '-', type: '押金退還', amount: r.totalDeposit,
+          paymentMethod: r.paymentMethod,
           note: `${r.memberName || ''} 器材押金退還${req.body.deductNote ? '（' + req.body.deductNote + '）' : ''}`.trim(),
         });
         await ref.update({ depositReturnAdjDone: true });
@@ -442,8 +447,9 @@ router.post('/:id/return-deposit', authenticate, checkPermission('rentals.manage
     // 補退押金（現金取出）→ 當日結帳加減項（−押金退還，部分退可於結帳頁改金額；冪等）；非現金付款不進現金加減項
     if (Number(r.totalDeposit) > 0 && !r.depositReturnAdjDone && r.paymentMethod === 'cash') {
       try {
-        await require('../services/settlementService').addCashAdjustment({
+        await require('../services/paymentRecording').recordDepositMovement({
           gymId: r.gymId, sign: '-', type: '押金退還', amount: r.totalDeposit,
+          paymentMethod: r.paymentMethod,
           note: `${r.memberName || ''} 器材押金退還${r.depositDeductNote ? '（' + r.depositDeductNote + '）' : ''}`.trim(),
         });
         await doc.ref.update({ depositReturnAdjDone: true });

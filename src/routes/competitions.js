@@ -871,9 +871,12 @@ router.post('/registrations/:regId/confirm-payment',
       if (reg.paymentMethod === 'cash') {
         try {
           const compDoc = await db.collection(COLLECTIONS.COMPETITIONS || 'competitions').doc(reg.competitionId).get();
-          await require('../services/settlementService').addCashAdjustment({
+          // 2026 整併第二階段：改呼叫共用 recordDepositMovement（外層 reg.paymentMethod==='cash' 已
+          // 判斷過，這裡一併帶入 paymentMethod 供該函式再次確認，避免只靠外層條件式）。
+          await require('../services/paymentRecording').recordDepositMovement({
             gymId: compDoc.data()?.gymId,
             amount: Number(req.body.amount) || reg.registrationFee || 0,
+            paymentMethod: reg.paymentMethod,
             note: `${reg.memberName || ''} ${reg.competitionName || ''}`.trim(),
           });
           // 2026-08-27：抽屜現金由上面這筆「+現金補入」唯一負責——比賽發票（延後開立）的非轉帳付款

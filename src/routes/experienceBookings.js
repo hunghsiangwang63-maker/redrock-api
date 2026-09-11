@@ -1007,8 +1007,11 @@ router.put('/:id/finance', authenticate, requireManager, async (req, res) => {
     const b = doc.data();
     if (coachFee != null && coachFee > 0 && !b.coachFeeAdjDone) {
       try {
-        await require('../services/settlementService').addCashAdjustment({
-          gymId: b.gymId, sign: '-', type: '教練費', amount: coachFee,
+        // 教練費一定是實際從抽屜付出的現金支出，與這筆體驗預約當初怎麼收款無關，故固定傳
+        // paymentMethod:'cash'（維持原本無條件記帳的行為；2026 整併第二階段改呼叫共用
+        // recordDepositMovement，其餘押金類呼叫點才是靠 paymentMethod 判斷是否要記）。
+        await require('../services/paymentRecording').recordDepositMovement({
+          gymId: b.gymId, sign: '-', type: '教練費', amount: coachFee, paymentMethod: 'cash',
           note: `${b.contactName || ''} 體驗教練費`.trim(),
           targetDate: b.bookingDate, // 記在活動當天，而非管理員填寫教練費金額的當下（2026-08-11 案例）
         });

@@ -428,10 +428,12 @@ router.post('/requests/:id/approve',
             finalDepositRefund = req.body.finalDepositRefund !== undefined ? Number(req.body.finalDepositRefund) : Number(request.suggestedDepositRefund) || 0;
             finalDepositRefund = Math.max(0, Math.min(finalDepositRefund, Number(dep.depositAmount)));
             try {
-              // 同上：只有原本實際以現金收取，退還才需要從抽屜拿出現金。
-              if (finalDepositRefund > 0 && dep.paymentMethod === 'cash') {
-                await require('../services/settlementService').addCashAdjustment({
+              // 同上：只有原本實際以現金收取，退還才需要從抽屜拿出現金
+              // （2026 整併第二階段：改呼叫共用 recordDepositMovement，判斷收斂在該函式內）。
+              if (finalDepositRefund > 0) {
+                await require('../services/paymentRecording').recordDepositMovement({
                   gymId: dep.gymId, sign: '-', type: '保證金退還', amount: finalDepositRefund,
+                  paymentMethod: dep.paymentMethod,
                   note: `${dep.memberName || ''}（${dep.courseName || ''}・提前取消）`,
                 });
               }

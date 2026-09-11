@@ -794,12 +794,12 @@ router.post('/enrollments/:enrollmentId/refund-deposit',
       const now = new Date();
       // 只有當初實際以現金收取，退還才需要從抽屜拿出現金；轉帳/線上支付的保證金從未進過抽屜，
       // 退還時也不該憑空扣現金（否則會產生比原本更嚴重的反向錯誤，比照收取端的同一守則）。
-      if (e.paymentMethod === 'cash') {
-        await require('../services/settlementService').addCashAdjustment({
-          gymId: e.gymId, sign: '-', type: '保證金退還', amount: e.depositAmount,
-          note: `${e.memberName || ''}（${e.courseName || ''}）`,
-        });
-      }
+      // 2026 整併第二階段：改呼叫共用 recordDepositMovement，「非現金不記」的判斷收斂在該函式內。
+      await require('../services/paymentRecording').recordDepositMovement({
+        gymId: e.gymId, sign: '-', type: '保證金退還', amount: e.depositAmount,
+        paymentMethod: e.paymentMethod,
+        note: `${e.memberName || ''}（${e.courseName || ''}）`,
+      });
       await ref.update({
         depositResolved: true, depositResolution: 'refunded', depositRefundedAmount: e.depositAmount,
         depositResolvedBy: req.staff.name || req.staff.id, depositResolvedAt: now, updatedAt: now,

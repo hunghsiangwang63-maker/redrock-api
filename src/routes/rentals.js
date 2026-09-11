@@ -183,8 +183,8 @@ router.post('/:id/confirm', authenticate, checkPermission('rentals.manage'), asy
     });
     try { await recordRentalRevenue(db, req.params.id, { staffId: req.staff.id, staffName: req.staff.name }); }
     catch (e) { console.error('器材租借記帳失敗', e.message); }
-    // 押金收取（現金持有）→ 當日結帳加減項（＋押金收取，可於結帳頁編輯/移除；冪等）
-    if (Number(r.totalDeposit) > 0 && !r.depositCashAdjDone) {
+    // 押金收取（現金持有）→ 當日結帳加減項（＋押金收取，可於結帳頁編輯/移除；冪等）；非現金付款不進現金加減項
+    if (Number(r.totalDeposit) > 0 && !r.depositCashAdjDone && r.paymentMethod === 'cash') {
       try {
         await require('../services/settlementService').addCashAdjustment({
           gymId: r.gymId, sign: '+', type: '押金收取', amount: r.totalDeposit,
@@ -211,8 +211,8 @@ router.post('/:id/return', authenticate, checkPermission('rentals.manage'), asyn
       depositDeductNote: req.body.deductNote || null,
       returnedBy: req.staff.id, returnedByName: req.staff.name, returnedAt: new Date(), updatedAt: new Date(),
     });
-    // 當場退押金（現金取出）→ 當日結帳加減項（−押金退還，部分退可於結帳頁改金額；冪等）
-    if (willReturn && Number(r.totalDeposit) > 0 && !r.depositReturnAdjDone) {
+    // 當場退押金（現金取出）→ 當日結帳加減項（−押金退還，部分退可於結帳頁改金額；冪等）；非現金付款不進現金加減項
+    if (willReturn && Number(r.totalDeposit) > 0 && !r.depositReturnAdjDone && r.paymentMethod === 'cash') {
       try {
         await require('../services/settlementService').addCashAdjustment({
           gymId: r.gymId, sign: '-', type: '押金退還', amount: r.totalDeposit,
@@ -252,6 +252,7 @@ router.post('/:id/invoices', authenticate, requireManagerOrStation, async (req, 
       itemName: itemName || '器材租借費', amount: amount ?? r.totalRentalFee, taxId, note, gymId: r.gymId, issuedAt, track, number,
       staffId: req.staff.id, staffName: req.staff.name || '',
       meta: { rentalId: req.params.id },
+      paymentMethod: r.paymentMethod,
     });
     res.json({ success: true, invoice: record });
   } catch (err) {
@@ -438,8 +439,8 @@ router.post('/:id/return-deposit', authenticate, checkPermission('rentals.manage
       depositReturned: true,
       depositReturnedBy: req.staff.name || req.staff.id, depositReturnedAt: new Date(), updatedAt: new Date(),
     });
-    // 補退押金（現金取出）→ 當日結帳加減項（−押金退還，部分退可於結帳頁改金額；冪等）
-    if (Number(r.totalDeposit) > 0 && !r.depositReturnAdjDone) {
+    // 補退押金（現金取出）→ 當日結帳加減項（−押金退還，部分退可於結帳頁改金額；冪等）；非現金付款不進現金加減項
+    if (Number(r.totalDeposit) > 0 && !r.depositReturnAdjDone && r.paymentMethod === 'cash') {
       try {
         await require('../services/settlementService').addCashAdjustment({
           gymId: r.gymId, sign: '-', type: '押金退還', amount: r.totalDeposit,

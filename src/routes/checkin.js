@@ -306,6 +306,7 @@ router.post('/:checkInId/invoices', authenticate, requireManagerOrStation, async
       itemName: itemName || '入場費', amount, taxId, note, gymId: ci.gymId, issuedAt, track, number,
       staffId: req.staff.id, staffName: req.staff.name || '',
       meta: { checkInId: req.params.checkInId, entryType: ci.entryType || '' },
+      paymentMethod: ci.paymentMethod,
     });
     res.json({ success: true, invoice: record });
   } catch (err) {

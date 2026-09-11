@@ -912,6 +912,7 @@ router.post('/:id/invoices', authenticate, requireManagerOrStation, async (req, 
       taxId, note, gymId: b.gymId, issuedAt, track, number,
       staffId: req.staff.id, staffName: req.staff.name || '',
       meta: { bookingId: req.params.id },
+      paymentMethod: b.paymentMethod,
     });
     res.json({ success: true, invoice: record });
   } catch (err) {

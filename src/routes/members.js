@@ -931,12 +931,21 @@ router.post('/course-invoices', authenticate, requireManagerOrStation, async (re
     const db = getDb();
     const { enrollmentId, memberId, memberName, courseId, courseName, gymId, itemName, amount, taxId, note, issuedAt, track, number } = req.body;
     if (!memberId || !courseId || !enrollmentId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '缺少會員或課程資訊' });
+    // 2026-08-xx 補：原本完全信任 req.body（含 memberId/courseId），改為以 enrollmentId 讀回報名文件核對，
+    // 並取得真實 paymentMethod 供發票的現金加減項判斷用（不再無條件當現金）。
+    const enrollDoc = await db.collection('courseEnrollments').doc(enrollmentId).get();
+    if (!enrollDoc.exists) return res.status(404).json({ error: 'ENROLLMENT_NOT_FOUND', message: '查無此報名紀錄' });
+    const enroll = enrollDoc.data();
+    if (enroll.memberId !== memberId || enroll.courseId !== courseId) {
+      return res.status(400).json({ error: 'ENROLLMENT_MISMATCH', message: '報名紀錄與提供的會員/課程不符' });
+    }
     await require('./invoices').checkInvoiceIssuanceTiming(db, 'course', enrollmentId); // 須等課程最後一堂才能開票
     const invoiceService = require('../services/invoiceService');
     const record = await invoiceService.createInvoice(db, {
       sourceType: 'course', refId: enrollmentId, memberId, memberName,
       itemName: itemName || courseName || '課程費用', amount, taxId, note, gymId, issuedAt, track, number,
       staffId: req.staff.id, staffName: req.staff.name || '',
+      paymentMethod: enroll.paymentMethod,
       meta: { enrollmentId, courseId, courseName: courseName || '' },
     });
     res.json({ success: true, invoice: record });

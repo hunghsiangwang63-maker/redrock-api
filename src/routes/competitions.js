@@ -1597,6 +1597,7 @@ router.post('/registrations/:regId/invoices', authenticate, requireManagerOrStat
       amount, taxId, note, gymId: comp.gymId || null, issuedAt, track, number,
       staffId: req.staff.id, staffName: req.staff.name || '',
       meta: { registrationId: req.params.regId, competitionId: reg.competitionId, competitionName: reg.competitionName || comp.name || '', divisionName: reg.divisionName || '' },
+      paymentMethod: reg.paymentMethod,
     });
     res.json({ success: true, invoice: record });
   } catch (err) {

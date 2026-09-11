@@ -337,6 +337,7 @@ router.post('/sales/:saleId/invoices', authenticate, requireManagerOrStation, as
       amount, taxId, note, gymId: sale.gymId, issuedAt, track, number,
       staffId: req.staff.id, staffName: req.staff.name || '',
       meta: { saleId: req.params.saleId },
+      paymentMethod: sale.paymentMethod,
     });
     res.json({ success: true, invoice: record });
   } catch (err) {

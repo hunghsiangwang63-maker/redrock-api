@@ -12,6 +12,19 @@ const { isValidTaiwanTaxId } = require('../utils/taiwanTaxId');
 
 const COLL = 'invoiceRecords';
 
+// 這些來源類型的錢，在開發票這一刻早就已經透過別的管道正確計入今日結帳
+// （rental_addon：金額本就存在對應 checkIns 文件、結帳頁即時重新掃描；
+//  pass_renewal：付款當下已由 recordTransaction 記為電子支付）——create/void
+// 都要一起跳過現金加減項，否則同一筆錢會被重複計算。集中定義於此，讓 create 與
+// void 讀同一份判斷依據，避免像過去那樣「開立時記得跳過、作廢時忘記」的不對稱。
+const DOUBLE_COUNTED_SOURCE_TYPES = new Set(['rental_addon', 'pass_renewal']);
+
+// 是否該記現金加減項：呼叫端明確要求跳過 → 一律跳過；來源類型本就雙重計算 → 跳過；
+// 呼叫端有告知真實付款方式且不是現金 → 跳過（這筆錢沒有進抽屜，不該記現金異動）；
+// 其餘（含呼叫端未帶 paymentMethod，向下相容尚未遷移的呼叫點）→ 維持記帳。
+const shouldSkipCashAdjustment = (sourceType, paymentMethod, explicitSkip) =>
+  !!explicitSkip || DOUBLE_COUNTED_SOURCE_TYPES.has(sourceType) || (paymentMethod != null && paymentMethod !== 'cash');
+
 const getActiveInvoice = async (db, sourceType, refId) => {
   const snap = await db.collection(COLL)
     .where('sourceType', '==', sourceType).where('refId', '==', refId).where('status', '==', 'issued').limit(1).get();
@@ -31,6 +44,11 @@ const createInvoice = async (db, {
   // 「+發票開立」加減項會把同一筆錢算兩次。預設 false（維持既有 course/competition/checkin 呼叫端
   // 沒改過的行為，不評斷/不動它們現有的正確性），只有呼叫端明確知道會重複時才傳 true 跳過。
   skipCashAdjustment = false,
+  // 2026-09-13 新增：這筆訂單實際的付款方式（選填，向下相容——未帶值時完全維持舊行為，一律當現金
+  // 記加減項）。有帶值且不是 'cash' 時（轉帳/LinePay/街口/台灣Pay），代表這筆錢沒有進抽屜，不該記
+  // 「+發票開立」現金加減項，否則會跟今天陳錦漩工作坊保證金同一種 bug——無條件當現金導致當日現金
+  // 虛增。存進發票紀錄本身，供 voidInvoice 作廢時讀同一個值對稱判斷，呼叫端不用在作廢時再傳一次。
+  paymentMethod,
 }) => {
   const amt = Number(amount);
   if (!(amt > 0)) { const e = new Error('發票金額需大於 0'); e.code = 'INVALID_AMOUNT'; throw e; }
@@ -60,12 +78,13 @@ const createInvoice = async (db, {
     taxId: taxIdVal, note: note ? String(note).trim() : '',
     issuedAt: issuedAt ? new Date(issuedAt) : now,
     staffId, staffName: staffName || '',
+    paymentMethod: paymentMethod || null,
     createdAt: now, updatedAt: now,
     ...(meta || {}),
   };
   await db.collection(COLL).doc(id).set(record);
-  // 計入當日營收（結帳加減項；不動原本認列的營收交易）——skipCashAdjustment 見上方參數說明
-  if (!skipCashAdjustment) {
+  // 計入當日營收（結帳加減項；不動原本認列的營收交易）——見上方 shouldSkipCashAdjustment 判斷式
+  if (!shouldSkipCashAdjustment(sourceType, paymentMethod, skipCashAdjustment)) {
     try {
       const invNoLabel = (trackVal || numberVal) ? `${trackVal}${numberVal}・` : '';
       await require('./settlementService').addCashAdjustment({
@@ -77,10 +96,11 @@ const createInvoice = async (db, {
   return record;
 };
 
-// skipCashAdjustment：對稱 createInvoice 同名參數——這筆發票當初開立時若也 skip 了「+發票開立」
-// 加減項（例如 pass_renewal：付款當下已透過 recordTransaction 正確記為電子支付，非現金），作廢時
-// 就不能無條件補一筆「－發票作廢」（會平白扣到當天現金，這筆錢本來就沒被算進現金過）。既有呼叫端
-// （course/competition/checkin/rental_addon）皆未傳此參數，預設 false，行為完全不變。
+// skipCashAdjustment：呼叫端仍可明確要求跳過（沿用既有參數、行為不變）；但現在**不再是唯一依據**——
+// 這裡改讀 shouldSkipCashAdjustment(inv.sourceType, inv.paymentMethod, skipCashAdjustment)，用開立
+// 當下就已經存在發票紀錄上的 sourceType/paymentMethod 自動比照 createInvoice 當時的判斷結果，呼叫端
+// 不需要（也不太可能）在作廢時重新正確傳一次同樣的旗標。修掉一個既有的真實不對稱 bug：rental_addon
+// 的開立有傳 skipCashAdjustment:true，但共用的通用作廢路由從未傳過，作廢時會誤記「－發票作廢」。
 const voidInvoice = async (db, id, staffId, staffName, voidReason, { skipCashAdjustment = false } = {}) => {
   const ref = db.collection(COLL).doc(id);
   const doc = await ref.get();
@@ -93,7 +113,7 @@ const voidInvoice = async (db, id, staffId, staffName, voidReason, { skipCashAdj
     voidReason: voidReason ? String(voidReason).trim() : '', updatedAt: now,
   });
   // 沖銷當日結帳加減項（負向、與開立時對稱；不刪改原始開立紀錄，保留稽核軌跡）
-  if (!skipCashAdjustment) {
+  if (!shouldSkipCashAdjustment(inv.sourceType, inv.paymentMethod, skipCashAdjustment)) {
     try {
       const invNoLabel = inv.invoiceNo ? `${inv.invoiceNo}・` : '';
       await require('./settlementService').addCashAdjustment({

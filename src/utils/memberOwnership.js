@@ -1,6 +1,17 @@
 const { getDb, COLLECTIONS } = require('../config/firebase');
 
 /**
+ * 純判斷式：target（已抓出的會員文件資料）是否為 member 的子會員（含共同家長 coParentIds）。
+ * 從 checkMemberOwnership 抽出——climbingRoutes.js 的 resolveActingMember 需要「順便」用同一次
+ * Firestore 讀取的結果做完擁有權驗證＋取得會員資料（避免驗證與抓資料各自讀一次），無法直接呼叫
+ * 下面會自己重新 fetch 的 checkMemberOwnership；改為共用這支純函式，只重複「決定規則」的那一行，
+ * 不重複「怎麼抓資料」，日後調整子會員判定規則（如新增其他親屬關係）兩處都會自動同步。
+ */
+function isChildOf(target, member) {
+  return target.parentMemberId === member.id || (Array.isArray(target.coParentIds) && target.coParentIds.includes(member.id));
+}
+
+/**
  * 驗證登入會員（req.member）是否有權代 targetMemberId 操作（本人，或自己的子會員）。
  *
  * 集中原本散落在各路由的重複判斷：「會員只能為自己或子會員報名」。
@@ -34,11 +45,10 @@ async function checkMemberOwnership(member, targetMemberId, opts = {}) {
   const target = snap.data();
   // 子會員判定以 parentMemberId 或 coParentIds（共同家長）為準（與 /members/my/children 一致）；
   // 不要求 isChildAccount 旗標，避免漏設旗標的子會員讓家長無法代操作（退費/請假/轉移等）。
-  const isParent = target.parentMemberId === member.id || (Array.isArray(target.coParentIds) && target.coParentIds.includes(member.id));
-  if (!isParent) {
+  if (!isChildOf(target, member)) {
     return forbidden;
   }
   return null; // 為自己的子會員（含共同家長）
 }
 
-module.exports = { checkMemberOwnership };
+module.exports = { checkMemberOwnership, isChildOf };

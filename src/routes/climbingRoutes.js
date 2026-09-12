@@ -43,6 +43,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticate, authenticateMember, authenticateAny, requireManager } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const { taiwanToday } = require('../utils/taiwanDate');
+const { isChildOf } = require('../utils/memberOwnership');
 const { v4: uuidv4 } = require('uuid');
 
 const validate = (req, res, next) => {
@@ -145,16 +146,16 @@ function publicDisplayName(name, nickname) {
 // 解析「為誰操作」（本人或子會員，含共同家長 coParentIds）——2026-09-02 新增，讓完攀記錄/排名/暱稱/
 // tag 皆可由家長代子會員操作（子會員無獨立登入）。回傳 { ok:true, id, data } 或 { ok:false, status, body }。
 // 未帶 targetMemberId 或帶自己 id → 直接用 req.member（已是新鮮讀出的完整資料，省一次查詢）；
-// 帶子會員 id → 讀一次該子會員文件同時完成擁有權驗證＋資料抓取（不額外呼叫 utils/memberOwnership
-// 的 checkMemberOwnership，避免驗證+抓資料各查一次 Firestore）。
+// 帶子會員 id → 讀一次該子會員文件同時完成擁有權驗證＋資料抓取（不呼叫會自己重新 fetch 一次的
+// checkMemberOwnership，避免驗證+抓資料各查一次 Firestore；擁有權「規則」本身仍呼叫共用的
+// isChildOf 純函式，與 checkMemberOwnership 同一份判斷依據，2026-09-14 清查時抽出）。
 async function resolveActingMember(db, member, targetMemberId) {
   const id = String(targetMemberId || '').trim() || member.id;
   if (id === member.id) return { ok: true, id, data: member };
   const doc = await db.collection('members').doc(id).get();
   if (!doc.exists) return { ok: false, status: 404, body: { error: 'MEMBER_NOT_FOUND', message: '查無此會員' } };
   const d = doc.data() || {};
-  const isChild = d.parentMemberId === member.id || (Array.isArray(d.coParentIds) && d.coParentIds.includes(member.id));
-  if (!isChild) return { ok: false, status: 403, body: { error: 'FORBIDDEN', message: '只能為自己或子會員操作' } };
+  if (!isChildOf(d, member)) return { ok: false, status: 403, body: { error: 'FORBIDDEN', message: '只能為自己或子會員操作' } };
   return { ok: true, id, data: d };
 }
 const TAG_LIMIT = 5; // 單次最多同時標記幾人，避免濫用洗版

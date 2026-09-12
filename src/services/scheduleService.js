@@ -9,6 +9,7 @@ const { getDb, COLLECTIONS } = require('../config/firebase');
 const { taiwanToday } = require('../utils/taiwanDate');
 const dayjs = require('dayjs');
 const { v4: uuidv4 } = require('uuid');
+const { findMatchingSpecialHours } = require('../utils/gymDailyHours');
 
 const MAX_RECURRING_MONTHS = 3;
 
@@ -87,8 +88,8 @@ const createRecurringShifts = async ({ gymId, staffId, staffName, weekdays, type
     const closureAnnouncement = dateAnnouncements.find(a => a.type === 'closure');
     if (closureAnnouncement) return { status: 'closed' };
 
-    const specialHours = dateAnnouncements.find(a => a.type === 'special_hours');
-    if (specialHours) return { status: 'special', specialOpen: specialHours.specialOpen, specialClose: specialHours.specialClose };
+    const resolvedSpecial = findMatchingSpecialHours(dateAnnouncements, gymId, dateStr);
+    if (resolvedSpecial) return { status: 'special', specialOpen: resolvedSpecial.open, specialClose: resolvedSpecial.close };
 
     const hours = gym.regularHours?.[dayOfWeek];
     if (!hours || hours.closed) return { status: 'regular_closed' };

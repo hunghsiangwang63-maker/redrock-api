@@ -14,6 +14,7 @@
  */
 const dayjs = require('dayjs');
 const { getDb, COLLECTIONS } = require('../config/firebase');
+const { findMatchingSpecialHours } = require('../utils/gymDailyHours');
 
 const ANNOUNCE_COLLECTION = 'gymAnnouncements';
 const DOW = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
@@ -43,8 +44,8 @@ function gymStatusLocal(gym, announcements, dateStr) {
     (a.effectiveTo == null || a.effectiveTo >= dateStr)
   );
   if (anns.some(a => a.type === 'closure')) return 'closed';
-  const sh = anns.find(a => a.type === 'special_hours');
-  if (sh) return (sh.specialOpen !== '00:00' || sh.specialClose !== '00:00') ? 'open' : 'special_closed';
+  const resolved = findMatchingSpecialHours(anns, gym.id, dateStr);
+  if (resolved) return (resolved.open !== '00:00' || resolved.close !== '00:00') ? 'open' : 'special_closed';
   const h = gym.regularHours?.[DOW[dayjs(dateStr).day()]];
   if (!h || h.closed) return 'regular_closed';
   return 'open';

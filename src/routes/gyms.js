@@ -23,6 +23,7 @@ const multer = require('multer');
 const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
+const { findMatchingSpecialHours } = require('../utils/gymDailyHours');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -122,22 +123,21 @@ const getGymStatusForDate = async (gymId, dateStr) => {
     };
   }
 
-  // 2. 特殊營業時間
-  const specialHours = dateAnnouncements.find(a => a.type === 'special_hours');
-  if (specialHours) {
-    const hasWindow = specialHours.specialOpen !== '00:00' || specialHours.specialClose !== '00:00';
+  // 2. 特殊營業時間（逐日／逐館解析，見 utils/gymDailyHours.js）
+  const resolvedSpecial = findMatchingSpecialHours(dateAnnouncements, gymId, dateStr);
+  if (resolvedSpecial) {
+    const { open, close, announcement } = resolvedSpecial;
+    const hasWindow = open !== '00:00' || close !== '00:00';
     return {
       isOpen: hasWindow,
-      isOpenNow: hasWindow ? isWithinHours(specialHours.specialOpen, specialHours.specialClose) : null,
-      todayHours: specialHours.specialOpen && specialHours.specialClose
-        ? `${specialHours.specialOpen} - ${specialHours.specialClose}`
-        : null,
+      isOpenNow: hasWindow ? isWithinHours(open, close) : null,
+      todayHours: open && close ? `${open} - ${close}` : null,
       status: 'special',
       statusLabel: '特殊營業時間',
-      specialNote: specialHours.title,
-      announcementId: specialHours.id,
-      specialOpen: specialHours.specialOpen,
-      specialClose: specialHours.specialClose,
+      specialNote: announcement.title,
+      announcementId: announcement.id,
+      specialOpen: open,
+      specialClose: close,
     };
   }
 
@@ -428,6 +428,7 @@ router.post('/:id/announcements',
     body('type').isIn(['closure', 'special_hours', 'route_change', 'general'])
       .withMessage('type 必須為 closure / special_hours / route_change / general'),
     body('effectiveFrom').isDate().withMessage('請輸入生效日期'),
+    body('dailyHours').optional().isArray().withMessage('dailyHours 須為陣列'),
   ],
   validate,
   async (req, res) => {
@@ -435,6 +436,14 @@ router.post('/:id/announcements',
       const db = getDb();
       const id = uuidv4();
       const now = new Date();
+      // 逐日／逐館時段設定（type='special_hours' 用，取代單一 specialOpen/specialClose）：
+      // 每列 {date, gymId(選填，null=兩館皆同), open, close}。有效性交由前端表單把關，
+      // 這裡只做基本結構清洗，避免壞資料寫入影響 getGymStatusForDate 等下游解析。
+      const dailyHours = Array.isArray(req.body.dailyHours)
+        ? req.body.dailyHours
+            .filter(r => r && typeof r.date === 'string' && typeof r.open === 'string' && typeof r.close === 'string')
+            .map(r => ({ date: r.date, gymId: r.gymId || null, open: r.open, close: r.close }))
+        : [];
 
       const announcement = {
         id,
@@ -446,9 +455,10 @@ router.post('/:id/announcements',
         showOnBanner: req.body.showOnBanner || false,
         effectiveFrom: req.body.effectiveFrom,
         effectiveTo: req.body.effectiveTo || null,
-        // 特殊營業時間才有
-        specialOpen: req.body.specialOpen || null,
-        specialClose: req.body.specialClose || null,
+        // 特殊營業時間才有：有 dailyHours 走逐日／逐館解析，legacy 單一時段留 null（避免兩者混淆）
+        specialOpen: dailyHours.length ? null : (req.body.specialOpen || null),
+        specialClose: dailyHours.length ? null : (req.body.specialClose || null),
+        dailyHours,
         // 排期發布時段：publishAt=顯示開始（排程上架）、publishUntil=顯示結束（皆選填）
         publishAt: req.body.publishAt ? new Date(req.body.publishAt) : null,
         publishUntil: req.body.publishUntil ? new Date(req.body.publishUntil) : null,
@@ -477,10 +487,18 @@ router.put('/:id/announcements/:aid',
     try {
       const db = getDb();
       const allowed = ['title', 'content', 'bannerImage', 'showOnBanner',
-        'effectiveFrom', 'effectiveTo', 'specialOpen', 'specialClose',
+        'effectiveFrom', 'effectiveTo', 'specialOpen', 'specialClose', 'dailyHours',
         'publishAt', 'publishUntil', 'isPublished'];
       const updates = {};
       allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+      // dailyHours 若有帶入且非空 → 清空 legacy 單一時段欄位（避免兩者並存混淆解析）
+      if (Array.isArray(req.body.dailyHours) && req.body.dailyHours.length) {
+        updates.dailyHours = req.body.dailyHours
+          .filter(r => r && typeof r.date === 'string' && typeof r.open === 'string' && typeof r.close === 'string')
+          .map(r => ({ date: r.date, gymId: r.gymId || null, open: r.open, close: r.close }));
+        updates.specialOpen = null;
+        updates.specialClose = null;
+      }
       // publishAt / publishUntil 需存為 Date（讀取時會 .toDate()）
       if (req.body.publishAt !== undefined) updates.publishAt = req.body.publishAt ? new Date(req.body.publishAt) : null;
       if (req.body.publishUntil !== undefined) updates.publishUntil = req.body.publishUntil ? new Date(req.body.publishUntil) : null;

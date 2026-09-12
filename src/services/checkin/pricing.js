@@ -4,7 +4,7 @@
  * 對外 API 仍經 services/checkinService.js 門面 re-export。
  */
 const { getDb } = require('../../config/firebase');
-const { isActiveTeamMember, TEAM_DISCOUNT_MIN_AMOUNT } = require('../teamMemberService');
+const { isActiveTeamMember, TEAM_DISCOUNT_MIN_AMOUNT, TEAM_DISCOUNT_RATE } = require('../teamMemberService');
 const { isChild, ageOf } = require('../../utils/age');
 const dayjs = require('dayjs');
 
@@ -13,8 +13,11 @@ const PRICES = {
   single_child: 0,       // 兒童免費（未滿13歲）
   single_student: 0,     // 學生免費（13~22歲或已驗證學生證）
   discount_card: 600,    // 購買優惠折扣券（含本次入場）
-  team_discount_rate: 0.9,
-  team_discount_min: 100,
+  // 隊員折扣率一律沿用 teamMemberService 的 TEAM_DISCOUNT_RATE（2026-09-12 清查發現這裡原本
+  // 另外重複定義一份 0.9 常數、team_discount_min:100 更是完全沒被讀取的死值——實際門檻判斷
+  // 全部改讀正確匯入的 TEAM_DISCOUNT_MIN_AMOUNT，team_discount_min 從未生效；改用同一顆常數，
+  // 避免日後調整隊員折扣率時漏改其中一處）。
+  team_discount_rate: TEAM_DISCOUNT_RATE,
 };
 
 // 使用優惠折扣券入場：原價 8 折（兒童不適用）。原價依會員身份取 entryTypes 價格。

@@ -319,11 +319,7 @@ const sendInstallmentReminders = async () => {
     .where('status', 'in', ['active', 'overdue']).get();
 
   let reminderSent = 0, overdueSent = 0, adminNotified = 0;
-
-  // 管理員清單只需查一次，所有需要預警的期數共用
-  const managersSnap = await db.collection('staff').where('role', 'in', ['super_admin', 'gym_manager']).get();
-  const managers = managersSnap.docs.map(d => ({ id: d.id }));
-  const notifBatch = db.batch();
+  const { notifyGymManagers } = require('./notificationService');
 
   for (const doc of snap.docs) {
     const plan = doc.data();
@@ -332,15 +328,19 @@ const sendInstallmentReminders = async () => {
 
     for (const i of plan.installments) {
       // 管理員提前預警（到期前7天，站內通知，不論會員是否有Email都會發）
+      // 2026-09-12 清查發現：原本查全部 staff role in [...]、沒有依 gymId 過濾 gym_manager
+      // ──士林的分期計畫也會誤通知到新竹的 gym_manager（反之亦然），與 dailySettlements.js/
+      // products.js 同一種跨館通知洩漏，改呼叫共用函式正確依館別範圍（plan.gymId 為 null 的
+      // 舊人工計畫沒有對應館別，只有 super_admin 會收到，符合「無館別歸屬」的合理預期）。
       if (i.status === 'pending' && i.dueDate >= today && i.dueDate <= adminWarningDate && !i.adminNotifiedAt) {
-        managers.forEach(m => {
-          const notifRef = db.collection('notifications').doc();
-          notifBatch.set(notifRef, {
+        try {
+          await notifyGymManagers({
+            gymId: plan.gymId || null,
             type: 'installment_upcoming', title: '分期付款即將到期',
-            message: `${plan.memberName}「${plan.itemName}」第 ${i.seq}/${plan.installments.length} 期將於 ${i.dueDate} 到期（NT$${i.amount.toLocaleString()}）`,
-            targetStaffId: m.id, data: { planId: plan.id, seq: i.seq }, isRead: false, createdAt: new Date(),
+            body: `${plan.memberName}「${plan.itemName}」第 ${i.seq}/${plan.installments.length} 期將於 ${i.dueDate} 到期（NT$${i.amount.toLocaleString()}）`,
+            referenceId: plan.id, referenceType: 'installmentPlan', link: '/staff/installments',
           });
-        });
+        } catch (e) { console.error(`[分期提醒] 管理員預警失敗 plan=${plan.id} seq=${i.seq}`, e.message); }
         i.adminNotifiedAt = new Date();
         adminNotified++;
       }
@@ -371,8 +371,6 @@ const sendInstallmentReminders = async () => {
     }
     await doc.ref.update({ installments: plan.installments, updatedAt: new Date() });
   }
-
-  if (adminNotified > 0) await notifBatch.commit();
 
   return { reminderSent, overdueSent, adminNotified };
 };

@@ -44,16 +44,6 @@ function normalizeRenewalDiscount(rd) {
   if (value <= 0) return null;
   return { mode: rd.mode, value: rd.mode === 'percent' ? Math.min(100, value) : value };
 }
-// 依票種算續約價（原價套續約折扣）
-function computeRenewalPrice(passType) {
-  const price = passType.price || 0;
-  const rd = passType.renewalDiscount;
-  if (!rd) return price;
-  return rd.mode === 'percent'
-    ? Math.max(0, Math.round(price * (100 - rd.value) / 100))
-    : Math.max(0, price - rd.value);
-}
-
 const validate = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {

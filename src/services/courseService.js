@@ -616,18 +616,22 @@ const updateSession = async ({ sessionId, staffId, data }) => {
     await syncCourseSessionCount(db, doc.data().courseId, 1, new Date());
   }
 
-  // 場次取消 → 補課學員退回補課券（比照 cancelMakeup / closureCancelSession；
-  // 一般取消不發正取豁免券，那是「休館停課」的專屬行為）
-  let makeupRestored = 0, trialAffected = 0;
+  // 場次取消 → 逐一處理該場次報名（比照 closureCancelSession 同一套分流，唯一差異：
+  // 一般取消不發正取豁免券，那是「休館停課」的專屬行為——2026-09-12 清查發現：先前只處理
+  // 補課／試上兩種特例，「正取的整期學員」完全沒被處理，報名紀錄會停在 confirmed、掛在一個
+  // 已取消的場次上，不會被標記取消也拿不到任何補償；已與使用者確認補法：報名標取消、
+  // 不給補課券（一般取消不一定是館方責任，不預設補償，之後要補課走既有請假/補課申請流程）。
+  let makeupRestored = 0, trialAffected = 0, regularCancelled = 0;
   if (data.status === 'cancelled' && prevStatus !== 'cancelled') {
     const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId)
-      .select('status', 'isMakeup', 'makeupId', 'isTrial', 'experienceBookingId').get();
+      .select('status', 'isMakeup', 'makeupId', 'isTrial', 'experienceBookingId', 'memberId').get();
     const now = new Date();
+    const affectedLeaveMemberIds = [];
     for (const d of enSnap.docs) {
       const e = d.data();
       if (!['confirmed', 'leave', 'waitlist'].includes(e.status)) continue;
-      // 補課學員：取消報名＋補課券還原 available
-      if (e.isMakeup && e.status === 'confirmed') {
+      // 補課學員：取消報名＋補課券還原 available（與狀態無關，比照 closureCancelSession）
+      if (e.isMakeup) {
         await d.ref.update({ status: 'cancelled', cancelReason: 'session_cancelled', cancelledAt: now, updatedAt: now });
         if (e.makeupId) {
           const mk = await db.collection(MAKEUP_COLLECTION).doc(e.makeupId).get();
@@ -648,6 +652,16 @@ const updateSession = async ({ sessionId, staffId, data }) => {
         trialAffected++;
         continue;
       }
+      // 一般整期學員（正取/請假/候補）：報名標取消，不發補課券；若這堂剛好是報名 header 的
+      // payEnrollmentId 錨點，頂替到另一筆仍有效的場次（比照 closureCancelSession）。
+      await d.ref.update({ status: 'cancelled', cancelReason: 'session_cancelled', cancelledAt: now, updatedAt: now });
+      await repointPayEnrollmentIfNeeded(db, e.memberId, doc.data().courseId, d.id);
+      regularCancelled++;
+      if (e.status === 'leave') affectedLeaveMemberIds.push(e.memberId);
+    }
+    // 請假者配額重算（該堂請假因場次取消而失效 → 額度收斂，比照 closureCancelSession）
+    for (const mid of [...new Set(affectedLeaveMemberIds)]) {
+      await reconcileMakeupEntitlement(db, mid, doc.data().courseId).catch(() => {});
     }
   }
 
@@ -668,7 +682,7 @@ const updateSession = async ({ sessionId, staffId, data }) => {
     if (n) await batch.commit();
   }
 
-  return { id: sessionId, ...doc.data(), ...updates, makeupRestored, trialAffected };
+  return { id: sessionId, ...doc.data(), ...updates, makeupRestored, trialAffected, regularCancelled };
 };
 
 // ── 單堂報名費用計算（2026-08-03 修正：一律收全額）──────────────────────

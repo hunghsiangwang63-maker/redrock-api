@@ -69,6 +69,14 @@ const announceTypeGuard = (req, res, next) => {
 // 會員可見的「發布時段」判定：publishAt <= now <= publishUntil（兩者皆選填）。
 // ⚠ 僅供「顯示給會員」的過濾。getGymStatusForDate（休館判定／定期票臨停補償來源）
 //   只看 publishAt、不套此函式——否則發布時段一過會讓休館「不算數」，補償錯亂。
+// dailyHours 陣列的最早／最晚日期（字串排序即可，格式皆為 YYYY-MM-DD）——
+// 後端權威計算 effectiveFrom/effectiveTo，不信任呼叫端（前端）自行算好的值。
+const dailyHoursRange = (dailyHours) => {
+  if (!dailyHours || !dailyHours.length) return null;
+  const dates = dailyHours.map(r => r.date).sort();
+  return { from: dates[0], to: dates[dates.length - 1] };
+};
+
 const isPublishedNow = (a, now) =>
   (!a.publishAt || a.publishAt.toDate() <= now) &&
   (!a.publishUntil || a.publishUntil.toDate() >= now);
@@ -427,7 +435,12 @@ router.post('/:id/announcements',
     body('title').notEmpty().withMessage('請輸入公告標題'),
     body('type').isIn(['closure', 'special_hours', 'route_change', 'general'])
       .withMessage('type 必須為 closure / special_hours / route_change / general'),
-    body('effectiveFrom').isDate().withMessage('請輸入生效日期'),
+    // 有帶 dailyHours（逐日設定）時效期由後端從陣列算出，effectiveFrom 免另外檢查
+    body('effectiveFrom').custom((value, { req }) => {
+      if (Array.isArray(req.body.dailyHours) && req.body.dailyHours.length) return true;
+      if (!value || !dayjs(value).isValid()) throw new Error('請輸入生效日期');
+      return true;
+    }),
     body('dailyHours').optional().isArray().withMessage('dailyHours 須為陣列'),
   ],
   validate,
@@ -445,6 +458,9 @@ router.post('/:id/announcements',
             .map(r => ({ date: r.date, gymId: r.gymId || null, open: r.open, close: r.close }))
         : [];
 
+      // 有 dailyHours 時，效期以逐日表格的最早／最晚日期為準（後端權威算出，不信任呼叫端傳的值）
+      const dhRange = dailyHoursRange(dailyHours);
+
       const announcement = {
         id,
         gymId: req.params.id === 'all' ? null : req.params.id,
@@ -453,8 +469,8 @@ router.post('/:id/announcements',
         content: req.body.content || '',
         bannerImage: req.body.bannerImage || null,
         showOnBanner: req.body.showOnBanner || false,
-        effectiveFrom: req.body.effectiveFrom,
-        effectiveTo: req.body.effectiveTo || null,
+        effectiveFrom: dhRange ? dhRange.from : req.body.effectiveFrom,
+        effectiveTo: dhRange ? dhRange.to : (req.body.effectiveTo || null),
         // 特殊營業時間才有：有 dailyHours 走逐日／逐館解析，legacy 單一時段留 null（避免兩者混淆）
         specialOpen: dailyHours.length ? null : (req.body.specialOpen || null),
         specialClose: dailyHours.length ? null : (req.body.specialClose || null),
@@ -491,13 +507,16 @@ router.put('/:id/announcements/:aid',
         'publishAt', 'publishUntil', 'isPublished'];
       const updates = {};
       allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
-      // dailyHours 若有帶入且非空 → 清空 legacy 單一時段欄位（避免兩者並存混淆解析）
+      // dailyHours 若有帶入且非空 → 清空 legacy 單一時段欄位（避免兩者並存混淆解析），
+      // 且效期改以逐日表格最早／最晚日期為準（後端權威算出，不信任呼叫端傳的 effectiveFrom/To）
       if (Array.isArray(req.body.dailyHours) && req.body.dailyHours.length) {
         updates.dailyHours = req.body.dailyHours
           .filter(r => r && typeof r.date === 'string' && typeof r.open === 'string' && typeof r.close === 'string')
           .map(r => ({ date: r.date, gymId: r.gymId || null, open: r.open, close: r.close }));
         updates.specialOpen = null;
         updates.specialClose = null;
+        const dhRange = dailyHoursRange(updates.dailyHours);
+        if (dhRange) { updates.effectiveFrom = dhRange.from; updates.effectiveTo = dhRange.to; }
       }
       // publishAt / publishUntil 需存為 Date（讀取時會 .toDate()）
       if (req.body.publishAt !== undefined) updates.publishAt = req.body.publishAt ? new Date(req.body.publishAt) : null;

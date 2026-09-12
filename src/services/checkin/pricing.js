@@ -5,6 +5,7 @@
  */
 const { getDb } = require('../../config/firebase');
 const { isActiveTeamMember, TEAM_DISCOUNT_MIN_AMOUNT } = require('../teamMemberService');
+const { isChild, ageOf } = require('../../utils/age');
 const dayjs = require('dayjs');
 
 const PRICES = {
@@ -50,11 +51,15 @@ const getOriginalEntryPrice = async (memberType) => {
 
 // ── 墜落測驗：有效期 1 年；到期前2個月~前1天入場時，回看過去1年若≥2次入場則自動延長1年（見 checkin/gates.js tryExtendFallTest）──
 const getMemberType = (member) => {
+  // 兒童（<13）以出生日期一律優先於 VIP/隊員標記——避免小孩掛 VIP/隊員時 memberType
+  // 蓋掉 'child' 而繞過兒童限制（如「兒童不適用優惠折扣券」，見 utils/age.js 設計說明；
+  // 2026-09-12 修復：原本 vip/climbing_team 判斷在年齡之前，兒童+VIP/隊員會被誤判成
+  // 非兒童身份）。13 歲以上的 VIP/隊員身份判斷不受影響，維持原順序。
+  if (isChild(member)) return 'child';
   if (member.memberType === 'vip') return 'vip';
   if (member.memberType === 'climbing_team') return 'climbing_team';
   if (!member.birthday) return 'general';
-  const age = dayjs().diff(dayjs(member.birthday), 'year');
-  if (age < 13) return 'child';
+  const age = ageOf(member);
   if (age <= 22) return 'student';
   if (member.memberType === 'student' && member.studentVerified) return 'student';
   return 'general';

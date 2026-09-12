@@ -12,6 +12,7 @@ const { authenticateAny } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 const memberService = require('../services/memberService');
+const { checkMemberOwnership } = require('../utils/memberOwnership');
 
 // 移轉規則
 const TRANSFER_RULES = {
@@ -34,13 +35,15 @@ const TRANSFER_RULES = {
   single_entry: (card) => ({ expiresAt: card.expiresAt }),
 };
 
-// 收件授權：本人，或「家長代其子女」處理（子帳號無法自行登入，須由家長 accept/reject）
-async function actorCanActFor(db, req, toMemberId) {
+// 收件授權：本人，或「家長代其子女（含共同家長 coParentIds）」處理（子帳號無法自行登入，
+// 須由家長 accept/reject）——改呼叫共用 checkMemberOwnership，與課程/比賽/租借等模組同一套
+// 親屬關係判斷（原本這裡手刻只查 parentMemberId，漏掉共同家長，2026-09-12 修復）。
+async function actorCanActFor(req, toMemberId) {
   const actorId = req.member?.id || req.staff?.id;
   if (toMemberId === actorId) return true;
   if (!req.member?.id) return false;
-  const doc = await db.collection('members').doc(toMemberId).get();
-  return doc.exists && doc.data().parentMemberId === req.member.id;
+  const denied = await checkMemberOwnership(req.member, toMemberId);
+  return denied === null;
 }
 
 // ── POST /ticket-transfers/request ──────────────────────────────
@@ -150,7 +153,7 @@ router.post('/:id/accept', authenticateAny, async (req, res) => {
     const transfer = (await db.collection('ticketTransfers').doc(req.params.id).get()).data();
     if (!transfer) return res.status(404).json({ error: 'NOT_FOUND' });
     if (transfer.status !== 'pending') return res.status(400).json({ error: 'ALREADY_PROCESSED' });
-    if (!(await actorCanActFor(db, req, transfer.toMemberId)))
+    if (!(await actorCanActFor(req, transfer.toMemberId)))
       return res.status(403).json({ error: 'NOT_TARGET' });
 
     const collectionMap = {
@@ -203,7 +206,7 @@ router.post('/:id/reject', authenticateAny, async (req, res) => {
     const transfer = (await db.collection('ticketTransfers').doc(req.params.id).get()).data();
     if (!transfer) return res.status(404).json({ error: 'NOT_FOUND' });
     if (transfer.status !== 'pending') return res.status(400).json({ error: 'ALREADY_PROCESSED' });
-    if (!(await actorCanActFor(db, req, transfer.toMemberId)))
+    if (!(await actorCanActFor(req, transfer.toMemberId)))
       return res.status(403).json({ error: 'NOT_TARGET' });
 
     await db.collection('ticketTransfers').doc(req.params.id).update({

@@ -9,6 +9,7 @@ const legacyCardService = require('../services/legacyCardService');
 const bonusService = require('../services/bonusService');
 const memberService = require('../services/memberService');
 const { isChild } = require('../utils/age');
+const { checkMemberOwnership } = require('../utils/memberOwnership');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -28,8 +29,11 @@ const childBlock = async (memberId, message) => {
 // 新優惠卡
 // ══════════════════════════════════════════════════════
 router.get('/discount/member/:memberId', authenticateAny, async (req, res) => {
-  try { res.json({ cards: await discountCardService.getMemberDiscountCards(req.params.memberId, { includeInactive: req.query.all === '1' }) }); }
-  catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  try {
+    const denied = await checkMemberOwnership(req.member, req.params.memberId, { onMissing: 403 });
+    if (denied) return res.status(denied.status).json(denied.body);
+    res.json({ cards: await discountCardService.getMemberDiscountCards(req.params.memberId, { includeInactive: req.query.all === '1' }) });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
 // 新增優惠卡給會員 = Group B：僅管理員（gym_manager / super_admin）
@@ -112,8 +116,11 @@ router.post('/discount/:id/transfer',
 // 舊優惠卡（拍照歸檔）
 // ══════════════════════════════════════════════════════
 router.get('/legacy-discount/member/:memberId', authenticateAny, async (req, res) => {
-  try { res.json({ cards: await legacyDiscountCardService.getMemberLegacyDiscountCards(req.params.memberId, { includeInactive: req.query.all === '1' }) }); }
-  catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  try {
+    const denied = await checkMemberOwnership(req.member, req.params.memberId, { onMissing: 403 });
+    if (denied) return res.status(denied.status).json(denied.body);
+    res.json({ cards: await legacyDiscountCardService.getMemberLegacyDiscountCards(req.params.memberId, { includeInactive: req.query.all === '1' }) });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
 // 舊優惠卡綁定（拍照歸檔）= Group A：館別電腦(值班)或管理員；立即生效 + 揭露通知管理員
@@ -178,8 +185,11 @@ router.post('/legacy-discount/:id/transfer',
 // 黑卡
 // ══════════════════════════════════════════════════════
 router.get('/black/member/:memberId', authenticateAny, async (req, res) => {
-  try { res.json({ cards: await legacyCardService.getMemberBlackCards(req.params.memberId, { includeInactive: req.query.all === '1' }) }); }
-  catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  try {
+    const denied = await checkMemberOwnership(req.member, req.params.memberId, { onMissing: 403 });
+    if (denied) return res.status(denied.status).json(denied.body);
+    res.json({ cards: await legacyCardService.getMemberBlackCards(req.params.memberId, { includeInactive: req.query.all === '1' }) });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
 // 黑卡綁定 = Group A：館別電腦(值班)或管理員；立即生效 + 揭露通知管理員
@@ -318,8 +328,11 @@ router.get('/transfers/outgoing/:memberId', authenticateAny, async (req, res) =>
 // 紅利
 // ══════════════════════════════════════════════════════
 router.get('/bonus/member/:memberId', authenticateAny, async (req, res) => {
-  try { res.json({ bonuses: await bonusService.getMemberBonuses(req.params.memberId, { includeInactive: req.query.all === '1' }) }); }
-  catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  try {
+    const denied = await checkMemberOwnership(req.member, req.params.memberId, { onMissing: 403 });
+    if (denied) return res.status(denied.status).json(denied.body);
+    res.json({ bonuses: await bonusService.getMemberBonuses(req.params.memberId, { includeInactive: req.query.all === '1' }) });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
 router.post('/bonus/:id/transfer-preview', authenticate,

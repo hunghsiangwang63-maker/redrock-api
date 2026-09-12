@@ -58,6 +58,22 @@ const notifyRoleInGym = async ({ gymId, role, type, title, body, referenceId, re
   return staffList.length;
 };
 
+// ── 批次通知同館 gym_manager + super_admin（單一入口）──────────────
+// 2026-09-12 清查發現：這個「for (const role of ['gym_manager','super_admin']) { try {...}
+// catch{} }」迴圈在 courseService.js／checkin/cancel.js／memberInquiries.js／invoices.js／
+// competitionSyncService.js／memberService.js／competitions.js 至少 7 處各自獨立重複實作，
+// 其中一半（memberService.js/competitions.js/competitionSyncService.js）還把兩個角色的呼叫
+// 包在同一個 try/catch 裡——gym_manager 那次失敗會連帶讓 super_admin 也收不到通知，
+// 與其餘幾處「每個角色各自獨立 try/catch」的行為不一致。收斂成這支函式，每個角色各自獨立
+// try/catch（其中一個角色查詢/寫入失敗，不影響另一個角色仍收到通知），單一真相供全部呼叫端共用。
+const notifyGymManagers = async ({ gymId, type, title, body, referenceId, referenceType, link, excludeStaffId }) => {
+  for (const role of ['gym_manager', 'super_admin']) {
+    try {
+      await notifyRoleInGym({ gymId, role, type, title, body, referenceId, referenceType, link, excludeStaffId });
+    } catch (e) { console.error(`notifyGymManagers(${type}) 對 ${role} 失敗`, e.message); }
+  }
+};
+
 // ── 單次入場券審核通知 ───────────────────────────────────────────
 // batchId 有值時（一次發放多張）合併為單一通知，避免發 N 則幾乎相同的通知
 const notifySingleEntryTicketApproval = async ({ ticketId, batchId, quantity, memberName, gymId, issuedByStaffName, notes }) => {
@@ -138,6 +154,7 @@ const markAllAsRead = async (staffId) => {
 module.exports = {
   createNotification,
   notifyRoleInGym,
+  notifyGymManagers,
   notifySingleEntryTicketApproval,
   notifyCardBindDisclosure,
   getUnreadNotifications,

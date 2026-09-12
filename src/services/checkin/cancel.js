@@ -40,14 +40,10 @@ const revertRenewal = async (db, checkIn, now) => {
 // 直接取消（此函式）過去完全不通知管理員（2026-08-06 補上，見下方 notifyCancelCheckin 呼叫）。
 // 原本另有一條「申請取消→管理員核准」的審核流程（cancelCheckin.js），但全前端從未呼叫過、
 // 正式環境 0 筆資料，已於 2026-08-17 確認為死碼並整條移除，不再是兩條並存的路徑。
-const notifyCancelCheckin = async ({ gymId, memberName, staffName, force, staffId }) => {
-  const { notifyRoleInGym } = require('../notificationService');
+const notifyCancelCheckin = ({ gymId, memberName, staffName, force, staffId }) => {
+  const { notifyGymManagers } = require('../notificationService');
   const body = `${staffName || '員工'} 取消了 ${memberName || '會員'} 的入場記錄${force ? '（強制取消，已超過10分鐘時限）' : ''}`;
-  for (const role of ['gym_manager', 'super_admin']) {
-    try {
-      await notifyRoleInGym({ gymId, role, type: 'checkin_cancelled', title: '入場已取消', body, excludeStaffId: staffId });
-    } catch (e) { console.error('notifyCancelCheckin 失敗', e.message); }
-  }
+  return notifyGymManagers({ gymId, type: 'checkin_cancelled', title: '入場已取消', body, excludeStaffId: staffId });
 };
 
 // ── 取消入場（10分鐘內）────────────────────────────────────────

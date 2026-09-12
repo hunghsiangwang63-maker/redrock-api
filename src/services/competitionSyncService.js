@@ -220,14 +220,12 @@ const autoEnableScoringSweep = async () => {
           await evRef.update({ scoringEnabled: true });
           action = 'enabled';
           try {
-            const { notifyRoleInGym } = require('./notificationService');
-            for (const role of ['gym_manager', 'super_admin']) {
-              await notifyRoleInGym({
-                gymId: c.gymId, role,
-                type: 'scoring_auto_enabled', title: '計分系統已自動開啟',
-                body: `「${c.name}」開賽前 10 分鐘（${st}），計分系統「計分中」已自動開啟。`,
-              });
-            }
+            const { notifyGymManagers } = require('./notificationService');
+            await notifyGymManagers({
+              gymId: c.gymId,
+              type: 'scoring_auto_enabled', title: '計分系統已自動開啟',
+              body: `「${c.name}」開賽前 10 分鐘（${st}），計分系統「計分中」已自動開啟。`,
+            });
           } catch (e) { console.error('[自動開計分] 通知失敗（不阻斷）:', e.message); }
         }
       } catch (e) { console.error('[自動開計分] 讀寫計分系統失敗（下輪再試）:', e.message); continue; }

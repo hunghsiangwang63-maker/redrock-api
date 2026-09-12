@@ -678,17 +678,15 @@ router.post('/stocktake', authenticate, checkPermission('products.manage'), asyn
     }
 
     if (discrepancies.length > 0) {
-      const managersSnap = await db.collection('staff').where('role', 'in', ['super_admin', 'gym_manager']).get();
-      const notifBatch = db.batch();
-      managersSnap.docs.forEach(m => {
-        const notifRef = db.collection('notifications').doc();
-        notifBatch.set(notifRef, {
-          type: 'stocktake_discrepancy', title: '庫存盤點差異',
-          message: `發現 ${discrepancies.length} 項庫存差異，請確認`,
-          targetStaffId: m.id, data: { discrepancies }, isRead: false, createdAt: now,
-        });
+      // 同館 gym_manager + super_admin；原本用 role in [...] 查全部 staff、沒有依 gymId 過濾
+      // gym_manager → 士林的盤點差異也會通知到新竹的 gym_manager，2026-09-12 清查發現的
+      // 跨館通知洩漏，改呼叫共用函式正確依館別範圍。
+      const { notifyGymManagers } = require('../services/notificationService');
+      await notifyGymManagers({
+        gymId,
+        type: 'stocktake_discrepancy', title: '庫存盤點差異',
+        body: `發現 ${discrepancies.length} 項庫存差異，請確認`,
       });
-      await notifBatch.commit();
     }
 
     // 正式送出盤點結果後，暫存檔已無用（本次已完整記入 stockLogs 正式歷史），順手清掉避免殘留誤導下次盤點。

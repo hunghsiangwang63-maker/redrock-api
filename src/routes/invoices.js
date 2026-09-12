@@ -13,7 +13,7 @@ const { v4: uuidv4 } = require('uuid');
 const { authenticate, requireManagerOrStation, requireManager } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const invoiceNumberService = require('../services/invoiceNumberService');
-const { notifyRoleInGym } = require('../services/notificationService');
+const { notifyGymManagers } = require('../services/notificationService');
 const { isValidTaiwanTaxId } = require('../utils/taiwanTaxId');
 const { taiwanToday } = require('../utils/taiwanDate');
 const dayjs = require('dayjs');
@@ -253,15 +253,11 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
     // 金額被人工改過 → 除了結帳頁自動彙整清單（computeTodayInvoiceAuthority），同時即時通知同館
     // 管理員（歸「結帳」通知分類，比照既有 settlement_difference 現金差異提醒），不用等結帳才知道。
     if (isAmountModified) {
-      for (const role of ['gym_manager', 'super_admin']) {
-        try {
-          await notifyRoleInGym({
-            gymId, role, type: 'invoice_amount_modified', title: '發票金額異動',
-            body: `${record.invoiceNo}　${itemName || '費用'}　原 NT$${record.originalAmount ?? '?'} → 改為 NT$${amt}${req.staff.name ? `（${req.staff.name}）` : ''}${note ? `／${String(note).trim()}` : ''}`,
-            referenceId: id, referenceType: 'invoice', link: '/staff/settlement',
-          });
-        } catch (e) { console.error('發票金額異動通知失敗', e.message); }
-      }
+      await notifyGymManagers({
+        gymId, type: 'invoice_amount_modified', title: '發票金額異動',
+        body: `${record.invoiceNo}　${itemName || '費用'}　原 NT$${record.originalAmount ?? '?'} → 改為 NT$${amt}${req.staff.name ? `（${req.staff.name}）` : ''}${note ? `／${String(note).trim()}` : ''}`,
+        referenceId: id, referenceType: 'invoice', link: '/staff/settlement',
+      });
     }
 
     // 「手動開立發票（無來源）」沒有任何既有訂單/收款流程會把這筆錢記進當日結帳——五個既有流程

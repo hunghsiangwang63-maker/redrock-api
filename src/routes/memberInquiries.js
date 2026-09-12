@@ -19,23 +19,18 @@ const { body, validationResult } = require('express-validator');
 const { authenticate, authenticateMember } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
-const { notifyRoleInGym } = require('../services/notificationService');
+const { notifyGymManagers } = require('../services/notificationService');
 
 const GYM_IDS = ['gym-hsinchu', 'gym-shilin'];
 
 // 通知該館相關人員（gym_manager+super_admin，比照 courseService.notifyCourseManagers 同一套慣例）；
 // 逐一 try/catch、不阻斷提問本身送出成功。
-const notifyInquiryManagers = async ({ gymId, inquiryId, memberName, subject }) => {
-  for (const role of ['gym_manager', 'super_admin']) {
-    try {
-      await notifyRoleInGym({
-        gymId, role, type: 'member_inquiry',
-        title: '會員問題諮詢', body: `${memberName} — ${subject}`,
-        referenceId: inquiryId, referenceType: 'memberInquiry', link: '/staff/pending-tasks',
-      });
-    } catch (e) { console.error('notifyInquiryManagers 失敗', e.message); }
-  }
-};
+const notifyInquiryManagers = ({ gymId, inquiryId, memberName, subject }) =>
+  notifyGymManagers({
+    gymId, type: 'member_inquiry',
+    title: '會員問題諮詢', body: `${memberName} — ${subject}`,
+    referenceId: inquiryId, referenceType: 'memberInquiry', link: '/staff/pending-tasks',
+  });
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);

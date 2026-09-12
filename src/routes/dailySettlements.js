@@ -777,22 +777,17 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
 
     const invoiceRolloverDue = await checkInvoiceRolloverDue(gymId, today).catch(() => false);
 
-    // 警示通知
+    // 警示通知（同館 gym_manager + super_admin；原本用 role in [...] 查全部 staff、
+    // 沒有依 gymId 過濾 gym_manager → 士林的結帳差異也會通知到新竹的 gym_manager，
+    // 2026-09-12 清查發現的跨館通知洩漏，改呼叫共用函式正確依館別範圍）
     if (Math.abs(difference) > 200) {
-      const managersSnap = await db.collection('staff').where('role', 'in', ['super_admin', 'gym_manager']).get();
-      const batch = db.batch();
-      managersSnap.docs.forEach(m => {
-        const ref = db.collection('notifications').doc();
-        batch.set(ref, {
-          type: 'settlement_difference',
-          title: '結帳差異警示',
-          message: `${gymId === 'gym-hsinchu' ? '新竹館' : '士林館'} ${today} 結帳差異 NT$${difference}，請確認`,
-          targetStaffId: m.id,
-          isRead: false,
-          createdAt: new Date(),
-        });
+      const { notifyGymManagers } = require('../services/notificationService');
+      await notifyGymManagers({
+        gymId,
+        type: 'settlement_difference',
+        title: '結帳差異警示',
+        body: `${gymId === 'gym-hsinchu' ? '新竹館' : '士林館'} ${today} 結帳差異 NT$${difference}，請確認`,
       });
-      await batch.commit();
     }
 
     const doneWord = wasSettled ? '已更新今日結帳' : '結帳完成';

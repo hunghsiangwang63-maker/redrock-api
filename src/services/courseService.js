@@ -13,7 +13,7 @@
 const { taiwanToday } = require('../utils/taiwanDate');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const { getMember } = require('./memberService');
-const { createNotification, notifyRoleInGym } = require('./notificationService');
+const { createNotification, notifyRoleInGym, notifyGymManagers } = require('./notificationService');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
@@ -1089,13 +1089,9 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
 // 連動：補課資格作廢；若補課資格已用（已報補課且補課那堂未上）→ 補課報名一併取消並釋放名額；
 //       補課那堂已上過 → 擋（MAKEUP_TAKEN，不可反悔）。
 // ── 課程異動通知（同館 gym_manager＋super_admin；失敗不阻斷主流程）───────
-const notifyCourseManagers = async ({ gymId, type, title, body, referenceId, link }) => {
-  for (const role of ['gym_manager', 'super_admin']) {
-    try {
-      await notifyRoleInGym({ gymId, role, type, title, body, referenceId, referenceType: 'courseEnrollment', link });
-    } catch (e) { console.error('notifyCourseManagers 失敗', e.message); }
-  }
-};
+// 薄包裝：實際迴圈/錯誤隔離邏輯收斂在 notificationService.notifyGymManagers（2026-09-12）。
+const notifyCourseManagers = ({ gymId, type, title, body, referenceId, link }) =>
+  notifyGymManagers({ gymId, type, title, body, referenceId, referenceType: 'courseEnrollment', link });
 
 const cancelLeave = async ({ enrollmentId, memberId }) => {
   const db = getDb();

@@ -820,16 +820,14 @@ router.post('/registrations/:regId/cancel',
       if (reg.paymentStatus === 'confirmed') {
         try {
           const comp = (await db.collection(COLLECTIONS.COMPETITIONS).doc(reg.competitionId).get()).data();
-          const { notifyRoleInGym } = require('../services/notificationService');
-          const payload = {
+          const { notifyGymManagers } = require('../services/notificationService');
+          await notifyGymManagers({
             gymId: comp?.gymId || 'gym-hsinchu',
             type: 'competition_refund_request',
             title: '比賽取消報名・退費待處理',
             body: `${reg.memberName} 取消「${reg.competitionName || comp?.name || ''}」報名（已收 NT$${reg.paidAmount || reg.registrationFee || ''}），退費帳號已留存，請至待辦處理。`,
             referenceId: req.params.regId, referenceType: 'competitionRegistration',
-          };
-          await notifyRoleInGym({ ...payload, role: 'gym_manager' });
-          await notifyRoleInGym({ ...payload, role: 'super_admin' });
+          });
         } catch (e) { console.error('比賽退費通知失敗', e.message); }
       }
       res.json({ success: true, message: isPaidReg

@@ -547,27 +547,9 @@ const buildCourseMemberList = async (db, c) => {
 // 從未同步回 header，導致這兩欄長期恆空。改為直接從 transferRecords 撈「最新一筆」（不限 confirmed，
 // pending/rejected 也要能看到會員提交了什麼，供店員核對），蓋過 header 的值。
 const attachReceivedAmounts = async (db, out) => {
-  const allEnrollIds = [...new Set(out.flatMap(c => c.members.map(m => m.enrollmentId).filter(Boolean)))];
-  const confirmedMap = {};
-  const latestProofMap = {}; // refId -> {bankLastFive, bankName, paymentDate, at}
-  for (let i = 0; i < allEnrollIds.length; i += 30) {
-    const chunk = allEnrollIds.slice(i, i + 30);
-    if (!chunk.length) break;
-    const snap = await db.collection('transferRecords').where('refId', 'in', chunk).get();
-    snap.docs.forEach(d => {
-      const t = d.data();
-      if (t.status === 'confirmed' && t.confirmedAmount != null) {
-        const at = t.confirmedAt?._seconds || t.confirmedAt?.seconds || 0;
-        const prev = confirmedMap[t.refId];
-        if (!prev || at >= prev.at) confirmedMap[t.refId] = { amount: Number(t.confirmedAmount), at };
-      }
-      if (t.bankLastFive || t.paymentDate) {
-        const at2 = t.submittedAt?._seconds || t.submittedAt?.seconds || t.createdAt?._seconds || t.createdAt?.seconds || 0;
-        const prev2 = latestProofMap[t.refId];
-        if (!prev2 || at2 >= prev2.at) latestProofMap[t.refId] = { bankLastFive: t.bankLastFive || '', bankName: t.bankName || '', paymentDate: t.paymentDate || '', at: at2 };
-      }
-    });
-  }
+  const { getTransferConfirmationData, resolveReceivedAmount } = require('../services/courseRegistrationService');
+  const allEnrollIds = out.flatMap(c => c.members.map(m => m.enrollmentId));
+  const { confirmedMap, proofMap: latestProofMap } = await getTransferConfirmationData(db, allEnrollIds);
   out.forEach(c => c.members.forEach(m => {
     if (m.enrollmentId && confirmedMap[m.enrollmentId]) m.confirmedAmount = confirmedMap[m.enrollmentId].amount;
     if (m.enrollmentId && latestProofMap[m.enrollmentId]) {
@@ -576,9 +558,7 @@ const attachReceivedAmounts = async (db, out) => {
       m.bankName = p.bankName || m.bankName;
       m.paymentDate = p.paymentDate || m.paymentDate;
     }
-    // 「實收金額」最終採用值：管理員直接編修(receivedAmountOverride) > 店員核對(confirmedAmount)
-    // > 會員自報(memberPaidAmount) > 報名應繳費用(fee)
-    m.receivedAmount = m.receivedAmountOverride ?? m.confirmedAmount ?? m.memberPaidAmount ?? m.fee ?? 0;
+    m.receivedAmount = resolveReceivedAmount(m);
   }));
 };
 

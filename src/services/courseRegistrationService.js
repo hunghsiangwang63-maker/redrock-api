@@ -113,9 +113,59 @@ const updateHeaderPauseStatus = async (db, memberId, courseId, pauseStatus) => {
   return snap.size;
 };
 
+/**
+ * 查一批報名 header 的「payEnrollmentId」對應的店員核對收款金額（transferRecords.confirmedAmount）
+ * 與最新一筆匯款證明（末五碼/銀行/日期）。
+ *
+ * 2026-09-12 清查發現：這段「查 transferRecords → 取每個 refId 最新一筆 confirmed 金額／最新一筆
+ * 證明」的迴圈邏輯在 members.js（課程學員報表）／courses.js（單一課程報名名單）／checkin.js
+ * （今日課程學員發票資料）三處各自獨立實作，改一處忘了同步另一處會讓不同入口顯示不同金額。
+ * 收斂成這支共用函式，三處都改呼叫它。
+ *
+ * @param {object} db
+ * @param {string[]} enrollIds  header.payEnrollmentId 的集合（會自動去重、過濾空值）
+ * @returns {Promise<{confirmedMap: object, proofMap: object}>}
+ *   confirmedMap[enrollId] = { amount, at }；proofMap[enrollId] = { bankLastFive, bankName, paymentDate, at }
+ */
+const getTransferConfirmationData = async (db, enrollIds) => {
+  const ids = [...new Set((enrollIds || []).filter(Boolean))];
+  const confirmedMap = {};
+  const proofMap = {};
+  for (let i = 0; i < ids.length; i += 30) {
+    const chunk = ids.slice(i, i + 30);
+    if (!chunk.length) break;
+    const snap = await db.collection('transferRecords').where('refId', 'in', chunk).get();
+    snap.docs.forEach(d => {
+      const t = d.data();
+      if (t.status === 'confirmed' && t.confirmedAmount != null) {
+        const at = t.confirmedAt?._seconds || t.confirmedAt?.seconds || 0;
+        const prev = confirmedMap[t.refId];
+        if (!prev || at >= prev.at) confirmedMap[t.refId] = { amount: Number(t.confirmedAmount), at };
+      }
+      if (t.bankLastFive || t.paymentDate) {
+        const at2 = t.submittedAt?._seconds || t.submittedAt?.seconds || t.createdAt?._seconds || t.createdAt?.seconds || 0;
+        const prev2 = proofMap[t.refId];
+        if (!prev2 || at2 >= prev2.at) proofMap[t.refId] = { bankLastFive: t.bankLastFive || '', bankName: t.bankName || '', paymentDate: t.paymentDate || '', at: at2 };
+      }
+    });
+  }
+  return { confirmedMap, proofMap };
+};
+
+/**
+ * 「實收金額」最終採用值的單一優先序（唯一權威）：
+ * 管理員直接編修(receivedAmountOverride) > 店員核對(confirmedAmount) > 會員自報(memberPaidAmount)
+ * > 報名應繳費用(fee)。三個消費端（members.js/courses.js/checkin.js）都改呼叫這支函式，
+ * 避免各自手刻同一條 `a ?? b ?? c ?? d ?? 0` 公式、日後調整優先序時漏改其中一處。
+ */
+const resolveReceivedAmount = ({ receivedAmountOverride, confirmedAmount, memberPaidAmount, fee }) =>
+  receivedAmountOverride ?? confirmedAmount ?? memberPaidAmount ?? fee ?? 0;
+
 module.exports = {
   REGISTRATION_COLLECTION,
   createRegistrationHeader,
   updateRegistrationStatusByCourseMember,
   updateHeaderPauseStatus,
+  getTransferConfirmationData,
+  resolveReceivedAmount,
 };

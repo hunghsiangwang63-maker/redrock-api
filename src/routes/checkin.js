@@ -551,21 +551,10 @@ async function getLastSessionCourseInvoiceData(db, gymId, today) {
       receivedAmountOverride: h.receivedAmountOverride ?? null,
     };
   }));
-  // 店員核對金額（transferRecords 最新一筆 confirmed），比照 attachReceivedAmounts 同一套優先序
-  const payEnrollmentIds = [...new Set(Object.values(regMap).map(r => r.enrollmentId).filter(Boolean))];
-  const confirmedMap = {};
-  for (let i = 0; i < payEnrollmentIds.length; i += 30) {
-    const chunk = payEnrollmentIds.slice(i, i + 30);
-    const snap = await db.collection('transferRecords').where('refId', 'in', chunk).get();
-    snap.docs.forEach(d => {
-      const t = d.data();
-      if (t.status === 'confirmed' && t.confirmedAmount != null) {
-        const at = t.confirmedAt?._seconds || t.confirmedAt?.seconds || 0;
-        const prev = confirmedMap[t.refId];
-        if (!prev || at >= prev.at) confirmedMap[t.refId] = { amount: Number(t.confirmedAmount), at };
-      }
-    });
-  }
+  // 店員核對金額（transferRecords 最新一筆 confirmed），與 members.js/courses.js 課程學員實收金額
+  // 共用同一份權威來源（2026-09-12 收斂）。
+  const { getTransferConfirmationData, resolveReceivedAmount } = require('../services/courseRegistrationService');
+  const { confirmedMap } = await getTransferConfirmationData(db, Object.values(regMap).map(r => r.enrollmentId));
 
   const sessionMap = {};
   sessions.forEach(s => { sessionMap[s.id] = s; });
@@ -579,7 +568,11 @@ async function getLastSessionCourseInvoiceData(db, gymId, today) {
     if (!isRegular || courseEndDateMap[s.courseId] !== today) return;
     const reg = regMap[`${s.courseId}_${e.memberId}`];
     if (!reg) return;
-    const receivedAmount = reg.receivedAmountOverride ?? (reg.enrollmentId && confirmedMap[reg.enrollmentId]?.amount) ?? reg.memberPaidAmount ?? reg.fee ?? 0;
+    const receivedAmount = resolveReceivedAmount({
+      receivedAmountOverride: reg.receivedAmountOverride,
+      confirmedAmount: reg.enrollmentId ? confirmedMap[reg.enrollmentId]?.amount : null,
+      memberPaidAmount: reg.memberPaidAmount, fee: reg.fee,
+    });
     const entry = { courseId: s.courseId, courseName: s.courseName || e.courseName || '', enrollmentId: reg.enrollmentId, paymentMethod: reg.paymentMethod, receivedAmount };
     byCourseAndMember.set(`${s.courseId}_${e.memberId}`, entry);
     if (!byMember.has(e.memberId)) byMember.set(e.memberId, entry); // 同會員多堂最後一堂只取第一筆（罕見邊界）

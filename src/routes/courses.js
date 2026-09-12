@@ -1029,12 +1029,17 @@ router.get('/:courseId/roster/download',
       const headerByEnrollId = {};
       // header 內嵌簽名圖，只取 CSV 用到的欄位（2026-08-27 補投影）
       const hSnap = await db.collection('courseRegistrations').where('courseId', '==', courseId)
-        .select('sourceEnrollmentIds', 'memberPaidAmount', 'receivedAmountOverride', 'healthNote', 'enrollNote', 'referralSource', 'staffNote')
+        .select('sourceEnrollmentIds', 'payEnrollmentId', 'memberPaidAmount', 'receivedAmountOverride', 'healthNote', 'enrollNote', 'referralSource', 'staffNote')
         .get();
       hSnap.forEach(d => {
         const h = d.data();
         (h.sourceEnrollmentIds || []).forEach(eid => { headerByEnrollId[eid] = h; });
       });
+      // 店員核對收款金額——與 members.js/checkin.js 課程學員實收金額同一份權威來源（2026-09-12 修復：
+      // 這個 CSV 原本「確認實收金額」欄漏看店員核對金額，管理員未手動編修時會誤顯示應繳費用而非
+      // 實際核對後的金額）。
+      const { getTransferConfirmationData: getRosterTransferData, resolveReceivedAmount: resolveRosterReceivedAmount } = require('../services/courseRegistrationService');
+      const { confirmedMap: rosterConfirmedMap } = await getRosterTransferData(db, Object.values(headerByEnrollId).map(h => h.payEnrollmentId));
 
       // 出席紀錄（依場次逐一查，courseAttendance 以 sessionId+memberId 為鍵）
       const sessionIds = [...new Set(enrolls.map(e => e.sessionId).filter(Boolean))];
@@ -1061,7 +1066,12 @@ router.get('/:courseId/roster/download',
           nm.name, nm.phone,
           STATUS_LABEL[e.status] || e.status || '',
           att,
-          e.paymentMethod || '', e.enrollmentFee ?? '', h.memberPaidAmount ?? '', h.receivedAmountOverride ?? e.enrollmentFee ?? '',
+          e.paymentMethod || '', e.enrollmentFee ?? '', h.memberPaidAmount ?? '',
+          resolveRosterReceivedAmount({
+            receivedAmountOverride: h.receivedAmountOverride,
+            confirmedAmount: h.payEnrollmentId ? rosterConfirmedMap[h.payEnrollmentId]?.amount : null,
+            memberPaidAmount: h.memberPaidAmount, fee: e.enrollmentFee,
+          }),
           e.paymentDate || '', e.bankLastFive || '',
           e.enrollGender || '', e.enrollAge ?? '',
           e.healthNote || h.healthNote || '', e.enrollNote || h.enrollNote || '', e.referralSource || h.referralSource || '',
@@ -1945,30 +1955,14 @@ router.get('/:courseId/enrollments',
           });
         }
       }
-      // 店員核對收款金額（transferRecords.confirmedAmount）＋匯款證明（末五碼/銀行/日期，比照 members.js
-      // attachReceivedAmounts 同一套邏輯）——header 的 bankLastFive/paymentDate 只在 enroll-all 報名當下
-      // 直接填寫轉帳資訊時才有值，會員走 /transfers/upload 提交（含退回重補）從未同步回 header，
-      // 故一律改從 transferRecords 撈「最新一筆」（不限 confirmed）蓋過 header/場次副本的值。
-      const payEnrollmentIds = [...new Set(Object.values(headerMap).map(h => h.payEnrollmentId).filter(Boolean))];
-      const confirmedMap = {};
-      const proofMap = {}; // payEnrollmentId -> {bankLastFive, bankName, paymentDate, at}
-      for (let i = 0; i < payEnrollmentIds.length; i += 30) {
-        const chunk = payEnrollmentIds.slice(i, i + 30);
-        const tSnap = await db.collection('transferRecords').where('refId', 'in', chunk).get();
-        tSnap.docs.forEach(td => {
-          const t = td.data();
-          if (t.status === 'confirmed' && t.confirmedAmount != null) {
-            const at = t.confirmedAt?._seconds || t.confirmedAt?.seconds || 0;
-            const prev = confirmedMap[t.refId];
-            if (!prev || at >= prev.at) confirmedMap[t.refId] = { amount: Number(t.confirmedAmount), at };
-          }
-          if (t.bankLastFive || t.paymentDate) {
-            const at2 = t.submittedAt?._seconds || t.submittedAt?.seconds || t.createdAt?._seconds || t.createdAt?.seconds || 0;
-            const prev2 = proofMap[t.refId];
-            if (!prev2 || at2 >= prev2.at) proofMap[t.refId] = { bankLastFive: t.bankLastFive || '', bankName: t.bankName || '', paymentDate: t.paymentDate || '', at: at2 };
-          }
-        });
-      }
+      // 店員核對收款金額（transferRecords.confirmedAmount）＋匯款證明（末五碼/銀行/日期）——header 的
+      // bankLastFive/paymentDate 只在 enroll-all 報名當下直接填寫轉帳資訊時才有值，會員走
+      // /transfers/upload 提交（含退回重補）從未同步回 header，故一律改從 transferRecords 撈「最新
+      // 一筆」（不限 confirmed）蓋過 header/場次副本的值。共用 courseRegistrationService，與
+      // members.js/checkin.js 同一份邏輯（2026-09-12 收斂，原本三處各自維護一份幾乎相同的迴圈）。
+      const { getTransferConfirmationData, resolveReceivedAmount } = require('../services/courseRegistrationService');
+      const payEnrollmentIds = Object.values(headerMap).map(h => h.payEnrollmentId);
+      const { confirmedMap, proofMap } = await getTransferConfirmationData(db, payEnrollmentIds);
       // 依會員聚合（一人一列，取代原本「一場次一列＋前端 byMember 去重」——週課一位學員原本會回傳
       // N 筆幾乎重複的列，只有 count/leaveUsed/waitlistPosition 這幾個「本質上是逐場次聚合」的欄位
       // 需要真的掃過 rosterDocs；其餘報名層級欄位一律只取 header/transferRecords，不再逐場次挑值）。
@@ -2018,8 +2012,7 @@ router.get('/:courseId/enrollments',
         const paymentDate = proof?.paymentDate || header.paymentDate || '';
         const memberPaidAmount = header.memberPaidAmount ?? null;
         const fee = header.fee ?? 0;
-        // 「實收金額」最終採用值：管理員直接編修 > 店員核對 > 會員自報 > 報名應繳費用（與 members.js attachReceivedAmounts 同一套優先序）
-        const receivedAmount = header.receivedAmountOverride ?? confirmedAmount ?? memberPaidAmount ?? fee ?? 0;
+        const receivedAmount = resolveReceivedAmount({ receivedAmountOverride: header.receivedAmountOverride, confirmedAmount, memberPaidAmount, fee });
         return {
           memberId: m.memberId,
           memberName: info.name || m.memberName || '',

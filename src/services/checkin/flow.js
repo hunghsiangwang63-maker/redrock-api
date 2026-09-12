@@ -11,7 +11,7 @@ const { isActiveTeamMember, TEAM_DISCOUNT_MIN_AMOUNT } = require('../teamMemberS
 const { isChild } = require('../../utils/age');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
-const { DISCOUNT_CARD_RATE, PRICES, computePaidEntryAmount, getEntryTypePrice, getMemberType, getOriginalEntryPrice, computeBuyDiscountCardAmount, computeUseDiscountCardAmount, computeBuyPassAmount } = require('./pricing');
+const { DISCOUNT_CARD_RATE, PRICES, computePaidEntryAmount, getEntryTypePrice, getRentalPrice, getMemberType, getOriginalEntryPrice, computeBuyDiscountCardAmount, computeUseDiscountCardAmount, computeBuyPassAmount } = require('./pricing');
 const { getRenewalInfo } = require('./eligibility');
 const { runEntryGates, tryExtendFallTest } = require('./gates');
 
@@ -61,7 +61,7 @@ const createPendingCheckIn = async ({
     }
   }
 
-  let ticketPartnerVendor = false, ticketPartnerGymMember = false;
+  let ticketPartnerVendor = false, ticketPartnerGymMember = false, rentalPrepaid = false;
   if (entryType === 'single_entry_ticket' && singleEntryTicketId) {
     const ticketDoc = await db.collection(COLLECTIONS.SINGLE_ENTRY_TICKETS).doc(singleEntryTicketId).get();
     if (!ticketDoc.exists || ticketDoc.data().status !== 'active') {
@@ -81,8 +81,8 @@ const createPendingCheckIn = async ({
     // 2026-08-23：此券若在線上付款當下已一併預繳租借費用（見 paymentService.js orderHandlers.entry），
     // 後端權威覆寫租借旗標/金額——不論呼叫端（會員 App 剛付款導回，自動產生 QR）送了什麼，租借費用
     // 一律視為已收（金額 0），避免確認入場時 confirmCheckIn 的 amountPaid 又重複收一次。
-    if (ticketData.rentShoes) { rentShoes = true; shoesPrice = 0; }
-    if (ticketData.rentChalk) { rentChalk = true; chalkPrice = 0; }
+    if (ticketData.rentShoes) { rentShoes = true; shoesPrice = 0; rentalPrepaid = true; }
+    if (ticketData.rentChalk) { rentChalk = true; chalkPrice = 0; rentalPrepaid = true; }
     // 2026-08-24：此券若在線上付款當下已套用友館隊員/特約廠商優惠——先記下來，redeem 不重算折扣
     // （錢已照付款當下算好的折後金額收了），僅在下方 finalPartnerVendor/finalPartnerGymMember
     // 覆寫供掃碼提示員工核對證件（金額不受影響）。
@@ -183,6 +183,13 @@ const createPendingCheckIn = async ({
   const now = new Date();
   const expiresAt = dayjs().add(30, 'minute').toDate();
 
+  // 岩鞋/粉袋租借金額後端權威計算（2026-09-12 修復：原本非 rentalPrepaid 情況會直接信任呼叫端
+  // 傳入的 shoesPrice/chalkPrice，等同前端可自訂租借價格）——一律改用 getRentalPrice()（管理員
+  // 可調的動態設定，與電話入場/事後補租/線上付款共用同一份權威來源）；已線上預繳(rentalPrepaid)
+  // 的維持 0，不重新收費。
+  const finalShoesPrice = rentShoes ? (rentalPrepaid ? 0 : await getRentalPrice('shoes')) : 0;
+  const finalChalkPrice = rentChalk ? (rentalPrepaid ? 0 : await getRentalPrice('chalk')) : 0;
+
   const pending = {
     qrToken,
     memberId, gymId, entryType,
@@ -205,13 +212,9 @@ const createPendingCheckIn = async ({
     partnerVendor: finalPartnerVendor,   // 特約廠商優惠（−20，掃碼提示出示證件）
     partnerGymMember: finalPartnerGymMember,   // 友館隊員優惠（9折，掃碼提示出示證件）
     rentShoes: rentShoes || false,
-    // ⚠️ 2026-08-23 修正：這裡原本用 `shoesPrice || PRICES.shoes_rental`——當上方「已線上預繳」覆寫把
-    // shoesPrice 明確設為 0 時，`0 || 100` 在 JS 會被判定成 falsy 而掉回預設 100，導致租借費用被悄悄
-    // 加回來重複收費（E2E 測試抓到）。改用 `!= null` 判斷，只有「完全沒帶這個欄位」才落回預設值，
-    // 明確傳入的 0（代表已付款、無需再收費）會被正確保留。
-    shoesPrice: rentShoes ? (shoesPrice != null ? shoesPrice : PRICES.shoes_rental) : 0,
+    shoesPrice: finalShoesPrice,
     rentChalk: rentChalk || false,
-    chalkPrice: rentChalk ? (chalkPrice != null ? chalkPrice : 50) : 0,
+    chalkPrice: finalChalkPrice,
     passContractPortraitSignature: entryType === 'buy_pass' ? (passContractPortraitSignature || null) : null,
     passContractGuardianSignature: entryType === 'buy_pass' ? (passContractGuardianSignature || null) : null,
     status: 'pending',
@@ -781,7 +784,10 @@ const addRentalToCheckIn = async (checkInId, { addShoes, addChalk }, staffId, st
   const newChalk = !!addChalk && !c.rentChalk;
   if (!newShoes && !newChalk) { throw { code: 'NOTHING_TO_ADD', message: '沒有新增項目（可能已租過）' }; }
 
-  const addCost = (newShoes ? 100 : 0) + (newChalk ? 50 : 0);
+  // 後端權威：與入場當下同一份 getRentalPrice()（管理員可調的動態設定），不寫死 100/50
+  const addShoesPrice = newShoes ? await getRentalPrice('shoes') : 0;
+  const addChalkPrice = newChalk ? await getRentalPrice('chalk') : 0;
+  const addCost = addShoesPrice + addChalkPrice;
   const paymentMethod = paymentMethodOverride || c.paymentMethod || 'cash';
   const now = new Date();
   const updates = {
@@ -789,8 +795,8 @@ const addRentalToCheckIn = async (checkInId, { addShoes, addChalk }, staffId, st
     paymentMethod,
     updatedAt: now,
   };
-  if (newShoes) { updates.rentShoes = true; updates.shoesPrice = (c.shoesPrice || 0) + 100; }
-  if (newChalk) { updates.rentChalk = true; updates.chalkPrice = (c.chalkPrice || 0) + 50; }
+  if (newShoes) { updates.rentShoes = true; updates.shoesPrice = (c.shoesPrice || 0) + addShoesPrice; }
+  if (newChalk) { updates.rentChalk = true; updates.chalkPrice = (c.chalkPrice || 0) + addChalkPrice; }
   await ref.update(updates);
 
   const { recordTransaction } = require('../../utils/revenueLedger');
@@ -804,7 +810,7 @@ const addRentalToCheckIn = async (checkInId, { addShoes, addChalk }, staffId, st
     relatedId: checkInId,
     staffId, staffName: staffName || '',
     entryFee: 0, // 純租借加購，不含入場費
-    shoesPrice: newShoes ? 100 : 0,
+    shoesPrice: addShoesPrice,
     entryType: c.entryType || null,
     notes: `事後補加租借：${[newShoes && '岩鞋', newChalk && '粉袋'].filter(Boolean).join('、')}`,
   });
@@ -831,7 +837,8 @@ const requestRentalAddon = async (checkInId, memberId, { addShoes, addChalk, pay
 
   const id = uuidv4();
   const now = new Date();
-  const cost = (newShoes ? 100 : 0) + (newChalk ? 50 : 0);
+  // 後端權威：與入場當下/櫃檯補租同一份 getRentalPrice()，不寫死 100/50
+  const cost = (newShoes ? await getRentalPrice('shoes') : 0) + (newChalk ? await getRentalPrice('chalk') : 0);
   await db.collection(RENTAL_ADDON_COLLECTION).doc(id).set({
     id, checkInId, memberId, memberName: c.memberName, gymId: c.gymId,
     addShoes: newShoes, addChalk: newChalk, cost, paymentMethod,

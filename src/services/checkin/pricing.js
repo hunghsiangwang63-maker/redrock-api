@@ -13,7 +13,6 @@ const PRICES = {
   single_child: 0,       // 兒童免費（未滿13歲）
   single_student: 0,     // 學生免費（13~22歲或已驗證學生證）
   discount_card: 600,    // 購買優惠折扣券（含本次入場）
-  shoes_rental: 100,     // 岩鞋租借
   team_discount_rate: 0.9,
   team_discount_min: 100,
 };
@@ -75,6 +74,21 @@ const getEntryTypePrice = async (entryTypeId, fallback) => {
     if (!doc.exists) return fallback;
     const t = (doc.data().types || []).find(x => x.id === entryTypeId);
     return (t && typeof t.price === 'number') ? t.price : fallback;
+  } catch (e) { return fallback; }
+};
+
+// 岩鞋/粉袋租借單價（可由管理員於系統設定調整；systemSettings/shoeRental 或 chalkRental
+// 的 {price} 欄位，找不到設定回落靜態預設）。唯一權威來源——2026-09-12 清查發現原本
+// 分散 4-5 處各自處理（QR自助/direct 信任前端傳值、電話入場正確查 Firestore、事後補租
+// 兩處各自寫死 100/50、線上付款也寫死），改一處忘了同步另一處；現供入場（QR/電話/direct/
+// 線上付款）與事後補租（櫃檯/會員自助）全部共用，且入場當下一律以此為準、不信前端傳值。
+const RENTAL_DEFAULTS = { shoes: 100, chalk: 50 };
+const RENTAL_SETTINGS_DOC = { shoes: 'shoeRental', chalk: 'chalkRental' };
+const getRentalPrice = async (kind) => {
+  const fallback = RENTAL_DEFAULTS[kind];
+  try {
+    const doc = await getDb().collection('systemSettings').doc(RENTAL_SETTINGS_DOC[kind]).get();
+    return (doc.exists && typeof doc.data().price === 'number') ? doc.data().price : fallback;
   } catch (e) { return fallback; }
 };
 
@@ -187,4 +201,4 @@ const computeBuyPassAmount = async (db, buyPassTypeId, gymId, member) => {
 // ── 取得有效定期票 ───────────────────────────────────────────────
 // endDate 改用「補償後到期日」（臨時休館延長票期，公休不補）→ 不在 Firestore 端以 endDate 預篩，
 // 改抓全部 active 後在程式碼用 effectiveEndDate 判斷（會員 active 票很少，成本可忽略）。
-module.exports = { PRICES, DISCOUNT_CARD_RATE, PARTNER_VENDOR_DISCOUNT, PARTNER_GYM_MEMBER_RATE, getPartnerVendorConfig, getPartnerGymMemberConfig, getOriginalEntryPrice, getMemberType, isFreeEntry, getEntryTypePrice, computePaidEntryAmount, computeBuyDiscountCardAmount, computeUseDiscountCardAmount, computeBuyPassAmount };
+module.exports = { PRICES, DISCOUNT_CARD_RATE, PARTNER_VENDOR_DISCOUNT, PARTNER_GYM_MEMBER_RATE, getPartnerVendorConfig, getPartnerGymMemberConfig, getOriginalEntryPrice, getMemberType, isFreeEntry, getEntryTypePrice, getRentalPrice, computePaidEntryAmount, computeBuyDiscountCardAmount, computeUseDiscountCardAmount, computeBuyPassAmount };

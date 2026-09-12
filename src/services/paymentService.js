@@ -338,7 +338,7 @@ const orderResolvers = {
     const gate = await runEntryGates(memberId, gymId);
     if (gate.blocked) throw { code: gate.code, message: gate.message };
 
-    const { PRICES, computePaidEntryAmount, computeBuyDiscountCardAmount, computeUseDiscountCardAmount, computeBuyPassAmount } = require('./checkin/pricing');
+    const { computePaidEntryAmount, computeBuyDiscountCardAmount, computeUseDiscountCardAmount, computeBuyPassAmount, getRentalPrice } = require('./checkin/pricing');
     let amount;
     if (entryType === 'discount_card') {
       // 使用（已持有的）優惠折扣券入場——付款前先驗證這張券真的屬於此會員、目前仍有效（未停用/
@@ -373,9 +373,10 @@ const orderResolvers = {
 
     // 2026-08-23 修正真實漏收案例：租借器材（岩鞋/粉袋）若在付款前已勾選，須併入線上付款總額——
     // 前端「租借器材」步驟本就在「選擇付款方式」之前，選完全部資訊才走到這裡，故 orderRef 帶來的
-    // rentShoes/rentChalk 就是會員最終確認的選擇；後端權威加總金額（不信前端算好的 amount），
-    // 與現金/其他方式的 handleGenerateQR 用同一組固定費率（岩鞋/粉袋，見 checkin/flow.js PRICES）。
-    const rentalAmount = (rentShoes ? (PRICES.shoes_rental || 100) : 0) + (rentChalk ? 50 : 0);
+    // rentShoes/rentChalk 就是會員最終確認的選擇；後端權威加總金額（不信前端算好的 amount）。
+    // 2026-09-12：改用 getRentalPrice()（管理員可調的動態設定），與現金/QR自助/事後補租共用
+    // 同一份權威來源（原本這裡寫死 100/50，跟其他路徑各自維護、管理員調價只有部分路徑生效）。
+    const rentalAmount = (rentShoes ? await getRentalPrice('shoes') : 0) + (rentChalk ? await getRentalPrice('chalk') : 0);
     return { amount: amount + rentalAmount, gymId, memberId, memberName: member.name || '' };
   },
 };

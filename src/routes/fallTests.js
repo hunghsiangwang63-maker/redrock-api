@@ -225,12 +225,10 @@ router.post('/:testId/extend', authenticate, async (req, res) => {
 router.get('/signature/:memberId', authenticateAny, async (req, res) => {
   try {
     const db = getDb();
-    // 會員僅能查自己或自己子會員的同意書（員工不受限）
+    // 會員僅能查自己或自己子會員（含共同家長）的同意書（員工不受限）
     if (req.member && req.member.id !== req.params.memberId) {
-      const childDoc = await db.collection('members').doc(req.params.memberId).get();
-      if (!childDoc.exists || childDoc.data().parentMemberId !== req.member.id) {
-        return res.status(403).json({ error: 'FORBIDDEN', message: '只能查看自己或子會員的同意書' });
-      }
+      const deny = await checkMemberOwnership(req.member, req.params.memberId, { onMissing: 403, message: '只能查看自己或子會員的同意書' });
+      if (deny) return res.status(deny.status).json(deny.body);
     }
     // 兩段式：先只投影 signedAt 找最新一筆，再單獨抓那一份完整文件（含簽名圖 base64）——
     // 簽名圖 ~100KB/筆，重簽過的會員有多筆時避免整批拉回只回傳一筆（2026-08-27 用量回查補投影）

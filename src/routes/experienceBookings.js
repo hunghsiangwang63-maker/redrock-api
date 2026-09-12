@@ -76,10 +76,14 @@ async function handleTrialBooking(req, res, db, memberId) {
     trialPhone = contactPhone || req.member?.phone || '';
     if (req.body.childMemberId && req.body.childMemberId !== memberId) {
       const childDoc = await db.collection('members').doc(req.body.childMemberId).get();
-      if (!childDoc.exists || childDoc.data().parentMemberId !== memberId) {
+      const childData = childDoc.exists ? childDoc.data() : null;
+      // 含共同家長 coParentIds（比照 utils/memberOwnership.js checkMemberOwnership 同一套判斷；
+      // 此處已先取得 childDoc 供下方姓名/聯絡資訊使用，故直接內嵌判斷避免重複查詢）
+      const isMyChild = childData && (childData.parentMemberId === memberId || (Array.isArray(childData.coParentIds) && childData.coParentIds.includes(memberId)));
+      if (!isMyChild) {
         return res.status(403).json({ code:'FORBIDDEN', message:'只能為自己或自己的子會員報名試上' });
       }
-      const child = childDoc.data();
+      const child = childData;
       trialMemberId = req.body.childMemberId;
       trialName = contactName || child.name || '';
       trialEmail = contactEmail || child.email || req.member?.email || '';

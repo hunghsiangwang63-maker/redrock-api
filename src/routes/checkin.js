@@ -39,10 +39,8 @@ router.post('/verify',
       if (req.member) {
         let targetId = req.member.id;
         if (targetMemberId && targetMemberId !== req.member.id) {
-          const child = await memberService.getMember(targetMemberId);
-          if (!child || child.parentMemberId !== req.member.id) {
-            return res.status(403).json({ error: 'FORBIDDEN', message: '只能查詢自己或自己子會員的入場資格' });
-          }
+          const deny = await checkMemberOwnership(req.member, targetMemberId, { onMissing: 403, message: '只能查詢自己或自己子會員的入場資格' });
+          if (deny) return res.status(deny.status).json(deny.body);
           targetId = targetMemberId;
         }
         member = await memberService.getMember(targetId);
@@ -87,10 +85,8 @@ router.post('/qr/create',
       if (req.member) {
         effectiveMemberId = req.member.id;
         if (memberId && memberId !== req.member.id) {
-          const child = await memberService.getMember(memberId);
-          if (!child || child.parentMemberId !== req.member.id) {
-            return res.status(403).json({ error: 'FORBIDDEN', message: '只能為自己或自己子會員產生入場 QR' });
-          }
+          const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403, message: '只能為自己或自己子會員產生入場 QR' });
+          if (deny) return res.status(deny.status).json(deny.body);
           effectiveMemberId = memberId;
         }
       } else {
@@ -1062,22 +1058,11 @@ router.post('/phone', authenticate, requireManagerOrStation, async (req, res) =>
       }
     } catch { amountPaid = entryType === 'single_ticket' ? 200 : 0; entryOriginal = amountPaid; }
 
-    // 岩鞋租借
+    // 岩鞋/粉袋租借（後端權威 getRentalPrice，與 QR自助/direct/事後補租共用同一份動態設定）
     const { rentShoes, rentChalk } = req.body;
-    let shoesPrice = 0;
-    if (rentShoes) {
-      try {
-        const shoeDoc = await db.collection('systemSettings').doc('shoeRental').get();
-        shoesPrice = shoeDoc.exists ? (shoeDoc.data().price || 100) : 100;
-      } catch { shoesPrice = 100; }
-    }
-    let chalkPrice = 0;
-    if (rentChalk) {
-      try {
-        const chalkDoc = await db.collection('systemSettings').doc('chalkRental').get();
-        chalkPrice = chalkDoc.exists ? (chalkDoc.data().price || 50) : 50;
-      } catch { chalkPrice = 50; }
-    }
+    const { getRentalPrice } = require('../services/checkin/pricing');
+    const shoesPrice = rentShoes ? await getRentalPrice('shoes') : 0;
+    const chalkPrice = rentChalk ? await getRentalPrice('chalk') : 0;
 
     const totalAmount = amountPaid + shoesPrice + chalkPrice;
 

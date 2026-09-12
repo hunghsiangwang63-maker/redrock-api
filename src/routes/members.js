@@ -1156,11 +1156,9 @@ router.get('/:id/waiver', authenticateAny, async (req, res) => {
     const memberId = req.params.id;
     const db = getDb();
     if (req.member && req.member.id !== memberId) {
-      // 允許父會員查看子會員的聲明書
-      const childDoc = await db.collection(COLLECTIONS.MEMBERS).doc(memberId).get();
-      if (!childDoc.exists || childDoc.data().parentMemberId !== req.member.id) {
-        return res.status(403).json({ error: 'FORBIDDEN', message: '只能查看自己或子會員的聲明書' });
-      }
+      // 允許父會員（含共同家長 coParentIds）查看子會員的聲明書
+      const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403, message: '只能查看自己或子會員的聲明書' });
+      if (deny) return res.status(deny.status).json(deny.body);
     }
     const waiverDoc = await db.collection(COLLECTIONS.WAIVERS).doc(memberId).get();
     if (!waiverDoc.exists) {

@@ -777,8 +777,9 @@ const SEARCH_LIST_FIELDS = ['name', 'phone', 'email', 'isChildAccount', 'memberT
 // 其餘欄位變動（如剛簽完 waiver）在快取視窗內顯示稍舊可接受，不逐一補清快取。
 // ⚠️ 2026-09-13 查詢洞察：仍是次高單一查詢型態（24 次搜尋、每次讀約 1563 筆＝37,537／天）。
 // 搜尋本身對「幾分鐘內資料略舊」無感（同上，剛建立會員的唯一風險已由主動清快取解決），
-// TTL 由 20 秒放寬到 90 秒，換更高快取命中率。
-const MEMBER_SEARCH_CACHE_TTL_MS = 90000;
+// TTL 由 20 秒放寬到 90 秒；2026-09-13 使用者確認可接受、再放寬到 5 分鐘（詳情頁不受影響，
+// 見上方註解——這裡最舊只影響清單頁的姓名/waiver/墜測等狀態小標籤）。
+const MEMBER_SEARCH_CACHE_TTL_MS = 300000;
 const _memberSearchCache = { data: null, expiresAt: 0 };
 const invalidateMemberSearchCache = () => { _memberSearchCache.data = null; _memberSearchCache.expiresAt = 0; };
 

@@ -870,8 +870,10 @@ router.get('/monthly-daily-counts', authenticate, checkPermission('checkin.read'
     // 改法：拆成兩段——①「已結束天數」(prevStart ~ min(昨天,curEnd))：查一次後**永久快取**（無
     // TTL），cache key 隨「昨天」日期前進、每天最多重查一次（跨月切換或查詢過去月份時，histEnd
     // 會停在該月最後一天不再變動，同樣只查一次、之後永久命中）②「今天」（若在此月份範圍內）：
-    // 獨立小範圍查詢（一天，非兩個月），沿用 60 秒 TTL——miss 成本從平均 2639 筆降到平均 ~44
-    // 筆（單日份量）。整體預估可將此查詢的讀取量降 95%+，且完全不動入場寫入流程、純讀取面優化。
+    // 獨立小範圍查詢（一天，非兩個月）——miss 成本從平均 2639 筆降到平均 ~44 筆（單日份量），
+    // 整體預估可將此查詢的讀取量降 95%+，且完全不動入場寫入流程、純讀取面優化。TTL 原設 60
+    // 秒，2026-09-13 使用者確認可接受、放寬到 5 分鐘（純顯示用的「今日入場數」，不影響任何
+    // 入場/結帳判斷）。
     const todayStr = taiwanToday();
     const yesterdayStr = dayjs(todayStr).subtract(1, 'day').format('YYYY-MM-DD');
     const histEnd = yesterdayStr < curEnd ? yesterdayStr : curEnd;
@@ -906,7 +908,7 @@ router.get('/monthly-daily-counts', authenticate, checkPermission('checkin.read'
           .where('checkedInAt', '<=', new Date(`${todayStr}T23:59:59+08:00`))
           .select('checkedInAt', 'isCancelled', 'status', 'gymId').get();
         todayRecords = todaySnap.docs.map(d => d.data());
-        _monthlyCheckinTodayCache.set(_todayKey, { data: todayRecords, expiresAt: Date.now() + 60000 });
+        _monthlyCheckinTodayCache.set(_todayKey, { data: todayRecords, expiresAt: Date.now() + 300000 });
       }
     }
     const rawRecords = histRecords.concat(todayRecords);

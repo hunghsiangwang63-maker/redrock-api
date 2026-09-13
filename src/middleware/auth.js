@@ -22,6 +22,11 @@ const DEFAULT_PERMISSIONS = {
   'passes.delete':         { super_admin: true, gym_manager: true, full_time: false, part_time: false },
   'passes.approve':        { super_admin: true, gym_manager: true, full_time: false, part_time: false },
   'vip.manage':            { super_admin: true, gym_manager: false,full_time: false, part_time: false },
+  // VIP 名單唯讀（新增/編輯/刪除仍限 vip.manage＝super_admin）：2026-09-13 開放場館電腦值班
+  // (operator) 檢視，見下方 COUNTER_PERMS；個人帳號登入（含 gym_manager）維持不可看，需在館別
+  // 電腦打卡值班才有——與 vip.manage 完全同一套「僅 super_admin」個人角色範圍，差別只在
+  // COUNTER_PERMS 這一層。
+  'vip.view':              { super_admin: true, gym_manager: false,full_time: false, part_time: false },
   'pass_types.manage':     { super_admin: true, gym_manager: true, full_time: false, part_time: false },
   // ── full_time 個人辦公權限 ──
   'courses.view':          { super_admin: true, gym_manager: true, full_time: true,  part_time: true  }, // 課程月曆檢視（part 也可）
@@ -67,7 +72,7 @@ const COUNTER_PERMS = new Set([
   'checkin.create', 'checkin.read',
   'passes.create', 'passes.update', 'installments.manage',
   'courses.attendance', 'products.sell', 'revenue.record', 'competitions.entries',
-  'schedule.events', 'rentals.manage',
+  'schedule.events', 'rentals.manage', 'vip.view',
 ]);
 
 // 可逐人覆寫的權限鍵白名單（2026-08-08）：目前僅開放「full_time 個人辦公權限」那 5 類，

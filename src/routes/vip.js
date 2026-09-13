@@ -15,10 +15,10 @@ const validate = (req, res, next) => {
   next();
 };
 
-// ── GET /vip - 取得 VIP 名單 ────────────────────────────────────
+// ── GET /vip - 取得 VIP 名單（唯讀，含場館電腦值班；新增/編輯/刪除仍限 vip.manage）──
 router.get('/',
   authenticate,
-  checkPermission('vip.manage'),
+  checkPermission('vip.view'),
   async (req, res) => {
     try {
       const db = getDb();

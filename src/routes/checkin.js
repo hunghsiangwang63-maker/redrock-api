@@ -847,7 +847,10 @@ router.get('/today',
 
 // ── GET /checkin/monthly-daily-counts?gymId=&month=YYYY-MM ────────────
 // 入場頁折線圖：本月與上月「每日入場數」（依台灣日期、排除取消）
-const _monthlyCheckinCache = new Map(); // key: month(YYYY-MM) → { data: rawRecords[], expiresAt }（見下方查詢處註解）
+// key: `${month}:${histEnd}` → rawRecords[]（已結束天數、永久有效——見下方說明，故無 expiresAt）
+const _monthlyCheckinHistCache = new Map();
+// key: 'YYYY-MM-DD'（台灣今天）→ { data, expiresAt }（今天這一天的小範圍查詢，短 TTL）
+const _monthlyCheckinTodayCache = new Map();
 router.get('/monthly-daily-counts', authenticate, checkPermission('checkin.read'), async (req, res) => {
   try {
     const db = getDb();
@@ -859,26 +862,54 @@ router.get('/monthly-daily-counts', authenticate, checkPermission('checkin.read'
     const prevStart = `${prevMonth}-01`;
     const curEnd = dayjs(curStart).endOf('month').format('YYYY-MM-DD');
 
-    // ⚠️ 2026-09-08 查 Firestore 查詢洞察資料發現：此查詢（月份範圍、無 gymId 篩選——每次都掃
-    // 全兩館）單一查詢型態佔全站單日 Read Ops 約 14%（本月範圍即讀約 2300 筆，接近 checkIns
-    // 總筆數的七成），主因是入場頁「每日入場數」折線圖每次頁面載入/切頁都重新查一次、無快取。
-    // 這純粹是顯示用趨勢圖、無需秒級即時，改為 60 秒 TTL 快取「原始查詢結果」（不快取最終依
-    // gymId 算好的回應——キャッシュ鍵僅用 month，讓 super_admin/兩館站台電腦共用同一份查詢，
-    // 不論請求帶哪個 gymId 都只需查一次；gymId 篩選在快取命中後、記憶體中重新跑一次即可）。
-    const _cacheKey = month;
-    const _cached = _monthlyCheckinCache.get(_cacheKey);
-    let rawRecords;
-    if (_cached && _cached.expiresAt > Date.now()) {
-      rawRecords = _cached.data;
+    // ⚠️ 2026-09-08 加 60 秒 TTL 快取後（查 Firestore 查詢洞察：原無快取時此查詢佔全站單日
+    // Read Ops 約 14%），2026-09-13 再查發現快取命中率不夠高——每次 miss 仍整段（本月+上月，
+    // 不分館）掃過去，一天 69 次 miss × 平均 2639 筆＝18萬+讀取，已躍升全站單日讀取次數最大宗
+    // （約 26%）。根本問題：「已過去的天數」資料永遠不會再變（唯一例外是事後補登/取消入場，
+    // 極罕見、可接受些微不準），卻每次都跟著「今天」一起重新整段查詢。
+    // 改法：拆成兩段——①「已結束天數」(prevStart ~ min(昨天,curEnd))：查一次後**永久快取**（無
+    // TTL），cache key 隨「昨天」日期前進、每天最多重查一次（跨月切換或查詢過去月份時，histEnd
+    // 會停在該月最後一天不再變動，同樣只查一次、之後永久命中）②「今天」（若在此月份範圍內）：
+    // 獨立小範圍查詢（一天，非兩個月），沿用 60 秒 TTL——miss 成本從平均 2639 筆降到平均 ~44
+    // 筆（單日份量）。整體預估可將此查詢的讀取量降 95%+，且完全不動入場寫入流程、純讀取面優化。
+    const todayStr = taiwanToday();
+    const yesterdayStr = dayjs(todayStr).subtract(1, 'day').format('YYYY-MM-DD');
+    const histEnd = yesterdayStr < curEnd ? yesterdayStr : curEnd;
+
+    let histRecords;
+    if (histEnd < prevStart) {
+      histRecords = []; // 極端邊界（今天早於上個月第一天，理論上不會發生）
     } else {
-      // 單欄位範圍（checkedInAt）＋記憶體過濾 gym/取消，避複合索引
-      const snap = await db.collection('checkIns')
-        .where('checkedInAt', '>=', new Date(`${prevStart}T00:00:00+08:00`))
-        .where('checkedInAt', '<=', new Date(`${curEnd}T23:59:59+08:00`))
-        .select('checkedInAt', 'isCancelled', 'status', 'gymId').get();
-      rawRecords = snap.docs.map(d => d.data());
-      _monthlyCheckinCache.set(_cacheKey, { data: rawRecords, expiresAt: Date.now() + 60000 });
+      const _histKey = `${month}:${histEnd}`;
+      const _histCached = _monthlyCheckinHistCache.get(_histKey);
+      if (_histCached) {
+        histRecords = _histCached;
+      } else {
+        const histSnap = await db.collection('checkIns')
+          .where('checkedInAt', '>=', new Date(`${prevStart}T00:00:00+08:00`))
+          .where('checkedInAt', '<=', new Date(`${histEnd}T23:59:59+08:00`))
+          .select('checkedInAt', 'isCancelled', 'status', 'gymId').get();
+        histRecords = histSnap.docs.map(d => d.data());
+        _monthlyCheckinHistCache.set(_histKey, histRecords);
+      }
     }
+
+    let todayRecords = [];
+    if (todayStr >= curStart && todayStr <= curEnd) {
+      const _todayKey = todayStr;
+      const _todayCached = _monthlyCheckinTodayCache.get(_todayKey);
+      if (_todayCached && _todayCached.expiresAt > Date.now()) {
+        todayRecords = _todayCached.data;
+      } else {
+        const todaySnap = await db.collection('checkIns')
+          .where('checkedInAt', '>=', new Date(`${todayStr}T00:00:00+08:00`))
+          .where('checkedInAt', '<=', new Date(`${todayStr}T23:59:59+08:00`))
+          .select('checkedInAt', 'isCancelled', 'status', 'gymId').get();
+        todayRecords = todaySnap.docs.map(d => d.data());
+        _monthlyCheckinTodayCache.set(_todayKey, { data: todayRecords, expiresAt: Date.now() + 60000 });
+      }
+    }
+    const rawRecords = histRecords.concat(todayRecords);
     const countMap = {};
     const gymCountMap = { 'gym-hsinchu': {}, 'gym-shilin': {} }; // 本月各館每日（不受 gymId 過濾，供 super_admin 兩館分線）
     rawRecords.forEach(r => {

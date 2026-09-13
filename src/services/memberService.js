@@ -771,10 +771,14 @@ const SEARCH_LIST_FIELDS = ['name', 'phone', 'email', 'isChildAccount', 'memberT
 // ⚠️ 2026-09-08 查 Firestore 查詢洞察資料發現：query 分支的全表掃描（見下方）單一查詢型態
 // 佔全站單日 Read Ops 約 6.5%（35 次搜尋、每次讀約 1473 筆＝幾乎整個 members 集合）。搜尋詞
 // 不影響「要撈哪些文件」（一律整表掃描、只有搜尋詞不同時的記憶體過濾結果不同），故用單一
-// 全域快取鍵存「整份投影後的會員清單」——20 秒內不論搜什麼字，都重用同一份清單只在記憶體
+// 全域快取鍵存「整份投影後的會員清單」——TTL 內不論搜什麼字，都重用同一份清單只在記憶體
 // 篩選（篩選本身不耗 Firestore 讀取）。⚠️ 唯一風險：剛註冊/剛建立的會員在快取視窗內搜不到
 // （像系統故障，比「資料顯示稍舊」嚴重）——createMember() 寫入會員文件後主動清快取解決；
 // 其餘欄位變動（如剛簽完 waiver）在快取視窗內顯示稍舊可接受，不逐一補清快取。
+// ⚠️ 2026-09-13 查詢洞察：仍是次高單一查詢型態（24 次搜尋、每次讀約 1563 筆＝37,537／天）。
+// 搜尋本身對「幾分鐘內資料略舊」無感（同上，剛建立會員的唯一風險已由主動清快取解決），
+// TTL 由 20 秒放寬到 90 秒，換更高快取命中率。
+const MEMBER_SEARCH_CACHE_TTL_MS = 90000;
 const _memberSearchCache = { data: null, expiresAt: 0 };
 const invalidateMemberSearchCache = () => { _memberSearchCache.data = null; _memberSearchCache.expiresAt = 0; };
 
@@ -805,7 +809,7 @@ const searchMembers = async ({ query, gymId, role, limit = 20, cursor }) => {
     snapshot = await ref.select(...SEARCH_LIST_FIELDS).get();
     const all = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
     _memberSearchCache.data = all;
-    _memberSearchCache.expiresAt = Date.now() + 20000;
+    _memberSearchCache.expiresAt = Date.now() + MEMBER_SEARCH_CACHE_TTL_MS;
     return all.filter(m =>
       m.name?.includes(query) ||
       m.phone?.includes(query) ||

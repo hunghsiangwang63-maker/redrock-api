@@ -1748,10 +1748,17 @@ router.get('/leave-makeup-summary/all',
       const db = getDb();
       const gymId = req.query.gymId || null;
       const today = taiwanToday();
+      // ⚠️ 2026-09-13：courseEnrollments 每筆內嵌簽名圖(base64 PNG，平均~77KB)，courseMakeupRights
+      // 亦隨資料量持續累積——這裡原本整份無投影掃全表，隨資料量成長已慢到觸發前端 timeout（士林
+      // 11.8s／新竹 25.5s，見「假補總表載入失敗」回報）。加 .select() 只投影下方實際用到的欄位
+      // （courses/pendingCourseClaims 量小、不含大欄位，維持整份撈；courses 另外還要餵給
+      // courseService.resolveRules，欄位需求不易窮舉，不冒風險投影）。
       const [csSnap, enSnap, mkSnap, pcSnap, catSnap] = await Promise.all([
         db.collection('courses').get(),
-        db.collection(COLLECTIONS.COURSE_ENROLLMENTS).get(),
-        db.collection('courseMakeupRights').get(),
+        db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+          .select('courseId', 'memberId', 'isTrial', 'isMakeup', 'status', 'date', 'maxLeavesAllowed', 'memberName').get(),
+        db.collection('courseMakeupRights')
+          .select('courseId', 'memberId', 'source', 'closureDate', 'prevLeaveDate', 'redemptionType', 'status', 'cashCreditAmount', 'expiresAt', 'usedSessionId', 'courseName', 'createdAt').get(),
         db.collection('pendingCourseClaims').get(),
         db.collection('courseCategories').get(),
       ]);
@@ -1810,9 +1817,17 @@ router.get('/leave-makeup-summary/all',
           const active = ens.filter(e => ['confirmed', 'leave', 'waitlist'].includes(e.status));
           if (!active.length) return null;
           const rights = (mkByCourse[c.id] || {})[mid] || [];
-          const realLeaves = ens.filter(e => e.status === 'leave').map(e => e.date).filter(Boolean);
+          const realLeaveDates = ens.filter(e => e.status === 'leave').map(e => e.date).filter(Boolean).sort();
           const closureDays = rights.filter(r => r.source === 'closure' && r.closureDate).map(r => r.closureDate);
           const prevLeaveDays = rights.filter(r => r.source === 'prev_leave' && r.prevLeaveDate).map(r => `${r.prevLeaveDate}（上期請假${r.redemptionType === 'cash_credit' ? `・${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}` : ''}）`);
+          // 本期請假現金折抵（見單一課程版 buildLeaveMakeupSummary 同一段註解；兩處各自維護，改一處記得改另一處）
+          const cashCreditRights = rights
+            .filter(r => r.redemptionType === 'cash_credit' && r.source !== 'prev_leave' && r.source !== 'closure')
+            .sort((a, b) => (a.createdAt?.toDate?.()?.getTime() || 0) - (b.createdAt?.toDate?.()?.getTime() || 0));
+          const realLeaves = realLeaveDates.map((d, i) => {
+            const r = cashCreditRights[i];
+            return r ? `${d}（${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}）` : d;
+          });
           const leaves = [...realLeaves, ...closureDays.map(d => `${d}（停課）`), ...prevLeaveDays].sort();
           const cap = ens.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rules.maxLeaves;
           // 現金折抵（redemptionType:'cash_credit'，如無可補課時段改折抵費用）不算補課次數，僅列在 leaves 供查核

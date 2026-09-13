@@ -1689,9 +1689,19 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
         const active = ens.filter(e => ['confirmed', 'leave', 'waitlist'].includes(e.status));
         if (!active.length) return null; // 全取消不列
         const rights = rightsByMember[mid] || [];
-        const realLeaves = ens.filter(e => e.status === 'leave').map(e => e.date).filter(Boolean);
+        const realLeaveDates = ens.filter(e => e.status === 'leave').map(e => e.date).filter(Boolean).sort();
         const closureDays = rights.filter(r => r.source === 'closure' && r.closureDate).map(r => r.closureDate); // 停課日（豁免、不計請假數）
         const prevLeaveDays = rights.filter(r => r.source === 'prev_leave' && r.prevLeaveDate).map(r => `${r.prevLeaveDate}（上期請假${r.redemptionType === 'cash_credit' ? `・${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}` : ''}）`); // 上一期請假、列本期補課
+        // 本期請假現金折抵（redemptionType:'cash_credit' 且非 prev_leave/closure 來源，如未安排補課改折抵下期課程費用）
+        // ——reconcile 機制本身不記「哪張券對應哪天請假」，故依時間序（createdAt／請假日期）依序配對，
+        // 供本期請假日期旁附註折抵金額（比照上期請假既有的顯示格式）。
+        const cashCreditRights = rights
+          .filter(r => r.redemptionType === 'cash_credit' && r.source !== 'prev_leave' && r.source !== 'closure')
+          .sort((a, b) => (a.createdAt?.toDate?.()?.getTime() || 0) - (b.createdAt?.toDate?.()?.getTime() || 0));
+        const realLeaves = realLeaveDates.map((d, i) => {
+          const r = cashCreditRights[i];
+          return r ? `${d}（${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}）` : d;
+        });
         const leaves = [...realLeaves, ...closureDays.map(d => `${d}（停課）`), ...prevLeaveDays].sort();
         const cap = ens.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rules.maxLeaves;
         // 現金折抵（redemptionType:'cash_credit'，如無可補課時段改折抵費用）不算補課次數，僅列在 leaves 供查核

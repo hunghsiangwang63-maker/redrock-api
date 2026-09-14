@@ -10,6 +10,7 @@ const bonusService = require('../services/bonusService');
 const memberService = require('../services/memberService');
 const { isChild } = require('../utils/age');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
+const { normalizeBarcode } = require('../utils/cardBarcode');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -64,7 +65,7 @@ router.post('/discount/bind',
         memberId: req.body.memberId,
         remainingCredits: parseInt(req.body.remainingCredits),
         gymId: req.staff.gymId, staffId: req.staff.id,
-        barcode: req.body.barcode.trim(),
+        barcode: normalizeBarcode(req.body.barcode),
       });
       // 揭露到管理員通知頁（非審核，立即生效）
       const dm = await require('../services/memberService').getMember(req.body.memberId).catch(() => null);
@@ -202,7 +203,7 @@ router.post('/black/bind',
   async (req, res) => {
     try {
       const card = await legacyCardService.bindBlackCard({
-        barcode: req.body.barcode.trim(), memberId: req.body.memberId,
+        barcode: normalizeBarcode(req.body.barcode), memberId: req.body.memberId,
         remainingCredits: parseInt(req.body.remainingCredits),
         gymId: req.staff.gymId, staffId: req.staff.id,
       });

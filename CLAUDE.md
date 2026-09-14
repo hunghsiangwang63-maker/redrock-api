@@ -3244,3 +3244,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **查證發現真相**：`invoices` 集合（真列印版）裡**早就存在**同號碼 `EF33426623`（`gym-hsinchu` 已開啟真列印）——是店員陳品翰稍早已經用「手動開立發票（無來源）」實際印出的真實發票，`amount:990`、`note:成人入門班試上費用`，只是當時沒有連結到具體訂單（`sourceType/refId/memberId` 皆空、`itemName` 只是通用的「費用」）。使用者要的其實是**把這張已經印出來的真實發票，補上「這是黃宇鴻試上費」的關聯資訊**，不是另開一張新的。
 - **修正**：刪除第一輪誤建的 `invoiceRecords` 重複紀錄；改直接更新那筆真實 `invoices` 文件，補上 `sourceType:'experience'`、`refId`(試上預約id)、`memberId`、`memberName:黃宇鴻`、`itemName` 改「課程試上費」。正式 API 驗證：「今日發票列表」EF33426623 只出現一次且正確顯示「課程試上費 黃宇鴻」；`GET /invoices/status?sourceType=experience&refId=...` 正確解析回這張發票（意味著之後在他的試上紀錄頁面看「開立發票」按鈕，會正確顯示「已開立 EF33426623」而不是又跳出可以再開一張的按鈕）。
 - 💡 **教訓**：使用者給一組具體發票號碼要求「綁到」某筆費用時，**先查該號碼是否已存在於真列印 `invoices` 集合**（尤其該館 `invoicePrintingEnabled` 已開啟時，代表現場很可能已經用真實印表機印過），不要預設「系統裡沒這張、需要我新建一筆」。
+
+## 目前進度（2026-09-14 續7）— 黑卡綁定白名單擴及 AT21 字軌
+> 指示「AT21黑卡已經整理好（同樣的）」——比照 AT19/ST19 既有流程擴大一個字軌。後端 `/health` `3.508.0-card-registry-gate-at21`；正式 API 4 情境驗證（測試資料/清冊狀態全部還原）。commit `10d5fb1`。
+- ✅ **匯入清冊**：`scripts/importCardRegistry.js --series=AT21 --commit`——AT21 共 1502 筆，已售出 1502，已綁定 764，未綁定 738。
+- ✅ **`GATED_SERIES.black` 加入 `'AT21'`**（`src/routes/cards.js`）：程式邏輯本就通用（依前綴比對），只需改這一份清單、無需動 `checkCardRegistry`/`markCardBound` 任何邏輯。
+- ✅ **正式 API 驗證（4 情境）**：①已綁定的真實 AT21 卡號 → 409 CARD_ALREADY_BOUND ②超出範圍假卡號 → 400 CARD_NOT_IN_REGISTRY ③真正未綁定卡號（帶dash測正規化）→ 綁定成功＋清冊正確標記 `bound:true` ④同一張卡再綁一次 → 正確擋 409。
+- 📌 **現況**：`GATED_SERIES.black = ['AT19','ST19','AT21']`（黑卡三字軌皆已擋）；優惠卡 D19/D21/D24 仍為空清單、尚未整理，維持不擋。

@@ -631,6 +631,40 @@ router.put('/draft', authenticate, requireStationAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── 結帳加減項 ↔ 人事報酬記錄（payoutRecords）串接（2026-09-14）────────────
+// 使用者拍板「兩邊串起來，結帳時要登記姓名」——教練費/定線費/拆點費這三種加減項在結帳頁填了
+// 姓名後，自動同步一筆結構化紀錄到 payoutRecords（供 /payouts 報稅查詢用），不用再手動記兩次。
+const PAYOUT_LINKED_TYPES = ['教練費', '定線費', '拆點費'];
+
+// 用 sourceSettlementId 標記「這筆是從這張結帳單同步來的」——每次結帳（含當日再次結帳）都先清掉
+// 舊的同步紀錄再依目前的加減項重建，確保修改/刪除某筆加減項時對應的報酬紀錄也跟著更新/消失；
+// 完全不動使用者直接在「人事報酬」頁手動新增、沒有 sourceSettlementId 的紀錄。系統自動產生的
+// 加減項（d.auto，如教練費由體驗預約 /finance 端點另外自動記帳）不在此同步範圍——那些有各自
+// 獨立的同步路徑（見 experienceBookings.js `/:id/finance`，sourceBookingId），避免重複建立。
+const syncPayoutRecordsFromSettlement = async (db, settlement) => {
+  try {
+    const existing = await db.collection('payoutRecords').where('sourceSettlementId', '==', settlement.id).get();
+    const batch = db.batch();
+    existing.docs.forEach(d => batch.delete(d.ref));
+    (settlement.deductions || []).forEach(dd => {
+      if (dd.auto) return;
+      if (!PAYOUT_LINKED_TYPES.includes(dd.type)) return;
+      const payeeName = String(dd.payeeName || '').trim();
+      const amount = Number(dd.amount) || 0;
+      if (!payeeName || amount <= 0) return;
+      const id = uuidv4();
+      const now = new Date();
+      batch.set(db.collection('payoutRecords').doc(id), {
+        id, date: settlement.date, payeeName, amount, category: dd.type, gymId: settlement.gymId,
+        note: dd.note || '', sourceSettlementId: settlement.id,
+        recordedBy: settlement.staffId, recordedByName: settlement.staffName || '',
+        createdAt: now, updatedAt: now, createdAtMs: now.getTime(),
+      });
+    });
+    await batch.commit();
+  } catch (e) { console.error('[結帳同步人事報酬記錄]', e.message); }
+};
+
 // ── POST /daily-settlements ───────────────────────────────────────
 router.post('/', authenticate, requireStationAuth, async (req, res) => {
   try {
@@ -651,6 +685,12 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
 
     const lockErr = findRemovedOrAlteredAutoDeductions(existDoc?.data()?.deductions, deductions);
     if (lockErr) return res.status(400).json({ error: 'AUTO_DEDUCTION_LOCKED', message: lockErr });
+
+    // 教練費/定線費/拆點費須登記姓名才能結帳（後端權威，不只是前端擋——見 syncPayoutRecordsFromSettlement）
+    const missingPayeeName = (deductions || []).find(dd => !dd.auto && PAYOUT_LINKED_TYPES.includes(dd.type) && !String(dd.payeeName || '').trim());
+    if (missingPayeeName) {
+      return res.status(400).json({ error: 'MISSING_PAYEE_NAME', message: `「${missingPayeeName.type}」加減項須填寫領款人姓名` });
+    }
 
     // 該館已開真列印 → 今日收入/發票起訖/作廢一律由 invoices 集合權威決定，忽略前端送來的值
     // （比照加減項鎖定原則：系統帶入的資料不信任前端、也不可被覆蓋，見上方 findRemovedOrAlteredAutoDeductions）
@@ -774,6 +814,7 @@ router.post('/', authenticate, requireStationAuth, async (req, res) => {
     }
 
     await db.collection('dailySettlements').doc(id).set(settlement);
+    await syncPayoutRecordsFromSettlement(db, settlement);
 
     const invoiceRolloverDue = await checkInvoiceRolloverDue(gymId, today).catch(() => false);
 
@@ -924,6 +965,7 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
     aoa.push(R('', '退貨總額', '', s => dedSum(s, '其他退款')));
     aoa.push(R('收支', '定線費', '', s => dedSum(s, '定線費')));
     aoa.push(R('', '教練費', '', s => dedSum(s, '教練費')));
+    aoa.push(R('', '拆點費', '', s => dedSum(s, '拆點費')));
     aoa.push(R('', '領取現金', '', s => dedSum(s, '現金領取')));
     aoa.push(R('行動支付', '台灣Pay', '', s => s.payment?.taiwanPay));
     aoa.push(R('', 'Line Pay', '', s => s.payment?.linePay));

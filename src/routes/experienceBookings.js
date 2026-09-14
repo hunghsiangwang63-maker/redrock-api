@@ -1021,6 +1021,22 @@ router.put('/:id/finance', authenticate, requireManager, async (req, res) => {
         });
         await ref.update({ coachFeeAdjDone: true });
       } catch (e) { console.error('體驗教練費寫入結帳加減項失敗', e.message); }
+      // 同步一筆人事報酬記錄（供 /payouts 報稅查詢用，2026-09-14）——教練姓名已知（b.coachName）才建，
+      // 沒指定教練的體驗課不強塞空白姓名。用 sourceBookingId 標記來源（區隔結帳頁手動填寫那批
+      // sourceSettlementId 的紀錄），與上面的結帳加減項同一個冪等旗標 coachFeeAdjDone 一起把關。
+      if (b.coachName && String(b.coachName).trim()) {
+        try {
+          const now = new Date();
+          const payoutId = uuidv4();
+          await db.collection('payoutRecords').doc(payoutId).set({
+            id: payoutId, date: b.bookingDate, payeeName: String(b.coachName).trim(),
+            amount: coachFee, category: '教練費', gymId: b.gymId,
+            note: `${b.contactName || ''} 體驗教練費`.trim(), sourceBookingId: b.id,
+            recordedBy: req.staff.id, recordedByName: req.staff.name || '',
+            createdAt: now, updatedAt: now, createdAtMs: now.getTime(),
+          });
+        } catch (e) { console.error('體驗教練費同步人事報酬記錄失敗', e.message); }
+      }
     }
     res.json({ success: true, coachFee, invoiceAmount });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }

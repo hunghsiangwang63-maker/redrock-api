@@ -279,12 +279,29 @@ router.get('/analytics', authenticate, requireManagerOrStation, async (req, res)
     const db = getDb();
     const today = taiwanToday();
 
-    const [passSnap, discountSnap, blackSnap, ticketSnap, bonusSnap] = await Promise.all([
+    // 未綁定卡號數：physicalCardRegistry 是「已售出實體卡清冊」（見 scripts/importCardRegistry.js
+    // 從使用者維護的 Excel 匯入），已售出但 bound=false 即為「還可以綁定」。用 .count() 只拿數字，
+    // 不拉整批文件內容。目前僅黑卡（AT/ST 系列）已匯入，優惠卡（D 系列）尚未整理——回 null 明確
+    // 區分「這個卡別根本還沒有清冊資料」跟「清冊裡剛好 0 張未綁定」，避免前端誤讀成 0 張。
+    const unboundCountOf = async (cardType) => {
+      try {
+        const soldSnap = await db.collection('physicalCardRegistry')
+          .where('cardType', '==', cardType).where('sold', '==', true).count().get();
+        if (soldSnap.data().count === 0) return null; // 尚未匯入此卡別的清冊
+        const unboundSnap = await db.collection('physicalCardRegistry')
+          .where('cardType', '==', cardType).where('sold', '==', true).where('bound', '==', false).count().get();
+        return unboundSnap.data().count;
+      } catch { return null; }
+    };
+
+    const [passSnap, discountSnap, blackSnap, ticketSnap, bonusSnap, blackUnbound, discountUnbound] = await Promise.all([
       db.collection(COLLECTIONS.MEMBER_PASSES).get(),
       db.collection('discountCards').get(),
       db.collection('legacyBlackCards').get(),
       db.collection('singleEntryTickets').get(),
       db.collection('discountBonuses').get(),
+      unboundCountOf('black'),
+      unboundCountOf('discount'),
     ]);
 
     // 定期票
@@ -331,11 +348,11 @@ router.get('/analytics', authenticate, requireManagerOrStation, async (req, res)
 
     // 優惠卡（discountCards：ownerMemberId、預設 10 格）
     const discounts = discountSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-    const discountStats = cardStats(discounts, 10);
+    const discountStats = { ...cardStats(discounts, 10), unbound: discountUnbound };
 
     // 黑卡（legacyBlackCards：memberId、預設 12 格、原始卡 expiresAt 可為 null=無期限）
     const blacks = blackSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-    const blackStats = cardStats(blacks, 12);
+    const blackStats = { ...cardStats(blacks, 12), unbound: blackUnbound };
 
     // 單日券（實際狀態值只有 pending_approval/active/used/cancelled，無 valid/expired 字串；
     // 「有效」＝status=active 且未過期、「已過期」＝status=active 但 expiresAt 已過，皆需以日期即時判斷）

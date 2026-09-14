@@ -34,6 +34,11 @@ const bindDiscountCard = async ({ memberId, remainingCredits, gymId, staffId, ba
     const mDoc = await db.collection('members').doc(memberId).get();
     if (!mDoc.exists) throw { code: 'MEMBER_NOT_FOUND', message: '找不到會員，無法綁定優惠卡' };
   }
+  // 卡號現為必填，比照黑卡既有作法擋同一張實體卡被重複轉入兩次。
+  if (barcode) {
+    const existing = await db.collection(COLLECTION).where('barcode', '==', barcode).limit(1).get();
+    if (!existing.empty) throw { code: 'CARD_ALREADY_BOUND', message: '此優惠卡已轉入過，無法重複轉入' };
+  }
   const cardId = uuidv4();
   const now = new Date();
   const expiresAt = null; // 轉入（綁定）優惠卡：無使用期限（購買入場產生的卡才有一年期限）

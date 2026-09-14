@@ -56,14 +56,15 @@ router.post('/discount/purchase',
 // 轉入優惠卡 = Group A：館別電腦(值班)或管理員；立即生效 + 揭露通知管理員
 router.post('/discount/bind',
   authenticate, requireManagerOrStation, auditLog('discount_card.bind'),
-  [body('memberId').notEmpty(), body('remainingCredits').isInt({ min: 1, max: 10 })], validate,
+  // 卡號改為必填（原「選填」）：日後要對照「可綁定卡號清單」做權威驗證，卡號是比對鍵故必須先有值。
+  [body('memberId').notEmpty(), body('remainingCredits').isInt({ min: 1, max: 10 }), body('barcode').trim().notEmpty().withMessage('請輸入卡片條碼')], validate,
   async (req, res) => {
     try {
       const card = await discountCardService.bindDiscountCard({
         memberId: req.body.memberId,
         remainingCredits: parseInt(req.body.remainingCredits),
         gymId: req.staff.gymId, staffId: req.staff.id,
-        barcode: req.body.barcode || null,
+        barcode: req.body.barcode.trim(),
       });
       // 揭露到管理員通知頁（非審核，立即生效）
       const dm = await require('../services/memberService').getMember(req.body.memberId).catch(() => null);
@@ -75,6 +76,7 @@ router.post('/discount/bind',
       res.status(201).json({ card, message: '優惠卡轉入成功' });
     } catch (err) {
       if (err.code === 'MEMBER_NOT_FOUND') return res.status(404).json(err);
+      if (err.code === 'CARD_ALREADY_BOUND') return res.status(409).json(err);
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }
   }
@@ -195,11 +197,12 @@ router.get('/black/member/:memberId', authenticateAny, async (req, res) => {
 // 黑卡綁定 = Group A：館別電腦(值班)或管理員；立即生效 + 揭露通知管理員
 router.post('/black/bind',
   authenticate, requireManagerOrStation, auditLog('black_card.bind'),
-  [body('memberId').notEmpty(), body('remainingCredits').isInt({ min: 1, max: 12 })], validate,
+  // 卡號改為必填（原「選填」）：日後要對照「可綁定卡號清單」做權威驗證，卡號是比對鍵故必須先有值。
+  [body('memberId').notEmpty(), body('remainingCredits').isInt({ min: 1, max: 12 }), body('barcode').trim().notEmpty().withMessage('請輸入黑卡條碼')], validate,
   async (req, res) => {
     try {
       const card = await legacyCardService.bindBlackCard({
-        barcode: req.body.barcode || null, memberId: req.body.memberId,
+        barcode: req.body.barcode.trim(), memberId: req.body.memberId,
         remainingCredits: parseInt(req.body.remainingCredits),
         gymId: req.staff.gymId, staffId: req.staff.id,
       });

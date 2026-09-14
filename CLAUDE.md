@@ -3175,3 +3175,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 
 ## 提醒（2026-09-13）— 本機（開發/API 測試主機）即將更新系統重開機
 - 純記錄：重開機期間本機上任何手動跑的 script/session 會中斷；Railway（後端 API）與 Firebase Hosting（會員/員工前端）皆為雲端服務，不受此機器開關機影響、不需特別處理。
+
+## 目前進度（2026-09-14）— 查證＋修：GCP data transfer 用量從 9/6 起又出現
+> 回報「為什麼從9/6開始又有data transfer使用量?」——查證流程與結論記錄如下，供日後同類調查參考。
+- **確認現象（GCP Billing → 依SKU分組、篩「Cloud Firestore Internet Data Transfer Out」兩個子SKU）**：9/1~9/5 這個 SKU 完全是 **$0**（表格裡整段沒有這幾天的列），從 **9/6 起才出現**且逐日成長：9/6 $2.31→9/7 $3.61→9/8 $2.06→9/9 $1.90→9/10 $2.96→9/11 $4.02→9/12 $2.81→9/13 **$8.41（2.21 GiB，換算約 $3.8/GiB）**。當月累計 $28.10、較上期已降 71%（大方向仍是健康的，但這條 SKU 本身是真的從 0 開始長）。
+- **已排除的候選**（逐一查證，非猜測）：
+  - `apiUsageStats`（既有機制，2026-08-20 建，記每日 member/staff 端 HTTP 回應 bytes）9/1~9/14 都在 50~150MB/天量級、**沒有 9/6 那種從 0 起跳的斷點**——代表問題不是「serve 給前端的 JSON 變大」，是 Firestore 內部（storage↔運算層，可能跨 zone）的讀取本身變大，兩者是不同的量測維度。
+  - `systemSettings/contractTerms`（5.9KB）、`gymContracts`（1KB）——9/6~9/7 新上線的「課程合約」功能讀的兩份設定文件，直接量測皆很小，即使被高頻讀取也遠不足以解釋 GB 級用量。
+  - `transferRecords`——Query Insights 排行第 3（`WHERE status=?` 無 `.select()`），但直接抽樣量測**平均只有 773 bytes/筆、全 collection 僅 220 筆**，天花板效應下不可能是禍首（已知的效率缺點，非本次主因，未修）。
+  - `experienceBookings` 整批下載（保險名冊 `/insurance-download`，同樣無 `.select()`）——量測全 collection 僅 42 筆、平均 1.5KB，可忽略。
+  - Query Insights 讀取次數排行前 2 名（`courseEnrollments`／`experienceBookings` 的兩個高頻 SELECT 查詢）本身**都已經有 `.select()` 投影**，且 Firestore 官方计费模型是「`.select()` 不減少 read-op 計費、但會減少實際網路傳輸位元組」，故這兩個高讀取次數的查詢反而不是嫌疑對象。
+  - Query Insights 本身**不提供「依傳輸位元組排序」的檢視**（僅有次數/延遲/掃描比等欄位、且該專案有 100 頁 query shape），這條路線在合理時間內查不出「哪一個查詢傳輸最多 bytes」，故改以程式碼比對（見下）。
+- **✅ 找到並修復一個真的、目前仍存在的缺口**：靜態掃描全 codebase「對 `courseEnrollments`/`experienceBookings`/`competitionRegistrations`/`courseRegistrations` 等已知內嵌簽名圖的肥集合、且**沒有 `.select()`** 的多文件查詢」，找到 `routes/courses.js` 的「假補總表」功能仍有 3 處：①單一課程版本 `buildLeaveMakeupSummary` 的主查詢 `enSnap`（`where courseId==`，1646行）從未投影過 ②單一課程版本內部的「跨期補課」查詢（`where memberId in chunk`，1683行）③**`/leave-makeup-summary/all`（全部課程版本）內部另一段獨立的「跨期補課」迴圈**（1807行）——這第③處是**昨天（3.503.0）修這支端點時漏掉的**：當時只修了端點最前面的 5-collection 批次查詢，沒注意到同一支端點裡還有第二段獨立、依 memberId 分批（每批10人）**橫跨全系統所有課程**查詢會員完整報名歷史的迴圈，未限定課程範圍、完全沒有 `.select()`——`courseEnrollments` 平均每筆內嵌 ~77KB base64 簽名圖，全系統會員規模下單次呼叫可能傳輸上百 MB。三處補齊 `.select()`，正式資料驗證（投影前後筆數/欄位值逐一比對）0 差異。commit `a035670`，`/health` `3.504.0-leave-summary-crossterm-projection-fix`，已部署驗證（`/all` 與單一課程端點皆正常回傳真實資料）。
+- ⚠️ **誠實記錄限制**：`courseEnrollments`（blame 顯示皆為 2026-07-19/22 舊碼）本身並非 9/6 才新增的查詢，無法 100% 確定「就是這 3 處導致精確從 9/6 開始長」的因果（比較可能是這個功能的使用頻率剛好在那之後升高、疊加本來就存在的投影缺口）；已修復的部分能確定會降低未來的用量，但**沒有辦法回頭證明過去 9/6~9/13 這筆帳單全部由它造成**。之後幾天可回頭比對這條 SKU 的每日走勢是否明顯回落，若沒有明顯改善，代表還有其他未找到的來源，需要再查（下一步可考慮的方向：對這 100 頁 query shape 逐頁排查、或在正式環境加臨時的 Firestore SDK 層級 bytes 計量工具）。

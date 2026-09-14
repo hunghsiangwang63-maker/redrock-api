@@ -28,18 +28,29 @@ const childBlock = async (memberId, message) => {
 };
 
 // ── 卡號白名單（physicalCardRegistry，見 scripts/importCardRegistry.js）──────────────
-// 只對「使用者已確認整理好」的字軌生效——尚未整理的字軌（如 D 系列）完全不擋，維持原行為。
-// 之後使用者確認其他字軌整理好，加進對應陣列即可，不需再改邏輯。
+// 只對「使用者已確認整理好」的字軌（或字軌內特定號碼區間，供分批整理用）生效——尚未整理的
+// 完全不擋，維持原行為。之後使用者確認其他字軌/區間整理好，加進對應陣列即可，不需再改邏輯。
+// 陣列元素可以是：純字軌字串（整個字軌都擋，如 'AT19'）／{prefix,from,to} 物件（只擋該字軌內
+// 序號落在 [from,to] 的部分，如 D21 使用者只整理了前 600 號時用）。
 const GATED_SERIES = {
   black: ['AT19', 'ST19', 'AT21'],
-  discount: ['D19'], // D21/D24 尚未整理，暫不擋
+  discount: ['D19', { prefix: 'D21', from: 1, to: 600 }], // D21 後段(601~)、D24 尚未整理，暫不擋
+};
+
+// 判斷某卡號是否落在白名單規則內（字串＝整字軌前綴比對；物件＝字軌前綴＋序號區間比對）
+const matchesGatedRule = (normalizedBarcode, rule) => {
+  if (typeof rule === 'string') return normalizedBarcode.startsWith(rule);
+  if (!normalizedBarcode.startsWith(rule.prefix)) return false;
+  const suffix = normalizedBarcode.slice(rule.prefix.length);
+  const num = parseInt(suffix, 10);
+  return Number.isFinite(num) && num >= rule.from && num <= rule.to;
 };
 
 // 回傳 {ok:true, tracked} 可放行（tracked=此卡號有在清冊裡，成功綁定後要標記 bound）；
 // 或 {ok:false, status, body} 直接擋下，供路由回應。
 const checkCardRegistry = async (db, cardType, normalizedBarcode) => {
   const gated = GATED_SERIES[cardType] || [];
-  if (!gated.some(prefix => normalizedBarcode.startsWith(prefix))) return { ok: true, tracked: false };
+  if (!gated.some(rule => matchesGatedRule(normalizedBarcode, rule))) return { ok: true, tracked: false };
   const doc = await db.collection('physicalCardRegistry').doc(normalizedBarcode).get();
   if (!doc.exists) return { ok: false, status: 400, body: { error: 'CARD_NOT_IN_REGISTRY', message: '此卡號不在已售出清冊內，請確認卡號是否正確' } };
   const data = doc.data();

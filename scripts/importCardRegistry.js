@@ -17,6 +17,9 @@
  *   預覽：GOOGLE_APPLICATION_CREDENTIALS=/path/sa.json node scripts/importCardRegistry.js
  *   寫入：GOOGLE_APPLICATION_CREDENTIALS=/path/sa.json node scripts/importCardRegistry.js --commit
  *   只匯入指定字軌：... node scripts/importCardRegistry.js --commit --series=AT19,ST19
+ *   只匯入某字軌的部分號碼區間（使用者分批整理完成時用，如「D21-0001~D21-0600 已整理好」但
+ *   後段尚未確認）：... node scripts/importCardRegistry.js --commit --series=D21 --range=1-600
+ *   （--range 只在單一 --series 時有意義，號碼比對用去除字軌前綴後的純數字部分）
  *   自訂檔案路徑：... node scripts/importCardRegistry.js /path/to/file.xlsx --commit
  */
 const ExcelJS = require('exceljs');
@@ -30,6 +33,11 @@ const COMMIT = args.includes('--commit');
 const filePath = args.find(a => !a.startsWith('--')) || DEFAULT_FILE;
 const seriesFilterArg = args.find(a => a.startsWith('--series='));
 const seriesFilter = seriesFilterArg ? seriesFilterArg.split('=')[1].split(',').map(s => s.trim().toUpperCase()) : null;
+const rangeArg = args.find(a => a.startsWith('--range='));
+const range = rangeArg ? (() => {
+  const [from, to] = rangeArg.split('=')[1].split('-').map(n => parseInt(n, 10));
+  return { from, to };
+})() : null;
 
 const COLLECTION = 'physicalCardRegistry';
 
@@ -70,6 +78,15 @@ function cardTypeOf(seriesName) {
       const sold = soldCol > 0 ? String(row[soldCol] || '').trim().toLowerCase() === 'sold' : false;
       const bound = boundCol > 0 ? String(row[boundCol] || '').trim().toLowerCase() === 'used' : false;
       const id = normalizeBarcode(rawNumber);
+
+      if (range) {
+        // 字軌前綴本身常含數字（如 D21、AT19），不能用「結尾連續數字」regex 抓序號（會把前綴的數字也
+        // 吃進去）——改用「去掉已知字軌前綴後剩下的部分」精確取序號。
+        const prefix = normalizeBarcode(seriesName);
+        const suffix = id.startsWith(prefix) ? id.slice(prefix.length) : null;
+        const num = suffix ? parseInt(suffix, 10) : null;
+        if (num == null || Number.isNaN(num) || num < range.from || num > range.to) continue; // 不在指定區間，跳過（不寫入、不計入統計）
+      }
 
       seriesRows++; totalRows++;
       if (sold) seriesSold++;

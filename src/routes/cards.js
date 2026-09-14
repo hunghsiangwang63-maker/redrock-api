@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { body, param, validationResult } = require('express-validator');
+const { getDb } = require('../config/firebase');
 const { authenticate, authenticateAny, authenticateMember, checkPermission, requireManagerOrStation, requireManager, auditLog } = require('../middleware/auth');
 const notificationService = require('../services/notificationService');
 const discountCardService = require('../services/discountCardService');
@@ -24,6 +25,34 @@ const childBlock = async (memberId, message) => {
   if (!memberId) return null;
   const m = await memberService.getMember(memberId).catch(() => null);
   return isChild(m) ? { code: 'CHILD_NOT_ALLOWED', message } : null;
+};
+
+// ── 卡號白名單（physicalCardRegistry，見 scripts/importCardRegistry.js）──────────────
+// 只對「使用者已確認整理好」的字軌生效——尚未整理的字軌（如 AT21、D 系列）完全不擋，維持原行為。
+// 之後使用者確認其他字軌整理好，加進對應陣列即可，不需再改邏輯。
+const GATED_SERIES = {
+  black: ['AT19', 'ST19'],
+  discount: [], // D19/D21/D24 尚未整理，暫不擋
+};
+
+// 回傳 {ok:true, tracked} 可放行（tracked=此卡號有在清冊裡，成功綁定後要標記 bound）；
+// 或 {ok:false, status, body} 直接擋下，供路由回應。
+const checkCardRegistry = async (db, cardType, normalizedBarcode) => {
+  const gated = GATED_SERIES[cardType] || [];
+  if (!gated.some(prefix => normalizedBarcode.startsWith(prefix))) return { ok: true, tracked: false };
+  const doc = await db.collection('physicalCardRegistry').doc(normalizedBarcode).get();
+  if (!doc.exists) return { ok: false, status: 400, body: { error: 'CARD_NOT_IN_REGISTRY', message: '此卡號不在已售出清冊內，請確認卡號是否正確' } };
+  const data = doc.data();
+  if (!data.sold) return { ok: false, status: 400, body: { error: 'CARD_NOT_SOLD', message: '此卡號尚未售出，無法綁定' } };
+  if (data.bound) return { ok: false, status: 409, body: { error: 'CARD_ALREADY_BOUND', message: '此卡號已經綁定過，無法重複綁定' } };
+  return { ok: true, tracked: true };
+};
+
+// 綁定成功後標記清冊該卡已綁定（僅 tracked=true 才需要，失敗不阻斷已完成的綁定）
+const markCardBound = async (db, normalizedBarcode, memberId) => {
+  await db.collection('physicalCardRegistry').doc(normalizedBarcode)
+    .set({ bound: true, boundAt: new Date(), boundMemberId: memberId }, { merge: true })
+    .catch(e => console.error('physicalCardRegistry 標記已綁定失敗:', e.message));
 };
 
 // ══════════════════════════════════════════════════════
@@ -61,12 +90,18 @@ router.post('/discount/bind',
   [body('memberId').notEmpty(), body('remainingCredits').isInt({ min: 1, max: 10 }), body('barcode').trim().notEmpty().withMessage('請輸入卡片條碼')], validate,
   async (req, res) => {
     try {
+      const db = getDb();
+      const normalized = normalizeBarcode(req.body.barcode);
+      const gate = await checkCardRegistry(db, 'discount', normalized);
+      if (!gate.ok) return res.status(gate.status).json(gate.body);
+
       const card = await discountCardService.bindDiscountCard({
         memberId: req.body.memberId,
         remainingCredits: parseInt(req.body.remainingCredits),
         gymId: req.staff.gymId, staffId: req.staff.id,
-        barcode: normalizeBarcode(req.body.barcode),
+        barcode: normalized,
       });
+      if (gate.tracked) await markCardBound(db, normalized, req.body.memberId);
       // 揭露到管理員通知頁（非審核，立即生效）
       const dm = await require('../services/memberService').getMember(req.body.memberId).catch(() => null);
       notificationService.notifyCardBindDisclosure({
@@ -202,11 +237,17 @@ router.post('/black/bind',
   [body('memberId').notEmpty(), body('remainingCredits').isInt({ min: 1, max: 12 }), body('barcode').trim().notEmpty().withMessage('請輸入黑卡條碼')], validate,
   async (req, res) => {
     try {
+      const db = getDb();
+      const normalized = normalizeBarcode(req.body.barcode);
+      const gate = await checkCardRegistry(db, 'black', normalized);
+      if (!gate.ok) return res.status(gate.status).json(gate.body);
+
       const card = await legacyCardService.bindBlackCard({
-        barcode: normalizeBarcode(req.body.barcode), memberId: req.body.memberId,
+        barcode: normalized, memberId: req.body.memberId,
         remainingCredits: parseInt(req.body.remainingCredits),
         gymId: req.staff.gymId, staffId: req.staff.id,
       });
+      if (gate.tracked) await markCardBound(db, normalized, req.body.memberId);
       // 揭露到管理員通知頁（非審核，立即生效）
       const bm = await require('../services/memberService').getMember(req.body.memberId).catch(() => null);
       notificationService.notifyCardBindDisclosure({

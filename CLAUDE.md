@@ -3219,6 +3219,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **兩個 bind 路由（`/cards/black/bind`、`/cards/discount/bind`）同步接上**（優惠卡因 `GATED_SERIES.discount` 目前是空陣列，此次上線對優惠卡完全零影響，純粹是為了 D 系列之後整理好時只需改清單、不用再改程式碼）。
 - ✅ **正式 API 驗證（5 情境，測試資料/清冊狀態測後皆已還原）**：①已綁定過的真實 AT19 卡號 → 409 ②超出範圍的假 AT19 卡號 → 400 CARD_NOT_IN_REGISTRY ③尚未開放字軌的 AT21 卡號 → 完全不擋、正常綁定成功（證明分字軌隔離正確）④真正未綁定的真實 AT19 卡號 → 綁定成功＋清冊正確標記 `bound:true`⑤同一張卡再綁一次 → 正確擋 409（證明標記機制生效、不會被重複核准）。
 
-## 目前進度（2026-09-14 續5）— 資料操作：補開黃宇鴻試上費用發票
-> 指示「把EF33426623綁到黃宇鴻試上費用的發票」。純資料操作，走正式 `POST /experience-bookings/:id/invoices` 端點（非直接寫 Firestore），無程式異動。
-- 查得黃宇鴻今日（2026-09-14）於「入門班 9-1月週一A班」試上一筆（`experienceBookings` bookingId `trial_1789346850564_c4bu`），試上費 NT$990，原本沒有任何發票紀錄。呼叫該預約的開票端點帶 `track:EF, number:33426623` → 成功建立 `invoiceRecords` 一筆（`itemName:課程試上費`、`amount:990`、`gymId:gym-hsinchu`、`paymentMethod` 自動帶入原繳費方式）。
+## 目前進度（2026-09-14 續6）— 修：「今日發票列表」漏顯示手動記帳版發票
+> 指示「發票管理這關也要呈現 課程試上費黃宇鴻」。查明「系統設定→發票列印」的「今日發票列表」（`GET /invoices/today`）**只查真列印版 `invoices` 集合、沒查手動記帳版 `invoiceRecords`**——兩套發票紀錄並存（見 `invoice-integration-plan.md`），凡是走 §9 手動記帳路徑（補開/事後登記等情境）的發票都不會出現在這個列表。後端 `/health` `3.507.1-invoices-today-merge-manual`；commit `bc8fb66`。
+- ✅ **修**：`GET /invoices/today` 改同時查 `invoices`＋`invoiceRecords`（皆依 `gymId`+今日 `issuedAt` 過濾）合併顯示；兩邊 status 字串不同（真列印用 `'void'`、手動記帳用 `'voided'`），合併時正規化成 `'void'`，讓前端既有的「已作廢」判斷對兩邊資料都正確運作。純顯示合併，不影響各自的開立/作廢邏輯。
+- ⚠️ **驗證這個修復時，意外揪出一個更早的資料錯誤**——見下方續5的修正記錄。
+
+## 目前進度（2026-09-14 續5）— 修正：黃宇鴻試上費用發票（一開始建錯，後改為連結既有真實發票）
+> 指示「把EF33426623綁到黃宇鴻試上費用的發票」。**第一次處理方式錯了**，靠續6「發票管理列表沒顯示」的驗證過程才發現、已修正。
+- **第一輪（錯誤）**：以為系統裡完全沒有這張發票，呼叫 `POST /experience-bookings/:id/invoices` 帶 `track:EF, number:33426623` 建了一筆 `invoiceRecords`（手動記帳版）。
+- **查證發現真相**：`invoices` 集合（真列印版）裡**早就存在**同號碼 `EF33426623`（`gym-hsinchu` 已開啟真列印）——是店員陳品翰稍早已經用「手動開立發票（無來源）」實際印出的真實發票，`amount:990`、`note:成人入門班試上費用`，只是當時沒有連結到具體訂單（`sourceType/refId/memberId` 皆空、`itemName` 只是通用的「費用」）。使用者要的其實是**把這張已經印出來的真實發票，補上「這是黃宇鴻試上費」的關聯資訊**，不是另開一張新的。
+- **修正**：刪除第一輪誤建的 `invoiceRecords` 重複紀錄；改直接更新那筆真實 `invoices` 文件，補上 `sourceType:'experience'`、`refId`(試上預約id)、`memberId`、`memberName:黃宇鴻`、`itemName` 改「課程試上費」。正式 API 驗證：「今日發票列表」EF33426623 只出現一次且正確顯示「課程試上費 黃宇鴻」；`GET /invoices/status?sourceType=experience&refId=...` 正確解析回這張發票（意味著之後在他的試上紀錄頁面看「開立發票」按鈕，會正確顯示「已開立 EF33426623」而不是又跳出可以再開一張的按鈕）。
+- 💡 **教訓**：使用者給一組具體發票號碼要求「綁到」某筆費用時，**先查該號碼是否已存在於真列印 `invoices` 集合**（尤其該館 `invoicePrintingEnabled` 已開啟時，代表現場很可能已經用真實印表機印過），不要預設「系統裡沒這張、需要我新建一筆」。

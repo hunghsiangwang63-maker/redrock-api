@@ -3169,6 +3169,20 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 「試上人數」目前僅由試上報名流程產生 `isTrial` 名單；如需員工手動加試上者，需另做 UI
 - 清理 dev Firebase 殘留測試會員：`【練習】…` 系列、`測試/測試API會員/管理員測試會員/Test1/Who` 等，以及測試用 `王大明`(0900222222)/子帳號 `小明明`；可用員工端「刪除會員」或 `DELETE /members/:id`（super_admin）清除（會一併刪子帳號、保留歷史紀錄）
 
+## 目前進度（2026-09-11）— 修：工作坊保證金收取/退還一律無條件記成現金（陳錦漩案例）
+> 轉帳確認收款時，課程費用本身有既有的付款方式更正機制正確回改，但**保證金**走獨立的「＋保證金收取」現金加減項，完全不看實際付款方式——陳錦漩紅石攀岩隊講座保證金 NT$200 實為轉帳付款，卻被無條件記成現金收取，讓當日結帳現金虛增 200 元（真實點鈔完全正確，純屬此 bug 造成的假性短少）。後端 `/health` `3.487.0-workshop-deposit-payment-method-aware`；commit `174b22d`。
+- ✅ **三處補上 `paymentMethod==='cash'` 才記現金加減項的守則**：收取（`transfers.js`）、店員手動退還（`courses.js` `refund-deposit`）、退費申請核准連動退還（`courseAdjustments.js`）——**後兩者若不比照修，日後轉帳付款的保證金被退還時會反向憑空扣現金，比原本的 bug 更嚴重**（不是單純補一處，是收/退兩端都要對稱）。
+- ✅ **資料面**：手動修正 2026-09-11 新竹館已結帳紀錄，移除該筆誤記的現金加減項，`expectedCashBalance`/`difference` 重新算過——修正後差異歸零、與實際點鈔金額完全吻合（證實當天現金原本就沒有短少，純屬此顯示層 bug 造成的假性差異）。
+
+## 目前進度（2026-09-12）— 發票開立/作廢的現金加減項全面改為付款方式感知（承上，擴大到全部發票來源）
+> 承上一筆工作坊保證金修復——同一種「無條件當現金」bug 其實也存在於**通用發票服務**（`invoiceService.createInvoice`/`voidInvoice`，§9 手動記帳版）：任何來源（入場/課程/比賽/體驗/商品/器材租借）開發票，若實際是轉帳/LinePay/街口/台灣Pay 收款，開票當下仍會無條件記一筆「＋發票開立」現金加減項，讓當日現金虛增；作廢時同理會誤記負向現金。器材租借押金的收取/退還三個呼叫點也是同一種形狀。一次盤點全面補上守則。後端 `/health` `3.488.0-invoice-cash-adjustment-payment-method-aware`；E2E（假館 `gym-e2e-test`）**16/16**；commit `5f22abc`。
+- ✅ **`invoiceService.js` 新增選填 `paymentMethod` 參數**（`createInvoice`/`voidInvoice` 對稱）：新增 `shouldSkipCashAdjustment(sourceType, paymentMethod, explicitSkip)`——呼叫端明確要求跳過 → 跳過；來源類型本就雙重計算（`DOUBLE_COUNTED_SOURCE_TYPES = new Set(['rental_addon','pass_renewal'])`，這兩者的錢已經透過別的管道正確計入今日結帳）→ 跳過；有帶真實付款方式且不是現金 → 跳過（這筆錢沒進抽屜，不該記現金異動）；其餘（含呼叫端未帶值，向下相容尚未遷移的呼叫點）→ 維持記帳。create/void 共用同一份判斷依據（`paymentMethod` 存進發票紀錄本身，供 void 讀同一個值對稱判斷，呼叫端不用在作廢時再傳一次）——**順帶修掉一個既有不對稱 bug**：`rental_addon` 的開立路徑原本有傳 `skipCashAdjustment:true`，但共用的通用作廢路由從未傳過，作廢時會誤記「－發票作廢」。
+- ✅ **6 個 `createInvoice` 呼叫點全部補上實際 `paymentMethod`**（`checkin.js` 入場費／`competitions.js` 比賽報名費／`experienceBookings.js` 體驗費／`products.js` 商品／`rentals.js` 器材租借費——皆從該路由已經在 scope 內的訂單文件讀出既有欄位傳入）。
+- ✅ **`members.js` 課程發票 handler 補資料完整性檢查**：原本 `POST /members/course-invoices` 完全信任 `req.body`（含 `memberId`/`courseId`），改為先以 `enrollmentId` 讀回 `courseEnrollments` 文件核對三者一致（不符回 400 `ENROLLMENT_MISMATCH`），並從中取得真實 `paymentMethod`——這是本次盤點意外發現的一個獨立資料完整性缺口（非現金加減項本身），順手一併補上。
+- ✅ **器材租借押金三個收放呼叫點比照工作坊保證金同一守則**：`POST /:id/confirm`（＋押金收取）、`POST /:id/return`（−押金退還，當場退）、`POST /:id/return-deposit`（−押金退還，補退）皆改為只有 `paymentMethod==='cash'` 才記現金加減項。
+- **E2E（16/16）**：cash/非cash 的 create+void 對稱行為、既有 `rental_addon`/`pass_renewal` 跳過案例迴歸正確（未被新機制誤傷）、押金三情境條件、課程發票的報名文件核對邏輯（含 mismatch 擋 400）。
+- 📌 **範圍界定（下次踩雷前先看這段）**：`recordRentalRevenue`（`rentals.js`，租金本身的營收記帳）目前仍是手刻直寫 `transactions`、沒有走共用的 `recordTransaction()`，是另一個獨立的「跟共用函式不同步」技術債（`paymentMethod` 讀取本身正確，不是這次要修的「記錯錢」類型 bug），刻意留給之後若要做「收款統一包裝函式」時一併處理，這次不動。`relatedId` 在課程交易用 `courseId`、比賽交易用 `regId`（報名 id，非比賽 id）的既有不一致慣例，本次也刻意不去統一（有下游程式碼依賴既有語意）。
+
 ## 目前進度（2026-09-13）— 修：員工端公告列表逐日館別標籤誤顯示「兩館」
 > 回報「新竹紅石公告 9/25、9/28 營業時間調整只是新竹館的，為什麼變成兩館的?」——查明純顯示層問題：單一館別特殊營業時間公告的 `dailyHours` 逐列 `gymId` 依設計恆為 null（範圍已由公告頂層 `gymId` 決定，逐列可選館別只在「跨館」模式才用得到），但員工端公告列表（`GymsPage.jsx`）逐日標籤原本只看 `r.gymId ? 館名 : '兩館'`，把這個 null 誤顯示成「兩館」。**確認未實際影響營業判斷**：三個真正決定今日營業狀態／定期票補償／排班自動產生的權威計算（`gyms.js getGymStatusForDate`／`passExpiryService.gymStatusLocal`／`scheduleService.resolveStatusForDate`）都已正確先看公告頂層 `gymId` 過濾，士林館的實際營業時間/補償/排班從頭到尾未被影響；會員端公告頁（`MemberGymsPage.jsx`）本就只看頂層 `gymId`，不受此問題影響。純前端修正：逐日標籤改優先顯示公告本身頂層館別、只有真正的跨館公告才回退看逐列設定。commit（redrock-web）`1ec74fd`，已 build+deploy（bundle hash 比對線上版一致）。
 - 順手清除該公告的一筆未發布重複草稿（同標題、早 3 分鐘建立，疑為第一次沒發布成功後重建的殘留），刪除後只剩正式發布那筆。

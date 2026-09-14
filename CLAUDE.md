@@ -3218,3 +3218,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **`markCardBound()`**：綁定成功後（僅 `tracked:true` 才需要）把清冊該筆標記 `bound:true`＋`boundAt`＋`boundMemberId`——讓「未綁定」統計持續反映最新狀態，之後有人綁過的卡號會自動被清冊記住、下次不會被重複核准。
 - ✅ **兩個 bind 路由（`/cards/black/bind`、`/cards/discount/bind`）同步接上**（優惠卡因 `GATED_SERIES.discount` 目前是空陣列，此次上線對優惠卡完全零影響，純粹是為了 D 系列之後整理好時只需改清單、不用再改程式碼）。
 - ✅ **正式 API 驗證（5 情境，測試資料/清冊狀態測後皆已還原）**：①已綁定過的真實 AT19 卡號 → 409 ②超出範圍的假 AT19 卡號 → 400 CARD_NOT_IN_REGISTRY ③尚未開放字軌的 AT21 卡號 → 完全不擋、正常綁定成功（證明分字軌隔離正確）④真正未綁定的真實 AT19 卡號 → 綁定成功＋清冊正確標記 `bound:true`⑤同一張卡再綁一次 → 正確擋 409（證明標記機制生效、不會被重複核准）。
+
+## 目前進度（2026-09-14 續5）— 資料操作：補開黃宇鴻試上費用發票
+> 指示「把EF33426623綁到黃宇鴻試上費用的發票」。純資料操作，走正式 `POST /experience-bookings/:id/invoices` 端點（非直接寫 Firestore），無程式異動。
+- 查得黃宇鴻今日（2026-09-14）於「入門班 9-1月週一A班」試上一筆（`experienceBookings` bookingId `trial_1789346850564_c4bu`），試上費 NT$990，原本沒有任何發票紀錄。呼叫該預約的開票端點帶 `track:EF, number:33426623` → 成功建立 `invoiceRecords` 一筆（`itemName:課程試上費`、`amount:990`、`gymId:gym-hsinchu`、`paymentMethod` 自動帶入原繳費方式）。

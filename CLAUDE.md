@@ -3251,3 +3251,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **`GATED_SERIES.black` 加入 `'AT21'`**（`src/routes/cards.js`）：程式邏輯本就通用（依前綴比對），只需改這一份清單、無需動 `checkCardRegistry`/`markCardBound` 任何邏輯。
 - ✅ **正式 API 驗證（4 情境）**：①已綁定的真實 AT21 卡號 → 409 CARD_ALREADY_BOUND ②超出範圍假卡號 → 400 CARD_NOT_IN_REGISTRY ③真正未綁定卡號（帶dash測正規化）→ 綁定成功＋清冊正確標記 `bound:true` ④同一張卡再綁一次 → 正確擋 409。
 - 📌 **現況**：`GATED_SERIES.black = ['AT19','ST19','AT21']`（黑卡三字軌皆已擋）；優惠卡 D19/D21/D24 仍為空清單、尚未整理，維持不擋。
+
+## 目前進度（2026-09-14 續8）— 新增「人事報酬記錄」（教練費/定線費/拆點費，供日後申報所得查資料清楚用）
+> 需求：「教練費、定線費或拆點人員的薪資之後都要申報所得，要如何記錄之後可以下資料比較清楚。資料需要：日期、姓名、金額、付款項目」。查明現有機制（每日結帳「加減項」的教練費/定線費類型）只是自由文字備註、無姓名欄位、無法跨日期依人彙總——那是為了抽屜現金對帳設計的，不適合報稅查詢。與使用者確認方向後新建**獨立**功能。後端 `/health` `3.509.0-payout-records`；正式 API E2E（建2筆/查詢/館別過濾/修改/匯出/刪除）全過、測試資料清乾淨。commit 後端 `99c293e`、前端 `da3bf84`。
+- ✅ **新集合 `payoutRecords`**（`src/routes/payouts.js`）：欄位 `date`(YYYY-MM-DD)/`payeeName`/`amount`/`category`(自由文字，前端給教練費/定線費/拆點費/其他建議)/`gymId`/`note`/`recordedBy`/`recordedByName`。**全部端點限管理員**（`requireManager`，super_admin/gym_manager）——薪資性質資料不對值班/一般員工開放；gym_manager 查詢/寫入自動鎖自己館別（後端權威覆蓋，不信前端送的 gymId），super_admin 可指定館別或省略查全部。
+- ✅ **端點**：`GET /payouts`（篩選 gymId/dateFrom/dateTo/category/name，單一等值查詢＋記憶體過濾避免複合索引，回列表+總額）／`POST`／`PUT /:id`／`DELETE /:id`（皆檢查 gym_manager 只能動自己館別的紀錄）／`GET /export`（xlsx 兩工作表：「明細」逐筆列＋「依姓名加總」依姓名彙總金額與筆數，供年底申報抓某人全年總額；沿用既有 `xlsx`套件+`sanitizeSheet` 防公式注入慣例）。
+- ✅ **前端**：`RevenuePage.jsx` 新增「人事報酬」分頁（`PayoutsPanel.jsx`）——日期區間/姓名搜尋/項目篩選、新增/編輯用共用 `Modal` 元件（`<input list>` datalist 建議教練費/定線費/拆點費/其他，可自訂文字）、表格含合計列、匯出 Excel 按鈕。沿用頁面既有全域館別選擇器（`gymFilter`）；super_admin 檢視「全館」時表格多顯示「館別」欄、新增表單另跳出館別下拉（預設帶入目前檢視館別）。
+- ⚠️ **刻意設計：與每日結帳「加減項」機制完全分開、不互相同步**——結帳加減項（教練費/定線費類型）仍要照舊填、影響當天抽屜現金對不對得起來；這裡是另外補一筆給報稅用的結構化紀錄，**同一筆真實支出目前需要兩邊各記一次**。與使用者明確確認過此取捨（見上一輪對話），日後如需要可考慮把兩者串接自動化（填一次兩邊都記），此次未做。
+- 🐞 **補齊 2 筆稍早已部署但漏 commit 的前端改動**：查 `redrock-web` git status 時發現 `CardsPage.jsx`（卡號必填/正規化提示）與 `PassesPage.jsx`（未綁定數量顯示）——即續7、及更早「AT19/ST19 白名單」那輪工作對應的前端部分——早就已經部署上線（bundle hash 比對過），但當時只做了 `firebase deploy`、沒做 `git add/commit`，本次一併補上兩筆 commit 落地。**教訓（再次印證）**：本 session 頻繁在 `redrock-api`／`redrock-web` 兩個獨立 git repo 間切換，`firebase deploy` 不需要 git 乾淨即可執行、也不會提醒——**每次改完 `redrock-web` 檔案後，務必明確 `cd` 進該 repo 目錄額外跑一次 `git status` 確認落地**，不能只靠 deploy 成功／bundle hash 比對來判斷「完成」。

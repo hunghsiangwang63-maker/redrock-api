@@ -1643,7 +1643,11 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
       const rules = courseService.resolveRules(course, await courseService.getCategoryOf(db, course.categoryId));
       const today = taiwanToday();
 
-      const enSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).where('courseId', '==', courseId).get();
+      // ⚠️ 2026-09-14：courseEnrollments 每筆內嵌簽名圖(base64 PNG，平均~77KB)——單一課程版本原本
+      // 也整份無投影掃描，與 /all 版本（已於 2026-09-13 補過 .select()）同一種問題、當時漏掉這裡。
+      // 只投影下方實際用到的欄位（courseId 供未來若改共用查詢時對齊，此函式本身已用 where 篩過）。
+      const enSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).where('courseId', '==', courseId)
+        .select('courseId', 'memberId', 'isTrial', 'isMakeup', 'status', 'date', 'maxLeavesAllowed', 'memberName').get();
       const byMember = {};
       enSnap.docs.forEach(d => {
         const e = d.data();
@@ -1680,7 +1684,11 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
       for (let i = 0; i < memberIds.length; i += 10) {
         const chunk = memberIds.slice(i, i + 10);
         if (!chunk.length) break;
-        const q = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).where('memberId', 'in', chunk).get();
+        // ⚠️ 2026-09-14：此查詢依 memberId 分批（每批10人），未依課程縮小範圍——會掃到該批會員
+        // 「跨全系統所有課程」的完整報名歷史；courseEnrollments 每筆內嵌簽名圖(base64 PNG，平均
+        // ~77KB)，全系統會員規模下未投影會傳輸大量資料（單次呼叫可能上百MB）。只投影用到的 6 欄。
+        const q = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).where('memberId', 'in', chunk)
+          .select('memberId', 'isMakeup', 'crossTermNote', 'status', 'date', 'startTime', 'courseName').get();
         q.docs.forEach(d => { const e = d.data(); if (e.isMakeup && e.crossTermNote && e.status !== 'cancelled') (crossTermByMember[e.memberId] = crossTermByMember[e.memberId] || []).push({ date: e.date, startTime: e.startTime || '', courseName: e.courseName || '', taken: !!e.date && e.date < today, note: e.crossTermNote }); });
       }
 
@@ -1804,7 +1812,11 @@ router.get('/leave-makeup-summary/all',
       for (let i = 0; i < allMemberIds.length; i += 10) {
         const chunk = allMemberIds.slice(i, i + 10);
         if (!chunk.length) break;
-        const q = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).where('memberId', 'in', chunk).get();
+        // ⚠️ 2026-09-14：此查詢依 memberId 分批（每批10人），未依課程縮小範圍——會掃到該批會員
+        // 「跨全系統所有課程」的完整報名歷史；courseEnrollments 每筆內嵌簽名圖(base64 PNG，平均
+        // ~77KB)，全系統會員規模下未投影會傳輸大量資料（單次呼叫可能上百MB）。只投影用到的 6 欄。
+        const q = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).where('memberId', 'in', chunk)
+          .select('memberId', 'isMakeup', 'crossTermNote', 'status', 'date', 'startTime', 'courseName').get();
         q.docs.forEach(d => { const e = d.data(); if (e.isMakeup && e.crossTermNote && e.status !== 'cancelled') (crossTermByMember[e.memberId] = crossTermByMember[e.memberId] || []).push({ date: e.date, startTime: e.startTime || '', courseName: e.courseName || '', taken: !!e.date && e.date < today, note: e.crossTermNote }); });
       }
 

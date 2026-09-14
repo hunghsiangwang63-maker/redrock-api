@@ -28,10 +28,10 @@ const childBlock = async (memberId, message) => {
 };
 
 // ── 卡號白名單（physicalCardRegistry，見 scripts/importCardRegistry.js）──────────────
-// 只對「使用者已確認整理好」的字軌生效——尚未整理的字軌（如 AT21、D 系列）完全不擋，維持原行為。
+// 只對「使用者已確認整理好」的字軌生效——尚未整理的字軌（如 D 系列）完全不擋，維持原行為。
 // 之後使用者確認其他字軌整理好，加進對應陣列即可，不需再改邏輯。
 const GATED_SERIES = {
-  black: ['AT19', 'ST19'],
+  black: ['AT19', 'ST19', 'AT21'],
   discount: [], // D19/D21/D24 尚未整理，暫不擋
 };
 

@@ -3275,3 +3275,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **月銷售 Excel「收支」區塊補一行拆點費小計**（`monthly-export`，比照既有定線費/教練費格式）。
 - **E2E 細節**：①`教練費` 無姓名 → 400 `MISSING_PAYEE_NAME` ②`教練費`500+`定線費`300 皆帶姓名 → 201、自動產生 2 筆 `payoutRecords`（`sourceSettlementId` 正確）③當日再次結帳改教練費金額為700＋移除定線費＋新增拆點費200 → 正確重建為「教練費700／拆點費200」共2筆（定線費那筆確實消失）④直接建測試 `experienceBookings` 文件（`coachName` 已知）呼叫 `/finance` 設教練費400 → 自動同步 1 筆 `sourceBookingId` 記錄 ⑤重複呼叫 `/finance` → 冪等、不重複建立。
 - ⚠️ **清理過程中額外發現一筆與本次改動無關的殘留**：`gym-e2e-test` 底下有 1 筆日期 `2026-09-15`（隔日）、`status:'draft'` 的結帳暫存檔——非本次測試產生（我全程只呼叫 `POST /`，未呼叫過 `PUT /draft`），推測是某次更早、無從追溯的測試遺留；因確認為假館測試資料（非真實財務紀錄）已一併刪除。
+
+## 目前進度（2026-09-14 續11）— 優惠卡綁定白名單擴及 D19 字軌
+> 指示「D19整理好了」——比照 AT19/ST19/AT21 既有流程擴大一個字軌，這是優惠卡（`discount`）系列首張開放。後端 `/health` `3.511.0-card-registry-gate-d19`；正式 API 4 情境驗證（測試資料/清冊狀態全部還原）。commit `16aa295`。
+- ✅ **匯入清冊**：`scripts/importCardRegistry.js --series=D19 --commit`——D19 共 1000 筆，已售出 1000，已綁定 735，未綁定 265（Excel 為使用者持續維護中的活頁簿，兩次執行間數字有小幅變動屬正常）。
+- ✅ **`GATED_SERIES.discount` 加入 `'D19'`**（`src/routes/cards.js`）：程式邏輯本就通用（依前綴比對、`checkCardRegistry`/`markCardBound` 對 black/discount 一視同仁），只需改這一份清單。
+- ✅ **正式 API 驗證（4 情境，走 `POST /cards/discount/bind`）**：①已綁定的真實 D19 卡號 → 409 CARD_ALREADY_BOUND ②超出範圍假卡號 → 400 CARD_NOT_IN_REGISTRY ③真正未綁定卡號（帶dash測正規化）→ 綁定成功＋清冊正確標記 `bound:true` ④同一張卡再綁一次 → 正確擋 409。
+- 📌 **現況**：`GATED_SERIES = { black: ['AT19','ST19','AT21'], discount: ['D19'] }`；優惠卡 D21/D24 仍尚未整理，維持不擋。

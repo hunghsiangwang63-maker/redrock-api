@@ -340,6 +340,10 @@ router.get('/status', authenticate, requireManagerOrStation, async (req, res) =>
 
 // GET /invoices/today?gymId= - 該館今日全部發票（含已作廢），供「系統設定 → 發票號碼管理」頁面
 // 直接顯示今日列表用（值班或管理員；限當館，同 /state 慣例）。依列印時間新到舊排序。
+// ⚠️ 兩套發票紀錄並存（見 invoice-integration-plan.md）：`invoices`＝真列印(P3，有配號)、
+// `invoiceRecords`＝手動記帳版(§9，尚未真列印的館別/情境用，如補開/事後登記)——這裡兩邊都要撈，
+// 否則手動記的發票（如補登的補救個案）不會出現在這個「今日列表」。狀態字串兩邊不同
+// （'void' vs 'voided'），統一正規化成 'void' 供前端 isVoid 判斷。
 router.get('/today', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const gymId = req.staff?.role === 'super_admin' ? (req.query.gymId || req.staff?.gymId) : req.staff?.gymId;
@@ -348,11 +352,17 @@ router.get('/today', authenticate, requireManagerOrStation, async (req, res) => 
     const todayStart = dayjs().startOf('day').toDate();
     const todayEnd = dayjs().endOf('day').toDate();
     const tsOf = (v) => v?.toDate ? v.toDate().getTime() : ((v?._seconds || 0) * 1000);
-    const snap = await getDb().collection('invoices').where('gymId', '==', gymId).get();
-    const invoices = snap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .filter(inv => { const t = tsOf(inv.issuedAt); return t >= todayStart.getTime() && t <= todayEnd.getTime(); })
-      .sort((a, b) => tsOf(b.issuedAt) - tsOf(a.issuedAt));
+    const inRange = (inv) => { const t = tsOf(inv.issuedAt); return t >= todayStart.getTime() && t <= todayEnd.getTime(); };
+    const db = getDb();
+    const [realSnap, manualSnap] = await Promise.all([
+      db.collection('invoices').where('gymId', '==', gymId).get(),
+      db.collection('invoiceRecords').where('gymId', '==', gymId).get(),
+    ]);
+    const real = realSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(inRange);
+    const manual = manualSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .filter(inRange)
+      .map(inv => ({ ...inv, status: inv.status === 'voided' ? 'void' : inv.status }));
+    const invoices = [...real, ...manual].sort((a, b) => tsOf(b.issuedAt) - tsOf(a.issuedAt));
     res.json({ invoices });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

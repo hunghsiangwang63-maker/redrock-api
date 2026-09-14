@@ -32,7 +32,7 @@ const childBlock = async (memberId, message) => {
 // 之後使用者確認其他字軌整理好，加進對應陣列即可，不需再改邏輯。
 const GATED_SERIES = {
   black: ['AT19', 'ST19', 'AT21'],
-  discount: [], // D19/D21/D24 尚未整理，暫不擋
+  discount: ['D19'], // D21/D24 尚未整理，暫不擋
 };
 
 // 回傳 {ok:true, tracked} 可放行（tracked=此卡號有在清冊裡，成功綁定後要標記 bound）；

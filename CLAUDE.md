@@ -3203,3 +3203,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 查得 `朱智萩`（memberId `ad24a31e...`）名下**單次入場券 4 筆**（2 筆狀態 active、2 筆早已 cancelled）、**黑卡 1 筆**（active、剩 3 格、無卡號）。
 - **第一輪**（判斷：只動她目前實際持有/可用的）：硬刪 2 筆 `status:active` 的入場券（一筆 online-entry 來源到期 2026-10-02、一筆 experience 來源已過期）＋硬刪那 1 筆黑卡；當時保留原本就 `cancelled` 的 2 筆入場券歷史紀錄。
 - **使用者確認「一起清除」後，第二輪**：硬刪剩下那 2 筆已取消的入場券歷史紀錄。複查確認她名下入場券、黑卡皆為 0 筆。
+
+## 目前進度（2026-09-14 續3）— 匯入實體卡號清冊 + 票券統計加「未綁定」數量（黑卡首批）
+> 承續2 的卡號白名單前置工作。使用者提供 Excel（`~/Library/CloudStorage/OneDrive-個人/文件/兩館共用/票卡使用紀錄.xlsx`），確認：①**AT19/ST19（黑卡）已整理好**，欄位「票號／銷售／使用」皆為**已售出**卡號，「使用」欄標記即代表**已綁定進系統**（使用者已確認此理解正確）②白名單驗證時機**要查 Firestore、不會去讀 OneDrive 檔案**（Railway 後端本來就碰不到本機檔案，此檔案只是使用者的維護工具，我這邊寫 script 同步一次）。後端 `/health` `3.506.0-card-registry-unbound-stat`；正式 API 驗證 `blackStats.unbound:453`（440+13，與 Excel 原始資料吻合）。commit `7974e85`。
+- ✅ **新增 `scripts/importCardRegistry.js`**（比照 `cleanupOrphans.js` 慣例：`GOOGLE_APPLICATION_CREDENTIALS` 憑證、預設 dry-run、`--commit` 才寫入、`--series=` 可指定字軌）：讀 Excel 每個工作表，依名稱開頭判斷 `cardType`（AT/ST→black、D+數字→discount，其餘如年度銷售明細表 11506/11701/21506 自動略過）；卡號用既有 `normalizeBarcode()`（跟 bind 端點同一套正規化，去 dash 轉大寫）當文件 id 寫入新集合 `physicalCardRegistry`（欄位 `series/cardType/sold/bound`）——**冪等**，之後使用者更新 Excel 只要重跑一次即可同步最新「使用」狀態。本次已匯入 `AT19`(1000筆，未綁定440)＋`ST19`(21筆，未綁定13)；`D19/D21/D24`(優惠卡)、`AT21`(黑卡) 目前 Excel 尚未整理完/未經使用者確認，**這次刻意沒匯入**（只匯入使用者明確說「先整理好」的兩個字軌）。
+- ✅ **`GET /pass-adjustments/analytics` 新增 `unbound` 欄位**（`discountStats`/`blackStats` 各一）：查 `physicalCardRegistry` 該 `cardType` 的 `sold&&!bound` 筆數（`.count()` 聚合查詢、不拉整批文件）；**該卡別完全沒有清冊資料時回 `null`**（明確跟「清冊裡剛好 0 張未綁定」區分，避免顯示成 0 造成誤解——目前優惠卡就是這個狀態）。
+- ✅ **前端**（`PassesPage.jsx` 票券統計頁）：優惠卡/黑卡統計卡片底部，`unbound != null` 時多一行「📇 實體卡未綁定：N 張（已售出、尚未有客人拿來綁定）」；優惠卡目前無資料故不顯示，黑卡正確顯示 453 張。
+- 📌 **下一步（待使用者指示）**：目前只是「統計顯示」層，`POST /cards/discount/bind`／`POST /cards/black/bind` **尚未接上這份清冊做即時擋卡**（卡號現只要求「必填」，還沒要求「必須在清冊裡且未綁定」）——等使用者確認要開始做這層擋、且優惠卡清冊也整理好後，再實作「bind 前查 `physicalCardRegistry` 是否 sold&&!bound，成功後把該筆標記 bound:true」。

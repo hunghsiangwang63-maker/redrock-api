@@ -3210,3 +3210,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **`GET /pass-adjustments/analytics` 新增 `unbound` 欄位**（`discountStats`/`blackStats` 各一）：查 `physicalCardRegistry` 該 `cardType` 的 `sold&&!bound` 筆數（`.count()` 聚合查詢、不拉整批文件）；**該卡別完全沒有清冊資料時回 `null`**（明確跟「清冊裡剛好 0 張未綁定」區分，避免顯示成 0 造成誤解——目前優惠卡就是這個狀態）。
 - ✅ **前端**（`PassesPage.jsx` 票券統計頁）：優惠卡/黑卡統計卡片底部，`unbound != null` 時多一行「📇 實體卡未綁定：N 張（已售出、尚未有客人拿來綁定）」；優惠卡目前無資料故不顯示，黑卡正確顯示 453 張。
 - 📌 **下一步（待使用者指示）**：目前只是「統計顯示」層，`POST /cards/discount/bind`／`POST /cards/black/bind` **尚未接上這份清冊做即時擋卡**（卡號現只要求「必填」，還沒要求「必須在清冊裡且未綁定」）——等使用者確認要開始做這層擋、且優惠卡清冊也整理好後，再實作「bind 前查 `physicalCardRegistry` 是否 sold&&!bound，成功後把該筆標記 bound:true」。
+
+## 目前進度（2026-09-14 續4）— 黑卡綁定接上白名單即時擋卡（AT19/ST19 先開放）
+> 指示「AT19&ST19可以先擋」——把上一段的「統計」推進到「即時擋卡」。後端 `/health` `3.507.0-card-registry-gate-at19-st19`；正式 API 5 情境驗證（測試資料/清冊狀態全部還原）。commit `5500d49`。
+- ✅ **設計：分字軌漸進式開放（`cards.js` `GATED_SERIES`）**：`{black:['AT19','ST19'], discount:[]}`——只有列在清單裡的字軌會被查清冊擋，**不在清單內的字軌完全不受影響**（如尚未整理的 `AT21`、優惠卡 `D19/D21/D24`，維持原本「必填即可、不查清冊」的行為）。之後使用者確認其他字軌整理好，只要把字軌加進對應陣列即可生效，不用再改邏輯。
+- ✅ **`checkCardRegistry(db, cardType, normalizedBarcode)`**：卡號正規化後不屬於已開放字軌 → 直接放行（`tracked:false`）；屬於已開放字軌則查 `physicalCardRegistry`——**查無此卡號**→ 400 `CARD_NOT_IN_REGISTRY`（清冊裡沒有，多半是打錯或超出實際售出範圍）；**`sold!==true`**→ 400 `CARD_NOT_SOLD`（目前資料下不會真的觸發，純防呆）；**`bound===true`**→ 409 `CARD_ALREADY_BOUND`（已經有人綁過）；三者皆非則放行（`tracked:true`）。
+- ✅ **`markCardBound()`**：綁定成功後（僅 `tracked:true` 才需要）把清冊該筆標記 `bound:true`＋`boundAt`＋`boundMemberId`——讓「未綁定」統計持續反映最新狀態，之後有人綁過的卡號會自動被清冊記住、下次不會被重複核准。
+- ✅ **兩個 bind 路由（`/cards/black/bind`、`/cards/discount/bind`）同步接上**（優惠卡因 `GATED_SERIES.discount` 目前是空陣列，此次上線對優惠卡完全零影響，純粹是為了 D 系列之後整理好時只需改清單、不用再改程式碼）。
+- ✅ **正式 API 驗證（5 情境，測試資料/清冊狀態測後皆已還原）**：①已綁定過的真實 AT19 卡號 → 409 ②超出範圍的假 AT19 卡號 → 400 CARD_NOT_IN_REGISTRY ③尚未開放字軌的 AT21 卡號 → 完全不擋、正常綁定成功（證明分字軌隔離正確）④真正未綁定的真實 AT19 卡號 → 綁定成功＋清冊正確標記 `bound:true`⑤同一張卡再綁一次 → 正確擋 409（證明標記機制生效、不會被重複核准）。

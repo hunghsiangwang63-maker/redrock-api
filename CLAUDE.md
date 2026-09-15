@@ -3339,3 +3339,9 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **修**：`courseRegistrationService.js` 新增 `resolveConfirmedAmountOnly({receivedAmountOverride, confirmedAmount})`——只回傳「管理員真的編修過」或「店員真的核對過轉帳」的金額，否則回傳 `null`（下載時留空，不落回應繳費用）；**原本的 `resolveReceivedAmount()` 完全不動**（`members.js`/`checkin.js`/`courses.js` 報名名單 modal 三個消費端仍用它當可編輯欄位預設值，語意不同、不能混用，各自查證過仍正確引用）。
 - ✅ **補齊缺少的「確認收款人員」「確認收款日期」兩欄**：`getTransferConfirmationData()`（`courseRegistrationService.js`）原本查了 `transferRecords` 的 `confirmedBy`/`confirmedByName`/`confirmedAt` 卻只回傳金額，這次補上一併回傳；下載端（`courses.js`）批次反查 `staff` 集合姓名（**不能只靠 `confirmedByName`——實測真實資料發現有 `confirmedBy`(id) 卻缺 `confirmedByName` 的情況**，姓名一律走 staff 集合反查、`confirmedByName` 僅供備援）。管理員直接編修（`receivedAmountOverride`）與店員核對轉帳（`confirmedBy`）共用同一份姓名對照表與顯示優先序，兩欄意義一致不會各講各話。
 - **正式資料驗證（真實 14 位報名者，非測試資料）**：陳莉涵（管理員 Debby Chu 於 8/29 21:46 編修為0）／陳樹希（Debby Chu 於 9/6 16:58 核對轉帳800，含匯款日期/末五碼）／王妤㚬・林芳宜（江幸樺核對200元隊員保證金）／詹翁知・柯景倫（Debby Chu 核對200元保證金）／徐薪承（**驗證過程中，陳品翰剛好在正式環境確認了他的現金付款**——修復前後對照：修復前顯示「確認實收800、無人員/日期」的假象；修復後顯示「確認實收800、確認人員陳品翰、確認日期9/15 20:26」——這次是真的收到錢了，不再是誤導）／張榕・楊雅雯・陳錦漩・曾聖發・歐武龍（皆尚未有任何人確認/編修，正確全部留空，不再誤顯示應繳金額）。
+
+## 目前進度（2026-09-15 續5）— 優惠卡 D24 字軌接上白名單即時擋卡（承 D19/D21/黑卡）
+> 指示「D24已經整理完成」。後端 `/health` `3.516.0-card-registry-d24-gated`；正式 API 4 情境驗證全過、測試資料/清冊狀態全數還原。commit `c08587f`。
+- ✅ **匯入 D24 清冊**：`scripts/importCardRegistry.js --series=D24 --commit`——共 1028 筆，已售出 1028、已綁定 635、未綁定 393。
+- ✅ **`GATED_SERIES.discount` 加入 `'D24'`**（整字軌擋，機制沿用既有 `matchesGatedRule`，無需改動）——現況 `{ black: ['AT19','ST19','AT21'], discount: ['D19','D21','D24'] }`。
+- ✅ **正式 API 驗證（4 情境）**：①已綁定的真實 D24 卡號 → 409 CARD_ALREADY_BOUND ②不在清冊裡的假 D24 卡號 → 400 CARD_NOT_IN_REGISTRY ③未綁定的真實 D24 卡號 → 綁定成功＋清冊正確標記 `bound:true` ④同一張卡再綁一次 → 正確擋 409。

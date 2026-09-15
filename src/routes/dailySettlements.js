@@ -634,7 +634,7 @@ router.put('/draft', authenticate, requireStationAuth, async (req, res) => {
 // ── 結帳加減項 ↔ 人事報酬記錄（payoutRecords）串接（2026-09-14）────────────
 // 使用者拍板「兩邊串起來，結帳時要登記姓名」——教練費/定線費/拆點費這三種加減項在結帳頁填了
 // 姓名後，自動同步一筆結構化紀錄到 payoutRecords（供 /payouts 報稅查詢用），不用再手動記兩次。
-const PAYOUT_LINKED_TYPES = ['教練費', '定線費', '拆點費'];
+const PAYOUT_LINKED_TYPES = ['教練費', '定線費', '拆點費', '講師費', '肢體評估費用'];
 
 // 用 sourceSettlementId 標記「這筆是從這張結帳單同步來的」——每次結帳（含當日再次結帳）都先清掉
 // 舊的同步紀錄再依目前的加減項重建，確保修改/刪除某筆加減項時對應的報酬紀錄也跟著更新/消失；
@@ -966,6 +966,8 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
     aoa.push(R('收支', '定線費', '', s => dedSum(s, '定線費')));
     aoa.push(R('', '教練費', '', s => dedSum(s, '教練費')));
     aoa.push(R('', '拆點費', '', s => dedSum(s, '拆點費')));
+    aoa.push(R('', '講師費', '', s => dedSum(s, '講師費')));
+    aoa.push(R('', '肢體評估費用', '', s => dedSum(s, '肢體評估費用')));
     aoa.push(R('', '領取現金', '', s => dedSum(s, '現金領取')));
     aoa.push(R('行動支付', '台灣Pay', '', s => s.payment?.taiwanPay));
     aoa.push(R('', 'Line Pay', '', s => s.payment?.linePay));

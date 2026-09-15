@@ -3325,3 +3325,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **`GATED_SERIES.discount` 的 D21 由 `{prefix:'D21',from:1,to:600}` 改回純字串 `'D21'`**（整字軌擋）——機制本身無需改動（`matchesGatedRule` 本就同時支援字串與區間物件兩種寫法）。
 - ✅ **正式 API 驗證（4 情境）**：①**600 號後已綁定真實卡號（D21-0601）→ 現在正確擋 409**（先前這個範圍完全不擋、可重複綁定，是驗證此次上線最關鍵的一項）②超出真實 2000 張範圍的假卡號 → 400 CARD_NOT_IN_REGISTRY ③600 號後真正未綁定卡號 → 綁定成功＋標記 `bound:true` ④同一張卡再綁一次 → 正確擋 409。
 - 📌 **現況**：`GATED_SERIES = { black: ['AT19','ST19','AT21'], discount: ['D19','D21'] }`；優惠卡 D24 仍完全不擋，待使用者確認整理完成。
+
+## 目前進度（2026-09-15 續3）— 結帳加減項新增「講師費」「肢體評估費用」（比照教練費串接人事報酬記錄）
+> 指示「結帳，新增加減項請加上：講師費、肢體評估費用」，隨後確認「這兩項都要強制填姓名，都要計算在人事薪酬裡面」。查證「肢體評估」確實是系統裡真實存在的工作坊課程（`type:workshop`），這兩項與教練費/定線費/拆點費同性質（工作坊講師/評估師的報酬）。後端 `/health` `3.514.0-settlement-deduction-lecturer-assessment-fee`；正式 API E2E（假館 `gym-e2e-test`）**4 情境全過**、測試資料全數清除。commit 後端 `f2d7834`、前端 `9f3e7fb`。
+- ✅ **`DEDUCTION_TYPES` 補「講師費」「肢體評估費用」**（前端下拉選單）＋**`PAYOUT_LINKED_TYPES` 兩邊（前後端）都加入這兩項**——結帳這兩種加減項比照教練費/定線費/拆點費，改為必填領款人姓名（前端送出前擋、後端 `MISSING_PAYEE_NAME` 權威擋），確認結帳時自動同步一筆 `payoutRecords`（用 `sourceSettlementId` 標記來源）。
+- ✅ **`PayoutsPanel.jsx` 的 `CATEGORY_SUGGESTIONS`（人事報酬頁手動新增用的下拉建議）同步補上**，讓兩種項目在「財務→人事報酬」頁也能直接手動登記，不只透過結帳同步。
+- ✅ **月銷售 Excel「收支」區塊補兩行小計**（比照既有定線費/教練費/拆點費格式）。
+- **E2E（4 情境）**：講師費缺姓名 → 400 MISSING_PAYEE_NAME；肢體評估費用缺姓名 → 400 MISSING_PAYEE_NAME；兩者皆帶姓名 → 201、正確自動產生 2 筆 `payoutRecords`（category 分別為「講師費」／「肢體評估費用」）；清理後複查 `payoutRecords`/`dailySettlements` 於假館皆 0 殘留。

@@ -3352,3 +3352,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **修正**：陳錦漩、曾聖發各自的 header 文件，`payEnrollmentId`/`sourceEnrollmentIds` 改指向現行 confirmed 的 9/15 報名（`a985fe0a...`／`fbd952fc...`），附 correctionNote 留稽核。
 - **驗證（打正式 API）**：`GET /courses/:courseId/enrollments` 兩人皆正確回傳 `confirmedAmount:200／receivedAmount:200`；`GET /courses/:courseId/roster/download` 兩人正確一筆的 `確認實收金額:200／確認收款人員:Debby Chu／確認收款日期` 皆正確帶出（陳錦漩 9/11、曾聖發 9/15，與各自轉帳確認的真實時間吻合）；`depositResolved:true／depositResolution:refunded` 本就正確（保證金已於今晚 20:24 由陳品翰退還）。
 - 📌 **與續4的關係**：續4修的是「查詢邏輯」本身（`resolveConfirmedAmountOnly` 誤導、缺確認人員/日期兩欄）；這次是**同一批查詢邏輯依賴的資料本身歪掉**——查詢邏輯是對的，只是 key（`payEnrollmentId`）指錯地方。日後若再遇到「用帶入學員頂替已取消報名」的情境，記得順手把 header 的 `payEnrollmentId`/`sourceEnrollmentIds` 也改過去，否則付款確認資訊會靜默查不到。
+
+## 目前進度（2026-09-15 續7）— 資料操作：補發 202609 講座一般價學員今日入場券（陳樹希）
+> 問「講座報名：一般價含入場、友館價含入場。今天講座有 2 人是一般價，有發出今日入場券嗎?」。純查證＋一筆資料補發，無程式異動。
+- 🔍 **查證**：這門課（同上兩則、`6c9ff204...`，今晚 20:00-21:30 場次）今天正取 12 人中，付一般價（`enrollmentFee:800/teamPriceApplied:false`）的確實 2 人——**徐薪承**（9/10 報名）與**陳樹希**（9/2 報名）。課程設定 `generalIncludesEntry:true`（一般價含入場，`teamIncludesEntry:false`／`partnerGymIncludesEntry:true` 三級收費規則正確吻合使用者描述）。
+  - **徐薪承**：`needsEntryTicket:true／entryTicketIssued:true`，`singleEntryTickets` 確實有 1 張今日有效未使用的入場券（收款確認當下 20:26 自動發出）——**正常，已發券**。
+  - **陳樹希**：`needsEntryTicket`/`entryTicketIssued` 欄位完全不存在（undefined）、無任何入場券——**沒發**。根因非 bug：三級收費＋自動發券機制（`enrollCourse` 的 `needsEntryTicket`）是 **2026-09-08**（commit `0d252e9`）才上線，陳樹希 9/2 報名時這個機制根本不存在，她的報名記錄本就不可能有這些欄位；徐薪承 9/10 報名則已在機制上線之後，正確吃到。
+- ✅ **補發**：陳樹希付的一般價與徐薪承相同（同樣 800、同一堂課、同一政策應含入場），比照 `issueCourseEntryTicket()` 同一套 schema 手動補一張今日有效入場券（`ticketType:'course', amount:0, status:active`，notes 註明補發原因）＋回填她的報名記錄 `needsEntryTicket:true, entryTicketIssued:true`（供之後查詢一致）。

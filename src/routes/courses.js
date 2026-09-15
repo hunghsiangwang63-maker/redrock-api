@@ -1036,13 +1036,6 @@ router.get('/:courseId/roster/download',
         const h = d.data();
         (h.sourceEnrollmentIds || []).forEach(eid => { headerByEnrollId[eid] = h; });
       });
-      // 管理員編修者姓名（receivedAmountEditedBy 是 staff id，批次反查姓名）
-      const editorStaffIds = [...new Set(Object.values(headerByEnrollId).map(h => h.receivedAmountEditedBy).filter(Boolean))];
-      const editorNameMap = {};
-      if (editorStaffIds.length) {
-        const sdocs = await db.getAll(...editorStaffIds.map(id => db.collection('staff').doc(id)));
-        sdocs.forEach(d => { if (d.exists) editorNameMap[d.id] = d.data().name || ''; });
-      }
       // 店員核對收款金額——與 members.js/checkin.js 課程學員實收金額同一份權威來源（2026-09-12 修復：
       // 這個 CSV 原本「確認實收金額」欄漏看店員核對金額，管理員未手動編修時會誤顯示應繳費用而非
       // 實際核對後的金額）。2026-09-15 再修：「確認實收金額」改用 resolveConfirmedAmountOnly（真的
@@ -1052,6 +1045,17 @@ router.get('/:courseId/roster/download',
       // 原本查了卻沒有欄位呈現出來）。
       const { getTransferConfirmationData: getRosterTransferData, resolveConfirmedAmountOnly } = require('../services/courseRegistrationService');
       const { confirmedMap: rosterConfirmedMap } = await getRosterTransferData(db, Object.values(headerByEnrollId).map(h => h.payEnrollmentId));
+      // 確認/編修人員姓名——`receivedAmountEditedBy`（管理員手動編修）與 `confirmedBy`（店員核對轉帳）
+      // 兩種都只存 staff id，`confirmedByName` 也常缺（舊資料/部分呼叫端沒補存），一律批次反查 staff
+      // 集合取姓名，兩種情境共用同一份 staffNameMap（避免各自查一次、也修掉單靠 confirmedByName
+      // 缺值就顯示空白的既有缺口）。
+      const staffIdSet = new Set(Object.values(headerByEnrollId).map(h => h.receivedAmountEditedBy).filter(Boolean));
+      Object.values(rosterConfirmedMap).forEach(v => { if (v?.by) staffIdSet.add(v.by); });
+      const staffNameMap = {};
+      if (staffIdSet.size) {
+        const sdocs = await db.getAll(...[...staffIdSet].map(id => db.collection('staff').doc(id)));
+        sdocs.forEach(d => { if (d.exists) staffNameMap[d.id] = d.data().name || ''; });
+      }
 
       // 出席紀錄（依場次逐一查，courseAttendance 以 sessionId+memberId 為鍵）
       const sessionIds = [...new Set(enrolls.map(e => e.sessionId).filter(Boolean))];
@@ -1087,8 +1091,11 @@ router.get('/:courseId/roster/download',
           e.paymentMethod || '', e.enrollmentFee ?? '', h.memberPaidAmount ?? '',
           confirmedAmountOnly ?? '',
           // 「確認收款人員」優先顯示管理員直接編修（receivedAmountOverride）者，其次才是店員核對轉帳
-          // （confirmedByName）——與 confirmedAmountOnly 的優先序一致，避免兩欄各講各的話。
-          h.receivedAmountOverride != null ? (editorNameMap[h.receivedAmountEditedBy] || '管理員編修') : (confirmInfo?.byName || ''),
+          // ——與 confirmedAmountOnly 的優先序一致，避免兩欄各講各的話；姓名一律走 staffNameMap
+          // 反查（confirmedByName 常缺值，不能只靠它，見上方註解）。
+          h.receivedAmountOverride != null
+            ? (staffNameMap[h.receivedAmountEditedBy] || '管理員編修')
+            : (staffNameMap[confirmInfo?.by] || confirmInfo?.byName || ''),
           h.receivedAmountOverride != null
             ? (secOf(h.receivedAmountEditedAt) ? new Date(secOf(h.receivedAmountEditedAt) * 1000 + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ') : '')
             : confirmedAtStr,

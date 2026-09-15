@@ -3345,3 +3345,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **匯入 D24 清冊**：`scripts/importCardRegistry.js --series=D24 --commit`——共 1028 筆，已售出 1028、已綁定 635、未綁定 393。
 - ✅ **`GATED_SERIES.discount` 加入 `'D24'`**（整字軌擋，機制沿用既有 `matchesGatedRule`，無需改動）——現況 `{ black: ['AT19','ST19','AT21'], discount: ['D19','D21','D24'] }`。
 - ✅ **正式 API 驗證（4 情境）**：①已綁定的真實 D24 卡號 → 409 CARD_ALREADY_BOUND ②不在清冊裡的假 D24 卡號 → 400 CARD_NOT_IN_REGISTRY ③未綁定的真實 D24 卡號 → 綁定成功＋清冊正確標記 `bound:true` ④同一張卡再綁一次 → 正確擋 409。
+
+## 目前進度（2026-09-15 續6）— 資料修正：紅石攀岩隊講座保證金確認資訊查不到（header.payEnrollmentId 停在已取消場次）
+> 回報「陳錦漩 曾聖發 紅石攀岩隊講座：筋膜刀放鬆課程-下肢 202609 已繳保證金 200 元，且已確認，為什麼看不到」。查證確認保證金確實已收款/確認/（今晚剛被陳品翰）退還，問題純出在 `courseRegistrations` header 的 `payEnrollmentId` 停在舊資料。純資料修正，無程式異動。
+- 🔍 **根因（承續4修復同一批查詢邏輯，這次是資料本身歪掉、非程式問題）**：這門課 2026-08-28 曾因員工連按兩次「新增場次」誤建重複場次（此課歷史記錄本就記過「8/28 重複建立的場次已取消（連按兩次新增場次誤建）」），當時的修正方式是把舊場次的報名標記取消、改用「加開場次帶入」在正確的場次重新建一筆報名——但**「帶入學員」這個功能設計上完全不會建立/更新 `courseRegistrations` header**（它是給多場次課程「已在籍學員加開額外場次」用的輕量寫法，正常情境下學員的 header 本來就還指向原本仍有效的主報名，不需要動）。這次因為是拿它來頂替一筆「已被取消」的報名，header 的 `payEnrollmentId`／`sourceEnrollmentIds` 卻沒有跟著重新指向新報名，一直停在 8/28 那筆已取消的舊 enrollment（連 9/11 曾有人編修過付款方式那次也沒有順便修到這個欄位）——所有依 header.payEnrollmentId 查 `transferRecords` 的地方（課程名單/報名名單/CSV 下載，見續4）自然查無資料，而實際的保證金轉帳確認記錄（`refId` 正確指向新報名 id）就這樣被永遠找不到。
+- ✅ **修正**：陳錦漩、曾聖發各自的 header 文件，`payEnrollmentId`/`sourceEnrollmentIds` 改指向現行 confirmed 的 9/15 報名（`a985fe0a...`／`fbd952fc...`），附 correctionNote 留稽核。
+- **驗證（打正式 API）**：`GET /courses/:courseId/enrollments` 兩人皆正確回傳 `confirmedAmount:200／receivedAmount:200`；`GET /courses/:courseId/roster/download` 兩人正確一筆的 `確認實收金額:200／確認收款人員:Debby Chu／確認收款日期` 皆正確帶出（陳錦漩 9/11、曾聖發 9/15，與各自轉帳確認的真實時間吻合）；`depositResolved:true／depositResolution:refunded` 本就正確（保證金已於今晚 20:24 由陳品翰退還）。
+- 📌 **與續4的關係**：續4修的是「查詢邏輯」本身（`resolveConfirmedAmountOnly` 誤導、缺確認人員/日期兩欄）；這次是**同一批查詢邏輯依賴的資料本身歪掉**——查詢邏輯是對的，只是 key（`payEnrollmentId`）指錯地方。日後若再遇到「用帶入學員頂替已取消報名」的情境，記得順手把 header 的 `payEnrollmentId`/`sourceEnrollmentIds` 也改過去，否則付款確認資訊會靜默查不到。

@@ -1027,18 +1027,30 @@ router.get('/:courseId/roster/download',
 
       // 報名 header（courseRegistrations）：staffNote/會員填實際匯款/管理員編修實收金額，用 sourceEnrollmentIds 對回各筆報名
       const headerByEnrollId = {};
-      // header 內嵌簽名圖，只取 CSV 用到的欄位（2026-08-27 補投影）
+      // header 內嵌簽名圖，只取 CSV 用到的欄位（2026-08-27 補投影；2026-09-15 補 receivedAmountEditedBy，
+      // 供下方「確認收款人員」欄解析管理員編修者姓名——此欄位由 PUT .../received-amount 雙寫進 header）
       const hSnap = await db.collection('courseRegistrations').where('courseId', '==', courseId)
-        .select('sourceEnrollmentIds', 'payEnrollmentId', 'memberPaidAmount', 'receivedAmountOverride', 'healthNote', 'enrollNote', 'referralSource', 'staffNote')
+        .select('sourceEnrollmentIds', 'payEnrollmentId', 'memberPaidAmount', 'receivedAmountOverride', 'receivedAmountEditedBy', 'receivedAmountEditedAt', 'healthNote', 'enrollNote', 'referralSource', 'staffNote')
         .get();
       hSnap.forEach(d => {
         const h = d.data();
         (h.sourceEnrollmentIds || []).forEach(eid => { headerByEnrollId[eid] = h; });
       });
+      // 管理員編修者姓名（receivedAmountEditedBy 是 staff id，批次反查姓名）
+      const editorStaffIds = [...new Set(Object.values(headerByEnrollId).map(h => h.receivedAmountEditedBy).filter(Boolean))];
+      const editorNameMap = {};
+      if (editorStaffIds.length) {
+        const sdocs = await db.getAll(...editorStaffIds.map(id => db.collection('staff').doc(id)));
+        sdocs.forEach(d => { if (d.exists) editorNameMap[d.id] = d.data().name || ''; });
+      }
       // 店員核對收款金額——與 members.js/checkin.js 課程學員實收金額同一份權威來源（2026-09-12 修復：
       // 這個 CSV 原本「確認實收金額」欄漏看店員核對金額，管理員未手動編修時會誤顯示應繳費用而非
-      // 實際核對後的金額）。
-      const { getTransferConfirmationData: getRosterTransferData, resolveReceivedAmount: resolveRosterReceivedAmount } = require('../services/courseRegistrationService');
+      // 實際核對後的金額）。2026-09-15 再修：「確認實收金額」改用 resolveConfirmedAmountOnly（真的
+      // 有管理員編修或店員核對過才有數字，否則留空）——原本用 resolveReceivedAmount 落回應繳費用，
+      // 導致「還沒繳費、報表卻顯示已收 800 元」的誤導（真實回報：徐薪承尚未繳費，該欄卻顯示800）；
+      // 同時補「確認收款人員」「確認收款日期」兩欄（transferRecords 本就存 confirmedBy/confirmedAt，
+      // 原本查了卻沒有欄位呈現出來）。
+      const { getTransferConfirmationData: getRosterTransferData, resolveConfirmedAmountOnly } = require('../services/courseRegistrationService');
       const { confirmedMap: rosterConfirmedMap } = await getRosterTransferData(db, Object.values(headerByEnrollId).map(h => h.payEnrollmentId));
 
       // 出席紀錄（依場次逐一查，courseAttendance 以 sessionId+memberId 為鍵）
@@ -1053,7 +1065,7 @@ router.get('/:courseId/roster/download',
       const ATT_LABEL = { present: '出席', absent: '缺席', late: '遲到' };
       const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
       const header = ['場次日期', '時段', '姓名', '電話', '報名狀態', '出席', '付款方式', '應繳金額', '會員填實際匯款', '確認實收金額',
-        '匯款日期', '匯款末五碼', '性別', '年齡', '健康備註', '自訂備註', '如何得知', '員工備註', '報名時間'];
+        '確認收款人員', '確認收款日期', '匯款日期', '匯款末五碼', '性別', '年齡', '健康備註', '自訂備註', '如何得知', '員工備註', '報名時間'];
       const rows = [header.map(q).join(',')];
       enrolls.forEach(e => {
         const h = headerByEnrollId[e.id] || {};
@@ -1061,17 +1073,25 @@ router.get('/:courseId/roster/download',
         const att = ATT_LABEL[attMap[`${e.sessionId}_${e.memberId}`]] || '';
         const enrolledAtSec = secOf(e.createdAt || e.enrolledAt);
         const enrolledAtStr = enrolledAtSec ? new Date(enrolledAtSec * 1000 + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ') : '';
+        const confirmInfo = h.payEnrollmentId ? rosterConfirmedMap[h.payEnrollmentId] : null;
+        const confirmedAmountOnly = resolveConfirmedAmountOnly({
+          receivedAmountOverride: h.receivedAmountOverride,
+          confirmedAmount: confirmInfo?.amount ?? null,
+        });
+        const confirmedAtStr = confirmInfo?.at ? new Date(confirmInfo.at * 1000 + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ') : '';
         rows.push([
           e.date || '', `${e.startTime || ''}~${e.endTime || ''}`,
           nm.name, nm.phone,
           STATUS_LABEL[e.status] || e.status || '',
           att,
           e.paymentMethod || '', e.enrollmentFee ?? '', h.memberPaidAmount ?? '',
-          resolveRosterReceivedAmount({
-            receivedAmountOverride: h.receivedAmountOverride,
-            confirmedAmount: h.payEnrollmentId ? rosterConfirmedMap[h.payEnrollmentId]?.amount : null,
-            memberPaidAmount: h.memberPaidAmount, fee: e.enrollmentFee,
-          }),
+          confirmedAmountOnly ?? '',
+          // 「確認收款人員」優先顯示管理員直接編修（receivedAmountOverride）者，其次才是店員核對轉帳
+          // （confirmedByName）——與 confirmedAmountOnly 的優先序一致，避免兩欄各講各的話。
+          h.receivedAmountOverride != null ? (editorNameMap[h.receivedAmountEditedBy] || '管理員編修') : (confirmInfo?.byName || ''),
+          h.receivedAmountOverride != null
+            ? (secOf(h.receivedAmountEditedAt) ? new Date(secOf(h.receivedAmountEditedAt) * 1000 + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ') : '')
+            : confirmedAtStr,
           e.paymentDate || '', e.bankLastFive || '',
           e.enrollGender || '', e.enrollAge ?? '',
           e.healthNote || h.healthNote || '', e.enrollNote || h.enrollNote || '', e.referralSource || h.referralSource || '',

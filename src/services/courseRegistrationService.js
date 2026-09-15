@@ -125,7 +125,9 @@ const updateHeaderPauseStatus = async (db, memberId, courseId, pauseStatus) => {
  * @param {object} db
  * @param {string[]} enrollIds  header.payEnrollmentId 的集合（會自動去重、過濾空值）
  * @returns {Promise<{confirmedMap: object, proofMap: object}>}
- *   confirmedMap[enrollId] = { amount, at }；proofMap[enrollId] = { bankLastFive, bankName, paymentDate, at }
+ *   confirmedMap[enrollId] = { amount, at, by, byName }（by/byName＝確認收款的員工id/姓名，
+ *   2026-09-15 補：原本只取 amount/at，「確認收款人員」「確認收款日期」在報表上完全看不到）；
+ *   proofMap[enrollId] = { bankLastFive, bankName, paymentDate, at }
  */
 const getTransferConfirmationData = async (db, enrollIds) => {
   const ids = [...new Set((enrollIds || []).filter(Boolean))];
@@ -140,7 +142,7 @@ const getTransferConfirmationData = async (db, enrollIds) => {
       if (t.status === 'confirmed' && t.confirmedAmount != null) {
         const at = t.confirmedAt?._seconds || t.confirmedAt?.seconds || 0;
         const prev = confirmedMap[t.refId];
-        if (!prev || at >= prev.at) confirmedMap[t.refId] = { amount: Number(t.confirmedAmount), at };
+        if (!prev || at >= prev.at) confirmedMap[t.refId] = { amount: Number(t.confirmedAmount), at, by: t.confirmedBy || '', byName: t.confirmedByName || '' };
       }
       if (t.bankLastFive || t.paymentDate) {
         const at2 = t.submittedAt?._seconds || t.submittedAt?.seconds || t.createdAt?._seconds || t.createdAt?.seconds || 0;
@@ -157,9 +159,22 @@ const getTransferConfirmationData = async (db, enrollIds) => {
  * 管理員直接編修(receivedAmountOverride) > 店員核對(confirmedAmount) > 會員自報(memberPaidAmount)
  * > 報名應繳費用(fee)。三個消費端（members.js/courses.js/checkin.js）都改呼叫這支函式，
  * 避免各自手刻同一條 `a ?? b ?? c ?? d ?? 0` 公式、日後調整優先序時漏改其中一處。
+ *
+ * ⚠️ 這支函式刻意「落回應繳費用(fee)」——給「實收金額（管理員可編修）」這類可編輯欄位當初始
+ * 預設值用（欄位名稱本身就誠實標示「可編修」，不是宣稱已收款）。**不要**拿來當「是否已確認收款」
+ * 的靜態報表欄位值——那種情境（欄位名稱明確寫「確認」）請改用下方 resolveConfirmedAmountOnly，
+ * 否則會出現「還沒繳費、報表卻顯示已收 800 元」的誤導（2026-09-15 真實回報案例）。
  */
 const resolveReceivedAmount = ({ receivedAmountOverride, confirmedAmount, memberPaidAmount, fee }) =>
   receivedAmountOverride ?? confirmedAmount ?? memberPaidAmount ?? fee ?? 0;
+
+/**
+ * 「已確認/已覆寫」金額——只有管理員明確編修過(receivedAmountOverride)或店員實際核對過轉帳
+ * (confirmedAmount) 才回傳數字，否則回傳 null（供報表顯示「尚未確認」，不落回應繳費用）。
+ * 供「確認實收金額」這類明確宣稱『已確認』的靜態報表欄位使用。
+ */
+const resolveConfirmedAmountOnly = ({ receivedAmountOverride, confirmedAmount }) =>
+  receivedAmountOverride ?? confirmedAmount ?? null;
 
 module.exports = {
   REGISTRATION_COLLECTION,
@@ -167,5 +182,6 @@ module.exports = {
   updateRegistrationStatusByCourseMember,
   updateHeaderPauseStatus,
   getTransferConfirmationData,
+  resolveConfirmedAmountOnly,
   resolveReceivedAmount,
 };

@@ -37,7 +37,7 @@ const triggerBonus = async ({ memberId, sourceType, sourceId, validityMonths }) 
     id: bonusId,
     ownerMemberId: memberId,
     originalOwnerMemberId: memberId, // 記錄原始持有者
-    sourceType,    // 'discount_card' | 'legacy_discount_card'
+    sourceType,    // 'discount_card'
     sourceId,      // 原始卡 ID
     isUsed: false,
     usedAt: null,

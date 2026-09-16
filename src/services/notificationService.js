@@ -103,9 +103,9 @@ const notifySingleEntryTicketApproval = async ({ ticketId, batchId, quantity, me
 };
 
 // ── 卡片綁定/轉入揭露通知（立即生效，非審核；通知管理員知悉）───────
-// kind: 'discount_bind'（轉入優惠卡）| 'black_bind'（黑卡綁定）| 'legacy_discount_bind'（舊優惠卡綁定/拍照歸檔）
-const _BIND_LABELS = { discount_bind: '優惠卡轉入', black_bind: '黑卡綁定', legacy_discount_bind: '舊優惠卡綁定' };
-const _BIND_REFS = { discount_bind: 'discountCard', black_bind: 'blackCard', legacy_discount_bind: 'legacyDiscountCard' };
+// kind: 'discount_bind'（轉入優惠卡）| 'black_bind'（黑卡綁定）
+const _BIND_LABELS = { discount_bind: '優惠卡轉入', black_bind: '黑卡綁定' };
+const _BIND_REFS = { discount_bind: 'discountCard', black_bind: 'blackCard' };
 // actorStaffId：執行綁定的員工本人（有帶入時排除自己，避免管理員自己操作卻收到「自己揭露自己」的通知）
 const notifyCardBindDisclosure = async ({ kind, memberName, gymId, staffName, detail, referenceId, actorStaffId }) => {
   const label = _BIND_LABELS[kind] || '卡片綁定';

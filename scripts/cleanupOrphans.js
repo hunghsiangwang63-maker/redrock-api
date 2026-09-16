@@ -22,7 +22,6 @@ const STATION_PREFIX = (args.find(a => a.startsWith('--station-prefix=')) || '--
 // owner 欄位有值但會員不存在 → 孤兒。逐集合設定其 owner 欄位。
 const ORPHAN_COLLECTIONS = [
   { name: 'discountCards', ownerField: 'ownerMemberId', label: '新優惠卡' },
-  { name: 'legacyDiscountCards', ownerField: 'ownerMemberId', label: '舊優惠卡' },
   { name: 'legacyBlackCards', ownerField: 'memberId', label: '黑卡' },
   { name: 'singleEntryTickets', ownerField: 'memberId', label: '單次入場券' },
   { name: 'memberPasses', ownerField: 'memberId', label: '定期票' },

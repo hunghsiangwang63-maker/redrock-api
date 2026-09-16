@@ -1034,7 +1034,7 @@ router.get('/:id',
       const today = dayjs().format('YYYY-MM-DD');
 
       // 獨立查詢一次並行（原本逐項序列 await ~2s）；查詢失敗個別退回空、不阻斷整體
-      const [waiverSnap, ftSnap, passesSnap, childrenSnap, fallTestSigSnap, blockReasons, discCards, legacyDiscCards, blackCards, singleTickets, bonuses] = await Promise.all([
+      const [waiverSnap, ftSnap, passesSnap, childrenSnap, fallTestSigSnap, blockReasons, discCards, blackCards, singleTickets, bonuses] = await Promise.all([
         // 2026-07-15 的「strip 簽名圖」只有刪 HTTP 回應欄位（省前端 payload），Firestore 讀取當下
         // 仍整份撈回（含 ~66KB 簽名圖），完全沒省到 Firestore 傳輸費——這裡才是真正的省法：
         // 直接在查詢層只選這頁會用到的欄位（=waiverOut 最終保留的欄位，逐字對齊，勿漏掉新欄位）。
@@ -1054,7 +1054,6 @@ router.get('/:id',
         memberService.refreshBlockStatus(req.params.id).catch(() => []),
         // 各類有效票券摘要（沿用既有權威 getter，各自 catch 不阻斷）
         require('../services/discountCardService').getMemberDiscountCards(req.params.id).catch(() => []),
-        require('../services/legacyDiscountCardService').getMemberLegacyDiscountCards(req.params.id).catch(() => []),
         require('../services/legacyCardService').getMemberBlackCards(req.params.id).catch(() => []),
         require('../services/checkinService').getValidSingleEntryTickets(req.params.id).catch(() => []),
         require('../services/bonusService').getMemberBonuses(req.params.id).catch(() => []),
@@ -1080,7 +1079,6 @@ router.get('/:id',
       // 各類有效票券摘要（getter 已做權威有效判定）
       const activeCards = [
         ...(discCards || []).map(c => ({ kind: 'discount', id: c.id, remainingCredits: c.remainingCredits ?? 0, source: c.source || null, expiresAt: c.expiresAtFormatted || null })),
-        ...(legacyDiscCards || []).map(c => ({ kind: 'legacy', id: c.id, remainingCredits: c.remainingCredits ?? 0, source: c.source || 'legacy', expiresAt: c.expiresAtFormatted || null })),
         ...(blackCards || []).map(c => ({ kind: 'black', id: c.id, remainingCredits: c.remainingCredits ?? 0, source: c.source || null, expiresAt: c.expiresAtFormatted || null })),
       ];
       // paymentId/paymentMethod/amount 供員工端判斷「是否為線上付款預購票券、可否一鍵真實退款」（見

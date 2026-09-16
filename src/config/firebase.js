@@ -69,7 +69,6 @@ const COLLECTIONS = {
   SINGLE_ENTRY_TICKETS: 'singleEntryTickets',
   PENDING_CHECK_INS: 'pendingCheckIns',
   DISCOUNT_CARDS: 'discountCards',
-  LEGACY_DISCOUNT_CARDS: 'legacyDiscountCards',
   BLACK_CARDS: 'blackCards',
   TEAM_MEMBERS: 'teamMembers',
   BONUS_PASSES: 'bonusPasses',

@@ -23,7 +23,6 @@ const VALUE_COLLECTIONS = [
   ['memberPasses', 'memberId'],
   ['discountCards', 'ownerMemberId'],
   ['legacyBlackCards', 'memberId'],
-  ['legacyDiscountCards', 'memberId'],
   ['singleEntryTickets', 'memberId'],
   ['discountBonuses', 'memberId'],
   ['courseEnrollments', 'memberId'],

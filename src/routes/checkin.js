@@ -737,7 +737,7 @@ router.get('/today',
         .filter(r => r.isCancelled !== true && r.status !== 'cancelled');
 
       const typeLabel = {
-        monthly_pass: '定期票', new_discount_card: '新優惠卡', legacy_discount_card: '舊優惠卡',
+        monthly_pass: '定期票', new_discount_card: '新優惠卡',
         black_card: '黑卡', bonus: '紅利入場', single_ticket: '單次',
         course_access: '課程學員', child_free: '兒童入場', student_free: '學生入場', other: '其他',
         pass: '定期票', discount_card: '優惠折扣券', single_entry_ticket: '單次入場券',

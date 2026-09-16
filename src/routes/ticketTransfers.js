@@ -19,12 +19,6 @@ const TRANSFER_RULES = {
   discount_card: (card) => ({
     expiresAt: card.expiresAt, // 繼承原到期日
   }),
-  legacy_discount_card: (card) => ({
-    expiresAt: card.isFirstTransfer
-      ? dayjs(card.expiresAt).add(1, 'year').toDate()
-      : card.expiresAt,
-    isFirstTransfer: false,
-  }),
   black_card: (card) => ({
     expiresAt: card.isFirstTransfer
       ? dayjs(card.expiresAt).add(1, 'year').toDate()
@@ -83,7 +77,6 @@ router.post('/request', authenticateAny, async (req, res) => {
     // 確認票券屬於申請人
     const collectionMap = {
       discount_card: 'discountCards',
-      legacy_discount_card: 'legacyDiscountCards',
       black_card: 'legacyBlackCards',
       bonus: 'discountBonuses',
       single_entry: 'singleEntryTickets',
@@ -158,7 +151,6 @@ router.post('/:id/accept', authenticateAny, async (req, res) => {
 
     const collectionMap = {
       discount_card: 'discountCards',
-      legacy_discount_card: 'legacyDiscountCards',
       black_card: 'legacyBlackCards',
       bonus: 'discountBonuses',
       single_entry: 'singleEntryTickets',

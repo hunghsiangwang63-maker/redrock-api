@@ -5,7 +5,6 @@ const { getDb } = require('../config/firebase');
 const { authenticate, authenticateAny, authenticateMember, checkPermission, requireManagerOrStation, requireManager, auditLog } = require('../middleware/auth');
 const notificationService = require('../services/notificationService');
 const discountCardService = require('../services/discountCardService');
-const legacyDiscountCardService = require('../services/legacyDiscountCardService');
 const legacyCardService = require('../services/legacyCardService');
 const bonusService = require('../services/bonusService');
 const memberService = require('../services/memberService');
@@ -157,75 +156,6 @@ router.post('/discount/:id/transfer',
         credits: parseInt(req.body.credits), initiatedBy: req.staff.id, initiatedByType: 'staff',
       });
       res.json({ transfer: t, message: `已送出移轉 ${t.credits} 次給 ${t.toMemberName}，待對方於會員 App 接收（24 小時內未接收將自動回沖）` });
-    } catch (err) { res.status(err.code ? 400 : 500).json(err.code ? err : { error: 'SERVER_ERROR', message: err.message }); }
-  }
-);
-
-// ══════════════════════════════════════════════════════
-// 舊優惠卡（拍照歸檔）
-// ══════════════════════════════════════════════════════
-router.get('/legacy-discount/member/:memberId', authenticateAny, async (req, res) => {
-  try {
-    const denied = await checkMemberOwnership(req.member, req.params.memberId, { onMissing: 403 });
-    if (denied) return res.status(denied.status).json(denied.body);
-    res.json({ cards: await legacyDiscountCardService.getMemberLegacyDiscountCards(req.params.memberId, { includeInactive: req.query.all === '1' }) });
-  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
-});
-
-// 舊優惠卡綁定（拍照歸檔）= Group A：館別電腦(值班)或管理員；立即生效 + 揭露通知管理員
-router.post('/legacy-discount/bind',
-  authenticate, requireManagerOrStation, auditLog('legacy_discount_card.bind'),
-  [body('memberId').notEmpty(), body('remainingCredits').isInt({ min: 1 })], validate,
-  async (req, res) => {
-    try {
-      const card = await legacyDiscountCardService.bindLegacyDiscountCard({
-        memberId: req.body.memberId,
-        remainingCredits: parseInt(req.body.remainingCredits),
-        gymId: req.staff.gymId, staffId: req.staff.id,
-        photoUrl: req.body.photoUrl || null,
-        barcode: req.body.barcode || null,
-      });
-      // 揭露到管理員通知頁（非審核，立即生效）
-      const lm = await require('../services/memberService').getMember(req.body.memberId).catch(() => null);
-      notificationService.notifyCardBindDisclosure({
-        kind: 'legacy_discount_bind', memberName: lm?.name || req.body.memberId,
-        gymId: req.staff.gymId, staffName: req.staff.name,
-        detail: `${parseInt(req.body.remainingCredits)} 次`, referenceId: card.id, actorStaffId: req.staff.id,
-      }).catch(e => console.error('notifyCardBindDisclosure(legacy) 失敗', e.message));
-      res.status(201).json({ card, message: '舊優惠卡綁定成功' });
-    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
-  }
-);
-
-router.post('/legacy-discount/:id/transfer-preview',
-  authenticate, checkPermission('products.sell'),
-  [body('toMemberId').notEmpty(), body('credits').isInt({ min: 1 })], validate,
-  async (req, res) => {
-    try {
-      const cb = await childBlock(req.body.toMemberId, '未滿 13 歲無法接受點數轉移');
-      if (cb) return res.status(400).json(cb);
-      res.json(await legacyDiscountCardService.getTransferPreview(req.params.id, req.body.toMemberId, parseInt(req.body.credits)));
-    }
-    catch (err) { res.status(err.code ? 400 : 500).json(err.code ? err : { error: 'SERVER_ERROR', message: err.message }); }
-  }
-);
-
-router.post('/legacy-discount/:id/transfer',
-  authenticate, checkPermission('products.sell'), auditLog('legacy_discount_card.transfer'),
-  [body('toMemberId').notEmpty(), body('credits').isInt({ min: 1 }), body('confirmedExpiry').equals('true').withMessage('請確認到期日')],
-  validate,
-  async (req, res) => {
-    try {
-      const cb = await childBlock(req.body.toMemberId, '未滿 13 歲無法接受點數轉移');
-      if (cb) return res.status(400).json(cb);
-      const result = await legacyDiscountCardService.transferLegacyDiscountCard({
-        fromCardId: req.params.id, toMemberId: req.body.toMemberId,
-        credits: parseInt(req.body.credits), staffId: req.staff.id,
-      });
-      const msg = result.isFirstTransfer
-        ? `成功移轉 ${req.body.credits} 次（首次移轉，到期日設為 ${result.expiresAt}）`
-        : `成功移轉 ${req.body.credits} 次（到期日 ${result.expiresAt} 不延長）`;
-      res.json({ ...result, message: msg });
     } catch (err) { res.status(err.code ? 400 : 500).json(err.code ? err : { error: 'SERVER_ERROR', message: err.message }); }
   }
 );

@@ -9,7 +9,6 @@
  *
  * 涵蓋的 loop：
  *   A. 新優惠卡  discountCardService        買→用滿→紅利→移轉→顯示
- *   B. 舊優惠卡  legacyDiscountCardService  bind→用滿→移轉（含首次移轉）
  *   C. 黑卡      legacyCardService          bind→用→移轉（含首次移轉）→退回
  *   D. 入場      checkinService             紅利/黑卡 confirm 扣點 + cancel 還原
  *   E. 課程      courseService              報名/候補→請假→補課→退費取消→插班計費
@@ -157,7 +156,6 @@ inject('services/notificationService.js', {
 
 // ── 載入真實 service ──
 const dcs = require(path.join(SRC, 'services/discountCardService.js'));
-const ldcs = require(path.join(SRC, 'services/legacyDiscountCardService.js'));
 const lcs = require(path.join(SRC, 'services/legacyCardService.js'));
 const bonus = require(path.join(SRC, 'services/bonusService.js'));
 const checkin = require(path.join(SRC, 'services/checkinService.js'));
@@ -284,42 +282,6 @@ async function seedSession(id, over = {}) {
     ok(r1.threw && r1.code === 'BONUS_USED', '重複使用被擋 BONUS_USED', `code=${r1.code}`);
     const r2 = await expectThrow(() => bonus.transferBonus({ bonusId: bId, toMemberId: 'C', staffId: 's' }));
     ok(r2.threw && r2.code === 'BONUS_UNAVAILABLE', '已用紅利移轉被擋', `code=${r2.code}`);
-  }
-
-  // ═══════════════ B. 舊優惠卡 ═══════════════
-  await reset();
-  section('B1 舊優惠卡：bind→用滿→觸發紅利');
-  {
-    const card = await ldcs.bindLegacyDiscountCard({ memberId: 'B', remainingCredits: 3, gymId: 'g', staffId: 's' });
-    let trig = false;
-    for (let i = 0; i < 3; i++) trig = (await ldcs.useLegacyDiscountCard(card.id, 'g')).bonusTriggered;
-    ok(trig === true, '舊卡用滿觸發紅利');
-    ok((await bonus.getMemberBonuses('B')).length === 1, '舊卡紅利顯示於 B');
-  }
-
-  await reset();
-  section('B2 舊優惠卡「首次」移轉（expiresAt=null → 設定1年）');
-  {
-    const card = await ldcs.bindLegacyDiscountCard({ memberId: 'A', remainingCredits: 5, gymId: 'g', staffId: 's' });
-    const r = await expectThrow(() => ldcs.transferLegacyDiscountCard({ fromCardId: card.id, toMemberId: 'B', credits: 2, staffId: 's' }));
-    ok(!r.threw, '首次移轉不應拋錯', r.threw ? `拋錯 msg=${r.message}` : '');
-    if (!r.threw) {
-      const b = await ldcs.getMemberLegacyDiscountCards('B');
-      ok(b.length === 1 && b[0].remainingCredits === 2, '受贈者 B 取得 2 次子卡');
-    }
-  }
-
-  await reset();
-  section('B3 舊卡移轉後：母子卡合計用滿→紅利歸原持有者一次');
-  {
-    const card = await ldcs.bindLegacyDiscountCard({ memberId: 'A', remainingCredits: 5, gymId: 'g', staffId: 's' });
-    const res = await ldcs.transferLegacyDiscountCard({ fromCardId: card.id, toMemberId: 'C', credits: 2, staffId: 's' });
-    for (let i = 0; i < 3; i++) await ldcs.useLegacyDiscountCard(card.id, 'g');
-    let trig = false;
-    for (let i = 0; i < 2; i++) trig = (await ldcs.useLegacyDiscountCard(res.newCard.id, 'g')).bonusTriggered;
-    ok(trig === true, '合計第5次觸發紅利');
-    ok((await bonus.getMemberBonuses('A')).length === 1 && (await bonus.getMemberBonuses('C')).length === 0,
-      '紅利歸原持有者 A、C 無');
   }
 
   // ═══════════════ C. 黑卡（legacyCardService）═══════════════

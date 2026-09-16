@@ -88,11 +88,16 @@ const cancelCheckIn = async (checkInId, staffId, force = false, staffName = null
       updatedAt: now,
     });
   } else if (checkIn.entryType === 'discount_card' && checkIn.discountCardId) {
-    // 退回優惠卡次數
+    // 退回優惠卡次數。若這次扣點剛好用罄卡片（remainingCredits 0→isActive:false，見
+    // discountCardService.useDiscountCard），取消時要一併恢復 isActive，否則卡片會卡在
+    // 「已停用」但其實還有次數可用（2026-09-16 踩雷：王妤㚬案例，remainingCredits 還原成1
+    // 卻仍顯示已停用/移轉、無法再入場）。
     const cardDoc = await db.collection(COLLECTIONS.DISCOUNT_CARDS).doc(checkIn.discountCardId).get();
     if (cardDoc.exists) {
+      const restoredCredits = cardDoc.data().remainingCredits + 1;
       await db.collection(COLLECTIONS.DISCOUNT_CARDS).doc(checkIn.discountCardId).update({
-        remainingCredits: cardDoc.data().remainingCredits + 1,
+        remainingCredits: restoredCredits,
+        isActive: restoredCredits > 0,
         updatedAt: now,
       });
     }

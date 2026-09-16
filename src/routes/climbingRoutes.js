@@ -1,14 +1,23 @@
 /**
  * 抱石路線管理 + 完攀計分（2026-08-29 新增）+ 社交互動（2026-09-01 新增：讚/分享/tag朋友）
  * + 家長代子會員操作（2026-09-02 新增：完攀記錄/排名/暱稱/tag 皆可代子女操作）
+ * + 會員自己的完攀影片分享（2026-09-16 新增，見下）+ 免登入公開單一路線頁（2026-09-16 新增，見下）
  *
  * 集合：
  *   climbingRoutes  路線（gymId/area/color/grade V0~V10/setter/igUrl/setAt/status active|archived/
  *                    likes:{memberId:true}——內嵌 map，路線數量規模小，不比照肥集合另開子集合）
  *   routeAscents    完攀記錄（doc id = `${routeId}_${memberId}` 天然去重；points 記錄當下快照、後端權威；
- *                    memberId＝實際完攀者，家長代記錄時另存 recordedByMemberId 供稽核）
+ *                    memberId＝實際完攀者，家長代記錄時另存 recordedByMemberId 供稽核；videoUrl（選填）＝
+ *                    會員自己分享的完攀影片連結，見 PUT /:id/ascents/video——是「我的完攀影片」，跟
+ *                    route.igUrl（館方/定線員提供的示範影片）是兩個獨立概念，不要混用）
  *   routeTags       路線標記朋友（每筆一個 from→to 配對，供逐一通知與查詢「我被誰標記過」；家長代子女
  *                    發起標記時 fromMemberId＝子女、另存 taggedByMemberId 供稽核）
+ *
+ * 免登入公開頁（GET /public/:id，2026-09-16 新增）：回報「分享路線的連結需要登入才看得到，起不到
+ *   分享效果」——會員端「分享路線」（MemberRoutesPage.jsx shareRoute）改連到前端 /route?id=<id>
+ *   （PublicRoutePage.jsx，免登入），這支端點就是它的資料來源。只回可公開的資訊（路線基本資料＋已
+ *   套用隱私遮蔽的社交數據：讚數/分享數/tag/會員完攀影片），不含任何未遮蔽個資或需要登入才有意義
+ *   的個人狀態（liked/myAscents 等）。已下架路線也照常回傳（分享出去的連結不該因路線後來下架而失效）。
  *
  * 計分：分數 = 難度基本分 × 嘗試層級係數（四捨五入）。
  *   預設值寫死於 DEFAULT_SCORING，可由 systemSettings/routeScoring 覆寫（目前無 UI、走 API/資料設定）。
@@ -320,13 +329,18 @@ router.get('/member', authenticateMember, async (req, res) => {
     if (!resolved.ok) return res.status(resolved.status).json(resolved.body);
     const targetId = resolved.id;
     const cfg = await getScoringConfig(db);
-    const [routesSnap, mySnap, checkedIn, tagsSnap] = await Promise.all([
+    const [routesSnap, mySnap, checkedIn, tagsSnap, videoAscentsSnap] = await Promise.all([
       db.collection('climbingRoutes').where('gymId', '==', gymId).get(),
       db.collection('routeAscents').where('memberId', '==', targetId).get(),
       checkedInTodayAt(db, targetId, gymId),
       // 該館所有路線的標記記錄一次撈完（避免逐條路線各查一次 /tags 的 N+1）；有暱稱顯示暱稱、否則遮蔽本名
       db.collection('routeTags').where('gymId', '==', gymId)
         .select('routeId', 'fromMemberName', 'fromMemberNickname', 'taggedMemberName', 'taggedMemberNickname').get(),
+      // 會員自己上傳的完攀影片（2026-09-16 新增，見 PUT /:id/ascents/video）——存在 routeAscents 上，
+      // 該館全部完攀記錄一次撈完後篩有 videoUrl 的，公開展示於各自路線卡（供其他會員查看，非分享
+      // 館方提供的示範影片）；隱私規則比照 tags：有暱稱顯示暱稱，否則遮蔽本名。
+      db.collection('routeAscents').where('gymId', '==', gymId)
+        .select('routeId', 'memberId', 'memberName', 'videoUrl').get(),
     ]);
     const tagsByRoute = {};
     tagsSnap.docs.forEach(d => {
@@ -336,6 +350,20 @@ router.get('/member', authenticateMember, async (req, res) => {
         from: publicDisplayName(t.fromMemberName, t.fromMemberNickname),
         tagged: publicDisplayName(t.taggedMemberName, t.taggedMemberNickname),
       });
+    });
+    const videoRows = videoAscentsSnap.docs.map(d => d.data()).filter(a => a.videoUrl);
+    const videoMemberIds = [...new Set(videoRows.map(a => a.memberId))];
+    const videoNickMap = {};
+    if (videoMemberIds.length) {
+      try {
+        const docs = await db.getAll(...videoMemberIds.map(id => db.collection('members').doc(id)), { fieldMask: ['nickname'] });
+        docs.forEach(d => { if (d.exists) videoNickMap[d.id] = d.data().nickname || ''; });
+      } catch (e) { /* join 失敗不阻斷，退回遮蔽本名顯示 */ }
+    }
+    const videosByRoute = {};
+    videoRows.forEach(a => {
+      if (!videosByRoute[a.routeId]) videosByRoute[a.routeId] = [];
+      videosByRoute[a.routeId].push({ memberId: a.memberId, name: publicDisplayName(a.memberName, videoNickMap[a.memberId]), url: a.videoUrl });
     });
     const routes = routesSnap.docs.map(d => ({ id: d.id, ...d.data() }))
       .filter(r => r.status !== 'archived')
@@ -351,6 +379,7 @@ router.get('/member', authenticateMember, async (req, res) => {
           shareCount: r.shareCount || 0,
           tags: routeTags,
           tagCount: routeTags.length, // 「被標記次數」排序用（與 tags 陣列同一份資料，明確給數字避免前端各自 .length）
+          videos: videosByRoute[r.id] || [], // 會員自己分享的完攀影片（見上）
         };
       })
       .sort((a, b) => (a.area || '').localeCompare(b.area || '', 'zh-Hant') || GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade));
@@ -360,7 +389,7 @@ router.get('/member', authenticateMember, async (req, res) => {
     const totals = { all: { points: 0, ascents: 0 }, byGym: {} };
     mySnap.docs.forEach(d => {
       const a = d.data();
-      myAscents[a.routeId] = { tier: a.tier, points: a.points, recordedAt: a.recordedAt };
+      myAscents[a.routeId] = { tier: a.tier, points: a.points, recordedAt: a.recordedAt, videoUrl: a.videoUrl || null };
       if (!activeRoutes.has(a.routeId)) return;
       const pts = Number(a.points) || 0;
       totals.all.points += pts; totals.all.ascents += 1;
@@ -374,6 +403,51 @@ router.get('/member', authenticateMember, async (req, res) => {
       checkedInToday: checkedIn,
       tiers: TIERS.map(t => ({ key: t.key, label: t.label, multiplier: Number(cfg.tierMultipliers[t.key]) || t.multiplier })),
       targetMemberId: targetId,
+    });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /climbing-routes/public/:id：免登入公開檢視單一路線（供「分享」深連結；供 PublicRoutePage 使用）──
+// 只回傳可安全公開的資訊：路線基本資料＋已做過隱私遮蔽的社交數據（讚數/分享數/標記/會員完攀影片）。
+// 不含任何未遮蔽的會員個資，也不含「我是否已讚/已完攀」等需要登入才有意義的個人狀態。
+// 已下架路線也照常回傳（純檢視、不阻擋——分享出去的連結不該因路線後來下架就整個失效）。
+router.get('/public/:id', async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('climbingRoutes').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'ROUTE_NOT_FOUND', message: '路線不存在' });
+    const r = doc.data();
+    const cfg = await getScoringConfig(db);
+    const [tagsSnap, videoSnap] = await Promise.all([
+      db.collection('routeTags').where('routeId', '==', req.params.id)
+        .select('fromMemberName', 'fromMemberNickname', 'taggedMemberName', 'taggedMemberNickname').get(),
+      db.collection('routeAscents').where('routeId', '==', req.params.id)
+        .select('memberId', 'memberName', 'videoUrl').get(),
+    ]);
+    const tags = tagsSnap.docs.map(d => d.data()).map(t => ({
+      from: publicDisplayName(t.fromMemberName, t.fromMemberNickname),
+      tagged: publicDisplayName(t.taggedMemberName, t.taggedMemberNickname),
+    }));
+    const videoRows = videoSnap.docs.map(d => d.data()).filter(a => a.videoUrl);
+    const videoMemberIds = [...new Set(videoRows.map(a => a.memberId))];
+    const videoNickMap = {};
+    if (videoMemberIds.length) {
+      try {
+        const docs = await db.getAll(...videoMemberIds.map(id => db.collection('members').doc(id)), { fieldMask: ['nickname'] });
+        docs.forEach(d => { if (d.exists) videoNickMap[d.id] = d.data().nickname || ''; });
+      } catch (e) { /* join 失敗不阻斷 */ }
+    }
+    const videos = videoRows.map(a => ({ name: publicDisplayName(a.memberName, videoNickMap[a.memberId]), url: a.videoUrl }));
+    res.json({
+      route: {
+        id: doc.id, gymId: r.gymId, area: r.area, color: r.color, grade: r.grade, name: r.name || '',
+        note: r.note || '', setter: r.setter || '', igUrl: r.igUrl || '', setAt: r.setAt || '',
+        plannedRemoveAt: r.plannedRemoveAt || '', status: r.status || 'active',
+        basePoints: Number(cfg.gradePoints[r.grade]) || 0,
+        likeCount: Object.keys(r.likes || {}).length,
+        shareCount: r.shareCount || 0,
+      },
+      tags, videos,
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
@@ -663,6 +737,39 @@ router.delete('/:id/ascents', authenticateMember, async (req, res) => {
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
+
+// 只接受真正的 Instagram 連結（2026-09-16 安全考量：這是公開展示給其他會員點擊的外部連結，只驗證
+// http(s):// 開頭仍可能被貼一個偽裝成 IG 連結的釣魚/惡意網址；此功能語意上就是「分享 IG 影片」，
+// 限定網域不影響正常使用、能直接排除掉這類風險）。
+const isInstagramUrl = (url) => {
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return h === 'instagram.com' || h.endsWith('.instagram.com') || h === 'instagr.am';
+  } catch (e) { return false; }
+};
+
+// ── PUT /climbing-routes/:id/ascents/video：設定/更新/清除自己的完攀影片連結（2026-09-16 新增）──
+// 回報「分享影片應該是分享自己的 IG 影片、讓其他使用者看到，而不是分享（館方的）示範影片」——
+// 這支端點就是「分享自己的完攀影片」：存在對應的完攀記錄上（一人一路線一筆，天然去重），公開展示
+// 於 /climbing-routes/member 與 /climbing-routes/public/:id 兩個讀取端點的 videos 欄位（供他人查看）。
+// 必須已有完攀記錄（NOT_ASCENDED）——語意上這就是「分享我這條路線的完攀影片」，非任意路線都能貼。
+router.put('/:id/ascents/video', authenticateMember,
+  [body('videoUrl').optional({ nullable: true, checkFalsy: true }).isString()], validate,
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const resolved = await resolveActingMember(db, req.member, req.body.targetMemberId);
+      if (!resolved.ok) return res.status(resolved.status).json(resolved.body);
+      const ref = db.collection('routeAscents').doc(`${req.params.id}_${resolved.id}`);
+      const doc = await ref.get();
+      if (!doc.exists) return res.status(400).json({ error: 'NOT_ASCENDED', message: '請先記錄完攀才能分享您的完攀影片' });
+      const url = String(req.body.videoUrl || '').trim();
+      if (url && !isInstagramUrl(url)) return res.status(400).json({ error: 'INVALID_URL', message: '請輸入有效的 Instagram 連結（instagram.com）' });
+      await ref.update({ videoUrl: url || null, updatedAt: new Date() });
+      res.json({ success: true, videoUrl: url || null });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
 
 // ── POST /climbing-routes/:id/like：按讚 toggle（不限入館，任何時候都可操作）──
 // 內嵌於路線文件的 likes map（非獨立集合）——路線數量規模小，讀清單時單一查詢即可帶出讚數與「我是否已讚」，

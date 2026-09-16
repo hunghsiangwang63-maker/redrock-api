@@ -123,9 +123,14 @@ router.get('/public/:courseId', async (req, res) => {
       .get();
     const allSessions = sessSnap.docs.map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => a.date.localeCompare(b.date));
+    // enrolledCount/maxStudents：2026-09-16 補——原本完全沒帶，公開預覽頁（PublicWorkshopEnrollPage）
+    // 因此無從判斷場次是否已額滿，導致已被報滿的時段（常見如每時段限 1 人的運動按摩）仍顯示可報名的
+    // CTA（回報案例：已有人報名的時段還看得到報名鈕）——與登入後真正報名頁（會員端 workshop 場次清單
+    // 本就正確用 enrolledCount>=maxStudents 判斷並停用按鈕）行為不一致，這裡補齊同一組欄位即可。
     const sessions = allSessions.map(s => ({
       id: s.id, date: s.date, startTime: s.startTime, endTime: s.endTime, gymId: s.gymId,
       status: s.status || 'scheduled', instructor: s.instructor || null,
+      enrolledCount: s.enrolledCount || 0, maxStudents: s.maxStudents ?? null,
     }));
     // 費用試算用：僅未來、未取消場次（與實際報名扣款口徑一致，不受上面完整清單影響）
     const futureActiveCount = allSessions.filter(s => s.status !== 'cancelled' && s.date >= today).length;
@@ -172,7 +177,9 @@ router.get('/public/category/:categoryId', async (req, res) => {
       const sessions = sessSnap.docs.map(d => ({ id: d.id, ...d.data() }))
         .filter(s => s.date >= today)
         .sort((a, b) => a.date.localeCompare(b.date))
-        .map(s => ({ id: s.id, date: s.date, startTime: s.startTime, endTime: s.endTime }));
+        // enrolledCount/maxStudents（2026-09-16 補，見 GET /public/:courseId 同型註解）：
+        // 沒有這兩個欄位，前端無從標示「已額滿」，已被報滿的場次仍會顯示可報名。
+        .map(s => ({ id: s.id, date: s.date, startTime: s.startTime, endTime: s.endTime, enrolledCount: s.enrolledCount || 0, maxStudents: s.maxStudents ?? null }));
       return { ...c, sessions };
     }));
 

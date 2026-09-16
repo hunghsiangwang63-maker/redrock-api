@@ -577,6 +577,45 @@ router.post('/bulk-delete', authenticate, routeEditorGate,
   }
 );
 
+// ── POST /climbing-routes/bulk-status：批次上/下架（路線管理整區一鍵下架/重新上架）──
+// 與 bulk-delete 同一套流程（逐筆讀取做跨館防呆，最後一次 batch 寫入），但上/下架本身完全不看
+// 有無完攀記錄——這正是它跟刪除的差別：整區換線時要保留舊路線的完攀成績歷史，只是不再計分/顯示
+// 在「現有路線」清單，故無 ROUTE_HAS_ASCENTS 這類略過理由，只會因跨館或路線不存在而略過。
+router.post('/bulk-status', authenticate, routeEditorGate,
+  [
+    body('ids').isArray({ min: 1 }).withMessage('請至少選擇一條路線'),
+    body('status').isIn(['active', 'archived']).withMessage('狀態須為 active 或 archived'),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const ids = [...new Set(req.body.ids)].slice(0, 200); // 上限防呆，與 bulk-delete 一致
+      const status = req.body.status;
+      const now = new Date();
+      const batch = db.batch();
+      const updated = [];
+      const skipped = [];
+      for (const id of ids) {
+        const ref = db.collection('climbingRoutes').doc(id);
+        const doc = await ref.get();
+        if (!doc.exists) { skipped.push({ id, reason: 'NOT_FOUND' }); continue; }
+        const r = doc.data();
+        if (req.staff.role !== 'super_admin' && req.staff.gymId && r.gymId !== req.staff.gymId) {
+          skipped.push({ id, reason: 'CROSS_GYM_FORBIDDEN', area: r.area, color: r.color, grade: r.grade });
+          continue;
+        }
+        const updates = { status, updatedAt: now };
+        if (status === 'archived' && r.status !== 'archived') updates.archivedAt = now;
+        batch.update(ref, updates);
+        updated.push(id);
+      }
+      await batch.commit();
+      res.json({ success: true, updatedCount: updated.length, updated, skipped, status });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
 // ── POST /climbing-routes/:id/ascents：會員記錄完攀（今日於該館入場才可；重複記錄＝更新層級）──
 // targetMemberId（選填，未帶＝本人）：家長可代子會員記錄（子會員無獨立登入、入場檢查看子女自己
 // 今日是否有入場，非家長）；代記錄時另存 recordedByMemberId 供稽核（比照體驗預約 bookedByMemberId）。

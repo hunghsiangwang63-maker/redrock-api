@@ -3408,3 +3408,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🐞 **發現缺口**：這筆剛好是這張卡的第10次（最後一次）使用——`useDiscountCard`→`incrementUsedCredits` 在扣點當下已把 `totalUsedCredits` 9→10（`>= totalIssuedCredits`）並觸發紅利（`bonusTriggered:true`＋建一筆 `discountBonuses`，原持有者=她自己，6個月免費入場）。但 `checkin/cancel.js` 的 `discount_card` 分支**只還原卡片次數，沒有連動撤銷同一筆交易觸發的紅利**——取消後她同時擁有「卡片恢復1次可用額度」＋「一筆本不該存在的免費入場紅利」，等於多得一次福利。
 - ✅ **修正**（唯一受影響的一筆，非程式邏輯修改）：卡片 `042933fd...` `totalUsedCredits` 10→9、`bonusTriggered` true→false（回復觸發前狀態，若她真的用掉最後1次可正常重新觸發）；紅利 `f24b182b...` 標 `isActive:false`＋`revokedAt`（保留文件供稽核，非刪除，比照既有「過期紅利標 inactive 不刪」慣例）；兩者皆附 `correctionNote` 說明成因。
 - 📌 **未修程式碼**：`checkin/cancel.js` 的 discount_card 分支目前只還原次數、不會回查「這次扣點是否剛好觸發了紅利」再連動撤銷——這是邊界情況（取消的入場剛好是卡片用罄的那一次），本次僅個案修正資料；若之後常態發生可考慮在該分支加上「還原次數後若 `remainingCredits` 從 0 變回正數，且該次扣點確實觸發過紅利，一併撤銷紅利＋回復 `totalUsedCredits`/`bonusTriggered`」的通用修復。
+
+## 目前進度（2026-09-16 續6）— 修：取消優惠卡入場還原次數時，未連動恢復 isActive（同一案例，第二個真 bug）
+> 使用者傳員工端王妤㚬的紀錄查詢截圖——優惠卡分頁顯示「已停用/移轉」、頂部「有效票券」也顯示「無有效票券」，與續5剛修好的「卡片已還原1次額度」矛盾。查證後確認是**同一起取消動作**暴露的第二個獨立 bug（非顯示問題）。後端 `/health` `3.520.0-discount-card-cancel-restore-active`；E2E（假館 `gym-e2e-test`）驗證通過；commit `2788e35`。
+- 🔍 **根因**：`discountCardService.useDiscountCard` 扣到剩 0 次時會把卡片標 `isActive:false`（`newCredits > 0` 判斷）；但 `checkin/cancel.js` 的 `discount_card` 取消分支**只把 `remainingCredits +1`、從未寫回 `isActive`**——王妤㚬這張卡因續5那筆入場剛好扣到 0（觸發紅利），取消後 `remainingCredits` 正確還原成 1，但 `isActive` 永遠卡在 `false`，導致畫面判斷「已停用/移轉」（`MembersPage.jsx cardInvalidReason`）、且**她現在無法再用這張卡入場**（`useDiscountCard` 對 `isActive:false` 直接擋 `CARD_INACTIVE`）——比續5的紅利多得利問題更嚴重，是實際功能被卡死。同集合的黑卡取消路徑（`refundBlackCard`）本就正確處理 `isActive:true`，只有這個新式優惠卡分支漏寫。
+- ✅ **修**：`cancel.js` 改為 `isActive: restoredCredits > 0`（與 `useDiscountCard` 對稱的判斷式）。
+- ✅ **資料修正**：該張卡（`042933fd...`）`isActive` false→true（`remainingCredits:1` 不變）。
+- **E2E（假館，1項）**：建卡片 `remainingCredits:0/isActive:false` ＋一筆入場 → `cancelCheckIn` → 卡片 `remainingCredits:1/isActive:true` 皆正確。fixtures 測後全清。

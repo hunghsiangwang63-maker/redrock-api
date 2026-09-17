@@ -1002,40 +1002,74 @@ router.put('/:id/finance', authenticate, requireManager, async (req, res) => {
     const invoiceAmount = req.body.invoiceAmount === '' || req.body.invoiceAmount == null ? null : Number(req.body.invoiceAmount);
     if (coachFee != null && (!Number.isFinite(coachFee) || coachFee < 0)) return res.status(400).json({ error: 'INVALID_VALUE', message: '教練費無效' });
     if (invoiceAmount != null && (!Number.isFinite(invoiceAmount) || invoiceAmount < 0)) return res.status(400).json({ error: 'INVALID_VALUE', message: '發票金額無效' });
+    // b＝更新前快照——教練費是否需要「首次記帳」或「修正金額」都要拿更新前的值當比較基準
+    // （coachFeeAdjDone===true 時，b.coachFee 即代表「目前結帳/人事報酬記錄裡實際反映的金額」，
+    // 這個不變量由本函式自己維護：每次金額有變動都會同步結帳/人事報酬，下次比較才會準）。
+    const b = doc.data();
     await ref.update({
       coachFee, invoiceAmount,
       financeUpdatedBy: req.staff.id, financeUpdatedByName: req.staff.name || '', financeUpdatedAt: new Date(),
       updatedAt: new Date(),
     });
-    // 教練費（現金支出）→ 當日結帳加減項（−教練費，可於結帳頁改金額；首次設 >0 才記、冪等）
-    const b = doc.data();
-    if (coachFee != null && coachFee > 0 && !b.coachFeeAdjDone) {
-      try {
-        // 教練費一定是實際從抽屜付出的現金支出，與這筆體驗預約當初怎麼收款無關，故固定傳
-        // paymentMethod:'cash'（維持原本無條件記帳的行為；2026 整併第二階段改呼叫共用
-        // recordDepositMovement，其餘押金類呼叫點才是靠 paymentMethod 判斷是否要記）。
-        await require('../services/paymentRecording').recordDepositMovement({
-          gymId: b.gymId, sign: '-', type: '教練費', amount: coachFee, paymentMethod: 'cash',
-          note: `${b.contactName || ''} 體驗教練費`.trim(),
-          targetDate: b.bookingDate, // 記在活動當天，而非管理員填寫教練費金額的當下（2026-08-11 案例）
-        });
-        await ref.update({ coachFeeAdjDone: true });
-      } catch (e) { console.error('體驗教練費寫入結帳加減項失敗', e.message); }
-      // 同步一筆人事報酬記錄（供 /payouts 報稅查詢用，2026-09-14）——教練姓名已知（b.coachName）才建，
-      // 沒指定教練的體驗課不強塞空白姓名。用 sourceBookingId 標記來源（區隔結帳頁手動填寫那批
-      // sourceSettlementId 的紀錄），與上面的結帳加減項同一個冪等旗標 coachFeeAdjDone 一起把關。
+    const newFeeNum = coachFee != null ? Number(coachFee) : 0;
+    const oldFeeNum = b.coachFee != null ? Number(b.coachFee) : 0;
+
+    if (!b.coachFeeAdjDone) {
+      // 教練費（現金支出）→ 當日結帳加減項（−教練費；首次設 >0 才記、冪等）
+      if (newFeeNum > 0) {
+        try {
+          // 教練費一定是實際從抽屜付出的現金支出，與這筆體驗預約當初怎麼收款無關，故固定傳
+          // paymentMethod:'cash'（維持原本無條件記帳的行為；2026 整併第二階段改呼叫共用
+          // recordDepositMovement，其餘押金類呼叫點才是靠 paymentMethod 判斷是否要記）。
+          await require('../services/paymentRecording').recordDepositMovement({
+            gymId: b.gymId, sign: '-', type: '教練費', amount: newFeeNum, paymentMethod: 'cash',
+            note: `${b.contactName || ''} 體驗教練費`.trim(),
+            targetDate: b.bookingDate, // 記在活動當天，而非管理員填寫教練費金額的當下（2026-08-11 案例）
+          });
+          await ref.update({ coachFeeAdjDone: true });
+        } catch (e) { console.error('體驗教練費寫入結帳加減項失敗', e.message); }
+        // 同步一筆人事報酬記錄（供 /payouts 報稅查詢用，2026-09-14）——教練姓名已知（b.coachName）才建，
+        // 沒指定教練的體驗課不強塞空白姓名。用 sourceBookingId 標記來源（區隔結帳頁手動填寫那批
+        // sourceSettlementId 的紀錄），與上面的結帳加減項同一個冪等旗標 coachFeeAdjDone 一起把關。
+        if (b.coachName && String(b.coachName).trim()) {
+          try {
+            const now = new Date();
+            const payoutId = uuidv4();
+            await db.collection('payoutRecords').doc(payoutId).set({
+              id: payoutId, date: b.bookingDate, payeeName: String(b.coachName).trim(),
+              amount: newFeeNum, category: '教練費', gymId: b.gymId,
+              note: `${b.contactName || ''} 體驗教練費`.trim(), sourceBookingId: b.id,
+              recordedBy: req.staff.id, recordedByName: req.staff.name || '',
+              createdAt: now, updatedAt: now, createdAtMs: now.getTime(),
+            });
+          } catch (e) { console.error('體驗教練費同步人事報酬記錄失敗', e.message); }
+        }
+      }
+    } else if (newFeeNum !== oldFeeNum) {
+      // 已同步過、這次是修正金額（2026-09-17 新增，原本此分支完全沒有——教練費改了，結帳/人事報酬
+      // 卻永遠停在第一次填的舊金額，真實案例：鄭庭昀體驗教練費 420 改成 220，兩邊都沒跟著動）。
+      // ① 結帳加減項比照既有「系統自動記錄不可直接改掉」政策（2026-08-10，見 dailySettlements.js
+      //   findRemovedOrAlteredAutoDeductions）——不去動原本那筆，改另外補一筆差額（金額變大→再扣
+      //   一筆差額；變小→補回一筆差額），淨額加總起來會等於最新的教練費，原始事件仍完整保留可稽核。
+      //   （沿用同一個 recordDepositMovement，已結帳的日子一樣會自動順延到下一個未結帳日——與
+      //   「首次」那筆的既有行為一致，非新增的例外。）
+      // ② 人事報酬記錄（無此政策約束、單純報稅用途）→ 直接更新既有那筆金額，避免同一人同一場
+      //   體驗出現多筆「看起來像分次付款」的報酬紀錄，混淆報稅金額。
+      const delta = newFeeNum - oldFeeNum;
+      if (delta !== 0) {
+        try {
+          await require('../services/paymentRecording').recordDepositMovement({
+            gymId: b.gymId, sign: delta > 0 ? '-' : '+', type: '教練費', amount: Math.abs(delta), paymentMethod: 'cash',
+            note: `${b.contactName || ''} 體驗教練費金額修正（${oldFeeNum}→${newFeeNum}）`.trim(),
+            targetDate: b.bookingDate,
+          });
+        } catch (e) { console.error('體驗教練費結帳加減項修正失敗', e.message); }
+      }
       if (b.coachName && String(b.coachName).trim()) {
         try {
-          const now = new Date();
-          const payoutId = uuidv4();
-          await db.collection('payoutRecords').doc(payoutId).set({
-            id: payoutId, date: b.bookingDate, payeeName: String(b.coachName).trim(),
-            amount: coachFee, category: '教練費', gymId: b.gymId,
-            note: `${b.contactName || ''} 體驗教練費`.trim(), sourceBookingId: b.id,
-            recordedBy: req.staff.id, recordedByName: req.staff.name || '',
-            createdAt: now, updatedAt: now, createdAtMs: now.getTime(),
-          });
-        } catch (e) { console.error('體驗教練費同步人事報酬記錄失敗', e.message); }
+          const payoutSnap = await db.collection('payoutRecords').where('sourceBookingId', '==', b.id).limit(1).get();
+          if (!payoutSnap.empty) await payoutSnap.docs[0].ref.update({ amount: newFeeNum, updatedAt: new Date() });
+        } catch (e) { console.error('體驗教練費同步人事報酬記錄修正失敗', e.message); }
       }
     }
     res.json({ success: true, coachFee, invoiceAmount });

@@ -209,7 +209,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.521.0-remove-dead-legacy-discount-card-path',
+    version: '3.522.0-route-auto-archive-removing-soon',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
@@ -275,6 +275,11 @@ if (require.main === module) {
       const g = await require('./services/ghostAccountService').sweepGhostAccounts();
       if (g.deleted > 0) console.log(`[幽靈帳號] 刪除 ${g.deleted} 筆（掃描 ${g.scanned}、有資料保留 ${g.skippedWithValue}）`);
     } catch (e) { console.error('[幽靈帳號清除] 失敗', e.message); }
+    // 路線攻略：預計下架日期到了 → 自動下架（成績保留，重新上架可恢復）
+    try {
+      const r = await require('./routes/climbingRoutes').sweepPlannedRouteRemovals();
+      if (r.archivedCount > 0) console.log(`[路線攻略] 自動下架 ${r.archivedCount} 條（已達預計下架日期）`);
+    } catch (e) { console.error('[路線攻略] 自動下架失敗', e.message); }
   };
   // 卡片移轉逾期回沖：每小時掃描（24h 未接收 → 次數回沖來源）
   const runCardTransferExpiry = async () => {

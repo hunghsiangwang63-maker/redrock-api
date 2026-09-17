@@ -54,6 +54,7 @@ const { getDb } = require('../config/firebase');
 const { taiwanToday } = require('../utils/taiwanDate');
 const { isChildOf } = require('../utils/memberOwnership');
 const { v4: uuidv4 } = require('uuid');
+const dayjs = require('dayjs');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -168,6 +169,7 @@ async function resolveActingMember(db, member, targetMemberId) {
   return { ok: true, id, data: d };
 }
 const TAG_LIMIT = 5; // 單次最多同時標記幾人，避免濫用洗版
+const ROUTE_REMOVAL_WARNING_DAYS = 7; // 會員端「即將下架」提前顯示天數（2026-09-17 新增）
 
 // 未下架路線 id 集合——積分/排名只計 active 路線（2026-08-29 政策：下架＝換掉的線不再計分；
 // 完攀記錄本身保留，重新上架即恢復計分）。路線集合小（數十~數百條），全掃投影可接受。
@@ -176,6 +178,33 @@ async function getActiveRouteIdSet(db) {
   const set = new Set();
   snap.docs.forEach(d => { if (d.data().status !== 'archived') set.add(d.id); });
   return set;
+}
+
+// ── 預計下架日期到了 → 自動下架（2026-09-17 新增，取代原本純提示不自動下架的行為）──
+// 掛每日 09:00 排程（index.js runDailyInstallmentJobs，比照結帳暫存/幽靈帳號等其他每日 sweep）。
+// 只下架（保留完攀成績＋路線本身記錄，比照既有「下架」語意），不刪除；plannedRemoveAt 保留供稽核。
+async function sweepPlannedRouteRemovals() {
+  const db = getDb();
+  const today = taiwanToday();
+  // 單一欄位等值查詢＋記憶體過濾 plannedRemoveAt（本專案慣例，避免複合索引）。
+  const snap = await db.collection('climbingRoutes').where('status', '==', 'active').get();
+  const due = snap.docs.filter(d => {
+    const p = String(d.data().plannedRemoveAt || '').trim();
+    return p && p <= today;
+  });
+  if (!due.length) return { archivedCount: 0, archived: [] };
+  const now = new Date();
+  const batch = db.batch();
+  due.forEach(d => {
+    batch.update(d.ref, {
+      status: 'archived',
+      archivedAt: now,
+      updatedAt: now,
+      autoArchivedNote: `預計下架日期（${d.data().plannedRemoveAt}）已到，系統自動下架（成績保留，重新上架可恢復）`,
+    });
+  });
+  await batch.commit();
+  return { archivedCount: due.length, archived: due.map(d => d.id) };
 }
 
 // ── GET /climbing-routes/scoring-config：計分規則（供前端顯示各層級分數）──
@@ -371,6 +400,14 @@ router.get('/member', authenticateMember, async (req, res) => {
         const likes = r.likes || {};
         const { likes: _drop, ...rest } = r; // 不把完整 likes map（含所有按讚者 memberId）回傳給前端，只給統計值
         const routeTags = tagsByRoute[r.id] || [];
+        // 即將下架（2026-09-17 新增）：預計下架日在「今天~未來 N 天」內才提醒；已過期（理論上排程
+        // 已於當天 09:00 自動下架、不會再出現在此清單）不算，避免舊資料殘留誤顯示負數天數。
+        const removeAt = String(r.plannedRemoveAt || '').trim();
+        let daysUntilRemoval = null;
+        if (removeAt) {
+          const d = dayjs(removeAt).diff(dayjs(taiwanToday()), 'day');
+          if (Number.isFinite(d) && d >= 0) daysUntilRemoval = d;
+        }
         return {
           ...rest,
           basePoints: Number(cfg.gradePoints[r.grade]) || 0,
@@ -380,6 +417,8 @@ router.get('/member', authenticateMember, async (req, res) => {
           tags: routeTags,
           tagCount: routeTags.length, // 「被標記次數」排序用（與 tags 陣列同一份資料，明確給數字避免前端各自 .length）
           videos: videosByRoute[r.id] || [], // 會員自己分享的完攀影片（見上）
+          daysUntilRemoval,
+          removingSoon: daysUntilRemoval !== null && daysUntilRemoval <= ROUTE_REMOVAL_WARNING_DAYS,
         };
       })
       .sort((a, b) => (a.area || '').localeCompare(b.area || '', 'zh-Hant') || GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade));
@@ -523,7 +562,8 @@ router.get('/', authenticate, async (req, res) => {
 // 單條：{gymId, area, color, grade, ...}（向下相容）
 // 批次：{gymId, area, setter, igUrl, setAt, plannedRemoveAt, routes:[{color,grade,name?,note?}]}
 //   → 同一支 IG 影片對應多條路線的情境：共用欄位填一次、一次建 N 條（上限 20）。
-//   備註 note 跟「每條路線」走（會員可見）；plannedRemoveAt 預計下架日＝共用（純提示、不自動下架）。
+//   備註 note 跟「每條路線」走（會員可見）；plannedRemoveAt 預計下架日＝共用（2026-09-17 起：日期到
+//   即由每日排程自動下架，見 sweepPlannedRouteRemovals；會員端提前 7 天顯示「即將下架」提醒）。
 router.post('/', authenticate, routeEditorGate,
   [
     body('gymId').notEmpty(),
@@ -880,3 +920,4 @@ router.get('/:id/tags', authenticateMember, async (req, res) => {
 });
 
 module.exports = router;
+router.sweepPlannedRouteRemovals = sweepPlannedRouteRemovals; // 供 index.js 排程呼叫（比照 passes.js 慣例）

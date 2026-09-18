@@ -19,6 +19,10 @@ const { COURSE_TYPES, parseBookingTime, courseTypeLabel, addExperienceToCourseAn
 const { isUnder4, isMinor } = require('../utils/age');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { notifyRoleInGym } = require('../services/notificationService');
+// 訪客體驗/試上原本 email 選填，導致寄不出「已收到預約」通知信（蘇晁永案例：填了預約但
+// contactEmail 空白，emailService 呼叫前的 if(contactEmail) guard 靜默跳過寄送）——2026-09-19
+// 起兩條訪客路徑（一般體驗 /public、試上 handleTrialBooking 訪客分支）皆改必填＋格式驗證。
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 // ── 試上：綁定週課場次（另收試上費、免保險、佔名額）─────────────────────
 // 共用給登入會員路徑（POST /、memberId 為真）與訪客公開路徑（POST /public、memberId 恆為 null）。
@@ -45,6 +49,7 @@ async function handleTrialBooking(req, res, db, memberId) {
     const { guestName, guestPhone, guestEmail, guestBirthday, signatureData, guardianSignature } = req.body;
     if (!guestName || !String(guestName).trim()) return res.status(400).json({ code:'MISSING_CONTACT', message:'請填寫姓名' });
     if (!guestPhone || !String(guestPhone).trim()) return res.status(400).json({ code:'MISSING_PHONE', message:'請填寫聯絡電話' });
+    if (!guestEmail || !EMAIL_RE.test(String(guestEmail).trim())) return res.status(400).json({ code:'MISSING_EMAIL', message:'請填寫有效的 Email' });
     if (!guestBirthday) return res.status(400).json({ code:'MISSING_BIRTHDAY', message:'請填寫生日' });
     if (isUnder4(guestBirthday)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 4 歲無法報名課程/體驗' });
     // 防呆：小蜘蛛人／青少年（班別大類 group==='youth'）限未滿18歲試上
@@ -324,6 +329,7 @@ router.post('/public', async (req, res) => {
     } = req.body;
     if (!contactName || !String(contactName).trim()) return res.status(400).json({ code:'MISSING_CONTACT', message:'請填寫聯絡人姓名' });
     if (!contactPhone || !String(contactPhone).trim()) return res.status(400).json({ code:'MISSING_PHONE', message:'請填寫聯絡電話' });
+    if (!contactEmail || !EMAIL_RE.test(String(contactEmail).trim())) return res.status(400).json({ code:'MISSING_EMAIL', message:'請填寫有效的 Email' });
     if (!gymId) return res.status(400).json({ code:'MISSING_GYM', message:'請選擇場館' });
     if (!bookingDate) return res.status(400).json({ code:'MISSING_DATE', message:'請選擇體驗日期' });
     if (!participants?.length) return res.status(400).json({ code:'MISSING_PARTICIPANTS', message:'請填寫參加人員資料' });

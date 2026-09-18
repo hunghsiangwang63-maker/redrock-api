@@ -36,6 +36,14 @@ const setGymStock = (variant, gymId, qty) => {
   return { ...variant, gymStock, stock: total };
 };
 
+// 促銷價正規化：只有「留空」（''／null／undefined）才視為「沒有促銷」，其餘（含明確填 0，
+// 代表免費出清/贈送）一律 parseInt 保留——原本 `v.promoPrice ? parseInt(v.promoPrice) : null`
+// 會把數字 0 誤判為 falsy 一併當成沒填，導致促銷價設 0 完全無法生效。
+const normalizePromoPrice = (raw) => (raw === '' || raw === null || raw === undefined) ? null : parseInt(raw);
+// 促銷是否生效：讀資料庫已存的 promoPrice 時一律用這個判斷（不可用 `promoPrice ?` 真值判斷，
+// 同上，0 是合法的「促銷免費」值）。
+const isPromoActive = (promoPrice) => promoPrice !== null && promoPrice !== undefined;
+
 // ── GET /products ─────────────────────────────────────────────────
 router.get('/', authenticate, async (req, res) => {
   try {
@@ -83,7 +91,7 @@ router.post('/', authenticate, checkPermission('products.manage'), async (req, r
           size: v.size || '',
           color: v.color || '',
           price: parseInt(v.price) || 0,
-          promoPrice: v.promoPrice ? parseInt(v.promoPrice) : null,
+          promoPrice: normalizePromoPrice(v.promoPrice),
           promoActive: false,
           stock: stockQty,
           gymStock,
@@ -252,7 +260,7 @@ router.post('/sell', authenticate, checkPermission('products.sell'), auditLog('p
       const currentStock = getGymStock(variant, gymId);
       if (currentStock < item.quantity)
         return res.status(400).json({ error: 'INSUFFICIENT_STOCK', message: `${product.name} ${variant.size} ${variant.color} 庫存不足（${gymId} 剩 ${currentStock} 件）` });
-      const unitPrice = variant.promoPrice ? variant.promoPrice : variant.price;  // 有填促銷價即生效
+      const unitPrice = isPromoActive(variant.promoPrice) ? variant.promoPrice : variant.price;  // 有填促銷價即生效（含填0）
       const rawSubtotal = unitPrice * item.quantity;
       const discountResult = applyTeamDiscount(rawSubtotal, isTeam);
       const subtotal = discountResult.discounted;
@@ -492,7 +500,7 @@ router.post('/import', authenticate, checkPermission('products.manage'), upload.
         id: uuidv4(),
         size: String(row['尺寸'] || ''), color: String(row['顏色'] || ''),
         price: parseInt(row['原價']) || 0,
-        promoPrice: row['促銷價'] ? parseInt(row['促銷價']) : null,
+        promoPrice: normalizePromoPrice(row['促銷價']),
         promoActive: false, stock: stockQty, gymStock,
       });
     }
@@ -519,8 +527,8 @@ router.get('/export', authenticate, requireManager, async (req, res) => {
           '品牌': p.brand || '', '名稱': p.name,
           '類別': p.category || '', '說明': p.description || '',
           '尺寸': v.size || '', '顏色': v.color || '',
-          '原價': v.price || 0, '促銷價': v.promoPrice || '',
-          '促銷狀態': v.promoPrice ? '促銷中' : '未促銷',
+          '原價': v.price || 0, '促銷價': isPromoActive(v.promoPrice) ? v.promoPrice : '',
+          '促銷狀態': isPromoActive(v.promoPrice) ? '促銷中' : '未促銷',
           '庫存': getGymStock(v, gymId),
           '低庫存警示': p.lowStockAlert || 5,
         });

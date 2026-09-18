@@ -3466,3 +3466,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（假館，17/17）**：家長查自己/子女分期（含新增的子女支援）、陌生人查詢/回報皆擋 403、回報自己/代子女分期成功且不誤動 status/paymentMethod、已繳期再回報擋 400 ALREADY_PAID、不存在期數擋 404、通知正確建立（含代子女回報也有通知）、待辦清單正確吸收「尚未到期但已回報」的期數且 `dueSeq` 精準指向該期（非誤判成已繳的第1期）。
 - 🖥️ **瀏覽器實機（正式環境，真實測試會員 0900555555，firebase-admin 注入 bcrypt 密碼＋一筆含1已繳1未繳的分期計畫）**：登入（`form_input` 直接設值繞開自動填充干擾）→ 用「本人不入場」略過入場前置改直接導 URL 進 `/member/records`（該路由本就不受 onboarding gate 包裹）→ 分期付款分頁正確顯示「合計 NT$3,870・支払済 1/2」「第1回…已支付済み・現金」「第2回…」→ 點「入金報告」開 modal（日文介面：お支払い方法 五選一/備考/送信）→ 選 LinePay+填備註送出 → 畫面即時變「報告済み：LinePay・備註」→ 點「報告を更新」可再次修正 → Firestore `memberReported` 與 3 位管理員的站內通知皆正確寫入（過程中第一次誤點座標選到台灣Pay/漏填備註，改用 `form_input`+`ref` 精準操作後正確覆蓋更新為 LinePay+正確備註——證實「重新回報」覆寫機制運作正常）。測試會員/計畫/6 則通知測後全數清除、複查 0 殘留。
 - ⚠️ **踩雷提醒（本次過程）**：改完 `redrock-web` 後**先跑 `vite build` 就直接開瀏覽器驗證，忘記 `firebase deploy`**——新分頁在正式站完全不出現，一度懷疑功能沒生效；本機建置成功 ≠ 已上線，任何要瀏覽器驗證的前端改動都要先確認已 `firebase deploy` 且 bundle hash 與線上一致。
+
+## 目前進度（2026-09-19）— 修：免登入公開體驗預約 Email 選填，導致寄不出通知信（蘇晁永案例）
+> 問「蘇晁永 體驗預約為什麼沒有看到通知信」——查明他是透過**免登入公開預約頁**（`/book/experience`，訪客身分）送出，`experienceBookings.contactEmail` 存成空字串——公開表單上該欄位原標示「Email（選填）」，他沒填；後端寄「已收到預約」通知信的判斷式 `if(contactEmail && ...)` 正確地靜默跳過（非發送失敗，是根本沒地址可寄），連館內副本(cc)都一併沒寄出，之後確認收款時的通知信也會同樣被跳過。使用者確認「email 修正為必填」。後端 `/health` `3.526.0-guest-experience-email-required`；E2E（本機起服務打正式資料）**5/5**、全程無寫入免清理；瀏覽器實機（正式環境）兩頁皆驗證通過。commit 後端 `8ff8baf`、前端 `886d03e`。
+- ✅ **同步修了一個同構的姊妹缺口**：「訪客試上」（`/book/trial`，`handleTrialBooking` 訪客分支）與蘇晁永中的一般體驗預約是**完全相同的成因**（`guestEmail` 同樣選填、同樣的 `if(contactEmail)` 靜默跳過寄信）——使用者的指示雖只提到「體驗預約」，但這是同一個公開預約頁家族、同一種 bug class，兩個一起修才不會留下另一個一模一樣還壞著的洞。
+- ✅ **後端**（`experienceBookings.js`）：新增共用 `EMAIL_RE`；`POST /experience-bookings/public`（一般體驗）與 `handleTrialBooking` 訪客分支（試上）皆在既有電話檢查後補上 `MISSING_EMAIL`（必填＋格式驗證，比照 `competitions.js:1169` 既有的同款寫法）。
+- ✅ **前端**（`PublicExperienceBookingPage.jsx`／`PublicTrialBookingPage.jsx`）：Email 欄位標籤由「Email（選填）」改「Email *」（沿用既有字典 `'Email *'`／`'請填寫有效的 Email'`，中英日三語免另外新增翻譯）、送出前同步做格式檢查。
+- **E2E（打正式資料，本機起服務，5/5，全程無寫入、免清理）**：一般體驗 email 空白/格式錯誤皆擋 400 `MISSING_EMAIL`、合法 email 正確放行（卡在後續欄位而非又被 MISSING_EMAIL 擋）；訪客試上（用真實存在的 allowTrial 場次）email 空白/格式錯誤同樣正確擋下。
+- 🖥️ **瀏覽器實機（正式環境）**：`/book/experience` 與 `/book/trial?session=<真實allowTrial場次id>` 兩頁皆確認「メール *」正確顯示為必填（與其餘必填欄位標示一致）。
+- 📌 **範圍**：此修正**只影響之後新送出的預約**，不會回溯修正蘇晁永這筆既有、`contactEmail` 仍是空字串的訂單——若要幫他把這筆補上 Email 並補寄收據，需另外取得他的信箱後手動處理（未執行，待使用者指示）。

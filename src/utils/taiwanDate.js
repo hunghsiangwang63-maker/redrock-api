@@ -18,4 +18,9 @@ function dateInTaiwan(dateOrMs) {
   return new Date(ms + 8 * 3600000).toISOString().slice(0, 10);
 }
 
-module.exports = { taiwanToday, dateInTaiwan };
+// 台灣當月起始（月統計用；2026-09-18 由 climbingRoutes.js 的本地重複定義移到這裡集中）
+function taiwanMonthStart() {
+  return new Date(taiwanToday().slice(0, 7) + '-01T00:00:00+08:00');
+}
+
+module.exports = { taiwanToday, dateInTaiwan, taiwanMonthStart };

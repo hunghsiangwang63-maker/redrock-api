@@ -1,7 +1,7 @@
 /**
  * 定期票異動管理路由（編輯/展延/退費/轉讓/年假批次展延）
  */
-const { taiwanToday } = require('../utils/taiwanDate');
+const { taiwanToday, taiwanMonthStart } = require('../utils/taiwanDate');
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
@@ -281,8 +281,8 @@ router.get('/analytics', authenticate, requireManagerOrStation, async (req, res)
 
     // 未綁定卡號數：physicalCardRegistry 是「已售出實體卡清冊」（見 scripts/importCardRegistry.js
     // 從使用者維護的 Excel 匯入），已售出但 bound=false 即為「還可以綁定」。用 .count() 只拿數字，
-    // 不拉整批文件內容。目前僅黑卡（AT/ST 系列）已匯入，優惠卡（D 系列）尚未整理——回 null 明確
-    // 區分「這個卡別根本還沒有清冊資料」跟「清冊裡剛好 0 張未綁定」，避免前端誤讀成 0 張。
+    // 不拉整批文件內容。目前僅部分字軌已整理（見 cards.js GATED_SERIES），尚未整理的卡別回 null
+    // 明確區分「這個卡別根本還沒有清冊資料」跟「清冊裡剛好 0 張未綁定」，避免前端誤讀成 0 張。
     const unboundCountOf = async (cardType) => {
       try {
         const soldSnap = await db.collection('physicalCardRegistry')
@@ -293,8 +293,29 @@ router.get('/analytics', authenticate, requireManagerOrStation, async (req, res)
         return unboundSnap.data().count;
       } catch { return null; }
     };
+    // 本月已綁定數（2026-09-18 新增）：查證「9/16、9/17 各一張優惠卡轉入，為何未綁定數看起來沒少」
+    // 後（結論：其實有算對，見 CLAUDE.md 記錄），使用者要求加一個「本月綁定數量」方便直接核對。
+    // ⚠ 刻意不查 physicalCardRegistry.boundAt——實測發現大部分卡（含這個月）根本沒有這個欄位：
+    // scripts/importCardRegistry.js 只在批次匯入時寫 {sold,bound}，從未寫過 boundAt；只有「白名單
+    // 上線後、真的透過即時綁定流程觸發 markCardBound()」的極少數卡才有這個時間戳，用它算月統計
+    // 會嚴重低估（實測 9 月 15 筆優惠卡轉入只有 2 筆有 boundAt）。改直接算「轉入卡」本身的建立時間
+    // ——discountCards 的 source:'migrated'（轉入優惠卡，見 discountCardService.bindDiscountCard）
+    // 與 legacyBlackCards 的 source:'original'（綁定黑卡，見 legacyCardService.bindBlackCard；此
+    // collection 只有 original/transferred 兩種 source，無獨立購買路徑）——用 .select('createdAt')
+    // 只拉時間戳（輕量）+ 記憶體過濾本月（本專案慣例，equality+range 混用會需要複合索引）。
+    const boundThisMonthOf = async (collectionName, sourceValue) => {
+      try {
+        const snap = await db.collection(collectionName).where('source', '==', sourceValue).select('createdAt').get();
+        const monthStart = taiwanMonthStart().getTime();
+        return snap.docs.filter(d => {
+          const ts = d.data().createdAt;
+          const ms = ts?.toDate ? ts.toDate().getTime() : (ts?._seconds != null ? ts._seconds * 1000 : null);
+          return ms != null && ms >= monthStart;
+        }).length;
+      } catch { return null; }
+    };
 
-    const [passSnap, discountSnap, blackSnap, ticketSnap, bonusSnap, blackUnbound, discountUnbound] = await Promise.all([
+    const [passSnap, discountSnap, blackSnap, ticketSnap, bonusSnap, blackUnbound, discountUnbound, blackBoundThisMonth, discountBoundThisMonth] = await Promise.all([
       db.collection(COLLECTIONS.MEMBER_PASSES).get(),
       db.collection('discountCards').get(),
       db.collection('legacyBlackCards').get(),
@@ -302,6 +323,8 @@ router.get('/analytics', authenticate, requireManagerOrStation, async (req, res)
       db.collection('discountBonuses').get(),
       unboundCountOf('black'),
       unboundCountOf('discount'),
+      boundThisMonthOf('legacyBlackCards', 'original'),
+      boundThisMonthOf('discountCards', 'migrated'),
     ]);
 
     // 定期票
@@ -348,11 +371,11 @@ router.get('/analytics', authenticate, requireManagerOrStation, async (req, res)
 
     // 優惠卡（discountCards：ownerMemberId、預設 10 格）
     const discounts = discountSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-    const discountStats = { ...cardStats(discounts, 10), unbound: discountUnbound };
+    const discountStats = { ...cardStats(discounts, 10), unbound: discountUnbound, boundThisMonth: discountBoundThisMonth };
 
     // 黑卡（legacyBlackCards：memberId、預設 12 格、原始卡 expiresAt 可為 null=無期限）
     const blacks = blackSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-    const blackStats = { ...cardStats(blacks, 12), unbound: blackUnbound };
+    const blackStats = { ...cardStats(blacks, 12), unbound: blackUnbound, boundThisMonth: blackBoundThisMonth };
 
     // 單日券（實際狀態值只有 pending_approval/active/used/cancelled，無 valid/expired 字串；
     // 「有效」＝status=active 且未過期、「已過期」＝status=active 但 expiresAt 已過，皆需以日期即時判斷）

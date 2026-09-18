@@ -51,7 +51,7 @@ const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const { authenticate, authenticateMember, authenticateAny, requireManager } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
-const { taiwanToday } = require('../utils/taiwanDate');
+const { taiwanToday, taiwanMonthStart } = require('../utils/taiwanDate');
 const { isChildOf } = require('../utils/memberOwnership');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
@@ -128,11 +128,6 @@ async function checkedInTodayAt(db, memberId, gymId) {
     const at = c.checkedInAt && (c.checkedInAt.toDate ? c.checkedInAt.toDate() : new Date(c.checkedInAt));
     return at && at >= todayStart;
   });
-}
-
-// 台灣當月起始（月排名用）
-function taiwanMonthStart() {
-  return new Date(taiwanToday().slice(0, 7) + '-01T00:00:00+08:00');
 }
 
 const ascentDate = (a) => a.recordedAt && (a.recordedAt.toDate ? a.recordedAt.toDate() : new Date(a.recordedAt));

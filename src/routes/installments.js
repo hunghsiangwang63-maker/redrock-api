@@ -5,6 +5,7 @@ const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const { authenticate, authenticateAny, checkPermission } = require('../middleware/auth');
+const { checkMemberOwnership } = require('../utils/memberOwnership');
 const installmentService = require('../services/installmentService');
 
 const validate = (req, res, next) => {
@@ -93,10 +94,13 @@ router.post('/:planId/mark-paid-in-full',
 );
 
 // ── GET /installments/member/:memberId - 查詢會員的分期計畫 ────────
+// 支援家長查子女（checkMemberOwnership，與「我的紀錄」其餘分頁一致），原本只認本人會漏掉子女
+// 名下的分期計畫（如課程分期報名對象是子女時）。
 router.get('/member/:memberId', authenticateAny, async (req, res) => {
   try {
-    if (req.member && req.member.id !== req.params.memberId) {
-      return res.status(403).json({ error: 'FORBIDDEN', message: '只能查看自己的分期計畫' });
+    if (req.member) {
+      const deny = await checkMemberOwnership(req.member, req.params.memberId, { message: '只能查看自己或子女的分期計畫' });
+      if (deny) return res.status(deny.status).json(deny.body);
     }
     const plans = await installmentService.getMemberInstallmentPlans(req.params.memberId);
     res.json({ plans });
@@ -104,6 +108,33 @@ router.get('/member/:memberId', authenticateAny, async (req, res) => {
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }
 });
+
+// ── POST /installments/:planId/:seq/report-payment - 會員自行回報某期已繳款 ──
+// 純「通知館方核對」，不等於確認收款——館方仍須到本頁（或待辦頁「💰待收款」）實際按「確認收款」
+// 才會真正記帳／解除入場限制。會員 App「我的紀錄→分期付款」使用；員工亦可代為登記（跳過擁有權檢查）。
+router.post('/:planId/:seq/report-payment',
+  authenticateAny,
+  [
+    body('paymentMethod').isIn(installmentService.VALID_PAYMENT_METHODS).withMessage('付款方式不正確'),
+    body('note').optional({ checkFalsy: true }).isLength({ max: 200 }).withMessage('備註過長（上限200字）'),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      const result = await installmentService.reportMemberPayment({
+        planId: req.params.planId,
+        seq: parseInt(req.params.seq),
+        requestingMember: req.member || null,
+        paymentMethod: req.body.paymentMethod,
+        note: (req.body.note || '').trim(),
+      });
+      res.json({ message: '已通知館方核對，請等候確認收款', ...result });
+    } catch (err) {
+      if (err.code) return res.status(err.status || 400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
 
 // ── GET /installments - 查詢所有分期計畫（管理端，可用 ?status= 篩選）──
 router.get('/', authenticate, checkPermission('installments.manage'), async (req, res) => {

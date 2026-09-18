@@ -13,6 +13,8 @@ const dayjs = require('dayjs');
 const { v4: uuidv4 } = require('uuid');
 
 const VALID_PAYMENT_METHODS = ['linepay', 'jkopay', 'taiwanpay', 'transfer', 'cash'];
+// 中文標籤（供會員回報通知內文／待辦清單顯示共用，避免各處各自重複定義一份）
+const PAYMENT_METHOD_LABEL = { linepay: 'LinePay', jkopay: '街口支付', taiwanpay: '台灣Pay', transfer: '轉帳', cash: '現金' };
 
 // ── 由「課程/票種的分期規則」+ 總價 + 起始日 產出各期 {amount,dueDate} ──
 // config = { enabled, periods:[{ percent, dueOffsetDays }] }；percent 為佔總價比例(合計≈100)，
@@ -228,6 +230,56 @@ const markInstallmentPaid = async ({ planId, seq, paymentMethod, staffId, staffN
   return { allPaid, plan: { ...plan, installments: updatedInstallments, status: newStatus } };
 };
 
+// ── 會員自行回報某期已繳款（2026-09-18 新增）─────────────────────────
+// 純「通知館方核對」用途，不等於真的確認收款——不動 status/paidAt/paymentMethod（那些只有
+// 管理員實際呼叫 markInstallmentPaid 才會設定），只在該期附註 memberReported 供館方核對時
+// 參考（例如金額對不上原訂期數就要先確認是不是搞錯期數），並發一則站內通知給同館管理員。
+// requestingMember：會員登入時的 req.member；員工代為登記時傳 null 跳過擁有權檢查。
+const reportMemberPayment = async ({ planId, seq, requestingMember, paymentMethod, note }) => {
+  if (!VALID_PAYMENT_METHODS.includes(paymentMethod)) {
+    throw { status: 400, code: 'INVALID_PAYMENT_METHOD', message: '付款方式不正確' };
+  }
+  const db = getDb();
+  const ref = db.collection(COLLECTIONS.INSTALLMENT_PLANS).doc(planId);
+  const doc = await ref.get();
+  if (!doc.exists) throw { status: 404, code: 'NOT_FOUND', message: '找不到此分期計畫' };
+  const plan = doc.data();
+
+  if (requestingMember) {
+    const { checkMemberOwnership } = require('../utils/memberOwnership');
+    const deny = await checkMemberOwnership(requestingMember, plan.memberId, { message: '只能回報自己或子女的分期繳款' });
+    if (deny) throw { status: deny.status, code: deny.body.error, message: deny.body.message };
+  }
+  if (plan.status === 'cancelled') throw { status: 400, code: 'PLAN_CANCELLED', message: '此分期計畫已取消' };
+  if (plan.status === 'completed') throw { status: 400, code: 'ALREADY_PAID', message: '此分期計畫已結清，無需回報' };
+
+  const target = (plan.installments || []).find(i => i.seq === seq);
+  if (!target) throw { status: 404, code: 'INSTALLMENT_NOT_FOUND', message: '找不到此期數' };
+  if (target.status === 'paid') throw { status: 400, code: 'ALREADY_PAID', message: '此期已確認收款，無需重複回報' };
+
+  const now = new Date();
+  const memberReported = { paymentMethod, note: note || '', reportedAt: now };
+  const updatedInstallments = plan.installments.map(i =>
+    i.seq === seq ? { ...i, memberReported } : i
+  );
+  await ref.update({ installments: updatedInstallments, updatedAt: now });
+
+  // 通知同館管理員（沿用單一入口 notifyGymManagers；失敗不阻斷回報本身）
+  try {
+    const notificationService = require('./notificationService');
+    await notificationService.notifyGymManagers({
+      gymId: plan.gymId,
+      type: 'installment_payment_reported',
+      title: '分期繳款回報',
+      body: `${plan.memberName} 回報「${plan.itemName}」第 ${seq}/${(plan.installments || []).length} 期已繳款 · ${PAYMENT_METHOD_LABEL[paymentMethod] || paymentMethod}${note ? `・${note}` : ''}，請核對後至分期付款頁確認收款`,
+      referenceId: planId, referenceType: 'installmentPlan',
+      link: `/staff/installments?plan=${planId}&seq=${seq}`,
+    });
+  } catch (e) { console.error('[分期] 會員回報通知失敗', e.message); }
+
+  return { plan: { ...plan, installments: updatedInstallments } };
+};
+
 // ── 整筆標記一次繳清（實際上已一次性收款，非依原訂各期時間分次繳，管理員直接登記結清）───
 // 未繳清的各期一次性標記為已繳（各自沿用原金額分開記帳，稽核可對到原分期金額）、計畫狀態→completed，
 // 一旦 completed，sendInstallmentReminders 的查詢條件（status in ['active','overdue']）本就不會再選到
@@ -415,6 +467,7 @@ module.exports = {
   createInstallmentPlan,
   cancelInstallmentPlan,
   markInstallmentPaid,
+  reportMemberPayment,
   markInstallmentPlanPaidInFull,
   runOverdueCheck,
   sendInstallmentReminders,
@@ -422,4 +475,5 @@ module.exports = {
   getMemberInstallmentPlans,
   getAllInstallmentPlans,
   VALID_PAYMENT_METHODS,
+  PAYMENT_METHOD_LABEL,
 };

@@ -433,17 +433,26 @@ router.get('/', authenticate, async (req, res) => {
 
     // 12. 分期付款待收款（會員自助分期首期原本無人接手、也接不到既有 transferRecords 待收款佇列；
     //     一併涵蓋各計畫「已到期還沒繳的最早一期」，不限首期，讓分期收款也有一個持續的待辦入口）
+    //     2026-09-18：優先挑「會員已回報」的那一期（見 installmentService.reportMemberPayment），
+    //     即使尚未到期也要立即出現在待辦（不然要等到期日才會被下面的日期條件抓到，會員提早繳款
+    //     反而看不到）；查無回報才退回原本「已到期最早一期」邏輯。desc 附上會員回報的付款方式/
+    //     備註，供管理員核對金額/期數是否對得上再確認收款。
     try {
+      const { PAYMENT_METHOD_LABEL } = require('../services/installmentService');
       const snap = await installmentPromise;
       snap.forEach(d => {
         const p = d.data();
         if (gymId && p.gymId && p.gymId !== gymId) return;
-        const due = (p.installments || []).find(i => i.status !== 'paid' && i.dueDate <= today);
+        const unpaid = (p.installments || []).filter(i => i.status !== 'paid');
+        const due = unpaid.find(i => i.memberReported) || unpaid.find(i => i.dueDate <= today);
         if (!due) return;
+        const reportedNote = due.memberReported
+          ? `｜學員回報：${PAYMENT_METHOD_LABEL[due.memberReported.paymentMethod] || due.memberReported.paymentMethod}${due.memberReported.note ? '・' + due.memberReported.note : ''}`
+          : '';
         tasks.push({
           id: `installment_${d.id}`, type: 'installment', targetId: d.id,
           title: '分期付款待收款',
-          desc: `${p.memberName} — ${p.itemName}（第${due.seq}/${(p.installments||[]).length}期 NT$${(due.amount||0).toLocaleString()}，到期${due.dueDate}）`,
+          desc: `${p.memberName} — ${p.itemName}（第${due.seq}/${(p.installments||[]).length}期 NT$${(due.amount||0).toLocaleString()}，到期${due.dueDate}）${reportedNote}`,
           date: due.dueDate,
           createdAt: p.createdAt?._seconds || 0,
           gymId: p.gymId, memberName: p.memberName,

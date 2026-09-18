@@ -3442,3 +3442,16 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - 金額未變動則完全不動作（冪等）。
 - **E2E（4 情境）**：首次設400正確記1筆／改600正確補一筆-200（淨額600、人事報酬更新為600非新增第二筆）／改220正確補一筆+380（淨額220）／重存相同值220不重複記帳。
 - 🧹 **資料修正：今日新竹真實案例（鄭庭昀體驗，教練江幸樺）**：查證發現該筆教練費 `experienceBookings.coachFee` 已被 Debby Chu 更正為 220，但結帳加減項與人事報酬記錄仍停在第一次的 420——且**今天結帳當時的差異 +200 正是這個 bug 造成**（`actualCashBalance 16988` vs 修正前 `expectedCashBalance 16788`，差額剛好等於 420-220=200，確認因果）。因當天結帳已是 `settled`（非草稿）、且能百分之百確認正確值就是 220（非需另加沖銷分錄的「不確定歷史真相」情境），比照本檔案歷來對已結帳資料的修正慣例（直接改欄位+重算+留 `correctionNote`，例如 8/28 士林結帳修正），直接把該筆加減項 420→220、重算 `expectedCashBalance`(16788→16988)/`difference`(200→**0**，與實際點鈔完全吻合)；`payoutRecords` 對應那筆同步 220。兩份文件皆附 `correctionNote` 留稽核；`differenceAlert` 原就是 false（200 未達 >200 警示門檻，無需額外處理已發出的通知）。
+
+## 目前進度（2026-09-18）— 票券統計加「本月已綁定」數量（優惠卡轉入／黑卡綁定）
+> 問「9/16,9/17各有一張優惠卡轉入，為什麼統計顯示實體卡未綁定：1,334張」——查證後確認**數字本就正確**（未綁定數看的是「已售出清冊裡尚未被任何人綁過」的存量，跟「這個月新增了幾筆綁定」是兩個不同的統計維度，兩筆新轉入的卡本來就是從清冊裡另外找兩張全新未綁定的號碼去綁，不會讓存量减少式地「反映」出來）。使用者確認「數字正確，白名單管控措施也正常」，接著要求「多一個顯示當月綁定數量」方便日後直接核對。後端 `/health` `3.524.0-card-bound-this-month-stat`；正式環境端到端驗證（登入正式 API 直接核對數字）通過；commit 後端 `e7cae3e`、前端 `015c33e`；bundle hash 比對本機/線上一致。
+- 🐞 **初版誤用 `physicalCardRegistry.boundAt` 當資料來源、嚴重低估**：`unboundCountOf` 既有機制查的是清冊集合本身，直覺會想沿用同一個集合的 `boundAt` 時間戳做「本月新增幾筆」——實測跑出 `discountStats.boundThisMonth:2`，但手動核對 9 月 `discountCards`(source:migrated) 建立紀錄明顯不只 2 筆才發現不對。追查 `scripts/importCardRegistry.js` 才發現：批次匯入清冊時**只寫 `{sold, bound, updatedAt}`，從未寫過 `boundAt`**——只有真正觸發過即時白名單綁定流程（`markCardBound()`）的極少數卡才會有這個欄位，用它算「本月綁定」會把「Excel 匯入時本來就已經 bound:true」的大宗歷史資料全部漏算。
+- ✅ **改用真正的資料來源**：`boundThisMonthOf(collectionName, sourceValue)` 直接查 `discountCards`(`source:'migrated'`，優惠卡轉入) 與 `legacyBlackCards`(`source:'original'`，黑卡綁定；此集合只有 `original`/`transferred` 兩種 source，無獨立購買路徑) 本身的 `createdAt`——`.select('createdAt')` 只拉時間戳（本專案慣例，equality+range 混用需要複合索引，改記憶體過濾避開）＋比對 `taiwanMonthStart()`（月起算，由 `climbingRoutes.js` 的本地重複定義移到 `utils/taiwanDate.js` 集中共用，路線攻略月排名同步受惠）。重跑：`discountStats.boundThisMonth:20`（與手動核對九月轉入紀錄一致，含起初漏算的幾筆 `barcode:null` 早期資料）、`blackStats.boundThisMonth:3`。
+- ✅ **前端**（`PassesPage.jsx`）：優惠卡/黑卡統計卡片既有「📇 實體卡未綁定」提示下方新增一行「📅 本月已綁定：N 張」（`boundThisMonth != null` 才顯示，與既有 unbound 顯示同一套 null-safe 慣例）。
+- **驗證**：正式環境登入打 `/pass-adjustments/analytics` 直接核對回傳值與本機測試結果一致（`discountStats:{unbound:1334,boundThisMonth:20}`／`blackStats:{unbound:1191,boundThisMonth:3}`）。
+
+## 目前進度（2026-09-18 續）— 資料操作：清除通知集合裡的測試殘留（15筆）
+> 指示「記得要把通知裡面的測試資料刪除」。純 Firestore 資料操作，逐筆核對內容才刪、無程式異動。
+- 🔍 **查法**：先粗略以命名關鍵字（`【測試】`/`【練習】`/`【E2E`/`gym-e2e-test`）掃 `notifications` 集合抓出候選，**逐筆讀完整文件內容**（而非只信任關鍵字命中）才判定——比照 2026-08-08 續2「教練費/定線費同步」段落已記錄過的教訓（測試通知的 `gymId==='gym-e2e-test'` 假館，因 `notifyGymManagers` 系列函式的 `gymId==='gym-hsinchu'?'新竹館':'士林館'` 三元判斷寫法，訊息內文會被誤標成「士林館」，不能單靠文字內容判斷是否為測試資料）。
+- ✅ **確認刪除 15 筆**：`checkin_cancelled`×3（【測試】卡狀態還原，本次 discount_card isActive 修復的測試殘留）、`discount_bind_disclosure`×4（【測試】D24卡號驗證×2、【練習】D21全範圍測試×2，皆早前白名單擴充功能的測試會員轉入通知）、`single_entry_ticket_auto_cancelled`×2（會員名字本身就是`【E2E-TEST-TICKET-SWEEP】`，明確標記）、`member_inquiry`×3（【練習】比賽報名測試 — Test）、`settlement_difference`×3（`gymId:gym-e2e-test`，本次結帳/人事報酬串接測試殘留）。
+- ⚠️ **逐筆核對後確認保留、未刪除**：`discount_bind_disclosure` 1 筆（江幸樺為真實會員江柏毅轉入優惠卡，`gymId:gym-hsinchu`，真實業務）；`course_leave` 3 筆（真實會員王雅茵課程請假，同一事件依規則各自通知同館多位管理員屬正常的多筆扇出、非重複測試殘留，`gymId:gym-shilin`）。

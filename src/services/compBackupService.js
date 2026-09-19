@@ -43,23 +43,26 @@ async function commitInChunks(db, ops) {
 }
 
 /**
- * 鏡射 redrock-comp 的一個「集合」到本專案的目標集合：寫入現有文件、刪除已消失的舊鏡射文件。
- * 回傳實際寫入的文件數。
+ * 鏡射一批 { id, data } 到本專案的目標集合：寫入現有文件、刪除已消失的舊鏡射文件。
+ * 回傳實際寫入的文件數。⚠ `id` 由呼叫端決定——不能直接沿用來源的 doc.id：`competitions/{compId}/
+ * data/scores` 這個子文件在每個賽事底下都叫一樣的字面 id「scores」，若直接拿它當目標集合的
+ * doc id，不同賽事的成績會全部互相覆蓋成同一份（曾在第一次上線時踩過，只留下最後處理的那筆）。
+ * 呼叫端對 scores 一律改用「所屬賽事的 compId」當目標 id，一個賽事一份、不會碰撞。
  */
-async function mirrorCollection(db, docs, destCollectionName) {
-  const liveIds = new Set(docs.map(d => d.id));
+async function mirrorCollection(db, items, destCollectionName) {
+  const liveIds = new Set(items.map(it => it.id));
   const existingSnap = await db.collection(destCollectionName).select().get();
   const staleIds = existingSnap.docs.map(d => d.id).filter(id => !liveIds.has(id));
 
   const ops = [];
-  for (const d of docs) {
-    ops.push(batch => batch.set(db.collection(destCollectionName).doc(d.id), d.data(), { merge: false }));
+  for (const it of items) {
+    ops.push(batch => batch.set(db.collection(destCollectionName).doc(it.id), it.data, { merge: false }));
   }
   for (const id of staleIds) {
     ops.push(batch => batch.delete(db.collection(destCollectionName).doc(id)));
   }
   await commitInChunks(db, ops);
-  return { written: docs.length, deleted: staleIds.length };
+  return { written: items.length, deleted: staleIds.length };
 }
 
 async function backupCompFirestore() {
@@ -70,16 +73,20 @@ async function backupCompFirestore() {
   const compsSnap = await cdb.collection('competitions').get();
   const sponsorsSnap = await cdb.collection('sponsors').get();
 
-  // 逐賽事讀取 data/scores 子文件（存在才鏡射；多數賽事都有，未開賽前可能還沒有分數資料）
-  const scoreDocs = [];
+  // 逐賽事讀取 data/scores 子文件（存在才鏡射；多數賽事都有，未開賽前可能還沒有分數資料）——
+  // 目標 id 用所屬賽事的 compId（見上方 mirrorCollection 註解，不可用子文件自己的 'scores' 字面 id）。
+  const scoreItems = [];
   for (const c of compsSnap.docs) {
     const scoresDoc = await cdb.collection('competitions').doc(c.id).collection('data').doc('scores').get();
-    if (scoresDoc.exists) scoreDocs.push(scoresDoc);
+    if (scoresDoc.exists) scoreItems.push({ id: c.id, data: scoresDoc.data() });
   }
 
-  const compResult = await mirrorCollection(db, compsSnap.docs, DEST.competitions);
-  const scoreResult = await mirrorCollection(db, scoreDocs, DEST.scores);
-  const sponsorResult = await mirrorCollection(db, sponsorsSnap.docs, DEST.sponsors);
+  const compItems = compsSnap.docs.map(d => ({ id: d.id, data: d.data() }));
+  const sponsorItems = sponsorsSnap.docs.map(d => ({ id: d.id, data: d.data() }));
+
+  const compResult = await mirrorCollection(db, compItems, DEST.competitions);
+  const scoreResult = await mirrorCollection(db, scoreItems, DEST.scores);
+  const sponsorResult = await mirrorCollection(db, sponsorItems, DEST.sponsors);
 
   const summary = {
     skipped: false,

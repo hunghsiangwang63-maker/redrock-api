@@ -197,6 +197,32 @@ router.post('/:id/confirm', authenticate, checkPermission('rentals.manage'), asy
         await ref.update({ depositCashAdjDone: true });
       } catch (e) { console.error('押金收取寫入結帳加減項失敗', e.message); }
     }
+    // 租金收取（現金持有）→ 當日結帳加減項（＋租金收取，可於結帳頁編輯/移除；冪等）；非現金付款不進現金加減項。
+    // 器材租借常跨日（取件日收款、歸還日才開發票——見 §8/§9），若不在取件當下就把租金計入現金，取件
+    // 當天的現金會少算這一筆，等歸還開發票那天又會透過發票統計（invAuth.byMethod）多算一次，兩天都會
+    // 出現假的現金差異（2026-09-19 真實案例：士林抱石墊租借，取件今天、歸還隔幾天）。這裡寫入的
+    // 「+租金收取」與 invoices.js print-record 開立這筆租金發票當下寫入的「－租金收取沖銷」互相對稱，
+    // 讓取件當天與開票當天的現金各自都準確反映實際現金流入/流出，兩天結帳現金能直接拉平。
+    // ⚠️ 只在「已開真列印」的館別才需要——那類館別的付款方式統計已改成「以今日開立的發票」為準（見
+    // dailySettlements.js computeTodayInvoiceAuthority），租金要等歸還開票才會被算進現金、才有這個
+    // 跨日落差需要補。未開真列印的館別，租金本就是用「今日 type:'rental' 交易」直接算現金（見
+    // dailySettlements.js 的 `if (!invAuth.printingEnabled) addPay(...)`），取件當下就已經正確算進去，
+    // 若在這裡再多寫一筆「+」會變成重複計算，讓那些館別的現金憑空多出一筆。
+    if (Number(r.totalRentalFee) > 0 && !r.rentalFeeCashAdjDone && r.paymentMethod === 'cash') {
+      try {
+        const gymDoc = await db.collection('gyms').doc(r.gymId).get();
+        const printingEnabled = !!(gymDoc.exists && gymDoc.data().invoicePrintingEnabled === true);
+        if (printingEnabled) {
+          const itemSummary = (r.items || []).map(it => `${it.name || it.type}${it.quantity > 1 ? `×${it.quantity}` : ''}`).join('、') || '器材租借';
+          await require('../services/paymentRecording').recordDepositMovement({
+            gymId: r.gymId, sign: '+', type: '租金收取', amount: r.totalRentalFee,
+            paymentMethod: r.paymentMethod,
+            note: `${r.memberName || ''} ${itemSummary} 租金`.trim(),
+          });
+          await ref.update({ rentalFeeCashAdjDone: true });
+        }
+      } catch (e) { console.error('租金收取寫入結帳加減項失敗', e.message); }
+    }
     res.json({ success: true, message: '已確認收款，器材已取件' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

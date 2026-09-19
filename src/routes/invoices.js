@@ -297,6 +297,29 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
       } catch (e) { console.error('[定期票續約開票後清除待開票旗標失敗]', e.message); }
     }
 
+    // 器材租借租金：取件當下已寫「+租金收取」加減項（rentals.js /:id/confirm，2026-09-19 起，見該處
+    // 說明）——這裡開立租金發票時，若確認取件當下真的寫過那筆「+」（讀 rentalFeeCashAdjDone 旗標，
+    // 而非直接假設「凡是 rental 發票都對應過一筆+」——此功能上線前就已取件的租借，取件當下並未寫入
+    // +，這裡就不該沖銷，否則會憑空多出一筆「－」造成新的假差異），一律「無條件」沖銷這筆金額（不論
+    // 取件與開票是否同一天——只要取件時已寫過+，開票當下下方 invAuth.byMethod 一定會再把這張發票的
+    // 金額算進付款方式統計，需要對稱扣除；與課程/比賽的 moveToOther 同一原理，差別在課程/比賽用
+    // 「移到其他類」、這裡改用明確的「－」加減項，讓店員在結帳頁清楚看到這是哪一筆租借的沖銷，而非
+    // 隱性消失）。作廢時的對稱復原見下方 voidRealInvoice（讀這裡設定的 rentalFeeOffsetWritten 旗標）。
+    if (sourceType === 'rental' && refId) {
+      try {
+        const rentalDoc = await db.collection('equipmentRentals').doc(refId).get();
+        const rr = rentalDoc.exists ? rentalDoc.data() : null;
+        if (rr && rr.rentalFeeCashAdjDone === true && (paymentMethod || 'cash') === 'cash') {
+          const itemSummary = (rr.items || []).map(it => `${it.name || it.type}${it.quantity > 1 ? `×${it.quantity}` : ''}`).join('、') || '器材租借';
+          await require('../services/paymentRecording').recordDepositMovement({
+            gymId, sign: '-', type: '租金收取沖銷', amount: amt, paymentMethod: paymentMethod || 'cash',
+            note: `${memberName || rr.memberName || ''} ${itemSummary} 租金（已於取件日認列，此為避免今日發票重複計算的沖銷）`.trim(),
+          });
+          await db.collection('invoices').doc(id).update({ rentalFeeOffsetWritten: true });
+        }
+      } catch (e) { console.error('[租借租金沖銷加減項]', e.message); }
+    }
+
     // 配號後的紙捲剩餘狀態（僅該館設過紙捲張數時才有意義）——供前端在列印成功畫面同步跳出
     // 「即將用完」醒目警語，不用等下次開設定頁才看到。
     res.json({
@@ -416,6 +439,19 @@ async function voidRealInvoice(db, id, staffId, staffName, voidReason) {
     status: 'void', voidedAt: now, voidedBy: staffId || null, voidedByName: staffName || '',
     voidReason: voidReason ? String(voidReason).trim() : '', updatedAt: now,
   });
+  // 器材租借租金沖銷復原（2026-09-19）：這張發票開立當下若曾寫過「－租金收取沖銷」（見上方 print-record
+  // 的 rentalFeeOffsetWritten 旗標），作廢時要對稱補回「＋」，否則這筆沖銷會平白留在加減項裡——之後
+  // 若重開一張新發票又會再沖銷一次，造成同一筆租金被扣兩次（原本的+只有一筆，沖銷卻疊加了兩筆）。
+  if (inv.sourceType === 'rental' && inv.rentalFeeOffsetWritten === true) {
+    try {
+      const itemLabel = (inv.itemName || '器材租借費');
+      await require('../services/paymentRecording').recordDepositMovement({
+        gymId: inv.gymId, sign: '+', type: '租金收取沖銷復原', amount: inv.amount,
+        paymentMethod: inv.paymentMethod || 'cash',
+        note: `${inv.memberName || ''} ${itemLabel}（發票 ${inv.invoiceNo || ''} 作廢，恢復先前沖銷）`.trim(),
+      });
+    } catch (e) { console.error('[租借租金沖銷復原加減項]', e.message); }
+  }
   return { ...inv, status: 'void' };
 }
 

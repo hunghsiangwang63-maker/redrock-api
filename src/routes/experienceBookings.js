@@ -1002,25 +1002,43 @@ router.put('/:id/finance', authenticate, requireManager, async (req, res) => {
   try {
     const db = getDb();
     const ref = db.collection('experienceBookings').doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
     const coachFee = req.body.coachFee === '' || req.body.coachFee == null ? null : Number(req.body.coachFee);
     const invoiceAmount = req.body.invoiceAmount === '' || req.body.invoiceAmount == null ? null : Number(req.body.invoiceAmount);
     if (coachFee != null && (!Number.isFinite(coachFee) || coachFee < 0)) return res.status(400).json({ error: 'INVALID_VALUE', message: '教練費無效' });
     if (invoiceAmount != null && (!Number.isFinite(invoiceAmount) || invoiceAmount < 0)) return res.status(400).json({ error: 'INVALID_VALUE', message: '發票金額無效' });
+
     // b＝更新前快照——教練費是否需要「首次記帳」或「修正金額」都要拿更新前的值當比較基準
     // （coachFeeAdjDone===true 時，b.coachFee 即代表「目前結帳/人事報酬記錄裡實際反映的金額」，
     // 這個不變量由本函式自己維護：每次金額有變動都會同步結帳/人事報酬，下次比較才會準）。
-    const b = doc.data();
-    await ref.update({
-      coachFee, invoiceAmount,
-      financeUpdatedBy: req.staff.id, financeUpdatedByName: req.staff.name || '', financeUpdatedAt: new Date(),
-      updatedAt: new Date(),
+    // ⚠️ 「讀取舊值→判斷是否首次→寫入 coachFeeAdjDone」這段用 transaction 包起來、原子完成——
+    // 2026-09-19 真實案例：黎晉瑋體驗教練費原本先存了400、隨即又改存0（很可能連續按了兩次儲存），
+    // 若只是普通 `doc.get()` 再各自 `ref.update()`，兩次請求可能都在對方寫入 coachFeeAdjDone 之前
+    // 讀到「還沒設過」的舊快照——先送達的那次把 400 記進結帳沒問題，但後送達、金額改成0的那次
+    // 若也自認是「第一次」，會落進「首次設 >0 才記」的判斷式（`newFeeNum>0` 為 false）什麼都不做，
+    // 修正金額的沖銷分支完全沒被觸發，結帳因此白白多扣一筆早該被沖銷回0的400元。改用 transaction
+    // 後，Firestore 會保證兩個交錯的請求其中一個必須在另一個已提交的最新資料上重新判斷，不會再
+    // 兩邊都誤判成「第一次」。
+    const { b, isFirstTime } = await db.runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) throw Object.assign(new Error('查無此預約'), { httpStatus: 404, code: 'NOT_FOUND' });
+      const snapshot = doc.data();
+      const wasAdjDone = !!snapshot.coachFeeAdjDone;
+      const newFeeNum0 = coachFee != null ? Number(coachFee) : 0;
+      const update = {
+        coachFee, invoiceAmount,
+        financeUpdatedBy: req.staff.id, financeUpdatedByName: req.staff.name || '', financeUpdatedAt: new Date(),
+        updatedAt: new Date(),
+      };
+      // 首次設定且金額>0 → 在同一個 transaction 內立刻佔下 coachFeeAdjDone，讓任何交錯進來、
+      // 之後才提交的請求一定會讀到「已佔用」，落入修正分支而非重複判定成第一次。
+      if (!wasAdjDone && newFeeNum0 > 0) update.coachFeeAdjDone = true;
+      tx.update(ref, update);
+      return { b: snapshot, isFirstTime: !wasAdjDone };
     });
     const newFeeNum = coachFee != null ? Number(coachFee) : 0;
     const oldFeeNum = b.coachFee != null ? Number(b.coachFee) : 0;
 
-    if (!b.coachFeeAdjDone) {
+    if (isFirstTime) {
       // 教練費（現金支出）→ 當日結帳加減項（−教練費；首次設 >0 才記、冪等）
       if (newFeeNum > 0) {
         try {
@@ -1032,7 +1050,6 @@ router.put('/:id/finance', authenticate, requireManager, async (req, res) => {
             note: `${b.contactName || ''} 體驗教練費`.trim(),
             targetDate: b.bookingDate, // 記在活動當天，而非管理員填寫教練費金額的當下（2026-08-11 案例）
           });
-          await ref.update({ coachFeeAdjDone: true });
         } catch (e) { console.error('體驗教練費寫入結帳加減項失敗', e.message); }
         // 同步一筆人事報酬記錄（供 /payouts 報稅查詢用，2026-09-14）——教練姓名已知（b.coachName）才建，
         // 沒指定教練的體驗課不強塞空白姓名。用 sourceBookingId 標記來源（區隔結帳頁手動填寫那批
@@ -1079,7 +1096,10 @@ router.put('/:id/finance', authenticate, requireManager, async (req, res) => {
       }
     }
     res.json({ success: true, coachFee, invoiceAmount });
-  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  } catch (err) {
+    if (err.code === 'NOT_FOUND') return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
 });
 
 // ── GET /experience-bookings/:id/tickets - 該預約的單日券清單（供指定發送 UI）──

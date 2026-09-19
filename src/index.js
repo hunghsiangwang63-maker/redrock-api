@@ -209,7 +209,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.528.0-rental-fee-cash-adjustment',
+    version: '3.529.0-comp-firestore-backup-mirror',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
@@ -280,6 +280,13 @@ if (require.main === module) {
       const r = await require('./routes/climbingRoutes').sweepPlannedRouteRemovals();
       if (r.archivedCount > 0) console.log(`[路線攻略] 自動下架 ${r.archivedCount} 條（已達預計下架日期）`);
     } catch (e) { console.error('[路線攻略] 自動下架失敗', e.message); }
+    // 計分系統(redrock-comp)每日備份鏡射：該專案未啟用付費方案、無法用 Firestore 原生排定備份
+    // （2026-09-19 已查證+使用者拍板不為此開通計費），改由本專案既有跨專案連線把賽事/成績/贊助商
+    // 資料鏡射進本專案自己的 Firestore，搭本專案已開啟的每日自動備份順風車。見 compBackupService.js。
+    try {
+      const b = await require('./services/compBackupService').backupCompFirestore();
+      if (!b.skipped) console.log(`[計分系統備份] competitions ${b.competitionsCount}、scores ${b.scoresCount}、sponsors ${b.sponsorsCount}${b.deletedStale ? `、清除已刪除 ${b.deletedStale}` : ''}`);
+    } catch (e) { console.error('[計分系統備份] 失敗', e.message); }
   };
   // 卡片移轉逾期回沖：每小時掃描（24h 未接收 → 次數回沖來源）
   const runCardTransferExpiry = async () => {

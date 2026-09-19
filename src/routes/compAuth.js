@@ -17,7 +17,7 @@
 const express = require('express');
 const router = express.Router();
 const { verifyAndMintToken, ssoMintToken } = require('../services/compAuthService');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, checkPermission } = require('../middleware/auth');
 
 router.post('/login', async (req, res) => {
   try {
@@ -42,6 +42,19 @@ router.post('/sso', authenticate, async (req, res) => {
   } catch (e) {
     console.error('[comp-auth] sso 失敗', e);
     res.status(500).json({ error: 'SERVER_ERROR', message: '登入失敗，請稍後再試' });
+  }
+});
+
+// POST /comp-auth/backup-now — 手動觸發計分系統資料備份鏡射（super_admin，供測試/補跑；正常
+// 情況下每日 09:00 隨其餘每日排程自動執行一次，見 index.js runDailyInstallmentJobs 與
+// services/compBackupService.js 說明）
+router.post('/backup-now', authenticate, checkPermission('super_admin'), async (req, res) => {
+  try {
+    const result = await require('../services/compBackupService').backupCompFirestore();
+    res.json(result);
+  } catch (e) {
+    console.error('[comp-auth] backup-now 失敗', e);
+    res.status(500).json({ error: 'SERVER_ERROR', message: '備份失敗，請稍後再試' });
   }
 });
 

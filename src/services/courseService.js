@@ -591,6 +591,10 @@ const updateSession = async ({ sessionId, staffId, data }) => {
   if (data.endTime) updates.endTime = data.endTime;
   if (data.instructor !== undefined) updates.instructor = data.instructor;
   if (data.notes !== undefined) updates.notes = data.notes;
+  // 單堂關閉補課名額（區別於課程層級的 makeupTarget——那是整梯次一起開/關，這個只針對這一堂日期，
+  // 例：某梯次原本開放補課，但特定一堂因故（人數已滿員但尚有名額空間、教練調整、想保留給正式生等）
+  // 不想再讓補課生進來，而其他堂維持照常開放。enrollMakeup 權威擋在此欄位為 true 時（2026-09-21）。
+  if (data.makeupClosed !== undefined) updates.makeupClosed = !!data.makeupClosed;
 
   // 日期/時間變更 → 套用與新增場次同一套排程規則（梯次期間內＋時間先後）＋防撞既有場次
   if (data.date || data.startTime || data.endTime) {
@@ -1776,6 +1780,11 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
   if (!sessionDoc.exists) throw { code: 'SESSION_NOT_FOUND' };
   const session = sessionDoc.data();
 
+  // 單堂關閉補課名額（區別於課程層級的 makeupTarget，見 updateSession 註解）——2026-09-21
+  if (session.makeupClosed === true) {
+    throw { code: 'MAKEUP_SESSION_CLOSED', message: '此場次已關閉補課名額，請改選其他梯次或日期' };
+  }
+
   // 跨期補課（非會員名單，另存 crossCohortMakeups，不進 enrolledCount）也佔實體名額 → 計入容量判斷
   const _xmSnap = await db.collection('crossCohortMakeups').where('targetSessionId', '==', targetSessionId).get();
   const _crossBooked = _xmSnap.docs.filter(d => d.data().status === 'booked').length;
@@ -2569,7 +2578,7 @@ const getMakeupCandidateSessions = async (db, { categoryId, gymId, excludeCourse
       .where('courseId', 'in', chunk).where('date', '>=', from).where('date', '<=', to).get();
     snap.docs.forEach(d => {
       const s = d.data();
-      if (s.status === 'cancelled') return;
+      if (s.status === 'cancelled' || s.makeupClosed === true) return; // 單堂關閉補課名額（見 enrollMakeup 同一權威判斷）
       sessions.push({ id: d.id, ...s });
     });
   }

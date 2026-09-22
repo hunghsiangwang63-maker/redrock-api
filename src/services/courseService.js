@@ -53,8 +53,12 @@ const resolveRules = (course, category) => {
     return RULE_DEFAULTS[k];
   };
   const rules = Object.fromEntries(Object.keys(RULE_DEFAULTS).map(k => [k, pick(k)]));
-  // 週課一律開放補課／試上（2026-08 起簡化：只要課程開放、班別彼此可互相補課即可選，不再受個別開關限制）
-  if (course?.type === 'weekly') { rules.allowMakeup = true; rules.allowTrial = true; }
+  // 週課預設開放補課／試上（2026-08 起簡化：多數課程不特別設定時一律可補課/試上，不用逐一開關）；
+  // 但課程或班別若明確設為 false（如虹瑩進階班政策：請假不發補課券），要尊重這個明確覆寫，不能無條件蓋掉。
+  if (course?.type === 'weekly') {
+    if (course?.allowMakeup == null && category?.allowMakeup == null) rules.allowMakeup = true;
+    if (course?.allowTrial == null && category?.allowTrial == null) rules.allowTrial = true;
+  }
   return rules;
 };
 const getCategoryOf = async (db, categoryId) => {

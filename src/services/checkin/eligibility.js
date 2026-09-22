@@ -6,6 +6,7 @@
 const { taiwanToday } = require('../../utils/taiwanDate');
 const { getDb, COLLECTIONS } = require('../../config/firebase');
 const dayjs = require('dayjs');
+const { isActiveTeamMember, applyTeamDiscount } = require('../teamMemberService');
 
 const getValidPasses = async (memberId, gymId) => {
   const passExpiryService = require('../passExpiryService');
@@ -60,16 +61,23 @@ const getBuyablePassTypes = async (gymId) => {
 // ── 定期票續約（會員端，到期前 14 天開放）─────────────────────────
 const RENEWAL_WINDOW_DAYS = 14;
 
-// 續約後端權威價：票種 renewalDiscount（percent=打折 / amount=折抵）套用於原價，夾在 [0, price]
-const computeRenewalPrice = (pt) => {
+// 續約後端權威價：票種 renewalDiscount（percent=打折 / amount=折抵）套用於原價後，
+// 攀岩隊員（效期內）再疊乘 9 折（2026-09-22 拍板方案A：兩者相乘，非互斥/非取代——
+// 例：原價4000、續約折扣5%→3800，隊員再打9折→3420）。isTeamMemberActive 未提供時
+// （呼叫端尚未查會員資料）視為非隊員，僅套票種本身的續約折扣，行為與改版前一致。
+const computeRenewalPrice = (pt, isTeamMemberActive = false) => {
   const price = pt.price || 0;
   const rd = pt.renewalDiscount;
-  if (!rd || !['percent', 'amount'].includes(rd.mode)) return price;
-  const v = Number(rd.value) || 0;
-  if (v <= 0) return price;
-  return rd.mode === 'percent'
-    ? Math.max(0, Math.round(price * (100 - Math.min(100, v)) / 100))
-    : Math.max(0, price - v);
+  let afterTypeDiscount = price;
+  if (rd && ['percent', 'amount'].includes(rd.mode)) {
+    const v = Number(rd.value) || 0;
+    if (v > 0) {
+      afterTypeDiscount = rd.mode === 'percent'
+        ? Math.max(0, Math.round(price * (100 - Math.min(100, v)) / 100))
+        : Math.max(0, price - v);
+    }
+  }
+  return applyTeamDiscount(afterTypeDiscount, isTeamMemberActive).discounted;
 };
 
 // 依票種算「續約後」新到期日：以現到期日（未到期）或今日（已過期）為基準加月數/天數
@@ -90,8 +98,14 @@ const getRenewalInfo = async (memberPass) => {
   const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(memberPass.passTypeId).get();
   if (!ptDoc.exists) return null;
   const pt = ptDoc.data();
+  // 攀岩隊員續約再疊 9 折（2026-09-22 拍板方案A，見 computeRenewalPrice 註解）
+  let teamDiscountApplied = false;
+  if (memberPass.memberId) {
+    const memberDoc = await db.collection(COLLECTIONS.MEMBERS).doc(memberPass.memberId).get();
+    if (memberDoc.exists) teamDiscountApplied = isActiveTeamMember(memberDoc.data());
+  }
   const fullPrice = pt.price || 0;
-  const renewalPrice = computeRenewalPrice(pt);
+  const renewalPrice = computeRenewalPrice(pt, teamDiscountApplied);
   return {
     passId: memberPass.id,
     passTypeId: memberPass.passTypeId,
@@ -103,6 +117,7 @@ const getRenewalInfo = async (memberPass) => {
     fullPrice,
     renewalPrice,
     renewalDiscount: pt.renewalDiscount || null,
+    teamDiscountApplied,
     installment: pt.installment?.enabled ? (pt.installment || { enabled: false, periods: [] }) : { enabled: false, periods: [] },
   };
 };

@@ -1761,6 +1761,7 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
           leaves, leaveCount: realLeaves.length, leaveCap: cap,
           makeupAvailable: avail.length, makeupUsed: used.length, makeupTotal: avail.length + used.length,
           makeupExpiresAt: expiresAt ? new Date(expiresAt.getTime() + 8 * 3600000).toISOString().slice(0, 10) : null, // 台灣日期
+          manualIssued: rights.filter(r => r.source === 'manual').length, // 政策上不發補課券的課程，館方已手動核發幾張（供判斷還要不要再核發）
           bookedMakeups,
         };
       }).filter(Boolean).sort((a, b) => a.memberName.localeCompare(b.memberName, 'zh-Hant'));
@@ -1772,8 +1773,8 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
 
       return {
         course: {
-          id: courseId, name: course.name, gymId: course.gymId || null,
-          maxLeaves: rules.maxLeaves,
+          id: courseId, name: course.name, gymId: course.gymId || null, categoryId: course.categoryId || null,
+          maxLeaves: rules.maxLeaves, allowMakeup: rules.allowMakeup, // allowMakeup:false → 前端顯示「手動核發補課券」入口
           makeupDeadline: course.makeupDeadlineDate || (course.endDate ? require('dayjs')(course.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null),
         },
         rows, pendingClaims,
@@ -1891,6 +1892,7 @@ router.get('/leave-makeup-summary/all',
             leaves, leaveCount: realLeaves.length, leaveCap: cap,
             makeupAvailable: avail.length, makeupUsed: used.length, makeupTotal: avail.length + used.length,
             makeupExpiresAt: expiresAt ? new Date(expiresAt.getTime() + 8 * 3600000).toISOString().slice(0, 10) : null,
+            manualIssued: rights.filter(r => r.source === 'manual').length,
             bookedMakeups,
           };
         }).filter(Boolean).sort((a, b) => a.memberName.localeCompare(b.memberName, 'zh-Hant'));
@@ -1898,8 +1900,8 @@ router.get('/leave-makeup-summary/all',
         if (rows.length || pendingClaims.length) {
           groups.push({
             course: {
-              id: c.id, name: c.name, gymId: c.gymId || null,
-              maxLeaves: rules.maxLeaves,
+              id: c.id, name: c.name, gymId: c.gymId || null, categoryId: c.categoryId || null,
+              maxLeaves: rules.maxLeaves, allowMakeup: rules.allowMakeup,
               makeupDeadline: c.makeupDeadlineDate || (c.endDate ? require('dayjs')(c.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null),
             },
             rows, pendingClaims,
@@ -1963,6 +1965,34 @@ router.get('/:courseId/leave-makeup-summary',
       if (!result) return res.status(404).json({ error: 'NOT_FOUND' });
       res.json(result);
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
+// POST /courses/manual-makeup-credit - 館方協助核發補課券（僅限「政策上不自動發補課券」的課程，如虹瑩進階班）
+// 權限：管理員（super_admin/gym_manager）不限課程；一般員工經 staff.makeupOverrideCategoryIds 授權才可用，
+// 且僅限清單內的班別——不比照一般 courses.manage 開放整個系統，避免此後門被用在無關課程。
+router.post('/manual-makeup-credit',
+  authenticate, checkPermission('courses.view'),
+  async (req, res) => {
+    try {
+      const { memberId, courseId } = req.body || {};
+      if (!memberId || !courseId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '請提供 memberId 與 courseId' });
+      const db = getDb();
+      const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+      if (!isManager) {
+        const courseDoc = await db.collection('courses').doc(courseId).get();
+        const categoryId = courseDoc.exists ? courseDoc.data().categoryId : null;
+        const allowed = Array.isArray(req.staff?.makeupOverrideCategoryIds) && categoryId && req.staff.makeupOverrideCategoryIds.includes(categoryId);
+        if (!allowed) return res.status(403).json({ error: 'FORBIDDEN', message: '無權限為此課程核發補課券' });
+      }
+      const right = await courseService.issueManualMakeupCredit(db, {
+        memberId, courseId, issuedBy: req.staff?.id, issuedByName: req.staff?.name,
+      });
+      res.status(201).json({ right, message: '補課券已核發' });
+    } catch (err) {
+      if (err.code) return res.status(400).json({ error: err.code, message: err.message });
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
   }
 );
 

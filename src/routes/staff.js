@@ -16,6 +16,14 @@ const sanitizePermissionOverrides = (input) => {
   return out;
 };
 
+// 「補課核發範圍」——授權此員工可對哪些班別（categoryId）使用「手動核發補課券」功能
+// （限「政策上不自動發補課券」的班別，如虹瑩進階班）；只接受字串陣列、去重、上限 50 筆。
+const sanitizeMakeupOverrideCategoryIds = (input) => {
+  if (!Array.isArray(input)) return undefined;
+  const ids = [...new Set(input.filter(x => typeof x === 'string' && x.trim()))].slice(0, 50);
+  return ids;
+};
+
 const validate = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -73,6 +81,7 @@ router.post('/',
       const now = new Date();
       const ref = db.collection('staff').doc();
       const permissionOverrides = sanitizePermissionOverrides(req.body.permissionOverrides);
+      const makeupOverrideCategoryIds = sanitizeMakeupOverrideCategoryIds(req.body.makeupOverrideCategoryIds);
       const staffDoc = {
         id: ref.id, name, email, phone: phone || '',
         role, gymId: role === 'super_admin' ? null : gymId,
@@ -81,6 +90,7 @@ router.post('/',
         isActive: true,
         createdAt: now, updatedAt: now,
         ...(permissionOverrides ? { permissionOverrides } : {}),
+        ...(makeupOverrideCategoryIds ? { makeupOverrideCategoryIds } : {}),
       };
       await ref.set(staffDoc);
       delete staffDoc.passwordHash;
@@ -117,6 +127,9 @@ router.put('/:id',
       allowed.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
       if (req.body.permissionOverrides !== undefined) {
         updates.permissionOverrides = sanitizePermissionOverrides(req.body.permissionOverrides) || {};
+      }
+      if (req.body.makeupOverrideCategoryIds !== undefined) {
+        updates.makeupOverrideCategoryIds = sanitizeMakeupOverrideCategoryIds(req.body.makeupOverrideCategoryIds) || [];
       }
       if (updates.role === 'super_admin') updates.gymId = null;
       // 降為非總管理員時必須有所屬館別，否則限館過濾會失效

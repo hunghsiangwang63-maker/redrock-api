@@ -1031,6 +1031,41 @@ const reconcileMakeupEntitlement = async (db, memberId, courseId, rules = null, 
   return { entitlement, used, available: targetAvailable, cap, activeLeaves };
 };
 
+// ── 館方手動核發補課券（給「政策上不自動發補課券」的課程，如虹瑩進階班）─────
+// 這類課程 rules.allowMakeup 明確為 false，reconcileMakeupEntitlement 每次都會把
+// 「不變量」算成 0，任何一般 available 券都會被自動作廢——必須用 exempt:true 標記，
+// 讓這張券完全跳出不變量重算範圍（比照休館停課/上期請假的豁免券寫法），才不會被
+// 「同會員同課程之後任何一次請假觸發的下一次 reconcile」悄悄回收。
+// 權限（由呼叫端／路由層先檢查）：管理員（super_admin/gym_manager）不限課程；
+// 個別員工可經 staff.makeupOverrideCategoryIds 授權，僅限清單內的班別（categoryId）。
+const issueManualMakeupCredit = async (db, { memberId, courseId, issuedBy, issuedByName }) => {
+  const cDoc = await db.collection(COURSE_COLLECTION).doc(courseId).get();
+  if (!cDoc.exists) throw { code: 'COURSE_NOT_FOUND', message: '查無此課程' };
+  const course = cDoc.data();
+  const rules = resolveRules(course, await getCategoryOf(db, course.categoryId));
+  if (rules.allowMakeup !== false) {
+    throw { code: 'NOT_NO_MAKEUP_COURSE', message: '此功能僅限「不自動發補課券」的課程使用，此課程本就會自動核發，請走一般請假流程' };
+  }
+  const memberDoc = await db.collection('members').doc(memberId).get();
+  if (!memberDoc.exists) throw { code: 'MEMBER_NOT_FOUND', message: '查無此會員' };
+
+  const now = new Date();
+  const expiresAt = makeupExpiryDayjs(course, rules).toDate();
+  const id = uuidv4();
+  const right = {
+    id, memberId, originalEnrollmentId: null,
+    courseId, courseName: course.name || '', categoryId: course.categoryId || null,
+    gymId: course.gymId || null, tags: course.tags || [],
+    status: 'available', expiresAt, usedSessionId: null, usedAt: null,
+    source: 'manual', exempt: true,
+    notes: '館方協助安排（此課程政策上請假不自動發補課券，由後台人工核發）',
+    issuedBy: issuedBy || null, issuedByName: issuedByName || null,
+    createdAt: now, updatedAt: now,
+  };
+  await db.collection(MAKEUP_COLLECTION).doc(id).set(right);
+  return right;
+};
+
 // ── 請假 ──────────────────────────────────────────────────────────
 const requestLeave = async ({ enrollmentId, memberId, reason }) => {
   const db = getDb();
@@ -1089,19 +1124,24 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
   // 而在其餘場次仍卡在候補（會造成同一人某些堂 confirmed、某些堂 waitlist 的破碎狀態）。
   // 整門課級的候補遞補只在「整門課退課/取消」時觸發，見 cancelCourseEnrollments → promoteWaitlistForCourse。
 
+  // 此課程/班別明確設定不發補課券（如虹瑩進階班政策）——非超限，是課程本身政策就不核發
+  const noMakeupCourse = rules.allowMakeup === false;
+
   // 通知同館管理員：釋出名額（過渡期補課由櫃檯以舊表單安排，需知道哪堂空出位子）
   await notifyCourseManagers({
     gymId: enrollment.gymId, type: 'course_leave',
     title: '課程請假',
     body: `${enrollment.memberName || '學員'} 已請假：${enrollment.courseName || ''} ${enrollment.date} ${enrollment.startTime || ''}` +
-      (overLimit ? '（超過上限，不產生補課資格）' : '，釋出 1 個名額（可安排補課）'),
+      (noMakeupCourse ? '（此課程不提供補課，如需協助請洽管理人員）'
+        : overLimit ? '（超過上限，不產生補課資格）' : '，釋出 1 個名額（可安排補課）'),
     referenceId: enrollmentId,
     link: `/staff/courses?course=${enrollment.courseId}`,
   });
 
   return {
     makeup: null, overLimit, entitlement: rec,
-    message: overLimit ? `請假成功（已達補課上限 ${rec.cap} 次，此次請假不增加補課資格）`
+    message: noMakeupCourse ? '請假成功；此課程恕不提供自動補課，如有需要請洽館方協助安排'
+      : overLimit ? `請假成功（已達補課上限 ${rec.cap} 次，此次請假不增加補課資格）`
       : (rec.available > 0 ? `請假成功，目前可補課 ${rec.available} 次` : '請假成功'),
   };
 };
@@ -3155,6 +3195,7 @@ module.exports = {
   cancelWorkshopEnrollment,
   closureCancelSession,
   reconcileMakeupEntitlement,
+  issueManualMakeupCredit,
   promoteWaitlist,
   promoteWaitlistForCourse,
   trialPaymentDeadline,

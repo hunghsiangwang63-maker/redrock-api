@@ -102,6 +102,38 @@ router.post('/',
 // 公開讀取（免登入，供公開報名頁顯示課程/場次資訊）
 // ══════════════════════════════════════════════════════
 
+// GET /courses/public/categories — 全部班別總覽（免登入，供公開「課程總覽」首頁的第一層用；
+// 路由順序須放在 /public/:courseId 之前，否則會被貪婪的 :courseId 參數吃掉）。
+// 沿用既有 getCourses（單一真相），依 categoryId 分組算出每個班別的梯次數/價格範圍，
+// 與會員端 MemberCoursesPage 瀏覽頁第一層同一套篩選口徑（active/isActive/未結束/尚有未來場次）。
+router.get('/public/categories', async (req, res) => {
+  try {
+    const all = await courseService.getCourses(null);
+    const list = all.filter(c =>
+      c.status === 'active' && c.isActive !== false && c.statusLabel !== 'ended' && c.hasFutureSession !== false
+    );
+    const groups = {};
+    for (const c of list) {
+      const key = c.categoryId || 'other';
+      if (!groups[key]) groups[key] = { id: c.categoryId || null, name: c.categoryName || '其他', group: c.categoryGroup || null, imageUrl: c.categoryImageUrl || null, cohorts: [] };
+      groups[key].cohorts.push(c);
+    }
+    const categories = Object.values(groups)
+      .filter(g => g.id) // 「其他」（無 categoryId 的孤兒課程）不對外公開列出
+      .map(g => {
+        const prices = g.cohorts.map(c => c.price || 0);
+        return {
+          id: g.id, name: g.name, group: g.group, imageUrl: g.imageUrl,
+          cohortCount: g.cohorts.length,
+          priceMin: Math.min(...prices), priceMax: Math.max(...prices),
+          gymIds: [...new Set(g.cohorts.map(c => c.gymId).filter(Boolean))],
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+    res.json({ categories });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // GET /courses/public/:courseId — 課程詳情+未來場次（免登入）
 router.get('/public/:courseId', async (req, res) => {
   try {

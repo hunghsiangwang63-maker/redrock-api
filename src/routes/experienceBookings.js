@@ -1156,9 +1156,14 @@ router.get('/download', authenticate, requireManager, async (req, res) => {
     const db = getDb();
     const { gymId, from, to } = req.query;
     const effectiveGymId = req.staff.role==='super_admin' ? gymId : req.staff.gymId;
+    // ⚠️ .select() 排除 consentSignatureUrl/guardianSignatureUrl 等內嵌簽名圖大欄位（試上預約會有）
+    // ——只投影下方 rows.push({...}) 實際用到的欄位（2026-09-25 查獲）
     let ref = db.collection('experienceBookings');
     if (effectiveGymId) ref = ref.where('gymId','==',effectiveGymId);
-    const snap = await ref.get();
+    const snap = await ref
+      .select('gymId', 'bookingDate', 'bookingTime', 'courseType', 'numParticipants', 'status',
+        'contactName', 'contactPhone', 'participants', 'totalFee', 'bankLastFive', 'notes', 'staffNote')
+      .get();
     let bookings = snap.docs.map(d=>({ id:d.id,...d.data() }));
     if (from) bookings = bookings.filter(b=>b.bookingDate>=from);
     if (to)   bookings = bookings.filter(b=>b.bookingDate<=to);
@@ -1230,9 +1235,10 @@ router.get('/insurance-download', authenticate, requireManager, async (req, res)
       const doc = await db.collection('experienceBookings').doc(bookingId).get();
       if (doc.exists) bookings = [{ id: doc.id, ...doc.data() }];
     } else {
+      // ⚠️ .select() 排除簽名圖大欄位——buildInsuranceXlsBuffer 只用 bookingDate/participants
       let ref = db.collection('experienceBookings').where('status', '!=', 'cancelled');
       if (effectiveGymId) ref = ref.where('gymId', '==', effectiveGymId);
-      const snap = await ref.get();
+      const snap = await ref.select('bookingDate', 'participants').get();
       bookings = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       if (from) bookings = bookings.filter(b => b.bookingDate >= from);
       if (to)   bookings = bookings.filter(b => b.bookingDate <= to);

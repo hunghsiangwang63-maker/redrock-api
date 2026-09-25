@@ -2379,11 +2379,16 @@ async function handleEnrollAll(req, res) {
         // 試上/補課單堂佔位不算「已報名整期」（比照下方名額計算同一套排除慣例，見 isMakeup||isTrial）——
         // 曾發生試上過的會員之後想報名整期被永久擋下的真實案例（2026-09-10 康晟恩：試上過的
         // confirmed 紀錄命中此檢查，永遠無法完成整期報名，須手動排查才發現）。
+        // ⚠️ .select() 排除內嵌簽名圖等大欄位——這兩條查詢跑在每一次報名的交易裡（含高人氣課程
+        // 的候補判定，會掃到該課程全部既有報名），是課程報名這條路徑最大宗的 egress 來源之一
+        // （2026-09-25 查獲）。`.select()` 只影響回傳欄位，不影響 tx.get(query) 本身用來做樂觀鎖
+        // 的判斷依據（仍是同一組 where 條件命中的文件），去重/候補序列化語意不變。
         const dupSnap = await tx.get(
           db.collection('courseEnrollments')
             .where('memberId', '==', memberId)
             .where('courseId', '==', courseId)
             .where('status', 'in', ['confirmed', 'waitlist', 'leave'])
+            .select('isMakeup', 'isTrial')
         );
         const hasRealDup = dupSnap.docs.some(d => { const x = d.data(); return !x.isMakeup && !x.isTrial; });
         if (hasRealDup) { const e = new Error('您已報名此課程，請勿重複報名'); e.code = 'ALREADY_ENROLLED'; throw e; }
@@ -2393,6 +2398,7 @@ async function handleEnrollAll(req, res) {
           db.collection('courseEnrollments')
             .where('courseId', '==', courseId)
             .where('status', 'in', ['confirmed', 'waitlist'])
+            .select('isMakeup', 'isTrial', 'status', 'memberId')
         );
         const confirmedMembers = new Set(), waitlistMembers = new Set();
         courseEnrollSnap.forEach(d => {

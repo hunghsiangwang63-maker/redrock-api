@@ -567,8 +567,10 @@ router.post('/requests/:id/approve',
         // header：原 header 標記 transferred（非 cancelled，供稽核區分「轉讓」與「取消」）；
         // 新會員另建一筆 header 承接（fee:0——轉讓費由館方現場另收，系統不重複記帳）
         try {
+          // ⚠️ .select() 排除 header 內嵌的兩張簽名圖大欄位——只用 status/courseName/gymId/paymentMethod
           const hSnap = await db.collection('courseRegistrations')
-            .where('courseId', '==', request.courseId).where('memberId', '==', request.memberId).get();
+            .where('courseId', '==', request.courseId).where('memberId', '==', request.memberId)
+            .select('status', 'courseName', 'gymId', 'paymentMethod').get();
           const oldHeader = hSnap.docs.find(d => d.data().status !== 'cancelled' && d.data().status !== 'transferred');
           if (oldHeader) {
             const oh = oldHeader.data();

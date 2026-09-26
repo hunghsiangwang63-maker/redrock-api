@@ -94,7 +94,20 @@ const isPublishedNow = (a, now) =>
 // 完全不呼叫這支函式，不受此快取影響。
 const _gymStatusCache = new Map(); // key: `${gymId}:${dateStr}` → { data, expiresAt }
 const GYM_STATUS_CACHE_TTL_MS = 60000;
-const invalidateGymStatusCache = () => _gymStatusCache.clear();
+
+// GET /gyms/announcements/all（會員首頁公告輪播，免登入公開端點）跟上面同一個問題：每次呼叫
+// 都整批掃描同一個公告集合，讀取次數診斷（2026-09-26 13:13~14:15 業務時段快照）顯示這是
+// 另一個持續成長、尚未有任何快取的來源（62分鐘內18次呼叫、396筆文件）。同一份公告集合被兩個
+// 端點各自獨立掃描，一起快取、一起用同一組 mutation 觸發清除。
+const _announcementsAllCache = new Map(); // key: `${includeScheduled}:${dateStr}` → { data, expiresAt }
+const ANNOUNCEMENTS_ALL_CACHE_TTL_MS = 60000;
+
+// 兩個快取皆由 ANNOUNCE_COLLECTION／COLLECTIONS.GYMS 的同一批 mutation 端點觸發失效，
+// 故合併成一個共用函式，7 處寫入端點只需呼叫這一個。
+const invalidateGymStatusCache = () => {
+  _gymStatusCache.clear();
+  _announcementsAllCache.clear();
+};
 
 // ── 今日營業狀態判斷 ──────────────────────────────────────────────
 const getGymStatusForDate = async (gymId, dateStr) => {
@@ -198,6 +211,33 @@ const computeGymStatusForDate = async (gymId, dateStr) => {
 };
 
 const getTodayStatus = async (gymId) => getGymStatusForDate(gymId, dayjs().format('YYYY-MM-DD'));
+
+// GET /gyms/announcements/all 的實際查詢邏輯（見上方 _announcementsAllCache 快取說明）
+const computeAnnouncementsAll = async (today, includeScheduled, cacheKey) => {
+  const db = getDb();
+  const now = new Date();
+  const snap = await db.collection(ANNOUNCE_COLLECTION)
+    .where('isPublished', '==', true)
+    .orderBy('effectiveFrom', 'desc')
+    .limit(50)
+    .get();
+
+  const all = snap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter(a => {
+      const notExpired = a.effectiveTo === null || a.effectiveTo >= today;
+      const published = isPublishedNow(a, now);
+      return notExpired && (published || includeScheduled);
+    });
+
+  const payload = {
+    banner: all.filter(a => a.showOnBanner && isPublishedNow(a, now)),
+    announcements: all,
+    count: all.length,
+  };
+  _announcementsAllCache.set(cacheKey, { data: payload, expiresAt: Date.now() + ANNOUNCEMENTS_ALL_CACHE_TTL_MS });
+  return payload;
+};
 
 // ══════════════════════════════════════════════════════
 // 公開端點
@@ -318,30 +358,14 @@ router.get('/:id/announcements', async (req, res) => {
 // GET /gyms/announcements/all - 兩館公告（會員首頁用）
 router.get('/announcements/all', async (req, res) => {
   try {
-    const db = getDb();
     const today = dayjs().format('YYYY-MM-DD');
-    const now = new Date();
     const includeScheduled = req.query.all === '1'; // 員工端：連未到發布時間的排程公告一起回傳
-
-    const snap = await db.collection(ANNOUNCE_COLLECTION)
-      .where('isPublished', '==', true)
-      .orderBy('effectiveFrom', 'desc')
-      .limit(50)
-      .get();
-
-    const all = snap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .filter(a => {
-        const notExpired = a.effectiveTo === null || a.effectiveTo >= today;
-        const published = isPublishedNow(a, now);
-        return notExpired && (published || includeScheduled);
-      });
-
-    res.json({
-      banner: all.filter(a => a.showOnBanner && isPublishedNow(a, now)),
-      announcements: all,
-      count: all.length,
-    });
+    const cacheKey = `${includeScheduled}:${today}`;
+    const cached = _announcementsAllCache.get(cacheKey);
+    const payload = (cached && cached.expiresAt > Date.now())
+      ? cached.data
+      : await computeAnnouncementsAll(today, includeScheduled, cacheKey);
+    res.json(payload);
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }

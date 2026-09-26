@@ -318,12 +318,14 @@ router.get('/member/me', authenticateMember, async (req, res) => {
     // 加 .select() 避免整張簽名圖被白白傳一次。DocumentReference 沒有 .select()——改用
     // collection query + documentId() 過濾（QuerySnapshot：.empty/.docs[0] 取代 .exists/.data()）。
     const waiverSnap = await db.collection('waivers').where(FieldPath.documentId(), '==', memberId)
-      .select('isComplete', 'parentRequired', 'parentSignedAt').limit(1).get();
+      .select('isComplete', 'parentRequired', 'parentSignedAt', 'memberSignedAt').limit(1).get();
     const waiverData = !waiverSnap.empty ? waiverSnap.docs[0].data() : null;
     const blockReasons = [];
     if (!waiverData || !waiverData.isComplete) {
       if (!waiverData) blockReasons.push('waiver_unsigned');
-      else if (waiverData.parentRequired && !waiverData.parentSignedAt) blockReasons.push('parent_waiver_pending');
+      // 「等待法定代理人」須本人真的簽過（memberSignedAt）才成立——與 memberService.getBlockReasons
+      // 同一顆修正（2026-09-26），避免員工退回未成年會員重簽後被誤判成「已簽、等家長」死路狀態。
+      else if (waiverData.parentRequired && waiverData.memberSignedAt && !waiverData.parentSignedAt) blockReasons.push('parent_waiver_pending');
       else blockReasons.push('waiver_unsigned');
     }
 

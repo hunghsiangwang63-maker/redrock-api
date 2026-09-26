@@ -81,8 +81,33 @@ const isPublishedNow = (a, now) =>
   (!a.publishAt || a.publishAt.toDate() <= now) &&
   (!a.publishUntil || a.publishUntil.toDate() >= now);
 
+// ── 今日狀態快取（2026-09-26）────────────────────────────────────────
+// getGymStatusForDate 每次呼叫都整批掃描 isPublished==true 的公告集合（平均 ~22 筆／次），
+// 且是公開端點（GET /gyms、GET /gyms/:id、GET /:id/today-status）直接曝露、免登入即可打——
+// 讀取次數診斷發現這是目前仍在持續增長的最大讀取來源之一（診斷窗口內短短兩小時就有 108 次
+// 呼叫、累計 2376 筆文件）。加短 TTL 記憶體快取消除同一分鐘內的重複查詢。
+// isOpenNow 因此可能有最多 60 秒的顯示延遲（僅影響「營業中／休息中」這種即時狀態徽章，不影響
+// isOpen/status——那兩者本就是「今天有無營業」的日粒度判斷，不受秒級快取影響），可接受。
+// ⚠️ 財務／定期票補償邏輯不受影響：dailySettlements.js 是唯一直接呼叫這支函式的下游（且僅在
+// 「偶數月且距月底≤6天」這個罕見情境才展開逐日查詢，本身能接受60秒內的極短延遲），
+// scheduleService.js 與 passExpiryService.js 的排班/補償計算各自用獨立的純記憶體重新實作、
+// 完全不呼叫這支函式，不受此快取影響。
+const _gymStatusCache = new Map(); // key: `${gymId}:${dateStr}` → { data, expiresAt }
+const GYM_STATUS_CACHE_TTL_MS = 60000;
+const invalidateGymStatusCache = () => _gymStatusCache.clear();
+
 // ── 今日營業狀態判斷 ──────────────────────────────────────────────
 const getGymStatusForDate = async (gymId, dateStr) => {
+  const cacheKey = `${gymId}:${dateStr}`;
+  const cached = _gymStatusCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+  const result = await computeGymStatusForDate(gymId, dateStr);
+  _gymStatusCache.set(cacheKey, { data: result, expiresAt: Date.now() + GYM_STATUS_CACHE_TTL_MS });
+  return result;
+};
+
+const computeGymStatusForDate = async (gymId, dateStr) => {
   const db = getDb();
   const dayOfWeek = ['sun','mon','tue','wed','thu','fri','sat'][dayjs(dateStr).day()];
 
@@ -341,6 +366,7 @@ router.put('/:id',
       updates.updatedAt = new Date();
 
       await db.collection(COLLECTIONS.GYMS).doc(req.params.id).update(updates);
+      invalidateGymStatusCache();
       res.json({ message: '場館資訊已更新' });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
@@ -363,6 +389,7 @@ router.post('/',
         id, name, shortName: shortName || name, address: address || '',
         status: 'active', createdAt: new Date(), updatedAt: new Date(),
       });
+      invalidateGymStatusCache();
       res.status(201).json({ message: `場館「${name}」已建立`, id });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
@@ -387,6 +414,7 @@ router.put('/:id/hours',
         regularHours: req.body.regularHours,
         updatedAt: new Date(),
       });
+      invalidateGymStatusCache();
       res.json({ message: '標準營業時間已更新' });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
@@ -420,6 +448,7 @@ router.post('/:id/announcements/:aid/image',
       await file.save(req.file.buffer, { contentType: req.file.mimetype });
       const [url] = await file.getSignedUrl({ action: 'read', expires: '2035-01-01' });
       await doc.ref.update({ bannerImage: url, updatedAt: new Date() });
+      invalidateGymStatusCache();
       res.json({ message: '公告圖片已上傳', bannerImage: url });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
@@ -486,6 +515,7 @@ router.post('/:id/announcements',
       };
 
       await db.collection(ANNOUNCE_COLLECTION).doc(id).set(announcement);
+      invalidateGymStatusCache();
 
       res.status(201).json({ announcement, message: '公告已建立' });
     } catch (err) {
@@ -524,6 +554,7 @@ router.put('/:id/announcements/:aid',
       updates.updatedAt = new Date();
 
       await db.collection(ANNOUNCE_COLLECTION).doc(req.params.aid).update(updates);
+      invalidateGymStatusCache();
       res.json({ message: '公告已更新' });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
@@ -553,6 +584,7 @@ router.delete('/:id/announcements/:aid',
         deletedAt: new Date(),
         deletedBy: req.staff.id,
       });
+      invalidateGymStatusCache();
       res.json({ message: '公告已下架' });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });

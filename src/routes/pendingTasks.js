@@ -35,6 +35,13 @@ router.get('/', authenticate, async (req, res) => {
     const today = taiwanToday();
     const sevenDaysAgo = new Date(Date.now() - 7*86400000);
     const withGym = (query) => gymId ? query.where('gymId', '==', gymId) : query;
+    // ⚠️ 2026-09-26 查獲：StaffLayout.jsx 的待辦數量徽章每 3 分鐘輪詢一次（見該檔註解），
+    // 每個開著的員工分頁都在跑，但畫面只用到 `total`（＝tasks.length，不含 registrations）。
+    // 下方「近7天報名」四條查詢（course/comp/exp/team）純粹是給待辦頁本身的「近7天報名」動態
+    // 資訊卡用，跟 badge 完全無關（原本的中文註解也寫「資訊性，不計入待辦 badge」）——但輪詢
+    // 呼叫的是完整版端點，這四條查詢照樣白白執行、白白計費。加 `countOnly` 參數讓徽章輪詢跳過
+    // 這四條查詢（連 fire 都不 fire，不是收到結果後才丟棄），待辦頁本身的呼叫不受影響。
+    const countOnly = req.query.countOnly === '1' || req.query.countOnly === 'true';
 
     const tasks = [];
 
@@ -64,13 +71,14 @@ router.get('/', authenticate, async (req, res) => {
     const fallTestPromise = withGym(db.collection('fallTestBookings').where('status', '==', 'pending')).get();
     const installmentPromise = db.collection('installmentPlans').where('status', 'in', ['active', 'overdue']).get();
     const inquiryPromise = withGym(db.collection('memberInquiries').where('status', '==', 'pending')).get();
-    const courseRegPromise = db.collection('courseRegistrations').where('createdAt', '>=', sevenDaysAgo)
+    // countOnly（badge 輪詢）時完全不 fire 這四條查詢——不是拿到結果不處理，是根本不發出去。
+    const courseRegPromise = countOnly ? null : db.collection('courseRegistrations').where('createdAt', '>=', sevenDaysAgo)
       .select('status', 'gymId', 'memberName', 'courseName', 'sessionCount', 'createdAt', 'courseId').get();
-    const compRegPromise = db.collection('competitionRegistrations').where('registeredAt', '>=', sevenDaysAgo)
+    const compRegPromise = countOnly ? null : db.collection('competitionRegistrations').where('registeredAt', '>=', sevenDaysAgo)
       .select('status', 'memberName', 'competitionName', 'divisionName', 'registeredAt', 'competitionId').get();
-    const expRegPromise = db.collection('experienceBookings').where('createdAt', '>=', sevenDaysAgo)
+    const expRegPromise = countOnly ? null : db.collection('experienceBookings').where('createdAt', '>=', sevenDaysAgo)
       .select('gymId', 'participants', 'contactName', 'courseName', 'courseType', 'bookingDate', 'numParticipants', 'createdAt').get();
-    const teamRegPromise = db.collection('teamApplications').where('createdAt', '>=', sevenDaysAgo)
+    const teamRegPromise = countOnly ? null : db.collection('teamApplications').where('createdAt', '>=', sevenDaysAgo)
       .select('status', 'memberName', 'year', 'primaryGym', 'createdAt').get();
 
     // 體驗課程類型標籤對照（供下方通知/待辦顯示用；避免原本 record.courseType/b.courseType
@@ -491,6 +499,7 @@ router.get('/', authenticate, async (req, res) => {
     // 課程（Phase 3：改讀 courseRegistrations header，一次報名天生一筆，不用再依查詢順序猜哪筆代表整組——
     // 原本直接查 courseEnrollments 用「查到的第一筆」判斷 _needsCollect，Firestore 未下 orderBy、
     // 順序不保證是扛費用的那筆，理論上可能誤判成「不用收款」而漏進待辦。header 一筆一組，無此疑慮。）
+    if (!countOnly) {
     try {
       // ⚠️ .select() 排除內嵌簽名圖（portraitSignature/guardianSignature，見 courseRegistrationService）——
       // 待辦頁「近7天報名」是全站最常開的儀表板頁面之一，2026-08-19 帳單流量排查一併找到的同型缺口。
@@ -538,6 +547,7 @@ router.get('/', authenticate, async (req, res) => {
       });
     } catch(e) {}
     registrations.sort((a, b) => b.createdAt - a.createdAt);
+    } // end if (!countOnly) —— 近7天報名動態四條查詢，badge 輪詢不需要
 
     const restricted = isRestrictedPersonalStaff(req.staff);
     const outTasks = restricted ? tasks.filter(t => REMIND_TYPES.includes(t.type)) : tasks;

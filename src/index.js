@@ -13,6 +13,10 @@ const { initFirebase } = require('./config/firebase');
 // ── 初始化 Firebase ───────────────────────────────────────────────
 initFirebase();
 
+// ── 一次性讀取次數診斷（2026-09-26，見 utils/queryDiag.js 檔頭說明；60 分鐘自動失效）──
+const queryDiag = require('./utils/queryDiag');
+queryDiag.install();
+
 const app = express();
 
 // ── Middleware ────────────────────────────────────────────────────
@@ -34,6 +38,9 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // API 一律不快取：保證瀏覽器/任何中介層絕不快取回應內容（資料改由前端主動重抓解決，見 useRefetchOnFocus）
 app.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+
+// 讀取次數診斷用的 request context（須放最外層，涵蓋後面所有 middleware/route 內的 Firestore 呼叫）
+app.use(queryDiag.requestContextMiddleware);
 
 // Railway 在反向代理後方：信任第一層 proxy 以取得真實 client IP（供限流正確計數）
 app.set('trust proxy', 1);
@@ -209,7 +216,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.537.0-pending-tasks-countonly-badge-poll',
+    version: '3.538.0-query-diag-temp',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
@@ -220,6 +227,12 @@ app.get('/health', (req, res) => {
       enforce: process.env.EDGE_ENFORCE === 'true',
     },
   });
+});
+
+// ── 一次性讀取次數診斷端點（2026-09-26，見 utils/queryDiag.js；限 super_admin，60分鐘自動失效）──
+app.get('/_diag/query-stats', require('./middleware/auth').authenticate, (req, res) => {
+  if (req.staff?.role !== 'super_admin') return res.status(403).json({ error: 'FORBIDDEN' });
+  res.json(queryDiag.getStats());
 });
 
 // ── 404 Handler ───────────────────────────────────────────────────

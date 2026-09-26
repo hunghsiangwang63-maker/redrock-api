@@ -1215,6 +1215,64 @@ router.post('/:id/waiver/sign',
   }
 );
 
+// ── POST /members/:id/entry-docs/sign - 合併簽署：風險安全聲明書＋墜落測驗同意書 ──
+// 一次簽名同時完成兩份文件（2026-09-26）；只會簽署「這位會員目前還沒簽過的那一份/兩份」，
+// 不會動已完成的部分（員工只退回其中一份重簽的修復情境亦適用）。會員本人自助簽署，
+// 或家長代簽子會員（:id 為子會員 id），authenticateAny 讓兩者共用同一套擁有權檢查。
+router.post('/:id/entry-docs/sign',
+  authenticateAny,
+  [body('signatureData').notEmpty().withMessage('請先簽名')],
+  validate,
+  async (req, res) => {
+    try {
+      const memberId = req.params.id;
+      const deny = await checkMemberOwnership(req.member, memberId, {
+        onMissing: 404, message: '只能簽署自己或子會員的文件',
+      });
+      if (deny) return res.status(deny.status).json(deny.body);
+
+      const member = await memberService.getMember(memberId);
+      const { signatureData, parentEmail: rawParentEmail, parentName, parentPhone, parentRelation, watchPercent, agreedParagraphs } = req.body;
+
+      // 子會員：自動帶入父會員 Email，不需另外填寫（與 /waiver/sign 一致）
+      let parentEmail = rawParentEmail;
+      if (member.isChildAccount && member.parentMemberId && !parentEmail) {
+        const parentMember = await memberService.getMember(member.parentMemberId);
+        parentEmail = parentMember?.email || parentMember?.phone || '';
+      }
+      if (member.isMinor && !member.isChildAccount && !parentEmail) {
+        return res.status(400).json({ error: 'PARENT_EMAIL_REQUIRED', message: '未成年會員需提供法定代理人 Email' });
+      }
+
+      const result = await waiverService.signEntryDocs({
+        memberId, memberName: member.name, isMinor: member.isMinor,
+        isChildAccount: member.isChildAccount || false,
+        signatureData, parentEmail, parentName, parentPhone, parentRelation,
+        watchPercent, agreedParagraphs,
+        staffId: req.staff?.id || null,
+        ip: req.ip,
+      });
+
+      // 只更新既有的 waiverSigned 快速篩選欄位；isBlocked/blockReasons 一律信任
+      // waiverService.signEntryDocs 內部算好的 refreshBlockStatus 結果，不在這裡另外覆蓋
+      // （/waiver/sign 尾端曾無條件清空 blockReasons，會蓋掉正確值，此端點不重蹈覆轍）。
+      if (result.waiverResult) {
+        const db = getDb();
+        await db.collection(COLLECTIONS.MEMBERS).doc(memberId).update({ waiverSigned: true, updatedAt: new Date() });
+      }
+
+      res.json({
+        message: member.isMinor && result.waiverResult ? '簽署成功，已發送 Email 通知法定代理人共同簽署' : '簽署成功',
+        ...result,
+      });
+    } catch (err) {
+      if (err.status) return res.status(err.status).json({ error: err.code, message: err.message });
+      if (err.code) return res.status(400).json({ error: err.code, message: err.message });
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // ── POST /members/:id/waiver/resend-parent - 重新發送家長簽名連結 ──
 router.post('/:id/waiver/resend-parent',
   authenticateAny,

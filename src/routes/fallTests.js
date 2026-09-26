@@ -119,7 +119,7 @@ router.get('/member/:memberId', authenticateAny, async (req, res) => {
 });
 
 // ── POST /fall-tests/sign ─────────────────────────────────────────
-// 會員簽署同意書（影片看完後）
+// 會員簽署同意書（影片看完後）。內文已抽至 fallTestService.signConsent（供合併簽署端點共用）。
 router.post('/sign', authenticateAny, async (req, res) => {
   try {
     const db = getDb();
@@ -132,47 +132,24 @@ router.post('/sign', authenticateAny, async (req, res) => {
       if (deny) return res.status(deny.status).json(deny.body);
       memberId = req.body.targetMemberId;
     }
-    const { signatureData, watchPercent, agreedParagraphs, guardianSignatureData, guardianName } = req.body;
-    const settings = await getFallTestSettings(db);
-
-    if (!(watchPercent >= settings.watchPercentRequired))
-      return res.status(400).json({ error: 'INSUFFICIENT_WATCH', message: `請觀看至少 ${settings.watchPercentRequired}% 的影片` });
-
-    if (!agreedParagraphs || !Array.isArray(agreedParagraphs) || agreedParagraphs.length === 0)
-      return res.status(400).json({ error: 'MISSING_AGREEMENT', message: '請閱讀並勾選所有條款後再簽署' });
+    const { signatureData, watchPercent, agreedParagraphs } = req.body;
 
     // 未成年（<18）家長簽名改為遠端：本人只簽自己的，家長於統一 email 連結一次簽 waiver+墜測同意書
     const { isMinor } = require('../utils/age');
     const memberDoc = await db.collection('members').doc(memberId).get();
     const parentRequired = memberDoc.exists ? isMinor(memberDoc.data().birthday) : false;
 
-    // 建立簽署紀錄，同時儲存當下條款文字快照（避免未來條款改版後副本顯示錯誤內容）
-    const signId = uuidv4();
-    await db.collection('fallTestSignatures').doc(signId).set({
-      id: signId,
-      memberId,
-      signatureData: signatureData || '',
-      watchPercent,
-      agreedParagraphs,
-      contentSnapshot: {
-        zh: settings.contentZh || '',
-        en: settings.contentEn || '',
-      },
-      parentRequired,                                          // 未成年需家長遠端簽名
-      guardianSignatureData: guardianSignatureData || null,    // 家長簽名（遠端 email 簽署時回填）
-      guardianName: guardianName || null,
-      guardianSignedAt: guardianSignatureData ? new Date() : null,
-      signedAt: new Date(),
+    const { signConsent } = require('../services/fallTestService');
+    const result = await signConsent({ memberId, signatureData, watchPercent, agreedParagraphs, isMinor: parentRequired });
+
+    res.status(201).json({
+      signatureId: result.signatureId,
+      message: result.skipped ? '同意書已簽署過，無需重複簽署' : '同意書已簽署，等待工作人員進行測驗',
     });
-
-    // 未成年：本人墜測同意書簽完 → 觸發統一家長簽署 email（waiver 也簽完才會真的寄）
-    if (parentRequired) {
-      try { await require('../services/waiverService').maybeSendParentSignEmail(memberId); }
-      catch (e) { console.error('墜測同意書觸發家長 email 失敗（簽署已保存）:', e.message); }
-    }
-
-    res.status(201).json({ signatureId: signId, message: '同意書已簽署，等待工作人員進行測驗' });
-  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
 });
 
 // ── POST /fall-tests ──────────────────────────────────────────────

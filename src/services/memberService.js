@@ -31,7 +31,7 @@ const getBlockReasons = async (memberId, memberData) => {
   // （QuerySnapshot：.empty/.docs[0] 取代 .exists/.data()）。
   const [waiverSnap, fallTests] = await Promise.all([
     db.collection(COLLECTIONS.WAIVERS).where(FieldPath.documentId(), '==', memberId)
-      .select('isComplete', 'parentRequired', 'parentSignedAt').limit(1).get(),
+      .select('isComplete', 'parentRequired', 'parentSignedAt', 'memberSignedAt').limit(1).get(),
     db.collection(COLLECTIONS.FALL_TESTS).where('memberId', '==', memberId).where('result', '==', 'passed').get(),
   ]);
   const waiverExists = !waiverSnap.empty;
@@ -41,7 +41,10 @@ const getBlockReasons = async (memberId, memberData) => {
   if (!waiverExists || !waiverData.isComplete) {
     if (!waiverExists) {
       reasons.push('waiver_unsigned');
-    } else if (waiverData.parentRequired && !waiverData.parentSignedAt) {
+    } else if (waiverData.parentRequired && waiverData.memberSignedAt && !waiverData.parentSignedAt) {
+      // 「等待法定代理人」須本人真的簽過（memberSignedAt）才成立——員工用 /waiver/reset 退回未成年
+      // 會員重簽時只清 isComplete/signedAt，parentRequired/parentSignedAt 原樣保留，若不檢查
+      // memberSignedAt 會把「本人尚未重簽」誤判成「本人已簽、等家長」死路狀態（2026-09-26 合併簽署時修正）。
       reasons.push('parent_waiver_pending');
     } else {
       reasons.push('waiver_unsigned');

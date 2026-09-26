@@ -157,4 +157,50 @@ const resendParentWaiverLink = async (memberId, staffId) => {
   return { message: '已重新發送法定代理人簽名連結' };
 };
 
-module.exports = { signWaiver, uploadSignature, resendParentWaiverLink, maybeSendParentSignEmail };
+// ── 合併簽署：風險安全聲明書 + 墜落測驗同意書一次簽名（2026-09-26）───────────
+// 不合併底層資料模型（waivers/fallTestSignatures 兩個集合、既有的入場關卡判斷、員工端
+// 個別退回重簽/檢視副本機制全部不動）——只合併「簽署這個動作」：用同一張簽名圖，依序
+// 呼叫既有的 signWaiver() 與 fallTestService.signConsent()，各自只在「這份還沒簽過」時才寫入，
+// 讓「兩份都缺」「員工只退回其中一份」兩種情況都能用同一個端點正確處理。
+const signEntryDocs = async ({
+  memberId, memberName, isMinor, isChildAccount, signatureData,
+  parentEmail, parentName, parentPhone, parentRelation,
+  watchPercent, agreedParagraphs, staffId, ip,
+}) => {
+  const db = getDb();
+
+  // 「本人是否已簽過 waiver」看 memberSignedAt（比 isComplete 精準——isComplete 對「等家長」
+  // 與「本人已簽」皆為 false，但 memberSignedAt 只在本人真的簽過才會有值）
+  const waiverSnap = await db.collection(COLLECTIONS.WAIVERS)
+    .where(FieldPath.documentId(), '==', memberId).select('memberSignedAt').limit(1).get();
+  const needsWaiver = waiverSnap.empty || !waiverSnap.docs[0].data().memberSignedAt;
+
+  const fallTestService = require('./fallTestService');
+  const needsFallTest = !(await fallTestService.hasConsentSignature(memberId));
+
+  if (!needsWaiver && !needsFallTest) {
+    throw { code: 'ALREADY_COMPLETE', message: '兩份文件皆已完成簽署' };
+  }
+
+  let waiverResult = null;
+  if (needsWaiver) {
+    waiverResult = await signWaiver({
+      memberId, memberName, isMinor, isChildAccount, signatureData,
+      parentEmail, parentName, parentPhone, parentRelation, staffId, ip,
+    });
+  }
+
+  let fallTestResult = null;
+  if (needsFallTest) {
+    fallTestResult = await fallTestService.signConsent({ memberId, signatureData, watchPercent, agreedParagraphs, isMinor });
+  }
+
+  // 兩份各自的寫入內部都已各自呼叫過 maybeSendParentSignEmail（沿用既有機制，冪等、
+  // 只在兩份皆已存在時才真的寄出）；這裡再算一次最終 blockReasons 回傳給呼叫端。
+  const memberService = require('./memberService');
+  const blockReasons = await memberService.refreshBlockStatus(memberId);
+
+  return { waiverResult, fallTestResult, blockReasons, parentRequired: isMinor };
+};
+
+module.exports = { signWaiver, signEntryDocs, uploadSignature, resendParentWaiverLink, maybeSendParentSignEmail };

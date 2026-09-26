@@ -1,6 +1,8 @@
 /**
  * 墜落測驗共用邏輯
- * 讓「登記測驗結果」在 fallTests 路由與 fallTestBookings 路由間共用一份程式。
+ * 讓「登記測驗結果」在 fallTests 路由與 fallTestBookings 路由間共用一份程式；
+ * 亦讓「簽署墜落測驗同意書」在 routes/fallTests.js（單獨簽署）與 waiverService.signEntryDocs
+ * （2026-09-26 合併簽署，一次簽名同時完成風險安全聲明書＋墜測同意書）間共用同一份寫入邏輯。
  */
 const { getDb } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
@@ -83,4 +85,60 @@ async function recordFallTestResult({ memberId, result, notes, staffId, staffNam
   return test;
 }
 
-module.exports = { getFallTestSettings, recordFallTestResult };
+// ── 是否已有墜測同意書簽署紀錄（不分是否通過測驗）─────────────────────
+async function hasConsentSignature(memberId) {
+  const db = getDb();
+  const snap = await db.collection('fallTestSignatures').where('memberId', '==', memberId).select().limit(1).get();
+  return !snap.empty;
+}
+
+/**
+ * 簽署墜落測驗同意書（原內文自 routes/fallTests.js POST /sign 抽出，純搬移、行為不變）。
+ * 供①原本的獨立簽署端點（員工協助個別重簽等修復情境）②合併簽署端點（waiverService.signEntryDocs）共用。
+ *
+ * @throws 帶 { status, code, message } 的 Error（呼叫端據此回應／略過）
+ */
+async function signConsent({ memberId, signatureData, watchPercent, agreedParagraphs, isMinor }) {
+  const db = getDb();
+  const settings = await getFallTestSettings(db);
+
+  if (!(watchPercent >= settings.watchPercentRequired)) {
+    const e = new Error(`請觀看至少 ${settings.watchPercentRequired}% 的影片`); e.status = 400; e.code = 'INSUFFICIENT_WATCH'; throw e;
+  }
+  if (!agreedParagraphs || !Array.isArray(agreedParagraphs) || agreedParagraphs.length === 0) {
+    const e = new Error('請閱讀並勾選所有條款後再簽署'); e.status = 400; e.code = 'MISSING_AGREEMENT'; throw e;
+  }
+
+  // 避免重複建立：已有簽署紀錄的會員（含合併簽署時另一份文件才是真正缺項的情況）不再疊加新的一筆
+  if (await hasConsentSignature(memberId)) {
+    return { skipped: true, reason: 'already_signed' };
+  }
+
+  const signId = uuidv4();
+  await db.collection('fallTestSignatures').doc(signId).set({
+    id: signId,
+    memberId,
+    signatureData: signatureData || '',
+    watchPercent,
+    agreedParagraphs,
+    contentSnapshot: {
+      zh: settings.contentZh || '',
+      en: settings.contentEn || '',
+    },
+    parentRequired: !!isMinor,        // 未成年需家長遠端簽名
+    guardianSignatureData: null,      // 家長簽名（遠端 email 簽署時回填）
+    guardianName: null,
+    guardianSignedAt: null,
+    signedAt: new Date(),
+  });
+
+  // 未成年：本人墜測同意書簽完 → 觸發統一家長簽署 email（waiver 也簽完才會真的寄）
+  if (isMinor) {
+    try { await require('./waiverService').maybeSendParentSignEmail(memberId); }
+    catch (e) { console.error('墜測同意書觸發家長 email 失敗（簽署已保存）:', e.message); }
+  }
+
+  return { signatureId: signId, skipped: false };
+}
+
+module.exports = { getFallTestSettings, recordFallTestResult, signConsent, hasConsentSignature };

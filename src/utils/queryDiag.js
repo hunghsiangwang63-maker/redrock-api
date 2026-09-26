@@ -17,7 +17,10 @@
 const { AsyncLocalStorage } = require('async_hooks');
 const { Query, Firestore, Transaction } = require('@google-cloud/firestore');
 
-const DIAG_WINDOW_MS = 60 * 60 * 1000; // 60 分鐘
+// ⚠️ 2026-09-26 08:50 部署當下才早上，館還沒開（週末營業時段約 12:00 起）——原訂 60 分鐘的
+// 診斷窗口會在真正有客人/員工使用前就失效，抓不到有意義的真實流量。改成 10 小時，涵蓋整個
+// 週末營業時段（含收尾）；到期後一樣自動失效還原，不影響下一次要診斷時重新調整這個常數再部署。
+const DIAG_WINDOW_MS = 10 * 60 * 60 * 1000; // 10 小時
 const startedAt = Date.now();
 const requestContext = new AsyncLocalStorage();
 const stats = new Map(); // key: `${routePath} || ${callSite}` -> { routePath, callSite, count, totalDocs }

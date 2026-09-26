@@ -99,6 +99,12 @@ const resendLimiter = rateLimit({
   standardHeaders: true, legacyHeaders: false,
   message: { error: 'TOO_MANY_REQUESTS', message: '請求過於頻繁，請稍後再試' },
 });
+// 前端 crash 回報（見 ErrorBoundary.jsx；免登入才能在任何崩潰狀態下都送得出去，故要另外限流防濫用）
+const clientErrorLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 60, // 每 IP 每15分鐘 60 次（真的在崩潰重試也綽綽有餘，擋濫發）
+  standardHeaders: true, legacyHeaders: false,
+  message: { error: 'TOO_MANY_REQUESTS' },
+});
 app.use(globalLimiter);
 app.use('/members/self-register', registerLimiter);
 app.use('/auth/member/resend-verification', resendLimiter);
@@ -113,6 +119,7 @@ app.use('/stations/login', authLimiter);
 app.use('/stations/shift/clockin', authLimiter);
 app.use('/auth/member/forgot-password', forgotLimiter);
 app.use('/comp-auth/login', authLimiter); // 計分系統密碼驗證，防暴力破解
+app.use('/client-errors', clientErrorLimiter);
 
 // ── 會員端／員工端流量拆分統計（2026-08-20）──────────────────────────
 // GCP 帳單本身只到 SKU/服務層級，看不出「這筆流量是哪邊 App 打的」。前端 client.js／
@@ -216,7 +223,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.539.0-gym-status-cache',
+    version: '3.540.0-error-boundary-client-errors',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
@@ -227,6 +234,32 @@ app.get('/health', (req, res) => {
       enforce: process.env.EDGE_ENFORCE === 'true',
     },
   });
+});
+
+// ── 前端 crash 回報（2026-09-26）───────────────────────────────────
+// 回報「顯示QR時內容全黑、像卡在頁面轉場的空白畫面、等待也不會恢復」——查證全站沒有任何
+// React Error Boundary，任何未捕捉的 render 例外都會讓 React 把整棵樹卸載、只剩空的 #root，
+// 而 html/body/#root 皆無明確背景色、系統深色模式下會落回接近全黑的 CSS 變數，看起來就像
+// 「卡死的黑屏」。新增 ErrorBoundary.jsx（前端）+ 這個端點：崩潰當下用 sendBeacon 盡力回報
+// 錯誤訊息，純寫 log（不進 Firestore，避免又變成新的讀寫費用來源），供下次真的發生時能看到
+// 實際的錯誤內容而非只能用猜的。免登入（崩潰當下不能假設還有有效 session）、限流防濫用、
+// 欄位長度上限防灌爆 log。
+app.post('/client-errors', (req, res) => {
+  try {
+    const b = req.body || {};
+    const cut = (s, n) => String(s || '').slice(0, n);
+    console.error('[client-error]', JSON.stringify({
+      message: cut(b.message, 500),
+      stack: cut(b.stack, 3000),
+      componentStack: cut(b.componentStack, 3000),
+      url: cut(b.url, 500),
+      userAgent: cut(b.userAgent, 300),
+      memberId: cut(b.memberId, 100),
+      buildId: cut(b.buildId, 100),
+      at: new Date().toISOString(),
+    }));
+  } catch (e) { /* 回報本身絕不能再拋錯 */ }
+  res.status(204).end();
 });
 
 // ── 一次性讀取次數診斷端點（2026-09-26，見 utils/queryDiag.js；限 super_admin，60分鐘自動失效）──

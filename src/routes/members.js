@@ -1542,21 +1542,43 @@ router.post('/:id/waiver/reset',
       const waiverRef = db.collection(COLLECTIONS.WAIVERS).doc(memberId);
       const waiverDoc = await waiverRef.get();
       if (!waiverDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '此會員尚未簽署 Waiver' });
+      const w = waiverDoc.data();
 
       // 封存舊簽署紀錄到 waiverResetLogs，供後台查詢
+      // ⚠ 2026-09-27 修正：原本讀 signatureData（signWaiver 從未寫入這個欄位名，實際是
+      // memberSignatureUrl／parentSignatureUrl）——導致這裡永遠存成 null，稽核完全留不住舊簽名圖。
       await db.collection('waiverResetLogs').add({
         memberId,
         resetBy: req.staff?.id || req.staff?.name || 'staff',
         resetByName: req.staff?.name || '',
         reason: reason.trim(),
-        previousSignatureData: waiverDoc.data().signatureData || null,
+        previousMemberSignatureUrl: w.memberSignatureUrl || null,
+        previousParentSignatureUrl: w.parentSignatureUrl || null,
+        hadParentSigned: !!w.parentSignedAt,
         resetAt: new Date(),
       });
 
-      // 清除簽署狀態（保留 parentRequired 等欄位結構，只清除簽署資料）
+      // 清除簽署狀態（保留 parentRequired 等欄位結構，只清除簽署資料）。
+      // ⚠ 2026-09-27 修正：舊版清的是 signedAt／signatureData，signWaiver 實際寫入的欄位是
+      // memberSignedAt／memberSignatureUrl——名稱兜不起來，導致舊簽名圖從沒真的被清掉，且
+      // 未成年會員若在家長簽署前被退回，memberSignedAt 殘留的舊值會讓合併簽署頁誤判成
+      // 「本人已簽、等家長簽署」的死路狀態，本人反而看不到重簽表單。這裡改清正確欄位名，
+      // 並比照「整份重來」語意，一併清掉家長簽名/連結（家長也需要重新簽）。
+      // signedAt／signatureData 屬從未寫入過的舊欄位名，一併清除僅為防禦性相容（若真有極舊
+      // 資料曾用過這兩個名稱）。
       await waiverRef.update({
         signedAt: null,
         signatureData: null,
+        memberSignedAt: null,
+        memberSignatureUrl: null,
+        memberSignedIp: null,
+        memberSignedBy: null,
+        parentSignedAt: null,
+        parentSignatureUrl: null,
+        parentSignedIp: null,
+        parentSignToken: null,
+        parentSignTokenExpiry: null,
+        parentEmailSentAt: null,
         isComplete: false,
         resetAt: new Date(),
         resetReason: reason.trim(),

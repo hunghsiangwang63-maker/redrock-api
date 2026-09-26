@@ -3485,3 +3485,9 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **E2E（本機起服務打正式資料，11/11，測後全清）**：建立商品（含促銷價0元的 variant A + 對照組無促銷 variant B）→ ①正確存成數字 0（非 null）②結帳 variant A 正確收 0 元（非誤收原價500）、variant B 正確收原價300（回歸測試）③0元銷售不記帳、300元銷售正確記帳（既有設計未被破壞）④模擬「PUT 更新（如調庫存）」情境，確認既有 promoPrice:0 不會被洗成 null ⑤Excel 匯出的促銷價/促銷狀態欄位正確顯示（0元不顯示空白、狀態正確為「促銷中」）。
 - 🖥️ **瀏覽器實機（正式環境）**：建立促銷價0元的真實測試商品，員工端「商品銷售」頁搜尋結果正確顯示「**NT$0**」（而非原價 NT$200 或空白）——確認部署上線的前端 bundle 已生效。測試商品測後刪除、複查 0 殘留。
 - 📌 **決策記錄**：正確的「商品免費出清/贈送」做法是直接把**基本售價**設 0（本就沒問題），不要用**促銷價**填 0（那是給「原價 X 打折到 Y」的情境，Y 也可以合法是 0，但語意上仍是「有一個原價可比對」的促銷，跟「這件商品本來就不賣錢」是不同概念）。
+
+## 目前進度（2026-09-26）— 修：Android 手機顯示 QR 偶爾黑屏（加螢幕常亮）
+> 問「Google的手機好像有時候顯示QRcode會黑屏」——查證全站四個 QR 顯示畫面（會員入場 QR／首頁補租器材 QR／比賽報到 QR／員工自助入館 QR）皆未使用 Screen Wake Lock，最可能成因＝拿手機給店員/現場掃描的等待期間，系統螢幕逾時自動熄屏（純網頁本無此防護，原生票證/登機證類 App 都會主動要求常亮）——螢幕關掉看起來就是「黑屏」，且 Android 手機預設螢幕逾時普遍比 iPhone短，符合回報只在特定裝置出現。純前端修正，未動任何後端邏輯。commit（redrock-web）`3c3c32e`；已 build+deploy 兩 target、bundle hash 比對本機/線上一致。
+- ✅ **新增共用 `hooks/useScreenWakeLock.js`**：`navigator.wakeLock.request('screen')`，`'wakeLock' in navigator` 特徵偵測（不支援的瀏覽器如部分舊版 Safari 安全跳過、不影響原本流程）；分頁切到背景時系統會自動釋放鎖，`visibilitychange` 監聽在切回可見且仍 active 時重新請求；unmount/active 轉 false 時釋放。
+- ✅ **套用至四處「手持手機給人掃碼」畫面**：`MemberQRPage.jsx`（`step==='qr'`）、`MemberHomePage.jsx`（補租器材 `raStep==='qr'`）、`MemberCompetitionsPage.jsx`（比賽報到 `!!checkinQr`）、`StaffEntryQrPage.jsx`（員工自助入館 `!!qr && !loading`）。
+- 📌 **未涵蓋**：`ExperienceBookingsPage.jsx`（staff）的公開預約連結 QR——那是給客人掃「連結」的靜態展示用途（可能放在展示螢幕/海報，非個人手機held-up-to-scan情境），性質不同、未套用。

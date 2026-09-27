@@ -222,6 +222,7 @@ router.get('/public/category/:categoryId', async (req, res) => {
       cohorts: withSessions.map(c => ({
         id: c.id, name: c.name, type: c.type, price: c.price, gymId: c.gymId,
         startDate: c.startDate, endDate: c.endDate, statusLabel: c.statusLabel || null,
+        weekdays: c.weekdays || null, startTime: c.startTime || null, endTime: c.endTime || null,
         sessions: c.sessions,
       })),
     });

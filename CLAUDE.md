@@ -3549,3 +3549,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 
 ## 目前進度（2026-09-26 續3）— 修：queryDiag.js 誤把 vite build 順序踩到的舊 buildId 標籤當成功能異常
 > 順著上面 UpdateChecker 的查證，發現一個**跟本次修復無關、單純是我自己操作順序造成**的小狀況：這次部署（`4042110` 節流修正）流程是先 `vite build`+`firebase deploy`+驗證 bundle hash 一致，**之後才 `git commit`**（跟平常先 commit 再 deploy 的習慣顛倒）——導致 `vite.config.js` 內建的 buildId 生成（讀當下 git hash + 時間戳）擷取到的是**上一個**commit（`f9290d2`，Error Boundary 那次）的雜湊值，而非這次真正部署的 `4042110`。**不影響 UpdateChecker 的偵測功能本身**（timestamp 部分仍然每次都不同，字串比對仍會正確判斷為新版本），只有 buildId 標籤裡的 git hash 前綴顯示成舊的、容易造成排查時誤判「這次到底部署了哪個 commit」。純記錄提醒：**之後想確保 buildId 標籤本身也精確對應到正確的 commit，要先 commit 再 build+deploy**（本次順序顛倒純屬部署流程操作失誤、非程式邏輯問題，未改動任何程式碼）。
+
+## 目前進度（2026-09-27）— 電話搜尋入場：只對到一位會員時自動預選（免多點一次）
+> 需求：入場用電話搜尋，若該電話只有一個會員資料，不用再手動點選才能繼續。純前端 `CheckinPage.jsx`，commit `57cb762`，已 build+deploy（bundle hash 比對線上一致）。
+- ✅ **抽出 `selectPhoneMember(m)`**：把原本寫死在「選擇入場人員」按鈕 onClick 裡的「設定選中人員 + 打 `/checkin/eligibility/:id` 帶出入場資格」邏輯抽成獨立函式，按鈕與自動選取共用同一份，避免各自維護一份日後改一處漏另一處。
+- ✅ **`handlePhoneSearch()` 找到唯一候選人即自動選取**：候選清單＝`[家長本人, ...未過濾掉的子會員]`（與畫面「選擇入場人員」按鈕列表同一份組法）；`candidates.length === 1`（該電話沒有家庭成員可選）時，搜尋完成直接呼叫 `selectPhoneMember(found)`，免再多點一次唯一的那個選項。有多位家庭成員時行為不變，仍要手動點選要讓誰入場。

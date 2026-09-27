@@ -215,6 +215,23 @@ router.get('/public/category/:categoryId', async (req, res) => {
       return { ...c, sessions };
     }));
 
+    // 常態報名已額滿的週課，若開放試上且某場次因請假釋出名額，補上「單堂試上」選項——沿用既有
+    // getTrialSessions()（與會員端「課程試上」分頁、公開試上預約頁 /book/trial 同一套邏輯：場次層級
+    // 的實際剩餘名額本就正確反映請假釋出的名額，跟 statusLabel 這個常態報名總量指標各自獨立），
+    // 避免另外重寫一份「這堂是否可試上」的判斷邏輯（同段邏輯平行複製過去在這個專案是反覆出現的
+    // bug 來源）。已額滿+無開放試上的梯次維持原樣（trialSessions 為空陣列，前端只顯示「已額滿」）。
+    const fullWeeklyIds = withSessions.filter(c => c.type !== 'workshop' && c.statusLabel === 'full').map(c => c.id);
+    const trialByCourse = {};
+    if (fullWeeklyIds.length > 0) {
+      const trialSessions = await courseService.getTrialSessions(null);
+      trialSessions.forEach(s => {
+        if (!fullWeeklyIds.includes(s.courseId) || s.isFull) return;
+        (trialByCourse[s.courseId] = trialByCourse[s.courseId] || []).push({
+          id: s.id, date: s.date, startTime: s.startTime, endTime: s.endTime, trialPrice: s.trialPrice,
+        });
+      });
+    }
+
     res.json({
       category: {
         id: catDoc.id, name: cat.name, description: cat.description || '', imageUrl: cat.imageUrl || null,
@@ -224,6 +241,7 @@ router.get('/public/category/:categoryId', async (req, res) => {
         startDate: c.startDate, endDate: c.endDate, statusLabel: c.statusLabel || null,
         weekdays: c.weekdays || null, startTime: c.startTime || null, endTime: c.endTime || null,
         sessions: c.sessions,
+        trialSessions: trialByCourse[c.id] || [],
       })),
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }

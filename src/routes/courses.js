@@ -215,12 +215,22 @@ router.get('/public/category/:categoryId', async (req, res) => {
       return { ...c, sessions };
     }));
 
+    // ⚠️ computeStatusLabel() 對已開課（today>=startDate）的梯次一律先回傳 'ongoing'，額滿判斷
+    // （enrolledCount>=maxStudents）那一行永遠排在它後面、對已開課課程完全不會被執行到——
+    // 也就是說任何「已開課、插班中」的梯次，statusLabel 實際上永遠不可能是 'full'，不管報名人數
+    // 是否早已超過上限。會員端 MemberCoursesPage.jsx 對此本就有補救寫法：
+    // `isFull = c.statusLabel==='full' || remaining<=0`（remaining=maxStudents-enrolledCount）——
+    // 這裡完全比照同一套判斷，不要只看 statusLabel（2026-09-27 由真實案例回報才發現：小蜘蛛人
+    // 初級班 9-1月週五B/週六A班皆為 enrolledCount===maxStudents===6 的已開課額滿梯次，
+    // statusLabel 卻仍是 'ongoing'，公開頁原本完全沒判定成額滿）。
+    const isCohortFull = (c) => c.statusLabel === 'full' || (c.maxStudents != null && (c.enrolledCount || 0) >= c.maxStudents);
+
     // 常態報名已額滿的週課，若開放試上且某場次因請假釋出名額，補上「單堂試上」選項——沿用既有
     // getTrialSessions()（與會員端「課程試上」分頁、公開試上預約頁 /book/trial 同一套邏輯：場次層級
     // 的實際剩餘名額本就正確反映請假釋出的名額，跟 statusLabel 這個常態報名總量指標各自獨立），
     // 避免另外重寫一份「這堂是否可試上」的判斷邏輯（同段邏輯平行複製過去在這個專案是反覆出現的
     // bug 來源）。已額滿+無開放試上的梯次維持原樣（trialSessions 為空陣列，前端只顯示「已額滿」）。
-    const fullWeeklyIds = withSessions.filter(c => c.type !== 'workshop' && c.statusLabel === 'full').map(c => c.id);
+    const fullWeeklyIds = withSessions.filter(c => c.type !== 'workshop' && isCohortFull(c)).map(c => c.id);
     const trialByCourse = {};
     if (fullWeeklyIds.length > 0) {
       const trialSessions = await courseService.getTrialSessions(null);
@@ -240,6 +250,9 @@ router.get('/public/category/:categoryId', async (req, res) => {
         id: c.id, name: c.name, type: c.type, price: c.price, gymId: c.gymId,
         startDate: c.startDate, endDate: c.endDate, statusLabel: c.statusLabel || null,
         weekdays: c.weekdays || null, startTime: c.startTime || null, endTime: c.endTime || null,
+        // 額滿判斷用（見上方 isCohortFull 註解）：statusLabel 對已開課梯次不可靠，前端要自己
+        // 再比對 enrolledCount/maxStudents，不能只信 statusLabel。
+        enrolledCount: c.enrolledCount || 0, maxStudents: c.maxStudents ?? null,
         sessions: c.sessions,
         trialSessions: trialByCourse[c.id] || [],
       })),

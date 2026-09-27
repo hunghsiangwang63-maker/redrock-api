@@ -3554,3 +3554,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 > 需求：入場用電話搜尋，若該電話只有一個會員資料，不用再手動點選才能繼續。純前端 `CheckinPage.jsx`，commit `57cb762`，已 build+deploy（bundle hash 比對線上一致）。
 - ✅ **抽出 `selectPhoneMember(m)`**：把原本寫死在「選擇入場人員」按鈕 onClick 裡的「設定選中人員 + 打 `/checkin/eligibility/:id` 帶出入場資格」邏輯抽成獨立函式，按鈕與自動選取共用同一份，避免各自維護一份日後改一處漏另一處。
 - ✅ **`handlePhoneSearch()` 找到唯一候選人即自動選取**：候選清單＝`[家長本人, ...未過濾掉的子會員]`（與畫面「選擇入場人員」按鈕列表同一份組法）；`candidates.length === 1`（該電話沒有家庭成員可選）時，搜尋完成直接呼叫 `selectPhoneMember(found)`，免再多點一次唯一的那個選項。有多位家庭成員時行為不變，仍要手動點選要讓誰入場。
+
+## 目前進度（2026-09-27 續）— 免登入公開課程頁：場館分類 + 額滿顯示 + 梯次星期時段
+> 需求：`PublicCoursesPage`（`/book/courses`，免登入班別總覽）與 `PublicCourseCategoryPage`（`/book/category`，免登入梯次列表）也要能依場館篩選；已額滿的梯次要顯示額滿資訊。中途使用者追加「也要把課程的時段顯示出來」。後端 `/health` `3.543.0-public-category-weekdays`；前端 commit `303cc01`；已 build+deploy 兩端，正式站打真實資料（小蜘蛛人初級班，11 梯跨新竹/士林）端到端驗證通過、console 零錯誤。
+- ✅ **後端**：`GET /courses/public/category/:categoryId` 的 cohort 投影補上 `weekdays`/`startTime`/`endTime`——`getCourses()` 本就算好這些欄位，只是先前的公開頁投影沒選取；額滿判斷完全不用改後端，`statusLabel` 早已在 `getCourses()` 依 `enrolledCount>=maxStudents` 算出 `'full'`，公開頁的 cohort 回應本就有帶這欄位（`3.543.0` 前就存在），只是前端沒讀。
+- ✅ **場館分類**（兩頁皆加「全部場館／新竹館／士林館」三選一 chips，樣式抄 `MemberRoutesPage.jsx` 既有的 `GymChips` 慣例）：
+  - `PublicCoursesPage`（第一層）：依 `cat.gymIds.includes(選定館)` 篩選班別卡；點進某個班別時把目前選定的場館帶成 `?gym=` 深連結參數。
+  - `PublicCourseCategoryPage`（第二層）：讀 `?gym=` 深連結初始化篩選狀態（無效值一律當「全部」）；依 `cohorts` 實際涵蓋的場館數決定要不要顯示這排 chips（只有一館時沒有篩選意義、不顯示）。
+- ✅ **額滿顯示**：非工作坊（週課）梯次比照工作坊場次既有的「已額滿」樣式（原本只有工作坊場次層級有做，週課梯次層級完全沒判斷、永遠顯示可報名的「報名 →」按鈕）——`c.statusLabel === 'full'` 時改顯示紅字「已額滿」取代按鈕。目前正式資料沒有剛好額滿的週課梯次可視覺驗證，但邏輯與已驗證運作的工作坊判斷完全同一套（`enrolledCount>=maxStudents` 早已由後端算好）。
+- ✅ **梯次星期時段**：仿 `MemberCoursesPage.jsx` 既有的 `wdList()`/`wdShort()` 寫法（因公開頁是獨立元件、未共用會員端模組，複製一份小工具函式），在梯次卡片加一行「🗓 每週三 16:30～18:00」，僅非工作坊梯次顯示（工作坊本就逐場次各自列時間，不需要在梯次卡層級重複）。
+- ✅ **i18n**：`memberI18n.js` 補「全部場館」中英日對照（`All Gyms`／`全店舗`，比照既有「新竹館」EN=Hsinchu／JA=新竹店 的命名慣例）。
+- 🧪 **驗證（正式站，JS 直接操作 DOM 迴避這個環境對 `computer` 座標點擊偶發的視窗座標系統對不上問題——已用 `getBoundingClientRect()` 確認過同一顆按鈕在畫面上看到的座標與實際可點擊區域不一致）**：①第一層 11 個班別篩「士林館」→ 正確剩 3 個（小蜘蛛人初級班/技巧班/RedFlash運動按摩，皆為 `gymIds` 含 `gym-shilin` 者）②點進「小蜘蛛人初級班」→ URL 正確帶 `&gym=gym-shilin`、第二層落地即顯示「士林館」chip 為選中狀態、「選擇梯次（共 3 個）」正確只列士林館 3 梯 ③梯次卡片正確顯示「🗓 每週三 16:30～18:00」等星期時段（11 梯逐一比對 API 回傳值與畫面一致）。

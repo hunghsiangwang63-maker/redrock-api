@@ -27,32 +27,24 @@ const childBlock = async (memberId, message) => {
 };
 
 // ── 卡號白名單（physicalCardRegistry，見 scripts/importCardRegistry.js）──────────────
-// 只對「使用者已確認整理好」的字軌（或字軌內特定號碼區間，供分批整理用）生效——尚未整理的
-// 完全不擋，維持原行為。之後使用者確認其他字軌/區間整理好，加進對應陣列即可，不需再改邏輯。
-// 陣列元素可以是：純字軌字串（整個字軌都擋，如 'AT19'）／{prefix,from,to} 物件（只擋該字軌內
-// 序號落在 [from,to] 的部分，如 D21 使用者只整理了前 600 號時用）。
-const GATED_SERIES = {
-  black: ['AT19', 'ST19', 'AT21'],
-  discount: ['D19', 'D21', 'D24'], // D24 已確認整理完成（2026-09-15 加入）
-};
-
-// 判斷某卡號是否落在白名單規則內（字串＝整字軌前綴比對；物件＝字軌前綴＋序號區間比對）
-const matchesGatedRule = (normalizedBarcode, rule) => {
-  if (typeof rule === 'string') return normalizedBarcode.startsWith(rule);
-  if (!normalizedBarcode.startsWith(rule.prefix)) return false;
-  const suffix = normalizedBarcode.slice(rule.prefix.length);
-  const num = parseInt(suffix, 10);
-  return Number.isFinite(num) && num >= rule.from && num <= rule.to;
-};
-
-// 回傳 {ok:true, tracked} 可放行（tracked=此卡號有在清冊裡，成功綁定後要標記 bound）；
+// ⚠ 2026-09-28 改為嚴格擋（原本「未匯入清冊的字軌一律不擋、放行」，改成「清冊查不到就直接
+// 拒絕」）——原本分階段放行的設計曾造成真實漏洞：黑卡卡號 AT19-0387 被拿去走優惠卡轉入流程，
+// 因為當時優惠卡那份白名單清單裡沒列 AT19 這個字軌（它本來就屬於黑卡），比對比不到就直接
+// 放行、連清冊都沒查，結果同一張實體卡最後被同時掛成一張優惠卡（8格）與一張黑卡（12格）——
+// 兩套福利。改成「只認清冊」後，判斷單純只看 physicalCardRegistry 這一份資料，不再需要另外
+// 維護一份「哪些字軌已經整理好」的清單，也天生不會有「這個類型沒列到、比對比不到就放行」
+// 這種分岔——只要清冊裡查不到（尚未匯入的字軌/打錯的卡號）、或登記的 cardType 跟現在要
+// 綁定的類型不同（如拿黑卡卡號走優惠卡流程），一律擋下。
+// 回傳 {ok:true, tracked:true} 可放行（成功綁定後要標記 bound）；
 // 或 {ok:false, status, body} 直接擋下，供路由回應。
 const checkCardRegistry = async (db, cardType, normalizedBarcode) => {
-  const gated = GATED_SERIES[cardType] || [];
-  if (!gated.some(rule => matchesGatedRule(normalizedBarcode, rule))) return { ok: true, tracked: false };
   const doc = await db.collection('physicalCardRegistry').doc(normalizedBarcode).get();
   if (!doc.exists) return { ok: false, status: 400, body: { error: 'CARD_NOT_IN_REGISTRY', message: '此卡號不在已售出清冊內，請確認卡號是否正確' } };
   const data = doc.data();
+  if (data.cardType && data.cardType !== cardType) {
+    const label = data.cardType === 'black' ? '黑卡' : '優惠卡';
+    return { ok: false, status: 409, body: { error: 'CARD_TYPE_MISMATCH', message: `此卡號屬於${label}，非您選擇的卡別，請確認卡號或改用正確的綁定功能` } };
+  }
   if (!data.sold) return { ok: false, status: 400, body: { error: 'CARD_NOT_SOLD', message: '此卡號尚未售出，無法綁定' } };
   if (data.bound) return { ok: false, status: 409, body: { error: 'CARD_ALREADY_BOUND', message: '此卡號已經綁定過，無法重複綁定' } };
   return { ok: true, tracked: true };

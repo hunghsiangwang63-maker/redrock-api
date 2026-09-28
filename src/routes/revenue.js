@@ -24,6 +24,37 @@ const foldType = (t) => {
   return ty;
 };
 
+const MAX_CUSTOM_RANGE_DAYS = 366; // 自訂期間安全上限，避免異常輸入拉出過大範圍
+
+// ── 解析報表期間：優先 dateFrom/dateTo（自訂期間，含起訖兩日），否則沿用既有
+// days（近N天、含今天）——供 /daily、/checkin-stats、/adjustments、
+// /export-adjustments-csv 四個「按天分組」的報表端點共用，行為對既有 days
+// 呼叫方式完全不變，只是新增一種輸入方式。
+function resolveReportRange(req) {
+  const { dateFrom, dateTo } = req.query;
+  if (dateFrom) {
+    const start = dayjs(dateFrom).startOf('day');
+    const end = (dateTo ? dayjs(dateTo) : dayjs()).endOf('day');
+    if (!start.isValid() || !end.isValid() || end.isBefore(start)) {
+      return { error: 'INVALID_RANGE' };
+    }
+    const dates = [];
+    let cur = start.clone();
+    while (cur.isBefore(end) || cur.isSame(end, 'day')) {
+      dates.push(cur.format('YYYY-MM-DD'));
+      cur = cur.add(1, 'day');
+      if (dates.length > MAX_CUSTOM_RANGE_DAYS) return { error: 'RANGE_TOO_LARGE' };
+    }
+    return { startDate: start.toDate(), endDate: end.toDate(), dates, fromDateStr: start.format('YYYY-MM-DD'), toDateStr: end.format('YYYY-MM-DD') };
+  }
+  const days = parseInt(req.query.days) || 7;
+  const start = dayjs().subtract(days - 1, 'day').startOf('day');
+  const end = dayjs().endOf('day');
+  const dates = [];
+  for (let i = 0; i < days; i++) dates.push(dayjs().subtract(i, 'day').format('YYYY-MM-DD'));
+  return { startDate: start.toDate(), endDate: end.toDate(), dates, fromDateStr: start.format('YYYY-MM-DD'), toDateStr: end.format('YYYY-MM-DD') };
+}
+
 // ── GET /revenue/summary - 今日/本週/本月統計 ────────────────────
 router.get('/summary',
   authenticate,
@@ -95,10 +126,9 @@ router.get('/daily',
     try {
       const db = getDb();
       const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
-      const days = parseInt(req.query.days) || 7;
-
-      const startDate = dayjs().subtract(days - 1, 'day').startOf('day').toDate();
-      const endDate = dayjs().endOf('day').toDate();
+      const range = resolveReportRange(req);
+      if (range.error) return res.status(400).json({ error: range.error, message: range.error === 'RANGE_TOO_LARGE' ? `自訂期間不可超過 ${MAX_CUSTOM_RANGE_DAYS} 天` : '日期範圍無效' });
+      const { startDate, endDate, dates } = range;
 
       // 按認列日歸帳（單欄位範圍查 recognitionDate，gymId/paymentStatus 記憶體過濾）
       const snap = await db.collection(COLLECTIONS.TRANSACTIONS)
@@ -110,10 +140,7 @@ router.get('/daily',
 
       // 按日期分組
       const byDate = {};
-      for (let i = 0; i < days; i++) {
-        const date = dayjs().subtract(i, 'day').format('YYYY-MM-DD');
-        byDate[date] = { date, total: 0, byType: {}, count: 0 };
-      }
+      dates.forEach(date => { byDate[date] = { date, total: 0, byType: {}, count: 0 }; });
 
       txns.forEach(t => {
         const date = dayjs((t.recognitionDate || t.paidAt).toDate()).format('YYYY-MM-DD');
@@ -143,7 +170,7 @@ router.get('/daily',
       });
 
       const daily = Object.values(byDate).sort((a, b) => b.date.localeCompare(a.date));
-      res.json({ daily, totalDays: days });
+      res.json({ daily, totalDays: dates.length });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }
@@ -188,10 +215,9 @@ router.get('/checkin-stats',
     try {
       const db = getDb();
       const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
-      const days = parseInt(req.query.days) || 7;
-
-      const startDate = dayjs().subtract(days - 1, 'day').startOf('day').toDate();
-      const endDate = dayjs().endOf('day').toDate();
+      const range = resolveReportRange(req);
+      if (range.error) return res.status(400).json({ error: range.error, message: range.error === 'RANGE_TOO_LARGE' ? `自訂期間不可超過 ${MAX_CUSTOM_RANGE_DAYS} 天` : '日期範圍無效' });
+      const { startDate, endDate, dates } = range;
 
       let ref = db.collection(COLLECTIONS.CHECK_INS)
         .where('isCancelled', '==', false)
@@ -204,15 +230,14 @@ router.get('/checkin-stats',
 
       // 按日期分組
       const byDate = {};
-      for (let i = 0; i < days; i++) {
-        const date = dayjs().subtract(i, 'day').format('YYYY-MM-DD');
+      dates.forEach(date => {
         byDate[date] = {
           date, count: 0, revenue: 0,
           byType: { pass: 0, vip: 0, course_access: 0, discount_card: 0,
                     black_card: 0, single_entry_ticket: 0, single_ticket: 0,
                     child_free: 0, student_free: 0 },
         };
-      }
+      });
 
       checkIns.forEach(c => {
         const date = dayjs(c.checkedInAt.toDate()).format('YYYY-MM-DD');
@@ -242,14 +267,14 @@ router.get('/adjustments',
     try {
       const db = getDb();
       const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
-      const days = parseInt(req.query.days) || 7;
-      // 與 /revenue/daily 期間對齊（近 N 天、含今日）
-      const fromDate = dayjs().subtract(days - 1, 'day').format('YYYY-MM-DD');
+      const range = resolveReportRange(req);
+      if (range.error) return res.status(400).json({ error: range.error, message: range.error === 'RANGE_TOO_LARGE' ? `自訂期間不可超過 ${MAX_CUSTOM_RANGE_DAYS} 天` : '日期範圍無效' });
+      const { fromDateStr: fromDate, toDateStr: toDate } = range;
 
-      // 單欄位範圍查 date（字串 YYYY-MM-DD 字典序即時間序），gymId / status 記憶體過濾避免複合索引
+      // 單欄位範圍查 date（字串 YYYY-MM-DD 字典序即時間序），gymId / status / 上限日期 記憶體過濾避免複合索引
       const snap = await db.collection('dailySettlements').where('date', '>=', fromDate).get();
       const settlements = snap.docs.map(d => d.data())
-        .filter(s => s.status !== 'draft' && (!gymId || s.gymId === gymId)); // 只計已結帳（settled/unlocked），排除暫存
+        .filter(s => s.status !== 'draft' && s.date <= toDate && (!gymId || s.gymId === gymId)); // 只計已結帳（settled/unlocked），排除暫存
 
       // 攤平每筆結帳的 deductions → 明細列
       const adjustments = [];
@@ -289,12 +314,13 @@ router.get('/export-adjustments-csv',
     try {
       const db = getDb();
       const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
-      const days = parseInt(req.query.days) || 7;
-      const fromDate = dayjs().subtract(days - 1, 'day').format('YYYY-MM-DD');
+      const range = resolveReportRange(req);
+      if (range.error) return res.status(400).json({ error: range.error, message: range.error === 'RANGE_TOO_LARGE' ? `自訂期間不可超過 ${MAX_CUSTOM_RANGE_DAYS} 天` : '日期範圍無效' });
+      const { fromDateStr: fromDate, toDateStr: toDate } = range;
 
       const snap = await db.collection('dailySettlements').where('date', '>=', fromDate).get();
       const settlements = snap.docs.map(d => d.data())
-        .filter(s => s.status !== 'draft' && (!gymId || s.gymId === gymId));
+        .filter(s => s.status !== 'draft' && s.date <= toDate && (!gymId || s.gymId === gymId));
 
       const GYM_LABEL = { 'gym-hsinchu': '新竹館', 'gym-shilin': '士林館' };
       const adjustments = [];

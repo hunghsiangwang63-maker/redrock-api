@@ -294,8 +294,19 @@ const getMemberDiscountCards = async (memberId, { includeInactive = false } = {}
         isExpired: e ? today.isAfter(dayjs(e)) : false,
       };
     })
-    // 有期限的到期日近→遠優先使用，無期限的排最後
-    .sort((a, b) => (a.expiresAtFormatted || '9999-12-31').localeCompare(b.expiresAtFormatted || '9999-12-31'));
+    // 有期限的到期日近→遠優先使用；到期日相同（含皆無期限——2026-07-15 起新購/轉入卡預設無期限，
+    // 現實中幾乎所有卡都落在這個 tie）時改依「取得時間」先後排序——買/綁定/轉入越早的卡優先使用
+    // （2026-09-29 拍板「都要從舊的先使用」）。這個排序**直接決定實際會扣哪張卡**：會員 App 與
+    // 員工端電話搜尋入場皆無卡片選擇 UI，一律直接取這裡回傳陣列的第一張（見
+    // MemberQRPage.jsx/CheckinPage.jsx 的 `cards[0]`）——原本無期限卡之間只靠 Firestore 查詢
+    // 回傳順序排列，該順序不保證、形同隨機，故同一人持有多張卡時扣哪張其實不可預期。
+    .sort((a, b) => {
+      const byExpiry = (a.expiresAtFormatted || '9999-12-31').localeCompare(b.expiresAtFormatted || '9999-12-31');
+      if (byExpiry !== 0) return byExpiry;
+      const ta = asDate(a.createdAt)?.getTime() || 0;
+      const tb = asDate(b.createdAt)?.getTime() || 0;
+      return ta - tb;
+    });
 
   // 移轉取得的卡：用完後紅利歸「原購買者」（非持卡人），標註 + 帶原購買者姓名
   const memberService = require('./memberService');

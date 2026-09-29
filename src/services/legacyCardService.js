@@ -232,6 +232,7 @@ const getMemberBlackCards = async (memberId, { includeInactive = false } = {}) =
   if (!includeInactive) {
     rows = rows.filter(c => c.isActive !== false).filter(c => !c.expiresAt || today.isBefore(dayjs(c.expiresAt.toDate())));
   }
+  const asMillis = (ts) => ts ? (typeof ts.toDate === 'function' ? ts.toDate().getTime() : new Date(ts).getTime()) : 0;
   return rows
     .map(c => ({
       ...c,
@@ -240,7 +241,16 @@ const getMemberBlackCards = async (memberId, { includeInactive = false } = {}) =
       daysLeft: c.expiresAt ? dayjs(c.expiresAt.toDate()).diff(today, 'day') : null,
       isExpiringSoon: c.expiresAt ? dayjs(c.expiresAt.toDate()).diff(today, 'day') <= EXPIRY_WARNING_DAYS : false,
       isOriginal: !c.expiresAt,
-    }));
+    }))
+    // 依到期日近→遠、同到期日（含皆無期限——黑卡本就恆無期限，見 bindBlackCard）依「綁定/取得
+    // 時間」先後排序——買/綁定越早的卡優先使用，理由同優惠卡（見
+    // discountCardService.getMemberDiscountCards 同款排序的說明）：這裡回傳陣列第一張就是
+    // 實際會被扣的那張，原本完全沒有排序（Firestore 查詢回傳順序不保證），2026-09-29 補上。
+    .sort((a, b) => {
+      const byExpiry = (a.expiresAtFormatted || '9999-12-31').localeCompare(b.expiresAtFormatted || '9999-12-31');
+      if (byExpiry !== 0) return byExpiry;
+      return asMillis(a.createdAt) - asMillis(b.createdAt);
+    });
 };
 
 module.exports = {

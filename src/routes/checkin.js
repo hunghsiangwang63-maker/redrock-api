@@ -949,12 +949,18 @@ router.get('/history',
 
       // 會員只能查自己或子會員的；員工可查指定館別
       const isMemberToken = !!req.member && !req.staff;
-      // 歷史入場查詢（員工端）限管理員「個人帳號」使用（2026-08-08 先擋個人正職/兼職未值班；
+      // 歷史入場查詢（員工端）原則限管理員「個人帳號」使用（2026-08-08 先擋個人正職/兼職未值班；
       // 2026-08-13 再拍板擴大擋「值班 operator」——含館長/系統管理員值班身分時也一併擋，
-      // 一律要用管理員自己的個人帳號登入才查得到。改用允許清單避免遺漏其他身分組合。
+      // 一律要用管理員自己的個人帳號登入才查得到。這條限制針對的是「不指定會員、瀏覽整天/整館
+      // 入場記錄」的一般瀏覽情境）。
+      // 2026-09-29 拍板放寬一種情境：櫃檯電腦（值班 operator／館別電腦 station）查詢「指定某一位
+      // 會員」的入場紀錄（如員工端「會員管理→紀錄查詢」面板）——這是查眼前這位客人的紀錄，跟上面
+      // 要擋的「瀏覽整天入場記錄」性質不同，故只在有帶 memberId 時才放行，不影響上面一般瀏覽仍限
+      // 管理員個人帳號的既有規則；個人（未打卡值班）正職/兼職帳號仍不放行，維持限「櫃檯」使用。
       if (!isMemberToken) {
         const isManagerPersonal = req.staff?.type === 'staff' && ['super_admin', 'gym_manager'].includes(req.staff?.role);
-        if (!isManagerPersonal) {
+        const isCounterMemberLookup = !!req.query.memberId && ['operator', 'station'].includes(req.staff?.type);
+        if (!isManagerPersonal && !isCounterMemberLookup) {
           return res.status(403).json({ error: 'MANAGER_ONLY', message: '此功能限管理員個人帳號使用' });
         }
       }

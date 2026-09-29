@@ -604,20 +604,25 @@ router.get('/download', authenticate, requireManager, async (req, res) => {
       .filter(inv => { const t = tsOf(inv.issuedAt); return t >= rangeStart.getTime() && t <= rangeEnd.getTime(); })
       .sort((a, b) => tsOf(a.issuedAt) - tsOf(b.issuedAt));
 
-    const aoa = [['開立日期時間', '發票號碼', '狀態', '來源類型', '品項', '金額', '會員', '統編', '備註', '經手人', '作廢時間', '作廢人', '作廢原因']];
+    // 與前端 InvoiceModal.jsx 的 PM_LABEL 同一組付款方式標籤（後端無法直接 import 前端元件，
+    // 維護一份對應的純字典；改動付款方式選項時兩邊要一起改）。paymentMethod 是 2026-08-15 才
+    // 開始存的新欄位，之前印的無來源發票沒有這欄，留空不硬猜。
+    const PAYMENT_METHOD_LABEL = { cash: '現金', transfer: '轉帳', linepay: 'LinePay', jkopay: '街口', taiwanpay: '台灣Pay' };
+    const aoa = [['開立日期時間', '發票號碼', '狀態', '來源類型', '品項', '金額', '付款方式', '會員', '統編', '備註', '經手人', '作廢時間', '作廢人', '作廢原因']];
     rows.forEach(inv => {
       aoa.push([
         fmtTs(inv.issuedAt), inv.invoiceNo || `${inv.track || ''}${inv.number || ''}`,
         inv.status === 'void' ? '已作廢' : '已開立',
         SOURCE_TYPE_LABEL[inv.sourceType] || inv.sourceType || '手動開立（無來源）',
-        inv.itemName || '', inv.amount ?? '', inv.memberName || '', inv.taxId || '', inv.note || '',
+        inv.itemName || '', inv.amount ?? '', PAYMENT_METHOD_LABEL[inv.paymentMethod] || inv.paymentMethod || '',
+        inv.memberName || '', inv.taxId || '', inv.note || '',
         inv.staffName || '', inv.status === 'void' ? fmtTs(inv.voidedAt) : '', inv.status === 'void' ? (inv.voidedByName || '') : '',
         inv.status === 'void' ? (inv.voidReason || '') : '',
       ]);
     });
 
     const ws = require('../utils/xlsxSafe').sanitizeSheet(XLSX.utils.aoa_to_sheet(aoa));
-    ws['!cols'] = [{ wch:16 }, { wch:12 }, { wch:8 }, { wch:16 }, { wch:20 }, { wch:10 }, { wch:12 }, { wch:12 }, { wch:24 }, { wch:10 }, { wch:16 }, { wch:10 }, { wch:24 }];
+    ws['!cols'] = [{ wch:16 }, { wch:12 }, { wch:8 }, { wch:16 }, { wch:20 }, { wch:10 }, { wch:10 }, { wch:12 }, { wch:12 }, { wch:24 }, { wch:10 }, { wch:16 }, { wch:10 }, { wch:24 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '發票明細');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });

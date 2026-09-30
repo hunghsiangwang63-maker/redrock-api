@@ -3643,3 +3643,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **資料修正**：查 `checkIns` 找到張驊謙 15:46:45 的真實入場記錄（discount_card、NT$240、LinePay、`checkedInBy` 與周邊發票同一位員工）→ 補建一筆 `invoices` 文件（`EF33426926`，對應此 checkIn）；同時把系統誤記的後 6 筆（Keyvan／劉子琳／陳博浩／陳冠霖／胡傳翊／羅詩芸）號碼各自 +1，對齊使用者現場核對的紙本真實號碼（羅詩芸＝932，逐一比對後完全吻合）；`gyms.invoiceState.currentNumber`（陳品翰稍早已手動校正到 33426933）**維持不動**——回頭驗算剛好正確（真實最後用到 932，下一張本來就該是 933），單一 batch 原子寫入、每筆附 `correctionNote` 留稽核。
   - **程式修復（`InvoiceIssuer.jsx`，commit `ee4557d`）**：把①②拆成各自獨立的 try/catch，新增 `printedNotRecorded` 狀態——①失敗維持原樣（沒印出來，可安全重試）；②失敗（不論何種錯誤，只要走到這裡就代表①已成功）改顯示醒目紅底警語「🚨 紙本可能已經印出，但系統登記失敗！請勿再按「重新列印」…請聯絡系統管理員手動補登」，並鎖住重新列印按鈕（`printDisabled` 加入此條件），逼店員改用其他管道處理，而非讓誤導訊息引導他們重印出第二張紙。
   - **驗證**：兩 target `vite build` 皆成功；`firebase deploy` 後 `staff.redrocktaiwan.com` bundle hash 與本機比對一致；資料修正後重查 `EF33426918~33426933` 序號連續無重複無跳號、926＝張驊謙、932＝羅詩芸，皆與使用者現場核對結果完全吻合。
+
+## 目前進度（2026-09-30 續）— 工作坊型課程補「單一公開報名連結」（多場次供訪客自選）
+> 使用者問「【新竹館】小蜘蛛人初級班 優惠試上 為什麼沒有公開報名連結」→ 查明它是 `type:'workshop'`，課程列表的「🔗 公開報名連結」原本刻意排除工作坊（因為公開頁 `/book/course` 是「一次報名整梯」設計，對每場次獨立收人的工作坊不適用，只能到「場次管理」逐場複製各自的單場連結）。使用者追問「可以統合成一個連結嗎？」，比照班別公開頁已有的模式補上。commit(redrock-web) `ffd1cd4`。
+- ✅ **`PublicCourseEnrollPage.jsx`（`/book/course?course=`）加 `isWorkshop` 分支**：後端 `GET /courses/public/:courseId` 本就有帶每場次 `enrolledCount`/`maxStudents`（2026-09-16 為單場頁 `PublicWorkshopEnrollPage.jsx` 補過，未動即可重用）——工作坊時改列出全部未來、未取消場次（含額滿徽章），逐場「報名 →」導去既有 `/book/workshop?course=&session=` 完成，完全比照 `PublicCourseCategoryPage.jsx` 展開工作坊梯次時的既有「選場次」模式（同一套邏輯/文案，這裡是單一課程整頁版）。頂部費用區塊工作坊改顯示單純「NT$X／場」（原本的整期插班試算對工作坊無意義）。
+- ✅ **`CoursesPage.jsx` 課程列表「🔗 公開報名連結」移除 `type!=='workshop'` 排除**，工作坊梯次現在也能直接從列表複製到這個統合連結。
+- ✅ **順手補：`'已額滿'` 徽章缺英/日翻譯對照**（`memberI18n.js`，影響 3 個公開頁）——原本只有中文，補上 `Full`／`満員`。
+- **驗證**：兩 target build 通過；`app.redrocktaiwan.com`/`staff.redrocktaiwan.com` bundle hash 皆與本機一致；瀏覽器實機開真實連結（小蜘蛛人初級班 優惠試上）確認正確顯示「請選擇要報名的時段（共 2 場）」＋兩場各自「報名 →」，console 零錯誤。

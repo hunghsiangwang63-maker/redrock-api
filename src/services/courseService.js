@@ -720,7 +720,14 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
   const member = isGuestBooking
     ? { id: memberId, name: guestName || '', isBlocked: false, isStaff: false }
     : await getMember(memberId);
-  if (member.isBlocked) throw { code: 'MEMBER_BLOCKED', message: '帳號已封鎖，無法報名' };
+  // 墜落測驗狀態不再阻擋一般課程／工作坊報名；其他封鎖原因仍照常阻擋。
+  // 若只有墜測原因，舊會員文件的 isBlocked 可能仍為 true，因此依 blockReasons 判斷。
+  const fallTestBlockReasons = new Set(['fall_test_required', 'fall_test_expired']);
+  const hasBlockingReason = !Array.isArray(member.blockReasons) || member.blockReasons.length === 0
+    || member.blockReasons.some(reason => !fallTestBlockReasons.has(reason));
+  if (member.isBlocked && hasBlockingReason) {
+    throw { code: 'MEMBER_BLOCKED', message: '帳號已封鎖，無法報名' };
+  }
 
   const sessionDoc = await db.collection(SESSION_COLLECTION).doc(sessionId).get();
   if (!sessionDoc.exists) throw { code: 'SESSION_NOT_FOUND' };

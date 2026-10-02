@@ -12,7 +12,7 @@
  */
 const { taiwanToday } = require('../utils/taiwanDate');
 const { getDb, COLLECTIONS } = require('../config/firebase');
-const { getMember } = require('./memberService');
+const { getMember, getBlockReasons } = require('./memberService');
 const { createNotification, notifyRoleInGym, notifyGymManagers } = require('./notificationService');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
@@ -721,12 +721,18 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     ? { id: memberId, name: guestName || '', isBlocked: false, isStaff: false }
     : await getMember(memberId);
   // 墜落測驗狀態不再阻擋一般課程／工作坊報名；其他封鎖原因仍照常阻擋。
-  // 若只有墜測原因，舊會員文件的 isBlocked 可能仍為 true，因此依 blockReasons 判斷。
-  const fallTestBlockReasons = new Set(['fall_test_required', 'fall_test_expired']);
-  const hasBlockingReason = !Array.isArray(member.blockReasons) || member.blockReasons.length === 0
-    || member.blockReasons.some(reason => !fallTestBlockReasons.has(reason));
-  if (member.isBlocked && hasBlockingReason) {
-    throw { code: 'MEMBER_BLOCKED', message: '帳號已封鎖，無法報名' };
+  // ⚠️ 2026-10-02 修正：原本信任會員文件上快取的 isBlocked/blockReasons——但這兩欄只在特定
+  // 時機（簽文件/記錄墜測結果/員工開會員詳情頁）才會重算，實測兩個真實案例（黃楷捷、王登妹）
+  // 簽完文件後快取數天～77天沒再更新、殘留 waiver_unsigned/parent_waiver_pending 等早已不成立
+  // 的舊原因，導致本人墜測未過但文件皆已簽妥時仍被誤判「其他原因封鎖」而擋下報名。改為即時
+  // 查詢目前真正的封鎖原因（不信任快取），只過濾掉墜測相關項目，其餘才真的擋。
+  if (!isGuestBooking) {
+    const fallTestBlockReasons = new Set(['fall_test_required', 'fall_test_expired']);
+    const liveBlockReasons = await getBlockReasons(memberId, member);
+    const realBlockingReasons = liveBlockReasons.filter(reason => !fallTestBlockReasons.has(reason));
+    if (realBlockingReasons.length > 0) {
+      throw { code: 'MEMBER_BLOCKED', message: '帳號已封鎖，無法報名' };
+    }
   }
 
   const sessionDoc = await db.collection(SESSION_COLLECTION).doc(sessionId).get();

@@ -3659,3 +3659,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - **驗證（正式資料端到端，均已安全還原、無資料異動殘留）**：①直接測試 5 種 `isBlocked`/`blockReasons` 組合，確認乾淨單一原因 `fall_test_required`/`fall_test_expired` 本就會放行、但 `blockReasons` 為空陣列／欄位不存在／混雜其他原因時會誤擋——驗證問題確實出在「快取可能不同步」而非布林運算本身 ②用王登妹真實資料端到端驗證修好的邏輯：暫時把她真實墜測紀錄的 `expiresAt` 調到過去（未動 `result` 欄位、未刪除任何紀錄）→ 呼叫真正的 `getBlockReasons()`（非手刻複製版）→ 回傳 `['fall_test_expired']`→ 過濾後為空 → 🟢 放行 → 測後立即還原 `expiresAt` 回原值，複查確認資料與修改前逐欄位一致。
 - 📌 **範圍**：只影響 `enrollCourse`（workshop 單場/試上類工作坊報名，`POST /sessions/:sessionId/enroll`）；`handleEnrollAll`（整期週課報名）原本就沒有任何 isBlocked 檢查，不受影響、不需要改。
 - 💡 **教訓**：`member.isBlocked`/`member.blockReasons` 是**快取欄位**、非即時狀態——任何要依賴「目前是否真的被封鎖」做判斷的新程式碼，應呼叫 `memberService.getBlockReasons()` 即時查詢，不要直接信任會員文件上存的值（已知會在簽文件後數天～數月不會自動刷新）。
+- ✅ **收尾**：黃楷捷/王登妹兩人先前被管理員手動設成「墜測通過」的假紀錄（含連動的假排測預約，建立到完成僅差 17 秒）已刪除還原（非沖銷，從未真實發生的事件直接刪），兩人正確變回 `isBlocked:true, blockReasons:['fall_test_required']`（真實狀態：文件皆簽妥、墜測尚未實測）；曾用正式 `enrollCourse` 幫黃楷捷預留 10/21 場次一次（byStaff，`paymentMethod:'pending'`），因使用者考量「他自己應該還是會填單」而改為撤回（刪 `courseEnrollments`+對應 `courseRegistrations` header+還原場次人數），讓他之後自行用 App 完成報名＋匯款資訊填寫（去重檢查本就會擋重複報名，不會衝突）。
+
+## 目前進度（2026-10-02 續）— 修：「發現新版本」提示反覆跳（redrock-web，`UpdateChecker.jsx`）
+> 使用者回報這兩天一直跳「發現新版本」提示。查證：正式站（member/staff）當下版本與本機 HEAD 重新 build 的結果完全一致（`hashSourceTree` 內容雜湊可重現、無落差），問題不在伺服器端持續在變。commit（redrock-web）`3d217bf`。
+- 🐞 **根因**：`UpdateChecker.jsx` 的「✕ 稍後再說」只存在元件 `useState`（純記憶體），**不會持久化**。加到主畫面的 standalone PWA 重新打開常只是「恢復背景狀態」而非真的重新連網抓新版（元件既有註解已點出這個限制）——每次重新 mount，`dismissed` 重置為 `false`，若裝置當下跑的仍是舊 bundle（沒抓到已部署的新版），`check()` 又會偵測到「跟伺服器不同」而重新彈出，造成同一個早就看過、關掉過的版本反覆跳提醒。
+- ✅ **修法**：按「稍後再說」時，把當下偵測到的遠端 `buildId` 存進 `localStorage`（`rr_update_dismissed_build`）；之後只有偵測到**比這個紀錄更新**的 `buildId` 才會再次彈出，同一版本重新 mount 不會再騷擾。「重新整理」按鈕行為不變（仍是帶 `_v=` 時間戳參數強制繞快取重新連網）。
+- **驗證**：兩 target build 前後兩次比對 buildId 完全一致（確認 hashSourceTree 本身具決定性、非本次問題來源）；部署後正式站 buildId 與本機重 build 結果一致；順手發現並一併推送本機原先落後遠端的 4 筆既有未推送 commit（`9f14233`/`5496b8d`/`ee4557d`/`ffd1cd4`，皆 9/30 已完成部署但當時漏了 `git push`），推送後本機/遠端完全同步。

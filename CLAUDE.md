@@ -3650,3 +3650,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **`CoursesPage.jsx` 課程列表「🔗 公開報名連結」移除 `type!=='workshop'` 排除**，工作坊梯次現在也能直接從列表複製到這個統合連結。
 - ✅ **順手補：`'已額滿'` 徽章缺英/日翻譯對照**（`memberI18n.js`，影響 3 個公開頁）——原本只有中文，補上 `Full`／`満員`。
 - **驗證**：兩 target build 通過；`app.redrocktaiwan.com`/`staff.redrocktaiwan.com` bundle hash 皆與本機一致；瀏覽器實機開真實連結（小蜘蛛人初級班 優惠試上）確認正確顯示「請選擇要報名的時段（共 2 場）」＋兩場各自「報名 →」，console 零錯誤。
+
+## 目前進度（2026-10-02）— 修正：墜測未過仍無法報名課程（ChatGPT 昨天的修補信任了會過期的快取欄位）
+> 使用者回報 ChatGPT 昨天（2026-10-01）做的「墜測未過可報名課程」修補沒改乾淨，實測「小蜘蛛人初級班 優惠試上」（`type:'workshop'`）仍被擋「帳號已封鎖，無法報名」。後端 `/health` `3.550.0-course-booking-fall-test-exemption`→`3.551.0-course-booking-fall-test-exemption-live-check`；commit `cc915f1`。
+- 🔍 **查證過程**：先確認本機落後遠端 3 個 commit（`904b648`/`bb615db`/`959b4c1`，含一個空的「retry Railway release build」）、`git pull --ff-only` 同步、正式環境（Railway+Render）皆已跑 `3.550.0`——部署本身沒問題，是邏輯有洞。
+- 🐞 **根因**：`enrollCourse`（`courseService.js`）原改法信任會員文件上**快取**的 `isBlocked`/`blockReasons` 欄位（`.some(reason => !fallTestBlockReasons.has(reason))`），但這兩欄只在特定時機（簽文件 `signEntryDocs`/記錄墜測結果/員工開會員詳情頁 `refreshBlockStatus`）才會重算寫回——**平常不會自動跟著 waiver/墜測的真實狀態同步**。用真實資料核對兩個案例（黃楷捷、王登妹，皆被 Debby Chu 手動設墜測通過當 workaround）：兩人會員文件 `updatedAt` 都停在帳號建立/簽署當下，**直到管理員手動設通過那一刻才第一次更新**——代表簽完文件後，`blockReasons` 快取殘留 `waiver_unsigned`/`parent_waiver_pending` 等早已不成立的舊原因，被新邏輯誤判成「其他原因封鎖」而擋下報名。
+- ✅ **修法**：改為即時呼叫 `memberService.getBlockReasons(memberId, member)`（即時查詢 `waivers`/`fallTests`，不信任快取）取得目前真正的封鎖原因，過濾掉 `fall_test_required`/`fall_test_expired` 後若還有其他原因才真的擋；`isGuestBooking` 分支不變（仍跳過整段檢查）。
+- **驗證（正式資料端到端，均已安全還原、無資料異動殘留）**：①直接測試 5 種 `isBlocked`/`blockReasons` 組合，確認乾淨單一原因 `fall_test_required`/`fall_test_expired` 本就會放行、但 `blockReasons` 為空陣列／欄位不存在／混雜其他原因時會誤擋——驗證問題確實出在「快取可能不同步」而非布林運算本身 ②用王登妹真實資料端到端驗證修好的邏輯：暫時把她真實墜測紀錄的 `expiresAt` 調到過去（未動 `result` 欄位、未刪除任何紀錄）→ 呼叫真正的 `getBlockReasons()`（非手刻複製版）→ 回傳 `['fall_test_expired']`→ 過濾後為空 → 🟢 放行 → 測後立即還原 `expiresAt` 回原值，複查確認資料與修改前逐欄位一致。
+- 📌 **範圍**：只影響 `enrollCourse`（workshop 單場/試上類工作坊報名，`POST /sessions/:sessionId/enroll`）；`handleEnrollAll`（整期週課報名）原本就沒有任何 isBlocked 檢查，不受影響、不需要改。
+- 💡 **教訓**：`member.isBlocked`/`member.blockReasons` 是**快取欄位**、非即時狀態——任何要依賴「目前是否真的被封鎖」做判斷的新程式碼，應呼叫 `memberService.getBlockReasons()` 即時查詢，不要直接信任會員文件上存的值（已知會在簽文件後數天～數月不會自動刷新）。

@@ -3672,3 +3672,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **`enrollCourse`（`courseService.js`，單場／工作坊／試上類報名）的 `MEMBER_BLOCKED` 改依即時封鎖原因（`getBlockReasons` 過濾墜測後的第一項）回傳具體訊息**：`waiver_unsigned`＋子會員→「報名對象（姓名）尚未完成風險安全聲明書簽署，請至「個人資料 → 家庭成員」代簽入場文件後再報名」；本人→「請先完成入場文件簽署」；`parent_waiver_pending`→「請查收法定代理人 Email 中的簽署連結」；`email_unverified`→「請先完成 Email 驗證」。回應另附 `blockReasons`。**擋/放行判斷完全不變**，只換訊息；會員端本就顯示 `response.data.message`，前端免改。
 - ⚠️ **未做真實報名驗證**：本次在雲端環境作業，網路政策擋 `api.redrocktaiwan.com`、無 Firebase 憑證，僅 `node -c` 語法檢查；黃亭穎小孩的實際封鎖原因也未能查證（請櫃檯在員工端該子會員「待完成事項」確認）。
   - ✅ **補查（有正式環境憑證的 session 事後驗證）**：黃亭穎與其子黃宬翊的實際 `blockReasons` 皆只有 `fall_test_required`（墜測未過），**非**上方猜測的 `waiver_unsigned`——子女 waiver 其實早已 `isComplete:true`（家長已代簽）。直接呼叫正式 `getBlockReasons()` 即時驗證：過濾墜測原因後為空陣列，`enrollCourse` 本就會放行（3.551.0 已涵蓋此情況），此案例的根本問題在 3.551.0 當下已解決，3.552.0 的訊息改善屬錦上添花、非她這筆的關鍵修復。**查 `courseEnrollments` 證實她已於 2026-10-03 12:47 成功報名**「小蜘蛛人初級班 優惠試上」（`status:confirmed`）——案例確認解決，無需進一步處理。
+
+## 目前進度（2026-10-03 續）— 風險安全聲明書／墜落測驗同意書：精簡改寫＋中英日三語＋簽署頁排版
+> 原兩份文件冗長且中英不同步、完全沒有日文。依使用者逐條確認的中文定稿，產出英文／日文並寫入正式資料庫；程式端補日文欄位、三語切換、排版修正。後端 `/health` `3.553.0-waiver-falltest-japanese-content`；前端 commit（redrock-web）`DocLangSwitch`／`DocParagraph`／簽署頁排版修正，已 deploy。
+- ✅ **文字存放（改文字不用改程式）**：風險安全聲明書＝`systemSettings/waiver`（`zh`／`en`／`ja`）；墜測同意書＝`systemSettings/fallTest`（`contentZh`／`contentEn`／`contentJa`，其餘 YouTube 網址／效期／觀看門檻欄位不動）。員工端「設定 → Waiver 內容／墜落測驗」各有三語輸入框。簽署快照（`contentSnapshot`）一併存 `ja`，已簽署者的紀錄仍是簽當時的舊文字、不受影響。
+- ✅ **文字格式約定（簽署頁靠這個切段與渲染，新增/改寫一律照此）**：**空白行＝一個勾選段落**（每段會員要各勾一次）；段落第一行若是短標題（≤40字、不以編號/破折號開頭、不以句號結尾）→ 粗體標題；`1. ` 編號行＝編號欄＋懸掛縮排；`- ` 行＝往內縮的圓點條列；其餘一般內文。渲染元件 `components/DocParagraph.jsx`（風險聲明書與墜測同意書共用）。
+- ✅ **現行定稿結構**：風險聲明書＝開場說明／安全注意事項（13條）／意外風險聲明／安全禮儀／個人責任（4點，第1點保留原文「致力為使用者打造安全的攀登環境」並補「仍可能會有意外發生」；第4點「公共意外責任險…運動傷害（如嚴重扭傷、骨折、脫臼等）」）。墜測同意書＝4段：**①本人自願參加同意聲明（置首）②測驗須知③安全墜落要點④未滿10歲兒童注意事項（含「通過後如有以下情形…」違規清單，改 `-` 條列，與前面編號 1–4 區隔）**。兒童規則為「**未滿10歲**」（原為6–10歲）；「12歲以下須成人陪同」不變。效期條款已改為現行規則（到期前2個月內入場、過去一年入場≥2次→自動延長一年），舊文「超過兩次可直接延長」作廢。
+- ✅ **前端**：`DocLangSwitch`（中文／English／日本語 segmented）用於會員簽署頁（`MemberWaiverPage`，預設跟隨會員語言 `getMemberLang()`）與家長簽署頁；**`ja` 內容未設定時自動隱藏「日本語」鈕**，並對缺漏語言 fallback 中文，不會出現空白。員工端副本檢視／列印仍讀 `contentSnapshot.zh`（未做日文）。
+- 🐞 **順修排版 bug**：墜測同意書段落原漏 `whiteSpace: pre-wrap`，編號項目被擠成一整段（風險聲明書本來就有）；兩份文件勾選框顏色也不一致（一紅一綠）→ 統一綠色、卡片間距對齊，並改用共用 `DocParagraph`。
+- 📌 **改文字的標準流程（本次沿用）**：中文草稿→使用者定稿→翻英日→使用者確認→**寫入前先把現行 Firestore 值備份成 JSON**（本次存在 session scratchpad，需長期保留要另存）→firebase-admin 用 `update`（非 `set`，避免洗掉同文件其他欄位）寫入→GET `/settings/waiver`、`/fall-tests/settings` 讀回驗證。寫入時務必確認「段落數三語一致」。
+- ⚠️ **未驗證/未做**：日文翻譯由 AI 產出、使用者確認通過，但未經日語母語者審閱（「公共意外責任保険」為沿用中文詞彙，未改成日本慣用說法）；員工端副本檢視未支援日文；競賽報名的 waiver（`ParentCompetitionWaiverPage` 等）是另一套，不在此範圍。
+- 🧪 **測試帳號現況**：`0900123123`（【練習】比賽報名測試，主帳號）**依使用者要求保持「未簽署」狀態**（waiver／墜測簽署與通過紀錄已刪、`isBlocked:true`、`blockReasons:[waiver_unsigned,fall_test_required]`），供之後反覆測試簽署頁；其子帳號 `test`（未成年）仍為已簽署。要還原成已簽署需手動重建（備份在當次 scratchpad，原始簽名圖非逐字還原）。

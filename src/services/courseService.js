@@ -731,7 +731,17 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     const liveBlockReasons = await getBlockReasons(memberId, member);
     const realBlockingReasons = liveBlockReasons.filter(reason => !fallTestBlockReasons.has(reason));
     if (realBlockingReasons.length > 0) {
-      throw { code: 'MEMBER_BLOCKED', message: '帳號已封鎖，無法報名' };
+      // 依實際原因給出可操作的訊息（原本一律「帳號已封鎖」，家長看不出要做什麼）
+      const who = member.isChildAccount ? `報名對象（${member.name || '子女'}）` : '您';
+      const REASON_MSG = {
+        waiver_unsigned: member.isChildAccount
+          ? `${who}尚未完成風險安全聲明書簽署，請至「個人資料 → 家庭成員」代簽入場文件後再報名`
+          : `${who}尚未完成風險安全聲明書簽署，請先完成入場文件簽署後再報名`,
+        parent_waiver_pending: `${who}的風險安全聲明書尚待法定代理人簽署（請查收法定代理人 Email 中的簽署連結）`,
+        email_unverified: `${who}的 Email 尚未驗證，請先完成 Email 驗證後再報名`,
+      };
+      const message = REASON_MSG[realBlockingReasons[0]] || '帳號已封鎖，無法報名';
+      throw { code: 'MEMBER_BLOCKED', message, blockReasons: realBlockingReasons };
     }
   }
 

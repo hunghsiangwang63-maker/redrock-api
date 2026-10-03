@@ -428,7 +428,7 @@ router.get('/waiver/parent/:token',
           .map(d => d.data())
           .sort((a, b) => (b.signedAt?._seconds || b.signedAt?.seconds || 0) - (a.signedAt?._seconds || a.signedAt?.seconds || 0))[0];
         fallTest = {
-          content: latest.contentSnapshot || { zh: '', en: '' },
+          content: latest.contentSnapshot || { zh: '', en: '', ja: '' },
           pending: latest.parentRequired === true && !latest.guardianSignedAt,
         };
       }

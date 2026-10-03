@@ -25,6 +25,7 @@ const getFallTestSettings = async (db) => {
     watchPercentRequired: 90,
     contentZh: '',
     contentEn: '',
+    contentJa: '',
   };
 };
 
@@ -94,7 +95,7 @@ router.get('/settings', async (req, res) => {
 router.put('/settings', authenticate, checkPermission('settings.manage'), async (req, res) => {
   try {
     const db = getDb();
-    const { requiredCheckins, validYears, youtubeUrl, watchPercentRequired, contentZh, contentEn } = req.body;
+    const { requiredCheckins, validYears, youtubeUrl, watchPercentRequired, contentZh, contentEn, contentJa } = req.body;
     await db.collection('systemSettings').doc('fallTest').set({
       requiredCheckins: Number(requiredCheckins) || 2,
       validYears: Number(validYears) || 1,
@@ -102,6 +103,7 @@ router.put('/settings', authenticate, checkPermission('settings.manage'), async 
       watchPercentRequired: Number(watchPercentRequired) || 90,
       contentZh: contentZh || '',
       contentEn: contentEn || '',
+      contentJa: contentJa || '',
       updatedAt: new Date(),
     });
     res.json({ success: true });

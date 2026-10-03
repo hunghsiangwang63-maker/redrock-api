@@ -33,7 +33,7 @@ const signWaiver = async ({ memberId, memberName, isMinor, isChildAccount, signa
   // 取得目前的 waiver 內容範本，作為簽署當下的文字快照（之後即使範本內容更新，
   // 已簽署紀錄仍會顯示簽署當時的版本，確保簽署紀錄的法律效力不受後續編輯影響）
   const contentDoc = await db.collection('systemSettings').doc('waiver').get();
-  const contentSnapshot = contentDoc.exists ? { zh: contentDoc.data().zh || '', en: contentDoc.data().en || '' } : { zh: '', en: '' };
+  const contentSnapshot = contentDoc.exists ? { zh: contentDoc.data().zh || '', en: contentDoc.data().en || '', ja: contentDoc.data().ja || '' } : { zh: '', en: '', ja: '' };
 
   // 上傳簽名圖
   const memberSignatureUrl = await uploadSignature(memberId, 'member', signatureData);

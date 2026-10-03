@@ -207,7 +207,7 @@ router.get('/waiver', async (req, res) => {
   try {
     const db = getDb();
     const doc = await db.collection('systemSettings').doc('waiver').get();
-    res.json(doc.exists ? doc.data() : { zh: '', en: '' });
+    res.json(doc.exists ? doc.data() : { zh: '', en: '', ja: '' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -217,8 +217,8 @@ router.put('/waiver', authenticate, async (req, res) => {
     return res.status(403).json({ error: '權限不足' });
   try {
     const db = getDb();
-    const { zh, en } = req.body;
-    await db.collection('systemSettings').doc('waiver').set({ zh, en, updatedAt: new Date() });
+    const { zh, en, ja } = req.body;
+    await db.collection('systemSettings').doc('waiver').set({ zh, en, ja: ja || '', updatedAt: new Date() });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

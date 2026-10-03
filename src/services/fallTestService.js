@@ -19,6 +19,7 @@ const getFallTestSettings = async (db) => {
     watchPercentRequired: 90,
     contentZh: '',
     contentEn: '',
+    contentJa: '',
   };
 };
 
@@ -124,6 +125,7 @@ async function signConsent({ memberId, signatureData, watchPercent, agreedParagr
     contentSnapshot: {
       zh: settings.contentZh || '',
       en: settings.contentEn || '',
+      ja: settings.contentJa || '',
     },
     parentRequired: !!isMinor,        // 未成年需家長遠端簽名
     guardianSignatureData: null,      // 家長簽名（遠端 email 簽署時回填）

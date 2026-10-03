@@ -1147,7 +1147,7 @@ router.get('/:id/waiver', authenticateAny, async (req, res) => {
     // 舊紀錄（此功能上線前簽署）沒有文字快照，退而求其次顯示目前範本內容，並明確標註非簽署當時版本
     if (!waiver.contentSnapshot) {
       const contentDoc = await db.collection('systemSettings').doc('waiver').get();
-      waiver.contentSnapshot = contentDoc.exists ? { zh: contentDoc.data().zh || '', en: contentDoc.data().en || '' } : { zh: '', en: '' };
+      waiver.contentSnapshot = contentDoc.exists ? { zh: contentDoc.data().zh || '', en: contentDoc.data().en || '', ja: contentDoc.data().ja || '' } : { zh: '', en: '', ja: '' };
       waiver.contentIsFallback = true; // 標註：這是現行版本，非簽署當下的逐字快照
     }
 

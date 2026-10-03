@@ -23,10 +23,10 @@ const { addCashAdjustment } = require('./settlementService');
  *   多了 skipped:'NON_CASH'/'INVALID_AMOUNT' 兩種提早結束的原因供呼叫端排查用（非必要，多數呼叫
  *   端目前只是 fire-and-forget 記 log，不特別檢查回傳值）。
  */
-async function recordDepositMovement({ gymId, amount, sign = '+', type = '現金補入', note, paymentMethod, targetDate }) {
+async function recordDepositMovement({ gymId, amount, sign = '+', type = '現金補入', note, paymentMethod, targetDate, refId }) {
   if (paymentMethod !== 'cash') return { skipped: true, reason: 'NON_CASH' };
   if (!(Number(amount) > 0)) return { skipped: true, reason: 'INVALID_AMOUNT' };
-  return addCashAdjustment({ gymId, amount, sign, type, note, targetDate });
+  return addCashAdjustment({ gymId, amount, sign, type, note, targetDate, refId });
 }
 
 /**

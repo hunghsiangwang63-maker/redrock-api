@@ -1049,6 +1049,7 @@ router.put('/:id/finance', authenticate, requireManager, async (req, res) => {
             gymId: b.gymId, sign: '-', type: '教練費', amount: newFeeNum, paymentMethod: 'cash',
             note: `${b.contactName || ''} 體驗教練費`.trim(),
             targetDate: b.bookingDate, // 記在活動當天，而非管理員填寫教練費金額的當下（2026-08-11 案例）
+            refId: b.id, // 改上課日時靠它把這筆搬到新日期（見 experienceService.updateExperienceSchedule）
           });
         } catch (e) { console.error('體驗教練費寫入結帳加減項失敗', e.message); }
         // 同步一筆人事報酬記錄（供 /payouts 報稅查詢用，2026-09-14）——教練姓名已知（b.coachName）才建，
@@ -1085,6 +1086,7 @@ router.put('/:id/finance', authenticate, requireManager, async (req, res) => {
             gymId: b.gymId, sign: delta > 0 ? '-' : '+', type: '教練費', amount: Math.abs(delta), paymentMethod: 'cash',
             note: `${b.contactName || ''} 體驗教練費金額修正（${oldFeeNum}→${newFeeNum}）`.trim(),
             targetDate: b.bookingDate,
+            refId: b.id,
           });
         } catch (e) { console.error('體驗教練費結帳加減項修正失敗', e.message); }
       }

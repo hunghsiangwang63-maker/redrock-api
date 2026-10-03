@@ -218,7 +218,26 @@ async function updateExperienceSchedule(db, booking, staff) {
     } catch (e) { console.error('[體驗改期] 同步營收認列日失敗（不阻斷改期）', e.message || e.code); }
   }
 
-  return { scheduleShiftId, ticketsUpdated: tk.size };
+  // 6) 教練費：結帳加減項與人事報酬記錄都要跟著搬到新上課日（2026-10-04 郭詠蓁案例：預約改上課日，
+  //    教練費沒連動，舊日結帳多扣一次、報酬記錄日期也停在舊日）。
+  //    ① 人事報酬記錄（sourceBookingId）日期一律改成新上課日。
+  //    ② 結帳加減項只搬「帶 refId、且仍在未結帳草稿」的自動項（relocateAutoDeductions）；已結帳的日子
+  //       不動（不改寫店員已核對關閉的帳）。2026-10-04 前建立的舊加減項沒有 refId，不會被搬。
+  let coachFeeRelocated = null;
+  if (booking.coachFeeAdjDone && booking.bookingDate) {
+    try {
+      const pr = await db.collection('payoutRecords').where('sourceBookingId', '==', booking.id).get();
+      if (!pr.empty) {
+        const pb = db.batch();
+        pr.forEach(d => pb.update(d.ref, { date: booking.bookingDate, updatedAt: new Date() }));
+        await pb.commit();
+      }
+      const { relocateAutoDeductions } = require('./settlementService');
+      coachFeeRelocated = await relocateAutoDeductions({ gymId: booking.gymId, refId: booking.id, toDate: booking.bookingDate });
+    } catch (e) { console.error('[體驗改期] 教練費連動失敗（不阻斷改期）', e.message || e.code); }
+  }
+
+  return { scheduleShiftId, ticketsUpdated: tk.size, coachFeeRelocated };
 }
 
 // ── 取消體驗：清理自動建立的課程/場次/教練排班（不阻斷退券主流程）──────

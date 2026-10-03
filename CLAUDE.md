@@ -3666,3 +3666,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🐞 **根因**：`UpdateChecker.jsx` 的「✕ 稍後再說」只存在元件 `useState`（純記憶體），**不會持久化**。加到主畫面的 standalone PWA 重新打開常只是「恢復背景狀態」而非真的重新連網抓新版（元件既有註解已點出這個限制）——每次重新 mount，`dismissed` 重置為 `false`，若裝置當下跑的仍是舊 bundle（沒抓到已部署的新版），`check()` 又會偵測到「跟伺服器不同」而重新彈出，造成同一個早就看過、關掉過的版本反覆跳提醒。
 - ✅ **修法**：按「稍後再說」時，把當下偵測到的遠端 `buildId` 存進 `localStorage`（`rr_update_dismissed_build`）；之後只有偵測到**比這個紀錄更新**的 `buildId` 才會再次彈出，同一版本重新 mount 不會再騷擾。「重新整理」按鈕行為不變（仍是帶 `_v=` 時間戳參數強制繞快取重新連網）。
 - **驗證**：兩 target build 前後兩次比對 buildId 完全一致（確認 hashSourceTree 本身具決定性、非本次問題來源）；部署後正式站 buildId 與本機重 build 結果一致；順手發現並一併推送本機原先落後遠端的 4 筆既有未推送 commit（`9f14233`/`5496b8d`/`ee4557d`/`ffd1cd4`，皆 9/30 已完成部署但當時漏了 `git push`），推送後本機/遠端完全同步。
+
+## 目前進度（2026-10-03）— 課程報名「帳號已封鎖」改依實際原因顯示可操作訊息
+> 回報：黃亭穎幫小孩報名「小蜘蛛人優惠試上」工作坊仍顯示「會員被封鎖」。3.551.0 已豁免墜測，剩下會擋的只有聲明書未簽／待法定代理人簽／Email 未驗證——最可能是家長建了子會員卻沒代簽入場文件（`waiver_unsigned`），但訊息一律「帳號已封鎖」，家長看不出要做什麼。後端 `/health` `3.552.0-course-booking-blocked-reason-message`；PR #1（merge commit `f6f9912`），已確認正式環境上線。
+- ✅ **`enrollCourse`（`courseService.js`，單場／工作坊／試上類報名）的 `MEMBER_BLOCKED` 改依即時封鎖原因（`getBlockReasons` 過濾墜測後的第一項）回傳具體訊息**：`waiver_unsigned`＋子會員→「報名對象（姓名）尚未完成風險安全聲明書簽署，請至「個人資料 → 家庭成員」代簽入場文件後再報名」；本人→「請先完成入場文件簽署」；`parent_waiver_pending`→「請查收法定代理人 Email 中的簽署連結」；`email_unverified`→「請先完成 Email 驗證」。回應另附 `blockReasons`。**擋/放行判斷完全不變**，只換訊息；會員端本就顯示 `response.data.message`，前端免改。
+- ⚠️ **未做真實報名驗證**：本次在雲端環境作業，網路政策擋 `api.redrocktaiwan.com`、無 Firebase 憑證，僅 `node -c` 語法檢查；黃亭穎小孩的實際封鎖原因也未能查證（請櫃檯在員工端該子會員「待完成事項」確認）。

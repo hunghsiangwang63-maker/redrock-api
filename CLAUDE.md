@@ -3739,3 +3739,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **E2E（假館資料，7/7）**：依 owedDates 發對張數、皆 prev_leave 豁免 available、效期 12/26、紀錄 converted；無 `autoIssue` 的紀錄不動、別人手機的紀錄不動；測後全清（含通知）。
 - ⚠️ **注意**：①宋沛德註冊後**不會**預設墜測通過（課程認領才有此預設；這次不是認領課程）→入場前墜測需另行處理 ②他用別的手機註冊就不會自動媒合，需人工核發 ③**日後要為「尚未註冊、前期欠補課」的人預先設定**：建 `crossCohortMakeups` 紀錄（`status:'pending_arrange'`、`phone`、`owedDates`、`deadline`、`gymId`、`courseName`）＋`autoIssue:{courseId:該班別的虛擬課程, expiresAt:'YYYY-MM-DD'}`；沒有該班別的虛擬課程要先建一個（複製 `virtual-prev-makeup-*`，改 `categoryId`/`name`/`gymId`）。
 - 📌 **補發/稽核操作慣例**：使用者給「某人＋哪幾天請假」要發補課券時，先確認①該人有無會員資料（無→走上述自動媒合）②本期掛哪個課程（進行中者優先，已結束的班不掛）③效期（問清楚或沿用使用者指定）；發券前先 dry-run 列出「將發」清單與既有券（避免重複），用 `prevLeaveDate`+`courseId`+`memberId` 去重。
+
+## 目前進度（2026-10-04 續5）— 月銷售紀錄「不管選幾月都下載到 10 月」修正（後端 `/health` `3.556.0-monthly-export-invalid-month-400`；前端 `MonthSelect`）
+> 回報：下載「月銷售紀錄」不管選幾月都是當月（10 月）資料。
+- 🔍 **查證**：直接用 API 下載 8/9/10 月，三份內容各是對應月份（表頭 8/1、9/1、10/1），**後端與前端傳參程式都沒錯**。唯一會永遠得到當月的路徑＝後端收到的 `month` **不是 `YYYY-MM`** 時**悄悄改用當月**（原本 `dailySettlements.js` `monthly-export` 的寫法 `/^\d{4}-\d{2}$/.test(month) ? month : dayjs().format('YYYY-MM')`）。兩個下載畫面（結帳→歷史紀錄 `DailySettlementPage`、財務→月銷售紀錄 `FinancePage`）用 `<input type="month">`，**桌面版 Safari 不支援 month 輸入、退化成純文字框**，選不到月份、送出值不是 `YYYY-MM` → 被當成當月。**⚠️ 這是依程式行為的判斷，未能確認使用者實際瀏覽器；若 Chrome 仍重現需另查。**
+- ✅ **前端**：新增共用元件 `components/MonthSelect.jsx`（年＋月兩個下拉，輸出 `YYYY-MM`，年份 2024～明年、已選值超出範圍自動納入；`aria-label` 年/月），取代兩處 `type="month"`。全站 `type="month"` 只有這兩處，已全數替換（正式站 `staff.redrocktaiwan.com/staff/finance` 實測已無 `input[type=month]`、出現「年=2026（4項）／月=10（12項）」）。
+- ✅ **後端**：`monthly-export` 有帶 `month` 但格式不是 `YYYY-MM`（含 `2026/09`、`2026年9月`、月份 `13`）→ **400 `INVALID_MONTH`**「月份格式不正確，請選擇年與月（YYYY-MM）」；沒帶 `month`（含空字串）→ 當月。驗證：`2026-09` 200、`2026/09` 400、`2026年9月` 400、`month=` 與不帶皆 200（xlsx）。
+- 📌 **同型地雷（尚未處理，留意）**：`checkin.js` `monthly-daily-counts`（入場頁每日入場數圖表）與 `schedule.js` 三處（`req.query.month || 當月`）對「格式錯誤的月份」仍是**靜默 fallback 當月**／直接當查詢字串用——目前前端傳值來源是程式內建（非使用者輸入的 month 欄位），暫無實害；日後若把這些接上使用者輸入的月份欄位，要比照這次改成驗格式＋回 400。
+- 💡 **教訓**：**給使用者選日期/月份的欄位，不要用 `type="month"`／`week`（桌面 Safari 不支援，會退化成文字框）；用年月下拉（`MonthSelect`）**。後端對「有傳但格式錯」的參數應回 400，而不是靜默換成預設值——靜默 fallback 會讓「前端欄位壞掉」變成「資料一直是當月、卻沒人知道哪裡錯」。

@@ -892,7 +892,12 @@ router.get('/monthly-export', authenticate, requireManager, async (req, res) => 
     const db = getDb();
     const XLSX = require('xlsx');
     const gymId = role === 'super_admin' ? (req.query.gymId || req.staff?.gymId) : req.staff?.gymId;
-    const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : dayjs().format('YYYY-MM');
+    // 沒帶 month → 當月；帶了但格式不是 YYYY-MM → 400（原本一律悄悄改用當月，前端月份欄位失效時
+    // 使用者會一直拿到當月資料卻不知道哪裡錯，2026-10-04 回報「不管選幾月都是10月」）。
+    if (req.query.month && !/^\d{4}-(0[1-9]|1[0-2])$/.test(req.query.month)) {
+      return res.status(400).json({ error: 'INVALID_MONTH', message: '月份格式不正確，請選擇年與月（YYYY-MM）' });
+    }
+    const month = req.query.month || dayjs().format('YYYY-MM');
     const start = `${month}-01`;
     const daysInMonth = dayjs(start).daysInMonth();
     const end = dayjs(start).endOf('month').format('YYYY-MM-DD');

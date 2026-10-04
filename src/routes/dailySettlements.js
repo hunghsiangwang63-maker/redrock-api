@@ -202,7 +202,9 @@ async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
     // 分組，涵蓋所有 sourceType，不限無來源發票），與 income 的課程/體驗收入（已於上方改依發票金額）
     // 使用同一個日期基準、同一批事件，兩者才會互相一致。定期票(pass)購買目前無對應真列印發票，此類
     // 收入的付款方式統計仍只能沿用 transactions(recognitionDate) 這條路（見 GET /today 呼叫端）。
-    issued.filter(i => i.sourceType !== 'checkin_merged').forEach(i => {
+    // 定期票續約發票（checkin_renewal／pass_renewal）不計入 byMethod：續約款的付款方式已由 type:'pass'
+    // 交易（GET /today 迴圈 addPay）統計，再加發票會重複（發票金額仍計入 actualTotal／bySourceType）。
+    issued.filter(i => i.sourceType !== 'checkin_merged' && i.sourceType !== 'checkin_renewal' && i.sourceType !== 'pass_renewal').forEach(i => {
       const m = i.paymentMethod || 'cash';
       result.byMethod[m] = (result.byMethod[m] || 0) + (Number(i.amount) || 0);
     });
@@ -465,6 +467,14 @@ router.get('/today', authenticate, requireStationAuth, async (req, res) => {
         addPay(data.paymentMethod, amount);
         const nm = ((data.notes || '').split('：')[1] || '定期票').trim() || '定期票';
         passByType[nm] = (passByType[nm] || 0) + amount;
+      } else if (data.type === 'refund' && !data.refundCategory && /定期票|分期|續約/.test(data.notes || '') && !(data.notes || '').includes('入場')) {
+        // 定期票/分期/續約的取消沖銷（負向 refund，如「定期票續約取消沖銷」）：原收款在上面 type:'pass' 分支
+        // 已計入 passIncome 與付款方式，沖銷必須同步扣回，否則取消後重新續約會變成收入/付款方式重複計算
+        // （黃永豪 2026-10-04：續約取消再重做，income.pass 7600、LinePay 多算，與發票 3800 對不上）。
+        // 判斷規則與 revenue.js foldType 一致；入場取消的沖銷已由 checkIns(isCancelled) 排除，不在此扣。
+        passIncome += amount;
+        addPay(data.paymentMethod, amount);
+        passByType['定期票'] = (passByType['定期票'] || 0) + amount;
       } else if (data.type === 'checkin') {
         // 入場金額本身（entryIncome/shoeRentalIncome）已由 checkinSnap 統計、此處不重複加總；
         // 但付款方式改逐筆用這裡的交易記錄歸類（見上方 checkinFallback 說明），只在此累加 payByMethod。

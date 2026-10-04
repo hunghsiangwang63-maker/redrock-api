@@ -227,6 +227,17 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
           const bkDoc = await bkRef.get();
           if (bkDoc.exists) {
             const bk = { id: bkDoc.id, ...bkDoc.data() };
+            // 試上：一併把課程名單標為已付款（與 /experience-bookings/:id/confirm 一致）；
+            // 否則「今日課程學員」會持續顯示「試上費未收」（李奇諦案例）。已取消名單不動。
+            if (bk.kind === 'trial' && bk.trialEnrollmentId) {
+              try {
+                const enRef = db.collection('courseEnrollments').doc(bk.trialEnrollmentId);
+                const enDoc = await enRef.get();
+                if (enDoc.exists && enDoc.data().status !== 'cancelled') {
+                  await enRef.update({ paymentStatus: 'paid', paymentDeadline: null, updatedAt: now });
+                }
+              } catch (e) { console.error('[試上名單標已付/transfers]', e.message); }
+            }
             const { recordExperienceRevenue, syncExperienceTickets } = require('../services/experienceService');
             await recordExperienceRevenue(db, bkRef, bk, req.staff);
             // 確認收款當下逐參加者發放入場券（試上/一般體驗皆自動發，比照 POST /experience-bookings/:id/confirm

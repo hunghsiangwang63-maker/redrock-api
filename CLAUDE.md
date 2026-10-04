@@ -3747,3 +3747,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **後端**：`monthly-export` 有帶 `month` 但格式不是 `YYYY-MM`（含 `2026/09`、`2026年9月`、月份 `13`）→ **400 `INVALID_MONTH`**「月份格式不正確，請選擇年與月（YYYY-MM）」；沒帶 `month`（含空字串）→ 當月。驗證：`2026-09` 200、`2026/09` 400、`2026年9月` 400、`month=` 與不帶皆 200（xlsx）。
 - 📌 **同型地雷（尚未處理，留意）**：`checkin.js` `monthly-daily-counts`（入場頁每日入場數圖表）與 `schedule.js` 三處（`req.query.month || 當月`）對「格式錯誤的月份」仍是**靜默 fallback 當月**／直接當查詢字串用——目前前端傳值來源是程式內建（非使用者輸入的 month 欄位），暫無實害；日後若把這些接上使用者輸入的月份欄位，要比照這次改成驗格式＋回 400。
 - 💡 **教訓**：**給使用者選日期/月份的欄位，不要用 `type="month"`／`week`（桌面 Safari 不支援，會退化成文字框）；用年月下拉（`MonthSelect`）**。後端對「有傳但格式錯」的參數應回 400，而不是靜默換成預設值——靜默 fallback 會讓「前端欄位壞掉」變成「資料一直是當月、卻沒人知道哪裡錯」。
+
+## 目前進度（2026-10-04 續6）— 入場統計（營收報表）匯出 CSV 失敗修正（後端 `/health` `3.557.0-checkin-export-no-index`）
+> 回報：入場統計無法下載（畫面只顯示「匯出失敗」）。
+- 🔍 **根因**：`GET /revenue/export-checkin-csv`（營收報表→入場日報→「↓ 匯出 CSV」）查詢同時用 `where isCancelled==false` ＋ `where gymId==`（選填）＋ `checkedInAt` 範圍 ＋ `orderBy checkedInAt desc`，**沒帶 gymId 時需要一組不存在的複合索引**（`isCancelled`+`checkedInAt`）→ `FAILED_PRECONDITION` → 500。前端 `handleExportCheckin` 原本**只傳 `dateFrom/dateTo`、從不帶 `gymId`** → super_admin（`gymId` 取 `req.query.gymId`）每次都走「全館」必炸；單館帳號走 `req.staff.gymId` 另一組已存在的索引所以正常。其他兩個匯出（`export-adjustments-csv` 等）不受影響。
+- ✅ **修**：後端改成**只用單一欄位**（`checkedInAt` 範圍＋排序，自動索引）查詢，`isCancelled!==true` 與 `gymId` 在記憶體過濾（專案慣例，不加複合索引）；前端 `RevenuePage.handleExportCheckin` 補傳 `gymId: gymFilter`（與畫面檢視館別一致，super_admin 全館時為空＝全館）。
+- ✅ **順手改善**：匯出 `ENTRY_LABEL` 補 `buy_pass 購買定期票／buy_discount_card 購買優惠折扣券／competition 比賽報到／already_paid 已付費放行／bonus 紅利／experience 體驗`（原本直接顯示英文原值）；會員姓名等欄位新增 `csvCell` 跳脫（含逗號/引號/換行才加引號，避免切歪欄位）。
+- ✅ **驗證（正式 API）**：近 30 天全館 1,625 筆 ＝ 新竹 1,173 ＋ 士林 452；三種館別選擇皆 200、類型欄全中文（優惠折扣券 384、課程學員 307、單次購票 302、購買優惠折扣券 52…）。修復前：不帶 gymId → 500、帶 gymId → 200。
+- 💡 **排查模式（匯出/下載類「失敗」共通）**：先用**管理員 token 直接打該端點**，分別測「帶 gymId／不帶 gymId」與不同日期範圍——`FAILED_PRECONDITION: The query requires an index` 幾乎都是「選填條件缺省時換了一組查詢形狀」；**選填篩選條件（gymId 等）會讓同一支查詢在不同參數組合下需要不同複合索引**，新增/修改 Firestore 查詢時要把「不帶選填條件」那條路徑也實測一次。

@@ -423,28 +423,33 @@ router.get('/export-checkin-csv',
       const gymId = req.staff.role === 'super_admin' ? req.query.gymId : req.staff.gymId;
       const { dateFrom, dateTo } = req.query;
 
-      let ref = db.collection(COLLECTIONS.CHECK_INS)
-        .where('isCancelled', '==', false);
-      if (gymId) ref = ref.where('gymId', '==', gymId);
+      // ⚠️ 2026-10-04：原本 isCancelled＋gymId＋checkedInAt 範圍＋orderBy 同時用，超級管理員選「全館」
+      // （不帶 gymId）時需要一組不存在的複合索引 → FAILED_PRECONDITION → 500「匯出失敗」。
+      // 依專案慣例：只用單一欄位（checkedInAt 範圍＋排序，自動索引）查詢，其餘條件在記憶體過濾。
+      let ref = db.collection(COLLECTIONS.CHECK_INS);
       if (dateFrom) ref = ref.where('checkedInAt', '>=', new Date(dateFrom));
       if (dateTo) ref = ref.where('checkedInAt', '<=', new Date(dateTo));
 
       const snap = await ref.orderBy('checkedInAt', 'desc').get();
-      const checkIns = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const checkIns = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(c => c.isCancelled !== true && (!gymId || c.gymId === gymId));
 
       const ENTRY_LABEL = {
         pass: '定期票', vip: 'VIP', course_access: '課程學員',
         discount_card: '優惠折扣券', black_card: '黑卡',
         single_entry_ticket: '單次入場券', single_ticket: '單次購票',
         child_free: '兒童入場', student_free: '學生入場',
+        buy_pass: '購買定期票', buy_discount_card: '購買優惠折扣券', competition: '比賽報到',
+        already_paid: '已付費放行', bonus: '紅利', experience: '體驗',
       };
+      const csvCell = (v) => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
 
       const rows = [
         ['日期', '時間', '會員姓名', '入場類型', '付款方式', '金額', '岩鞋租借'].join(','),
         ...checkIns.map(c => [
           dayjs(c.checkedInAt.toDate()).format('YYYY-MM-DD'),
           dayjs(c.checkedInAt.toDate()).format('HH:mm'),
-          c.memberName,
+          csvCell(c.memberName),
           ENTRY_LABEL[c.entryType] || c.entryType,
           c.paymentMethod || '—',
           c.amountPaid || 0,

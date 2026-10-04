@@ -205,10 +205,16 @@ const cancelCheckIn = async (checkInId, staffId, force = false, staffName = null
       const invoiceService = require('../invoiceService');
       const legacyInv = await invoiceService.getActiveInvoice(db, 'checkin', checkInId);
       if (legacyInv) { await invoiceService.voidInvoice(db, legacyInv.id, staffId, staffName, '入場取消自動作廢'); invoiceVoided = true; }
+      // 現場續約發票（sourceType:'checkin_renewal'，refId 同為 checkInId）——入場取消會連動沖銷續約款
+      // （revertRenewal），對應發票也一併作廢，避免續約已退款、發票仍有效。
+      const renewalInv = await invoiceService.getActiveInvoice(db, 'checkin_renewal', checkInId);
+      if (renewalInv) { await invoiceService.voidInvoice(db, renewalInv.id, staffId, staffName, '入場取消自動作廢'); invoiceVoided = true; }
     } catch (e) { console.error('[入場取消連動作廢-手動記帳發票]', e.message); }
     try {
       const realInv = await voidRealInvoiceIfIssued(db, { sourceType: 'checkin', refId: checkInId }, staffId, staffName, '入場取消自動作廢');
       if (realInv) invoiceVoided = true;
+      const realRenewalInv = await voidRealInvoiceIfIssued(db, { sourceType: 'checkin_renewal', refId: checkInId }, staffId, staffName, '入場取消自動作廢');
+      if (realRenewalInv) invoiceVoided = true;
     } catch (e) { console.error('[入場取消連動作廢-真實發票]', e.message); }
   }
 

@@ -70,7 +70,7 @@ async function checkInvoiceIssuanceTiming(db, sourceType, refId) {
 async function checkStillValidForInvoice(db, sourceType, refId) {
   if (!sourceType || !refId) return { valid: true };
   try {
-    if (sourceType === 'checkin') {
+    if (sourceType === 'checkin' || sourceType === 'checkin_renewal') {
       const doc = await db.collection('checkIns').doc(refId).get();
       if (doc.exists && doc.data().isCancelled) return { valid: false, reason: '入場已取消' };
     } else if (sourceType === 'product') {

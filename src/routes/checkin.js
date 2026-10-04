@@ -312,6 +312,48 @@ router.post('/:checkInId/invoices', authenticate, requireManagerOrStation, async
   }
 });
 
+// ── 現場續約開立發票（2026-10-04）：到館現場在產生入場 QR 時勾選續約（checkIns.renewalAmount>0），
+// 續約款不併入入場費（入場實收 amountPaid 常為 0，見 confirmCheckIn 續約處理），原本入場發票按鈕
+// 因「實收 0」而隱藏，導致這筆續約款沒有任何開發票入口（黃永豪案例）。sourceType:'checkin_renewal'、
+// refId=checkInId（同一次入場最多一張續約發票）；續約款已在確認當下記為 type:'pass' 交易，故與
+// rental_addon/pass_renewal 同屬「不另記現金加減項」（invoiceService DOUBLE_COUNTED_SOURCE_TYPES）。
+router.get('/:checkInId/renewal-invoices', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('invoiceRecords')
+      .where('sourceType', '==', 'checkin_renewal').where('refId', '==', req.params.checkInId).get();
+    const invoices = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.issuedAt?._seconds || 0) - (a.issuedAt?._seconds || 0));
+    res.json({ invoices });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+router.post('/:checkInId/renewal-invoices', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const checkInDoc = await db.collection(COLLECTIONS.CHECK_INS).doc(req.params.checkInId).get();
+    if (!checkInDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到入場紀錄' });
+    const ci = checkInDoc.data();
+    if (ci.isCancelled) return res.status(400).json({ error: 'CHECKIN_CANCELLED', message: '此入場已取消，續約款已沖銷，無法開立發票' });
+    if (!(Number(ci.renewalAmount) > 0)) return res.status(400).json({ error: 'NO_RENEWAL', message: '此入場沒有續約款' });
+    const { itemName, amount, taxId, note, issuedAt, track, number } = req.body;
+    const invoiceService = require('../services/invoiceService');
+    const record = await invoiceService.createInvoice(db, {
+      sourceType: 'checkin_renewal', refId: req.params.checkInId,
+      memberId: ci.memberId, memberName: ci.memberName || '',
+      itemName: itemName || '定期票續約', amount, taxId, note, gymId: ci.gymId, issuedAt, track, number,
+      staffId: req.staff.id, staffName: req.staff.name || '',
+      meta: { checkInId: req.params.checkInId, passId: ci.renewPassId || null },
+      paymentMethod: ci.paymentMethod,
+    });
+    res.json({ success: true, invoice: record });
+  } catch (err) {
+    const map = { INVALID_AMOUNT: 400, MISSING_FIELDS: 400, ALREADY_INVOICED: 400, INVALID_TRACK: 400, INVALID_NUMBER: 400, INVALID_TAX_ID: 400 };
+    if (err.code && map[err.code]) return res.status(map[err.code]).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 // ── 更正入場付款方式（2026-09-04）：已確認入場後才發現付款方式選錯，一次同步 checkIn／對應
 // 交易記錄／已開立發票（若有），並在「今天」的正式結帳快照仍為 settled 時精確回補現金/電子支付
 // 分類（見 checkin/flow.js correctPaymentMethod 完整說明）。僅限管理員（現金結帳敏感動作，

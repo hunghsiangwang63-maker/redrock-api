@@ -17,7 +17,7 @@ const COLL = 'invoiceRecords';
 //  pass_renewal：付款當下已由 recordTransaction 記為電子支付）——create/void
 // 都要一起跳過現金加減項，否則同一筆錢會被重複計算。集中定義於此，讓 create 與
 // void 讀同一份判斷依據，避免像過去那樣「開立時記得跳過、作廢時忘記」的不對稱。
-const DOUBLE_COUNTED_SOURCE_TYPES = new Set(['rental_addon', 'pass_renewal']);
+const DOUBLE_COUNTED_SOURCE_TYPES = new Set(['rental_addon', 'pass_renewal', 'checkin_renewal']);
 
 // 是否該記現金加減項：呼叫端明確要求跳過 → 一律跳過；來源類型本就雙重計算 → 跳過；
 // 呼叫端有告知真實付款方式且不是現金 → 跳過（這筆錢沒有進抽屜，不該記現金異動）；

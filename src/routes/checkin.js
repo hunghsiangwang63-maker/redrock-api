@@ -870,6 +870,9 @@ router.get('/today',
             // 記在 checkIns 文件的 onlineTicket 欄位（見 checkin/flow.js confirmCheckIn 寫回）——
             // 此白名單投影原本漏掉這欄，導致「今日入場」清單的開立發票鈕永遠判定成「免費、無需開票」。
             onlineTicket: r.onlineTicket || null,
+            // 現場續約款（一次付清；分期為 0）——入場實收常為 0，需靠此欄位才知道要顯示「續約發票」鈕
+            // （同上，此白名單投影原本漏掉，2026-10-04 補上）。
+            renewalAmount: Number(r.renewalAmount) || 0, isCancelled: r.isCancelled === true,
             ...(courseInv ? {
               courseInvoice: { courseId: courseInv.courseId, courseName: courseInv.courseName, enrollmentId: courseInv.enrollmentId, paymentMethod: courseInv.paymentMethod, receivedAmount: courseInv.receivedAmount },
             } : {}),

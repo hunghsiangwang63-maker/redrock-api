@@ -315,3 +315,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **新竹結帳發票 9,236 vs 系統 13,036（差 3,800）**（`3.560.0-settlement-pass-refund-netting`）：黃永豪 90 日票續約 3,800 做了兩次——續約→取消入場（`revertRenewal` 記 `type:'refund'` −3,800、notes「定期票續約取消沖銷」）→重新續約；淨額與發票皆 3,800。結帳 `GET /today` 迴圈只加 `type:'pass'`、**不扣 refund** → `income.pass` 7,600；`payment.linePay` 也多算（pass 交易 `addPay` ＋續約發票進 `invAuth.byMethod` 重複）16,156（實際 8,556）。修：①迴圈新增 refund 分支——無 `refundCategory`、notes 含「定期票／分期／續約」且不含「入場」者，同步扣回 `passIncome`／付款方式／`passByType`（規則與 `revenue.js foldType` 一致；入場取消沖銷已由 `checkIns.isCancelled` 排除，不在此扣）②`computeTodayInvoiceAuthority` 的 `byMethod` 排除 `checkin_renewal`／`pass_renewal` 發票（續約款付款方式已由 pass 交易統計；發票金額仍計入 `actualTotal`／`bySourceType`）。已結帳快照（`9d7ff343…`）已更正：pass 7600→3800、total 13036→9236、linePay 16156→8556；現金 680、差異 0 不變。
 - ✅ **驗證**：用管理員打正式 `GET /daily-settlements/today?gymId=gym-hsinchu`（已結帳日仍即時重算 `live`，**不必等隔日**即可驗證）→ pass 3800／total 9236／linePay 8556／cash 680／invoiceActualTotal 9236，與手動更正的快照完全一致。
 - 💡 **對帳備忘**：結帳「系統總額」與「發票總額」差額剛好等於某筆定期票/續約金額時，先查該會員是否有「續約取消後重做」（`transactions` 依 `relatedId`＝passId 看 pass／refund／pass 三筆）；已結帳日更正快照時，`actualCash`／`closingCash` 不動、隔日前日餘額不受影響。
+
+## 目前進度（2026-10-04 續8）— 王柏然（士林子會員）墜測同意書併入聲明書＋放行入場（純資料，無程式異動）
+> 管理員要求「王柏然的墜測同意書合併到風險安全聲明書，家長不要多簽名」。會員 `10c29ca2-f71a-4b41-9380-09d02bb72a77`（12 歲、`isChildAccount`、家長 `8c5c1dc1…`）。
+- 🔍 **查證現況**：waiver `isComplete:true`，但 **`memberSignedBy:'self'`（本人簽、非家長代簽）、無 `parentSignedAt`**，內容為舊版（不含墜測同意條款）；`fallTestSignatures` 0 筆、無墜測紀錄、`blockReasons:['fall_test_required']`。（一度誤說成「家長代簽」，已更正。）
+- ✅ **補一筆行政合併標記** `fallTestSignatures/baaa00ff-6745-46e8-8809-6af8d1cc6d7d`：`source:'merged-with-waiver'`、`mergedWaiverId`、`signatureData:''`（**未複製聲明書簽名圖、未偽造觀看進度/勾選段落**）、`adminNote` 註明依管理員指示併入。入場關卡 `hasConsentSignature` 只判斷「有無紀錄」，故不再要求家長補簽。員工端若有檢視副本，此筆內容為空。
+- ✅ **墜測通過由管理員（Sean）在員工端自行登記**（效期至 2027-10-04）→ `isBlocked:false`、`blockReasons:[]`，可入場（12 歲以下仍須家長/成人陪同）。
+- 📌 **注意**：`fall_test_required` 看的是「有無通過的 `fallTests`」，**與同意書簽署紀錄無關**；`recordFallTestResult` 登記通過前會檢查有無同意書簽署紀錄（`SIGNATURE_REQUIRED`），所以併入標記必須先於登記通過。
+- ⚠️ **權限**：我用 service 函式補登通過被 auto mode 分類器擋（獨立於 settings allow 規則，專案已有 `Bash(node *)` 仍擋）；不要靠加規則解決，被擋就說明並請使用者在員工端操作或確認。全域 `~/.claude/settings.json` 一度被 `/permissions` 誤存成壞規則（整段 JSON 當字串），已清空 `allow`。

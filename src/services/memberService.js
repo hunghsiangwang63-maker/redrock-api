@@ -329,6 +329,59 @@ const claimPendingCourseEnrollment = async (db, memberId, member) => {
   }
 };
 
+// 前期請假補課券自動媒合（2026-10-04，宋沛德案例）：前期（舊梯次）學員欠補課、但本期沒有報名任何課，
+// 註冊前沒有 memberId 可掛券。館方先在 crossCohortMakeups 建一筆待安排紀錄並帶 autoIssue
+// （{courseId:掛靠用虛擬課程, expiresAt}），該人註冊時以「手機」精確比對（不比姓名，避免同名碰撞），
+// 命中就依 owedDates 逐日發 prev_leave 豁免補課券（不佔請假額度），紀錄標 converted。
+// 只處理有 autoIssue 的紀錄（舊的待安排紀錄不受影響）；子帳號共用家長電話一律跳過；失敗不阻斷註冊。
+const claimPendingPrevLeaveRights = async (db, memberId, member) => {
+  try {
+    if (member.isChildAccount) return null;
+    const phone = normalizePhone(member.phone);
+    if (!phone) return null;
+    const snap = await db.collection('crossCohortMakeups').where('status', '==', 'pending_arrange').get();
+    const hits = snap.docs.filter(d => d.data().autoIssue && d.data().autoIssue.courseId && normalizePhone(d.data().phone) === phone);
+    if (!hits.length) return null;
+    const now = new Date();
+    let issued = 0;
+    for (const hit of hits) {
+      const x = hit.data(); const ai = x.autoIssue;
+      const cdoc = await db.collection('courses').doc(ai.courseId).get();
+      if (!cdoc.exists) { console.error('[前期補課認領] 掛靠課程不存在', ai.courseId); continue; }
+      const c = cdoc.data();
+      const expiresAt = new Date(`${ai.expiresAt || x.deadline}T00:00:00+08:00`);
+      const ids = [];
+      for (const dt of (x.owedDates || [])) {
+        const rid = uuidv4(); ids.push(rid);
+        await db.collection('courseMakeupRights').doc(rid).set({
+          id: rid, memberId, originalEnrollmentId: null,
+          courseId: ai.courseId, courseName: c.name || '', categoryId: c.categoryId || null,
+          gymId: c.gymId || x.gymId || null, tags: c.tags || [],
+          status: 'available', expiresAt, usedSessionId: null, usedAt: null,
+          source: 'prev_leave', exempt: true, prevLeaveDate: dt,
+          notes: '註冊自動媒合（前期請假，依手機比對）', createdAt: now, updatedAt: now,
+        });
+        issued++;
+      }
+      await hit.ref.update({ status: 'converted', claimedBy: memberId, claimedAt: now, convertedRightIds: ids, updatedAt: now });
+      try {
+        const { notifyGymManagers } = require('./notificationService');
+        await notifyGymManagers({
+          gymId: x.gymId || c.gymId || 'gym-hsinchu', type: 'prev_leave_claimed',
+          title: '前期補課券已自動發放',
+          body: `${member.name}（${member.phone}）註冊會員，已依手機自動發放 ${ids.length} 張前期請假補課券（${(x.owedDates || []).join('、')}；${x.courseName || c.name}），效期至 ${dayjs(expiresAt).format('YYYY-MM-DD')}。請核對是否為同一人。`,
+          referenceId: ai.courseId, referenceType: 'course', link: '/staff/courses',
+        });
+      } catch (e) { console.error('前期補課認領通知失敗（券已發放）:', e.message); }
+      console.log(`✅ 前期補課券認領: ${member.name} ${phone} → ${ids.length} 張`);
+    }
+    return issued;
+  } catch (e) {
+    console.error('claimPendingPrevLeaveRights 失敗（不阻斷建立會員）:', e.message);
+    return null;
+  }
+};
+
 // ── 舊系統課程舊生名單自動認領（如 BeClass 小蜘蛛人歷史報名，用來判定「舊生報名優惠」）───
 // legacyCourseAlumni：{ name(上課者/小孩姓名), phone(家長電話，已正規化為純數字), categoryId, claimed }。
 // 比對：電話（正規化）+ 姓名（legacyNameMatch，去括號＋包含式；子帳號共用家長電話，name 比對上課者本人姓名）。
@@ -717,6 +770,8 @@ const createMember = async (memberData, staffId, options = {}) => {
   await claimLegacyCompetitionReg(db, memberId, member);
   // 課程名單預留自動認領（店員先建名單但當時查無會員 → 註冊時姓名比對自動加入該課程）
   await claimPendingCourseEnrollment(db, memberId, member);
+  // 前期請假補課券自動媒合（手機比對；館方先在 crossCohortMakeups 建 autoIssue 紀錄）
+  await claimPendingPrevLeaveRights(db, memberId, member);
   // 舊系統課程舊生名單自動認領（如 BeClass 小蜘蛛人歷史報名 → 判定「舊生報名優惠」）
   await claimLegacyCourseAlumni(db, memberId, member);
   // Climbio VIP 名單自動認領（無期限；全家 VIP 含子帳號繼承）

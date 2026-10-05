@@ -323,3 +323,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **墜測通過由管理員（Sean）在員工端自行登記**（效期至 2027-10-04）→ `isBlocked:false`、`blockReasons:[]`，可入場（12 歲以下仍須家長/成人陪同）。
 - 📌 **注意**：`fall_test_required` 看的是「有無通過的 `fallTests`」，**與同意書簽署紀錄無關**；`recordFallTestResult` 登記通過前會檢查有無同意書簽署紀錄（`SIGNATURE_REQUIRED`），所以併入標記必須先於登記通過。
 - ⚠️ **權限**：我用 service 函式補登通過被 auto mode 分類器擋（獨立於 settings allow 規則，專案已有 `Bash(node *)` 仍擋）；不要靠加規則解決，被擋就說明並請使用者在員工端操作或確認。全域 `~/.claude/settings.json` 一度被 `/permissions` 誤存成壞規則（整段 JSON 當字串），已清空 `allow`。
+
+## 目前進度（2026-10-05）— 刪除王登第／王登妹「【新竹館】小蜘蛛人初級班 優惠試上」測試報名（純資料，無程式異動）
+> 管理員指示刪除兩人在該工作坊（課程 `6b6172f9-1752-4301-9ecc-6aebb3d52f54`）的報名，確認「都是測試資料」。這些是 10/3 Debby Chu 測「退回付款」流程時留下的（退回原因 `test`／`test2`）。
+- 🔍 **刪前查證**：王登第 1 筆（10/21，`transfer_rejected`）；王登妹 2 筆——10/21（`transfer_rejected`）與 **11/04（`paymentConfirmed:true`、400 元、入場券已發）**。因 11/04 那筆看似已收款，先停下來問管理員，確認「全部刪除、都是測試」才動手。
+- ✅ **刪除（單一 batch，刪前備份成 JSON）**：`courseEnrollments` 3 筆（`4a50ee45…`／`a3cd7c2b…`／`fc3088ee…`）、`courseRegistrations` 3 筆（每筆報名各一）、`singleEntryTickets` 1 筆（`bf4a2590…`，王登妹 11/04 課程入場券）。
+- ✅ **場次人數扣回**：10/21 場次 `enrolledCount` 4→2、11/04 場次 1→0（扣前核對過 `enrolledCount` 與有效報名數一致才扣）。
+- 📋 **查無需清**：`transactions`（王登妹 0 筆；王登第 3 筆皆與此課程無關，未動）、`invoices`、`notifications` 皆無關聯紀錄。會員帳號本身未動。
+- 📌 **模式**：刪「已確認收款」的報名前，先查 `singleEntryTickets`（`courseEnrollmentId`）、交易／發票、場次 `enrolledCount`，並把報名＋總表（`payEnrollmentId`／`sourceEnrollmentIds` 互指）成對刪。

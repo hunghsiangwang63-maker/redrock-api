@@ -36,6 +36,7 @@ const makeupExpiryDayjs = (course, rules, fallbackBase) => {
 const RULE_DEFAULTS = {
   leaveDeadlineHours: 2,       // 上課前 N 小時前須請假
   maxLeaves: 2,                // 整期可請假次數
+  makeupPerLeave: 1,           // 每次有效請假發幾張補課券（青少年進階班＝2：上課 3 小時，可補 2 次 1.5 小時課）
   allowMakeup: true,           // 開放補課
   makeupDeadlineDays: 60,      // 課程「結束日」後 N 天內補完
   allowTrial: false,           // 開放試上
@@ -998,7 +999,7 @@ const verifyCoursePartnerGym = async (enrollmentId, approved, staff) => {
 };
 
 // ── 補課額度重算（不變量，政策 2026-07-17）────────────────────────
-// 任一時刻：補課總額(available+used) = min(cap, 目前有效請假數)；cap = enrollment.maxLeavesAllowed ?? rules.maxLeaves。
+// 任一時刻：補課總額(available+used) = min(cap, 目前有效請假數) × makeupPerLeave（預設 1）；cap = enrollment.maxLeavesAllowed ?? rules.maxLeaves。
 // 取消請假不再永久吃掉額度：只要有效請假數仍足夠，額度自動補回（先復活 cancelled 券、不夠再新建）；
 // 過多只作廢多餘 available（over_limit）、絕不動 used。冪等。
 const reconcileMakeupEntitlement = async (db, memberId, courseId, rules = null, enrollment = null) => {
@@ -1013,7 +1014,8 @@ const reconcileMakeupEntitlement = async (db, memberId, courseId, rules = null, 
   const activeLeaves = enDocs.filter(e => e.status === 'leave').length;
   const capOverride = enrollment?.maxLeavesAllowed ?? enDocs.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed;
   const cap = capOverride ?? rules.maxLeaves;
-  const entitlement = rules.allowMakeup === false ? 0 : Math.min(cap, activeLeaves);
+  const perLeave = Math.max(1, Number(rules.makeupPerLeave) || 1);
+  const entitlement = rules.allowMakeup === false ? 0 : Math.min(cap, activeLeaves) * perLeave;
 
   const mkSnap = await db.collection(MAKEUP_COLLECTION)
     .where('memberId', '==', memberId).where('courseId', '==', courseId).get();
@@ -1218,7 +1220,7 @@ const cancelLeave = async ({ enrollmentId, memberId }) => {
     const enDocsQ = enSnapQ.docs.map(d => d.data());
     const activeLeavesQ = enDocsQ.filter(e => e.status === 'leave').length;
     const capQ = enDocsQ.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rulesQ.maxLeaves;
-    const newEntitlement = rulesQ.allowMakeup === false ? 0 : Math.min(capQ, Math.max(0, activeLeavesQ - 1));
+    const newEntitlement = rulesQ.allowMakeup === false ? 0 : Math.min(capQ, Math.max(0, activeLeavesQ - 1)) * Math.max(1, Number(rulesQ.makeupPerLeave) || 1);
     const mkSnapQ = await db.collection(MAKEUP_COLLECTION)
       .where('memberId', '==', memberId).where('courseId', '==', enrollment.courseId).get();
     const usedQ = mkSnapQ.docs.filter(d => d.data().status === 'used' && d.data().exempt !== true).length; // 豁免券不佔配額
@@ -1295,7 +1297,7 @@ const precheckCancelLeave = async ({ enrollmentId, memberId }) => {
   const enDocsQ = enSnapQ.docs.map(d => d.data());
   const activeLeavesQ = enDocsQ.filter(e => e.status === 'leave').length;
   const capQ = enDocsQ.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rulesQ.maxLeaves;
-  const newEntitlement = rulesQ.allowMakeup === false ? 0 : Math.min(capQ, Math.max(0, activeLeavesQ - 1));
+  const newEntitlement = rulesQ.allowMakeup === false ? 0 : Math.min(capQ, Math.max(0, activeLeavesQ - 1)) * Math.max(1, Number(rulesQ.makeupPerLeave) || 1);
   const mkSnapQ = await db.collection(MAKEUP_COLLECTION)
     .where('memberId', '==', memberId).where('courseId', '==', enrollment.courseId).get();
   const usedRights = mkSnapQ.docs.filter(d => d.data().status === 'used' && d.data().exempt !== true); // 豁免券不佔配額

@@ -501,7 +501,7 @@ router.get('/analytics/download', authenticate, requireManager, async (req, res)
       rows = docs.map((b, i) => {
         const owner = nameMap[b.ownerMemberId] || {};
         const orig = nameMap[b.originalOwnerMemberId] || {};
-        const status = b.isUsed ? '已使用' : (b.isActive === false ? '已移轉/停用' : (bExpiredDl(b) ? '已過期' : '有效'));
+        const status = b.isUsed ? '已使用' : (b.isActive === false ? '已移轉/停用' : (bExpiredDl(b) ? '已使用' : '有效'));
         return [i+1, csv(owner.name), owner.phone || '', csv(orig.name), status, fmtDate(b.expiresAt), fmtDate(b.usedAt), gymLabel(b.usedAtGymId), fmtDate(b.createdAt)].join(',');
       });
     }

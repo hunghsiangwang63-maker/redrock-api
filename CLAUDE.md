@@ -337,3 +337,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **員工端「票券統計」定期票區塊排除已取消**：拿掉「已取消」數字卡與長條圖「取消」欄（統計卡改 3 欄）；「總發出」改為前端 `total − cancelled`（＝有效＋已過期）；`GET /pass-adjustments/analytics/download?type=passes` 的 CSV 也過濾掉 `status==='cancelled'`。後端 analytics API 回傳欄位本身不動（仍含 `cancelled`），只是畫面/CSV 不再顯示。優惠卡／黑卡／單日券統計不動。
 - ✅ **現場續約發票＋線上續約發票彈窗（另一 session，前端 `49b81b4`、後端 `15c8587`／`124fbbf`）**：`checkIns.renewalAmount>0` 且未取消時入場頁顯示「開立續約發票」（`sourceType:'checkin_renewal'`，`refId=checkInId`，端點 `/checkin/:checkInId/renewal-invoices`）；在家線上續約（`sourceType:'pass_renewal'`，`refId=paymentId`，端點 `/passes/renewal-invoice/:paymentId`＋`/void`）原本按鈕有但彈窗未接（點了沒反應），已補上。`InvoiceButton` 新增 `label` 參數。**使用者確認此功能已實際驗證過**。
 - 📌 **部署流程提醒**：前端 deploy 時 working tree 內其他 session 已 commit 的改動會一併上線（本次 `49b81b4` 即隨 `1cbf9ac` 的 build 一起部署）；動前端前先 `git log` 看有無他人新 commit。
+
+## 目前進度（2026-10-06 續）— 員工端「票券統計」頁精簡：各票種拿掉取消/過期、紅利加圓餅圖
+> 純顯示/統計口徑調整，皆已部署。前端(redrock-web)：`1cbf9ac`／`1f494f8`／`0e2b58b`／`725617d`／`67788bb`／`ffed42a`；後端：`ed53cb0`／`5389fe0`／`67e8b7a`／`025dc8f`。使用者逐項指示，**後端 analytics API 仍回傳完整欄位（含 `cancelled`/`expired`），只是前端不顯示、CSV 與紅利統計有過濾**。
+- ✅ **定期票**：拿掉「已取消」卡與長條圖「取消」欄；「總發出」＝前端算 `total − cancelled`（＝有效＋已過期）；下載明細 CSV 排除已取消。
+- ✅ **優惠卡／黑卡**：拿掉「過期」卡（剩總張數／有效／已用完 3 欄）；兩者共用的圓餅圖拿掉「已用／剩餘」圖例（比例文字已標示）。
+- ✅ **單日券**：拿掉「已取消」；「已過期」併入「已使用」（卡片＝總張數／有效／已使用，總張數已扣取消）；圓餅圖只剩有效／已用；CSV 排除已取消、原「已過期」狀態改寫「已使用」。取消來源（正式資料 4 張）：`approval_timeout`（單次券 24h 未審核自動取消）、`參加者移除`（體驗預約減人連動取消；體驗券與單日券同存 `singleEntryTickets`，故會一併計入）、`已從紙本發出`（人工標記）。
+- ✅ **紅利**：「已過期」併入「已使用」，新增有效／已用圓餅圖；CSV 原「已過期」改寫「已使用」。**統計與 CSV 排除兩類**：①`transferredTo` 的已移轉**原紅利**（`bonusService.transferBonus` 移轉時會複製一筆給新持有人，只算新那筆，避免重複）②管理員停用/撤銷的紅利（`isActive:false && !isUsed && !expiredAt`，有 `revokedAt`/`correctionNote`；正式資料 2 筆）。系統自動掃過期的紅利有 `expiredAt`，仍計入（併入已使用）。正式資料驗證過濾：67→65 筆。⚠️ 正式資料目前**沒有**已移轉紅利，去重邏輯只依程式推演、無實資料驗證；`ticketTransfers` 流程是直接改持有人（不複製、無 `transferredTo`），不受過濾影響。
+- 📌 **提醒**：日後若有人問「票券統計數字對不上資料庫」，先想到這些刻意排除（取消/停用/已移轉原紅利）與併入規則；要看原始全量用 `GET /pass-adjustments/analytics` 回傳的原欄位或直接查集合。

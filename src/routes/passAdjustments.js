@@ -421,7 +421,7 @@ router.get('/analytics/download', authenticate, requireManager, async (req, res)
     if (type === 'passes' || !type) {
       const snap = await db.collection(COLLECTIONS.MEMBER_PASSES).get();
       headers = ['序號','會員姓名','票種','狀態','開始日','到期日','館別','備註'];
-      rows = snap.docs.map((d,i) => {
+      rows = snap.docs.filter(d => d.data().status !== 'cancelled').map((d,i) => {
         const p = d.data();
         const status = p.status==='cancelled'?'已取消':p.endDate<today?'已過期':p.status==='active'?'有效':'其他';
         return [i+1, `"${p.memberName||''}"`, `"${p.passTypeName||''}"`, status, p.startDate||'', p.endDate||'', p.gymId||'', `"${p.note||''}"`].join(',');

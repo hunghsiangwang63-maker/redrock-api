@@ -391,7 +391,9 @@ router.get('/analytics', authenticate, requireManagerOrStation, async (req, res)
     };
 
     // 紅利（discountBonuses：優惠卡用完送「一次免費入場」；一次性、非天數制）
-    const bonuses = bonusSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // 排除：已移轉的原紅利（移轉時會複製一筆給新持有人，只算新的那筆避免重複）、管理員停用/撤銷的紅利
+    const bonuses = bonusSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .filter(b => !b.transferredTo && !(b.isActive === false && !b.isUsed && !b.expiredAt));
     const bExpDate = (ts) => {
       const ms = ts?._seconds != null ? ts._seconds*1000 : (ts?.seconds != null ? ts.seconds*1000 : (typeof ts?.toDate==='function' ? ts.toDate().getTime() : (ts ? new Date(ts).getTime() : null)));
       return ms != null ? new Date(ms + 8*3600000).toISOString().slice(0,10) : null; // 台灣日
@@ -399,8 +401,7 @@ router.get('/analytics', authenticate, requireManagerOrStation, async (req, res)
     const bExpired = (b) => { const d = bExpDate(b.expiresAt); return d != null && d < today; };
     const bonusStats = {
       total: bonuses.length,
-      // 已移轉（transferredTo）視為未使用，仍計入有效
-      active: bonuses.filter(b => (b.isActive !== false || b.transferredTo) && !b.isUsed && !bExpired(b)).length,
+      active: bonuses.filter(b => b.isActive !== false && !b.isUsed && !bExpired(b)).length,
       used: bonuses.filter(b => b.isUsed === true).length,
       expired: bonuses.filter(b => !b.isUsed && bExpired(b)).length,
     };
@@ -484,7 +485,8 @@ router.get('/analytics/download', authenticate, requireManager, async (req, res)
     } else if (type === 'bonuses') {
       // 現行紅利 discountBonuses（一次免費入場）：持有人 ownerMemberId、原購買者 originalOwnerMemberId 反查姓名
       const snap = await db.collection('discountBonuses').get();
-      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(b => !b.transferredTo && !(b.isActive === false && !b.isUsed && !b.expiredAt)); // 與統計一致：排除已移轉原紅利/已停用
       const uniqIds = [...new Set(docs.flatMap(b => [b.ownerMemberId, b.originalOwnerMemberId]).filter(Boolean))];
       const nameMap = {};
       for (let i = 0; i < uniqIds.length; i += 50) {

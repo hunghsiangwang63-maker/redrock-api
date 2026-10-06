@@ -345,3 +345,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **單日券**：拿掉「已取消」；「已過期」併入「已使用」（卡片＝總張數／有效／已使用，總張數已扣取消）；圓餅圖只剩有效／已用；CSV 排除已取消、原「已過期」狀態改寫「已使用」。取消來源（正式資料 4 張）：`approval_timeout`（單次券 24h 未審核自動取消）、`參加者移除`（體驗預約減人連動取消；體驗券與單日券同存 `singleEntryTickets`，故會一併計入）、`已從紙本發出`（人工標記）。
 - ✅ **紅利**：「已過期」併入「已使用」，新增有效／已用圓餅圖；CSV 原「已過期」改寫「已使用」。**統計與 CSV 排除兩類**：①`transferredTo` 的已移轉**原紅利**（`bonusService.transferBonus` 移轉時會複製一筆給新持有人，只算新那筆，避免重複）②管理員停用/撤銷的紅利（`isActive:false && !isUsed && !expiredAt`，有 `revokedAt`/`correctionNote`；正式資料 2 筆）。系統自動掃過期的紅利有 `expiredAt`，仍計入（併入已使用）。正式資料驗證過濾：67→65 筆。⚠️ 正式資料目前**沒有**已移轉紅利，去重邏輯只依程式推演、無實資料驗證；`ticketTransfers` 流程是直接改持有人（不複製、無 `transferredTo`），不受過濾影響。
 - 📌 **提醒**：日後若有人問「票券統計數字對不上資料庫」，先想到這些刻意排除（取消/停用/已移轉原紅利）與併入規則；要看原始全量用 `GET /pass-adjustments/analytics` 回傳的原欄位或直接查集合。
+
+## 目前進度（2026-10-06 續2）— 林子雲補「虹瑩進階班」9/10 課：人工補課券＋手動登記名單（純資料）
+> 管理員指示：林子雲（`dc502ee4…`，0963004187，原班＝「虹瑩進階班 8-9月週四班」`00491b4e…`，士林）今天 10/6 補課，登記補課券與名單。**虹瑩課程政策上不自動發補課券（`rules.allowMakeup:false`），一律館方人工額外給。**
+- ✅ **補課券**：`courseMakeupRights/a35939c7-878a-45b7-8b6f-7532bbae589f`，用既有 `issueManualMakeupCredit()` 發（`source:'manual'`、`exempt:true`、`originalEnrollmentId:null`，掛原班週四班）。依指示補 **2026-09-10**（該堂週四班場次 `cancelled`、但她的報名仍 `confirmed`，故系統原本沒發停課券）→ 加 `makeupForDate:'2026-09-10'`＋備註；**效期改成當日**（2026-10-06，存 2026-10-05T16:00Z＝台灣 00:00，格式同系統其他補課券；原本預設 10/24）。
+- ✅ **名單**：補到今天 19:30 士林「虹瑩進階班 8-9月週二班」（場次 `c4616280…`，原 2/3 → **3/3**；賴芷均請假者不佔 `enrolledCount`）。報名 `courseEnrollments/cda1d21d-3d93-409e-a39e-3b02a1b3064f`（`isMakeup:true`、`makeupId` 指回券、`enrolledBy:'staff-manual'`、帶人工註記），券同步標 `used`（`usedSessionId`＝該場次）。
+- ⚠️ **繞過了一道守門，是刻意的**：正式 `enrollMakeup()` 擋下 `MAKEUP_TARGET_CLOSED`——週二班 `makeupTarget:'off'`（不開放當補課目標）。因為是管理員人工安排，改**手動照 `enrollMakeup` 同樣的三筆寫入**（報名＋場次人數＋券 used）在單一 batch 完成，其餘檢查（券可用、場次未滿、未重複報名）自行驗過。寫入前備份在當次 scratchpad `backup-ziyun.json`。
+- ✅ **入場**：她當下 `getBlockReasons` 為空；`eligibility.js` 對補課報名（`isMakeup && date===今天`）給「當天限定」課程學員入場資格（不延伸到隔天）——依程式判斷可直接入場，**未在櫃檯實測**。
+- 📌 **日後類似需求（虹瑩等不自動發補課券的班）**：①`issueManualMakeupCredit(db,{memberId,courseId,issuedBy,issuedByName})` 發券（掛學員自己的班）②目標場次若 `makeupTarget` 為 off 則 `enrollMakeup` 會被擋，管理員確認要硬排時才照上述手動三筆寫入 ③券「已使用」是登記補課當下就標的（發券＋排課是一組），不是自己變的。

@@ -471,12 +471,12 @@ router.get('/analytics/download', authenticate, requireManager, async (req, res)
     } else if (type === 'tickets') {
       const snap = await db.collection('singleEntryTickets').get();
       headers = ['序號','會員姓名','狀態','有效期限','使用日期','核發人','核發館別'];
-      rows = snap.docs.map((d,i) => {
+      rows = snap.docs.filter(d => d.data().status !== 'cancelled').map((d,i) => {
         const t = d.data();
         const ticketStatus = t.status === 'used' ? '已使用'
           : t.status === 'cancelled' ? '已取消'
           : t.status === 'pending_approval' ? '待審核'
-          : (t.status === 'active' && t.expiresAt && t.expiresAt < today) ? '已過期'
+          : (t.status === 'active' && t.expiresAt && t.expiresAt < today) ? '已使用'
           : t.status === 'active' ? '有效' : (t.status || '');
         return [i+1, `"${t.memberName||''}"`, ticketStatus, t.expiresAt||'', t.usedAt?._seconds?new Date(t.usedAt._seconds*1000).toLocaleDateString('zh-TW'):'', `"${t.issuedByName||''}"`, t.gymId||''].join(',');
       });

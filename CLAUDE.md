@@ -331,3 +331,9 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **場次人數扣回**：10/21 場次 `enrolledCount` 4→2、11/04 場次 1→0（扣前核對過 `enrolledCount` 與有效報名數一致才扣）。
 - 📋 **查無需清**：`transactions`（王登妹 0 筆；王登第 3 筆皆與此課程無關，未動）、`invoices`、`notifications` 皆無關聯紀錄。會員帳號本身未動。
 - 📌 **模式**：刪「已確認收款」的報名前，先查 `singleEntryTickets`（`courseEnrollmentId`）、交易／發票、場次 `enrolledCount`，並把報名＋總表（`payEnrollmentId`／`sourceEnrollmentIds` 互指）成對刪。
+
+## 目前進度（2026-10-06）— 票券統計定期票排除已取消＋續約發票（另一 session 完成）記錄
+> 兩件事，皆已部署。前端(redrock-web) commit `1cbf9ac`／`1f494f8`；後端 `ed53cb0`。
+- ✅ **員工端「票券統計」定期票區塊排除已取消**：拿掉「已取消」數字卡與長條圖「取消」欄（統計卡改 3 欄）；「總發出」改為前端 `total − cancelled`（＝有效＋已過期）；`GET /pass-adjustments/analytics/download?type=passes` 的 CSV 也過濾掉 `status==='cancelled'`。後端 analytics API 回傳欄位本身不動（仍含 `cancelled`），只是畫面/CSV 不再顯示。優惠卡／黑卡／單日券統計不動。
+- ✅ **現場續約發票＋線上續約發票彈窗（另一 session，前端 `49b81b4`、後端 `15c8587`／`124fbbf`）**：`checkIns.renewalAmount>0` 且未取消時入場頁顯示「開立續約發票」（`sourceType:'checkin_renewal'`，`refId=checkInId`，端點 `/checkin/:checkInId/renewal-invoices`）；在家線上續約（`sourceType:'pass_renewal'`，`refId=paymentId`，端點 `/passes/renewal-invoice/:paymentId`＋`/void`）原本按鈕有但彈窗未接（點了沒反應），已補上。`InvoiceButton` 新增 `label` 參數。**使用者確認此功能已實際驗證過**。
+- 📌 **部署流程提醒**：前端 deploy 時 working tree 內其他 session 已 commit 的改動會一併上線（本次 `49b81b4` 即隨 `1cbf9ac` 的 build 一起部署）；動前端前先 `git log` 看有無他人新 commit。

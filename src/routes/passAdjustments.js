@@ -399,7 +399,8 @@ router.get('/analytics', authenticate, requireManagerOrStation, async (req, res)
     const bExpired = (b) => { const d = bExpDate(b.expiresAt); return d != null && d < today; };
     const bonusStats = {
       total: bonuses.length,
-      active: bonuses.filter(b => b.isActive !== false && !b.isUsed && !bExpired(b)).length,
+      // 已移轉（transferredTo）視為未使用，仍計入有效
+      active: bonuses.filter(b => (b.isActive !== false || b.transferredTo) && !b.isUsed && !bExpired(b)).length,
       used: bonuses.filter(b => b.isUsed === true).length,
       expired: bonuses.filter(b => !b.isUsed && bExpired(b)).length,
     };
@@ -501,7 +502,7 @@ router.get('/analytics/download', authenticate, requireManager, async (req, res)
       rows = docs.map((b, i) => {
         const owner = nameMap[b.ownerMemberId] || {};
         const orig = nameMap[b.originalOwnerMemberId] || {};
-        const status = b.isUsed ? '已使用' : (b.isActive === false ? '已移轉/停用' : (bExpiredDl(b) ? '已使用' : '有效'));
+        const status = b.isUsed ? '已使用' : (b.isActive === false ? (b.transferredTo ? '已移轉（未使用）' : '已停用') : (bExpiredDl(b) ? '已使用' : '有效'));
         return [i+1, csv(owner.name), owner.phone || '', csv(orig.name), status, fmtDate(b.expiresAt), fmtDate(b.usedAt), gymLabel(b.usedAtGymId), fmtDate(b.createdAt)].join(',');
       });
     }

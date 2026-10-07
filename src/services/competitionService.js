@@ -88,11 +88,18 @@ const computeCompetitionFee = async ({ competition, birthday, memberId, partnerG
   let teamFee = baseFee, teamOk = false;
   if (memberId && !isKidsComp) {
     try {
-      const { isActiveTeamMember, applyTeamDiscount } = require('./teamMemberService');
+      const { isActiveTeamMember, applyTeamDiscount, TEAM_DISCOUNT_MIN_AMOUNT } = require('./teamMemberService');
       const mDoc = await getDb().collection(COLLECTIONS.MEMBERS).doc(memberId).get();
       if (mDoc.exists && isActiveTeamMember(mDoc.data())) {
-        const r = applyTeamDiscount(baseFee, true);
-        teamFee = r.discounted; teamOk = r.applied;
+        // 賽事自己的「隊員折扣」費率（fees.teamMemberDiscount，如 0.9=9折）優先；未設/無效才退回系統預設 9 折。
+        // 費率 >= 1 視為此賽事不給隊員折扣。最低適用金額等規則沿用 applyTeamDiscount。
+        const rate = Number(fees.teamMemberDiscount);
+        if (fees.teamMemberDiscount != null && fees.teamMemberDiscount !== '' && Number.isFinite(rate) && rate > 0) {
+          if (rate < 1 && baseFee >= TEAM_DISCOUNT_MIN_AMOUNT) { teamFee = Math.round(baseFee * rate); teamOk = true; }
+        } else {
+          const r = applyTeamDiscount(baseFee, true);
+          teamFee = r.discounted; teamOk = r.applied;
+        }
       }
     } catch (e) { /* 查無會員不影響計算 */ }
   }

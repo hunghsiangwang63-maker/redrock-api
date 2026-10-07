@@ -43,7 +43,10 @@ const mapAthlete = (competition, registration) => {
     birthday: registration.birthday || '',
     phone: registration.phone || '',
     email: registration.email || '',
-    team: cf.team || cf['隊伍'] || cf['隊伍名稱'] || '',
+    // 隊伍：自訂欄位有填隊伍就用它；否則帶「平常練習岩館」——計分系統各畫面都在選手姓名旁顯示 team，
+    // 現場可直接看到選手來自哪個岩館（另存 practiceGym 原值，供日後計分系統單獨使用）
+    team: cf.team || cf['隊伍'] || cf['隊伍名稱'] || registration.practiceGym || '',
+    practiceGym: registration.practiceGym || '',
   };
 };
 
@@ -97,6 +100,7 @@ const syncCompAthlete = async (competition, registration) => {
         [`athletes.${key}.phone`]: ath.phone,
         [`athletes.${key}.email`]: ath.email,
         [`athletes.${key}.team`]: ath.team,
+        [`athletes.${key}.practiceGym`]: ath.practiceGym,
         [`athletes.${key}.origId`]: ath.origId,
       });
     } else {
@@ -133,6 +137,7 @@ const syncAllAthletes = async (competition, registrations) => {
       update[`athletes.${key}.phone`] = ath.phone;
       update[`athletes.${key}.email`] = ath.email;
       update[`athletes.${key}.team`] = ath.team;
+      update[`athletes.${key}.practiceGym`] = ath.practiceGym;
       update[`athletes.${key}.origId`] = ath.origId;
     } else {
       update[`athletes.${key}`] = ath;
@@ -243,6 +248,6 @@ const startAutoScoringTimer = () => {
   setTimeout(autoEnableScoringSweep, 20 * 1000); // 開機 20 秒後先跑一次（部署當下若已在窗口內即刻生效）
 };
 
-module.exports = { COMP_SCORING, isCompScoring, syncCompEvent, syncCompAthlete, syncAllAthletes, removeCompAthlete, pullFinalResults,
+module.exports = { COMP_SCORING, isCompScoring, mapAthlete, syncCompEvent, syncCompAthlete, syncAllAthletes, removeCompAthlete, pullFinalResults,
   autoEnableScoringSweep, startAutoScoringTimer,
 };

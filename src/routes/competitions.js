@@ -1274,6 +1274,8 @@ router.post('/registrations/:regId/update-form', authenticateAny, async (req, re
       formReturned: false, formReturnReason: null, formReturnedAt: null,
       updatedAt: new Date(),
     });
+    // 資料有改（姓名/組別/練習岩館等）→ 已正取且簽署完成者重新推送計分系統（sendWebhook 內部會略過候補/未完成者）
+    if (newStatus === 'confirmed' && reg.isComplete) { try { await competitionService.sendWebhook(req.params.regId); } catch (e) { console.error('改表後推送計分系統失敗', e.message); } }
     res.json({ success: true, message: '報名資料已更新，請等待館方確認' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

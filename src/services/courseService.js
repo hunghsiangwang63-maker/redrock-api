@@ -1586,11 +1586,12 @@ const promoteWaitlistForCourse = async (courseId) => {
   // 課程級容量：以「不重複常態學員數」計（比照 enroll-all 判定準則，補課/試上單堂佔位不算）
   const allSnap = await db.collection(ENROLLMENT_COLLECTION)
     .where('courseId', '==', courseId).where('status', 'in', ['confirmed', 'waitlist'])
-    .select('status', 'memberId', 'isMakeup', 'isTrial').get();
+    .select('status', 'memberId', 'isMakeup', 'isTrial', 'pauseStatus').get();
   const confirmedMembers = new Set();
   allSnap.forEach(d => {
     const e = d.data();
     if (e.isMakeup || e.isTrial) return;
+    if (e.pauseStatus === 'paused') return; // 暫停中不佔名額
     if (e.status === 'confirmed') confirmedMembers.add(e.memberId);
   });
   if (confirmedMembers.size >= maxStudents) return null; // 沒有空位，不遞補
@@ -2054,7 +2055,7 @@ const markTodayCourseAttendanceOnEntry = async ({ memberId, gymId, staffId }) =>
 // header fallback 用（enrollGender/enrollAge/enrollNote/healthNote/referralSource 非第一堂
 // 場次會是 null），非畫面直接顯示，勿漏。
 const SESSION_ROSTER_FIELDS = [
-  'memberId', 'memberName', 'courseId', 'status', 'isMakeup',
+  'memberId', 'memberName', 'courseId', 'status', 'isMakeup', 'pauseStatus',
   'enrollGender', 'enrollAge', 'enrollNote', 'healthNote', 'referralSource',
   'paymentStatus', 'leaveReason',
   // 免登入公開報名（guest_ 開頭假 memberId，members 集合查無此人）：電話存在報名當下填的
@@ -2080,7 +2081,8 @@ const getSessionRoster = async (sessionId) => {
   // 補上會員姓名/電話，方便工作人員端直接顯示完整名單，不需要再額外查會員資料
   // 批次 db.getAll() 取代逐筆 await getMember()（原為 N 次序列查詢，名單越大越慢，
   // 2026-08-18 查獲——改批次後同樣資料一次網路往返取得，不逐筆等待）
-  const roster = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  // 暫停中的學員（courseAdjustments 暫停核准）不列入場次名單（名額已釋放）
+  const roster = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.pauseStatus !== 'paused');
   const memberIds = [...new Set(roster.map(r => r.memberId).filter(Boolean))];
   const memberInfoMap = {};
   for (let i = 0; i < memberIds.length; i += 30) {
@@ -2430,7 +2432,7 @@ const getCourses = async (gymId) => {
     const [enrollSnap, waitlistSnap] = await Promise.all([
       db.collection(ENROLLMENT_COLLECTION)
         .where('courseId', 'in', chunk).where('status', '==', 'confirmed')
-        .select('courseId', 'memberId', 'isMakeup', 'isTrial').get(),
+        .select('courseId', 'memberId', 'isMakeup', 'isTrial', 'pauseStatus').get(),
       db.collection(ENROLLMENT_COLLECTION)
         .where('courseId', 'in', chunk).where('status', '==', 'waitlist')
         .select('courseId', 'memberId').get(),
@@ -2438,6 +2440,7 @@ const getCourses = async (gymId) => {
     enrollSnap.docs.forEach(d => {
       const e = d.data();
       if (e.isMakeup || e.isTrial) return; // 常態上課人數：補課/試上為單堂行為，不計入課程層人數（場次層另有計）
+      if (e.pauseStatus === 'paused') return; // 暫停中釋放名額，不計入課程層人數
       if (!enrolledByCourse[e.courseId]) enrolledByCourse[e.courseId] = new Set();
       enrolledByCourse[e.courseId].add(e.memberId);
     });
@@ -2538,8 +2541,8 @@ const getSessions = async (gymId, fromDate, toDate) => {
   for (const chunk of chunks) {
     // .select() 只抓需要欄位——避免拖回每筆內嵌的簽名圖(base64)，見 getCourses 同型註解
     const enrollSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', 'in', chunk)
-      .select('sessionId', 'status', 'isMakeup', 'isTrial').get();
-    enrollSnap.docs.forEach(d => allEnrollments.push(d.data()));
+      .select('sessionId', 'status', 'isMakeup', 'isTrial', 'pauseStatus').get();
+    enrollSnap.docs.forEach(d => { const e = d.data(); if (e.pauseStatus !== 'paused') allEnrollments.push(e); }); // 暫停中不計入場次人數
   }
 
   const statsBySession = {};

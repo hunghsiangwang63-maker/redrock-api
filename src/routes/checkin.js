@@ -644,7 +644,7 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
     const [enrollSnaps, checkedInSnap, xmSnap] = await Promise.all([
       Promise.all(chunks.map(chunk => db.collection('courseEnrollments')
         .where('sessionId', 'in', chunk).where('status', '==', 'confirmed')
-        .select('sessionId', 'memberId', 'memberName', 'isMakeup', 'isTrial', 'paymentStatus', 'courseName').get())),
+        .select('sessionId', 'memberId', 'memberName', 'isMakeup', 'isTrial', 'paymentStatus', 'courseName', 'pauseStatus').get())),
       db.collection('checkIns')
         .where('gymId', '==', gymId).where('isCancelled', '==', false)
         .where('checkedInAt', '>=', todayStart).get(),
@@ -652,7 +652,7 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
         .where('targetDate', '==', today).where('status', '==', 'booked').get(),
     ]);
     const enrollments = [];
-    enrollSnaps.forEach(snap => snap.docs.forEach(d => enrollments.push({ id: d.id, ...d.data() })));
+    enrollSnaps.forEach(snap => snap.docs.forEach(d => { if (d.data().pauseStatus !== 'paused') enrollments.push({ id: d.id, ...d.data() }); })); // 暫停中的學員不列入今日名單
     const checkedInMemberIds = new Set(checkedInSnap.docs.map(d => d.data().memberId));
 
     const sessionMap = {};

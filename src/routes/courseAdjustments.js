@@ -517,8 +517,16 @@ router.post('/requests/:id/approve',
           .get();
         let paused = 0;
         for (const d of snap.docs) {
-          if ((d.data().date || '') < today) continue; // 已上的堂不動
-          await d.ref.update({ pauseStatus: 'paused', pausedAt: now, pauseRequestId: req.params.id, updatedAt: now });
+          const e = d.data();
+          if ((e.date || '') < today) continue; // 已上的堂不動
+          if (e.pauseStatus === 'paused') continue; // 已暫停過（冪等）
+          // 暫停＝釋放該堂名額（2026-10-07 政策）：場次人數 -1、學員從場次名單/今日名單消失；恢復時再佔回名額
+          await d.ref.update({ pauseStatus: 'paused', pausedAt: now, pauseRequestId: req.params.id, pausedSeatReleased: true, updatedAt: now });
+          if (e.sessionId) {
+            const sRef = db.collection(COLLECTIONS.COURSE_SESSIONS || 'courseSessions').doc(e.sessionId);
+            const sDoc = await sRef.get();
+            if (sDoc.exists) await sRef.update({ enrolledCount: Math.max(0, (sDoc.data().enrolledCount || 0) - 1), updatedAt: now });
+          }
           paused++;
         }
         // 同步 header（供 members.js buildCourseMemberList 改讀 header 後仍正確排除暫停中會員）
@@ -645,39 +653,47 @@ router.post('/enrollments/:enrollmentId/restore',
       const enrollment = enrollDoc.data();
       if (enrollment.pauseStatus !== 'paused') return res.status(400).json({ error: 'NOT_PAUSED', message: '此報名並非暫停狀態' });
 
-      // 恢復報名狀態
-      await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).doc(req.params.enrollmentId).update({
-        pauseStatus: null,
-        restoredAt: new Date(),
-        restoredBy: req.staff.id,
-        updatedAt: new Date(),
+      // 恢復範圍＝該會員此課程「所有」暫停中的未來場次（暫停核准時一次暫停整門課的未來堂數，
+      // 原本只恢復單一 enrollmentId 會讓學員只回來一堂）。暫停時名額已釋放 → 恢復要重新佔位：
+      // 先檢查每堂是否還有空位，任何一堂已被補滿就整批不恢復（避免只回來一部分），回傳哪幾堂額滿。
+      const memberSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).where('memberId', '==', enrollment.memberId).get();
+      const today = taiwanToday();
+      const paused = memberSnap.docs.filter(d => {
+        const x = d.data();
+        return x.courseId === enrollment.courseId && x.pauseStatus === 'paused';
       });
-      // 將 paused 的場次恢復（未來場次）
-      const today = new Date();
-      const sessionEnrollSnap = await db.collection('courseSessionEnrollments')
-        .where('enrollmentId', '==', req.params.enrollmentId)
-        .where('status', '==', 'paused').get();
-      const batch = db.batch();
-      sessionEnrollSnap.docs.forEach(d => {
-        batch.update(d.ref, { status: 'confirmed', updatedAt: new Date() });
+      const futurePaused = paused.filter(d => (d.data().date || '') >= today);
+      const sessionDocs = {};
+      for (const d of futurePaused) {
+        const sid = d.data().sessionId;
+        if (sid && !sessionDocs[sid]) sessionDocs[sid] = await db.collection(COLLECTIONS.COURSE_SESSIONS || 'courseSessions').doc(sid).get();
+      }
+      const fullDates = [];
+      futurePaused.forEach(d => {
+        const x = d.data();
+        if (!x.pausedSeatReleased) return; // 舊資料（釋放名額政策上線前暫停的）名額從未釋放，不需再檢查/佔位
+        const sd = sessionDocs[x.sessionId];
+        if (sd?.exists && (sd.data().enrolledCount || 0) >= (sd.data().maxStudents || 0)) fullDates.push(x.date);
       });
-      await batch.commit();
-      // 同步 header：此 API 只恢復單一 enrollmentId（暫停時可能一次暫停多堂未來場次），
-      // 要先確認該會員此課程「已無其他仍暫停中的場次」才把 header 的 pauseStatus 清掉，
-      // 否則只恢復其中一堂時會誤把 header 標成「已恢復」。
-      try {
-        // 單一等值查詢＋記憶體過濾（避免 courseId+memberId+pauseStatus 三欄複合索引，本專案慣例）
-        const remainSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
-          .where('memberId', '==', enrollment.memberId).get();
-        const stillPaused = remainSnap.docs.some(d => {
-          const x = d.data();
-          return x.courseId === enrollment.courseId && x.pauseStatus === 'paused';
-        });
-        if (!stillPaused) {
-          await courseRegistrationService.updateHeaderPauseStatus(db, enrollment.memberId, enrollment.courseId, null);
+      if (fullDates.length) {
+        return res.status(409).json({ error: 'SESSION_FULL', message: `以下場次名額已被補滿，暫無法恢復：${fullDates.sort().join('、')}。請先調整該堂名單（如取消補課/試上）再恢復` });
+      }
+
+      const now = new Date();
+      let restored = 0;
+      for (const d of paused) {
+        const x = d.data();
+        await d.ref.update({ pauseStatus: null, restoredAt: now, restoredBy: req.staff.id, pausedSeatReleased: false, updatedAt: now });
+        if (x.pausedSeatReleased && (x.date || '') >= today && x.sessionId) {
+          const sRef = db.collection(COLLECTIONS.COURSE_SESSIONS || 'courseSessions').doc(x.sessionId);
+          const sDoc = await sRef.get();
+          if (sDoc.exists) await sRef.update({ enrolledCount: (sDoc.data().enrolledCount || 0) + 1, updatedAt: now });
         }
-      } catch (e) { console.error('header pauseStatus 同步失敗（恢復）', e.message); }
-      res.json({ success: true, message: '課程已恢復，學員已重新加回場次名單' });
+        restored++;
+      }
+      try { await courseRegistrationService.updateHeaderPauseStatus(db, enrollment.memberId, enrollment.courseId, null); }
+      catch (e) { console.error('header pauseStatus 同步失敗（恢復）', e.message); }
+      res.json({ success: true, restored, message: `課程已恢復（${restored} 堂），學員已重新加回場次名單` });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );

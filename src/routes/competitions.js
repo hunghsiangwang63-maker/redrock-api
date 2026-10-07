@@ -223,7 +223,20 @@ router.get('/:id/quote', authenticateAny, async (req, res) => {
     const quote = await competitionService.computeCompetitionFee({
       competition, birthday, memberId, partnerGymId: req.query.partnerGymId || null,
     });
-    res.json({ quote });
+    // 兒童賽：附上此報名對象可用的補課券（供報名表「使用補課券抵費」選單；實際抵費以報名時後端為準）
+    let makeupRights = [];
+    if (competition.competitionType === 'kids') {
+      const snap = await getDb().collection('courseMakeupRights').where('memberId', '==', memberId).get();
+      const nowMs = Date.now();
+      makeupRights = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => {
+        const exp = r.expiresAt?.toDate ? r.expiresAt.toDate().getTime() : (r.expiresAt ? new Date(r.expiresAt).getTime() : null);
+        return r.status === 'available' && r.redemptionType !== 'cash_credit' && (exp == null || exp > nowMs);
+      }).map(r => ({
+        id: r.id, courseName: r.courseName || '', source: r.source || null,
+        expiresAt: r.expiresAt?.toDate ? r.expiresAt.toDate().toISOString() : null,
+      }));
+    }
+    res.json({ quote, makeupRights });
   } catch (err) {
     if (err.code) return res.status(404).json(err);
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
@@ -382,6 +395,7 @@ router.get('/public/:id', async (req, res) => {
       competition: {
         id: competition.id, name: competition.name, description: competition.description || '',
         competitionType: competition.competitionType || 'standard',
+        hasInsurance: competition.hasInsurance !== false,
         gymId: competition.gymId, eventDate: competition.eventDate,
         registrationStart: competition.registrationStart, registrationEnd: competition.registrationEnd,
         earlyBirdDeadline: competition.earlyBirdDeadline || null,
@@ -447,7 +461,7 @@ router.post('/public/:id/register',
         armSpan: req.body.armSpan,
         isHonorary: req.body.isHonorary,
         memberNote: req.body.memberNote,
-        partnerGymId: req.body.partnerGymId,
+        practiceGym: req.body.practiceGym,
         // 付款（訪客一律轉帳）
         paymentMethod: 'transfer',
         paymentDate: req.body.paymentDate,
@@ -548,7 +562,9 @@ router.post('/:id/register',
         armSpan: req.body.armSpan,
         isHonorary: req.body.isHonorary,
         memberNote: req.body.memberNote,
-        partnerGymId: req.body.partnerGymId,
+        practiceGym: req.body.practiceGym,
+        useMakeup: !!req.body.useMakeup,
+        makeupRightId: req.body.makeupRightId || null,
         paidAmount: req.body.paidAmount,
         // 付款
         paymentMethod: req.body.paymentMethod,
@@ -664,26 +680,33 @@ router.get('/:id/registrations/download',
       const HEADERS = [
         '序號','姓名','性別','生日','手機','Email',
         '身分證/護照','緊急聯絡人','緊急聯絡人關係','緊急聯絡人手機',
-        '身高','臂展','組別','榮譽參賽','友館折扣','報名費',
+        '身高','臂展','組別','榮譽參賽','平常練習岩館','友館折扣','報名費',
         '付款狀態','匯款銀行','匯款/繳款日期','匯款末五碼',
         '簽署狀態','是否候補','備註','員工備註','報名時間',
       ];
-      const rowOf = (r, i) => {
+      // 無保險賽事：不輸出「身分證/護照」欄（保險名冊專用資料）
+      const dropIdCol = comp.hasInsurance === false;
+      const ID_IDX = 6;
+      const rowOf0 = (r, i) => {
         const paid = r.paymentStatus === 'confirmed' ? '已確認' : r.paymentStatus === 'refunded' ? '已退費' : '待確認';
         const signed = r.isComplete ? '已完成' : r.parentRequired ? '待法定代理人簽名' : '未完成';
         return [
           i + 1, r.memberName || '', r.gender || '', r.birthday || '', r.phone || '', r.email || '',
           r.idNumber || '', r.emergencyContact || '', r.emergencyRelation || '', r.emergencyPhone || '',
           r.height || '', r.armSpan || '', r.divisionName || '', r.isHonorary ? '是' : '否',
+          r.practiceGym || '',
           r.isPartnerGymDiscount ? `${r.partnerGym || '友館'}${r.partnerGymPending ? '(待核對)' : ''}` : '',
           r.registrationFee || '', paid,
-          r.paymentMethod === 'cash' ? '臨櫃繳款' : (r.bankName || ''),
+          r.paymentMethod === 'cash' ? '臨櫃繳款' : r.paymentMethod === 'makeup_credit' ? '補課券抵費' : (r.bankName || ''),
           r.paymentDate || '', r.paymentMethod === 'cash' ? '' : (r.bankLastFive || ''),
           signed, r.status === 'waitlist' ? '是' : '否',
           r.memberNote || r.customFieldValues?.notes || '', r.staffNote || '',
           r.registeredAt?._seconds ? new Date(r.registeredAt._seconds * 1000).toLocaleString('zh-TW') : '',
         ];
       };
+
+      const rowOf = (r, i) => { const row = rowOf0(r, i); return dropIdCol ? row.filter((_, k) => k !== ID_IDX) : row; };
+      const HEADERS_OUT = dropIdCol ? HEADERS.filter((_, k) => k !== ID_IDX) : HEADERS;
 
       const ExcelJS = require('exceljs');
       const workbook = new ExcelJS.Workbook();
@@ -698,7 +721,7 @@ router.get('/:id/registrations/download',
       };
       const writeSheet = (name, rows) => {
         const ws = workbook.addWorksheet(sanitizeSheetName(name));
-        const headerRow = ws.addRow(HEADERS);
+        const headerRow = ws.addRow(HEADERS_OUT);
         headerRow.eachCell(c => { c.font = { bold: true }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } }; });
         rows.forEach((r, i) => ws.addRow(rowOf(r, i)));
         ws.columns.forEach(col => { col.width = 13; });
@@ -778,7 +801,7 @@ router.post('/registrations/:regId/cancel',
 
       // 已繳費(confirmed)的取消才算「申請退費」→ 標記 refundRequested + 存退費帳號、建待辦通知管理員；
       // 未繳費(pending)是純「取消報名」→ 無款可退，不標記退費、不通知（避免會員以為在等退費、櫃檯卻看不到）
-      const isPaidReg = reg.paymentStatus === 'confirmed';
+      const isPaidReg = reg.paymentStatus === 'confirmed' && !reg.paidByMakeup; // 補課券抵費者無款可退
       // 權威把關：已繳費取消（＝退費申請）必須帶退費銀行代碼＋帳號，否則櫃檯無從匯款
       if (isPaidReg) {
         const bankCode = String(req.body.refundBankCode || '').trim();
@@ -798,6 +821,9 @@ router.post('/registrations/:regId/cancel',
         refundAccountName: isPaidReg ? (req.body.refundAccountName || null) : null,
         updatedAt: new Date(),
       });
+      // 補課券抵費的報名：取消 → 補課券歸還（效期內才還原成可用）
+      try { await competitionService.releaseMakeupRightForRegistration(db, reg, req.params.regId); }
+      catch (e) { console.error('取消報名歸還補課券失敗', e.message); }
       // 作廢連動的待確認轉帳單（避免取消後仍殘留在待收款）
       try {
         const trs = await db.collection('transferRecords').where('refId', '==', req.params.regId).get();
@@ -1104,7 +1130,7 @@ router.post('/registrations/:regId/reject-form',
       if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
       const reg = doc.data();
       if (reg.status === 'cancelled') return res.status(400).json({ error: 'ALREADY_CANCELLED', message: '此報名已取消' });
-      const wasPaid = reg.paymentStatus === 'confirmed';
+      const wasPaid = reg.paymentStatus === 'confirmed' && !reg.paidByMakeup;
       await ref.update({
         status: 'cancelled',
         cancelReason: `管理員駁回：${reason}`,
@@ -1116,6 +1142,8 @@ router.post('/registrations/:regId/reject-form',
         refundRequested: wasPaid,
         updatedAt: new Date(),
       });
+      try { await competitionService.releaseMakeupRightForRegistration(db, reg, req.params.regId); }
+      catch (e) { console.error('駁回報名歸還補課券失敗', e.message); }
       // 作廢連動的待確認轉帳單（避免駁回後仍殘留在待收款）
       try {
         const trs = await db.collection('transferRecords').where('refId', '==', req.params.regId).get();
@@ -1232,10 +1260,11 @@ router.post('/registrations/:regId/update-form', authenticateAny, async (req, re
       height: b.height || null, armSpan: b.armSpan || null,
       isHonorary: !!b.isHonorary,
       memberNote: b.memberNote || null,
-      registrationFee, isEarlyBird: !!isEarly, isTeamDiscount: feTeamDiscount,
+      practiceGym: String(b.practiceGym || reg.practiceGym || '').trim() || null,
+      registrationFee: reg.paidByMakeup ? 0 : registrationFee, isEarlyBird: !!isEarly, isTeamDiscount: feTeamDiscount,
       isPartnerGymDiscount: fePartner, partnerGym: fePartner ? fePartnerName : null,
       partnerGymPending: fePartner ? (reg.partnerGymPending !== false) : false,
-      insuranceFee, isChild: !!isChild,
+      insuranceFee: reg.paidByMakeup ? 0 : insuranceFee, isChild: !!isChild,
       receivedAmountOverride: null, // 生日/身分可能改變（成人⇄兒童）→ 清除手動覆蓋，回歸依新保費自動計算
       // 生日可能被改成使報名對象變成/不再是未成年（以比賽當天為基準重算）；
       // 若變成未成年而先前沒有法代簽名，isComplete 標 false（擋計分系統推送，等家長簽署），不擋這次表單修改本身

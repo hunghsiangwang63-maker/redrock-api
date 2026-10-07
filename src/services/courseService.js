@@ -1223,11 +1223,14 @@ const cancelLeave = async ({ enrollmentId, memberId }) => {
     const newEntitlement = rulesQ.allowMakeup === false ? 0 : Math.min(capQ, Math.max(0, activeLeavesQ - 1)) * Math.max(1, Number(rulesQ.makeupPerLeave) || 1);
     const mkSnapQ = await db.collection(MAKEUP_COLLECTION)
       .where('memberId', '==', memberId).where('courseId', '==', enrollment.courseId).get();
-    const usedQ = mkSnapQ.docs.filter(d => d.data().status === 'used' && d.data().exempt !== true).length; // 豁免券不佔配額
+    const usedDocsQ = mkSnapQ.docs.filter(d => d.data().status === 'used' && d.data().exempt !== true); // 豁免券不佔配額
+    const usedQ = usedDocsQ.length;
     if (usedQ > newEntitlement) {
+      // 其中若有補課券拿去抵比賽報名（usedCompetitionRegId），提示要先取消該比賽報名（取消後券會歸還）
+      const compUsed = usedDocsQ.filter(d => d.data().usedCompetitionRegId).length;
       throw {
         code: 'MAKEUP_OVER_QUOTA',
-        message: `已預約 ${usedQ} 堂補課、取消此請假後補課額度只剩 ${newEntitlement} 堂，請先取消一堂補課再取消請假（補課已上過則無法取消）`,
+        message: `已使用 ${usedQ} 張補課券（含補課 ${usedQ - compUsed} 堂、抵比賽報名 ${compUsed} 張）、取消此請假後補課額度只剩 ${newEntitlement} 張，請先取消一堂補課${compUsed ? '，或取消用補課券抵費的比賽報名（券會歸還）' : ''}再取消請假（補課已上過、比賽已舉行則無法取消）`,
       };
     }
   }

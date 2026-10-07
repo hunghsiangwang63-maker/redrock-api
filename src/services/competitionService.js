@@ -83,7 +83,9 @@ const computeCompetitionFee = async ({ competition, birthday, memberId, partnerG
       ? (isEarlyBird ? fees.childEarlyBird : fees.childRegular) || 950
       : (isEarlyBird ? fees.adultEarlyBird : fees.adultRegular) || 1100;
   }
-  const insuranceFee = (isChild || isKidsComp) ? (fees.insuranceChild ?? 118) : (fees.insuranceAdult ?? 261);
+  // 賽事可設定「無保險」（hasInsurance:false，如兒童抱石賽）→ 保險費 0；舊賽事無此欄位＝有保險
+  const hasInsurance = competition.hasInsurance !== false;
+  const insuranceFee = !hasInsurance ? 0 : ((isChild || isKidsComp) ? (fees.insuranceChild ?? 118) : (fees.insuranceAdult ?? 261));
 
   let teamFee = baseFee, teamOk = false;
   if (memberId && !isKidsComp) {
@@ -120,7 +122,7 @@ const computeCompetitionFee = async ({ competition, birthday, memberId, partnerG
 
   return {
     isEarlyBird, isChild, isMinor, baseFee, insuranceFee,
-    competitionType: isKidsComp ? 'kids' : 'standard', isStudent,
+    competitionType: isKidsComp ? 'kids' : 'standard', isStudent, hasInsurance,
     registrationFee: win.fee,
     teamDiscountApplied: win.kind === 'team',
     partnerGymApplied: win.kind === 'partner',
@@ -140,7 +142,7 @@ const assertKidsFees = (competitionType, fees) => {
   }
 };
 
-const createCompetition = async ({ name, description, gymId, registrationStart, registrationEnd, earlyBirdDeadline, eventDate, eventStartTime, divisions, customFields, waiverContent, scoringSystem, webhookUrl, fees, refundPolicies, status, paymentDeadlineDays, competitionType, staffId }) => {
+const createCompetition = async ({ name, description, gymId, registrationStart, registrationEnd, earlyBirdDeadline, eventDate, eventStartTime, divisions, customFields, waiverContent, scoringSystem, webhookUrl, fees, refundPolicies, status, paymentDeadlineDays, competitionType, hasInsurance, staffId }) => {
   if (!SCORING_SYSTEMS.includes(scoringSystem)) {
     throw { code: 'INVALID_SCORING_SYSTEM', message: 'scoringSystem 必須為 rating_system 或 competition_management_v2' };
   }
@@ -154,6 +156,7 @@ const createCompetition = async ({ name, description, gymId, registrationStart, 
   const now = new Date();
   const competition = {
     id, name, description: description || '',
+    hasInsurance: hasInsurance !== false, // 是否有保險（false＝隱藏保險費/身分證等保險相關欄位、不收保險費）
     competitionType: competitionType === 'kids' ? 'kids' : 'standard', // standard=一般賽（成人/兒童、早鳥）；kids=兒童賽（當期學員/非當期學員價）
     gymId: gymId || null,
     registrationStart, registrationEnd, eventDate,
@@ -265,9 +268,10 @@ const updateCompetition = async (competitionId, updates) => {
 
   const oldDivisions = doc.data().divisions || [];
   const allowed = ['name', 'description', 'gymId', 'registrationStart', 'registrationEnd', 'earlyBirdDeadline', 'eventDate', 'eventStartTime',
-    'divisions', 'customFields', 'waiverContent', 'scoringSystem', 'webhookUrl', 'status', 'fees', 'refundPolicies', 'paymentDeadlineDays', 'competitionType'];
+    'divisions', 'customFields', 'waiverContent', 'scoringSystem', 'webhookUrl', 'status', 'fees', 'refundPolicies', 'paymentDeadlineDays', 'competitionType', 'hasInsurance'];
   const payload = { updatedAt: new Date() };
   allowed.forEach(f => { if (updates[f] !== undefined) payload[f] = updates[f]; });
+  if (payload.hasInsurance !== undefined) payload.hasInsurance = payload.hasInsurance !== false;
   if (payload.competitionType !== undefined) payload.competitionType = payload.competitionType === 'kids' ? 'kids' : 'standard';
   {
     const mergedType = payload.competitionType ?? doc.data().competitionType;
@@ -352,6 +356,40 @@ const getCompetition = async (competitionId) => {
 // 報名（含風險聲明書簽署）
 // ══════════════════════════════════════════════════════
 
+// ── 補課券抵兒童賽：挑一張可用券 ──
+// 可用＝status:available、未到期（報名當下）、非「現金折抵」類。指定 makeupRightId 就用該張（須屬於本人且可用）；
+// 沒指定→停課券（closure）優先（比照 enrollMakeup），其次最早到期。
+const pickAvailableMakeupRight = async (db, memberId, preferredId) => {
+  const snap = await db.collection('courseMakeupRights').where('memberId', '==', memberId).get();
+  const nowMs = Date.now();
+  const list = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => {
+    const exp = r.expiresAt?.toDate ? r.expiresAt.toDate().getTime() : (r.expiresAt ? new Date(r.expiresAt).getTime() : null);
+    return r.status === 'available' && r.redemptionType !== 'cash_credit' && (exp == null || exp > nowMs);
+  });
+  if (preferredId) return list.find(r => r.id === preferredId) || null;
+  const expMs = (r) => r.expiresAt?.toDate ? r.expiresAt.toDate().getTime() : Number.MAX_SAFE_INTEGER;
+  list.sort((a, b) => ((b.source === 'closure') - (a.source === 'closure')) || (expMs(a) - expMs(b)));
+  return list[0] || null;
+};
+
+// 報名取消/駁回 → 把當初抵費的補課券歸還（券還在效期內才還原成可用；已過期則作廢，不復活過期券）
+const releaseMakeupRightForRegistration = async (db, reg, regId) => {
+  if (!reg || !reg.makeupRightId) return null;
+  const ref = db.collection('courseMakeupRights').doc(reg.makeupRightId);
+  const d = await ref.get();
+  if (!d.exists) return null;
+  const r = d.data();
+  if (r.status !== 'used' || r.usedCompetitionRegId !== regId) return null;
+  const now = new Date();
+  const expired = r.expiresAt?.toDate ? r.expiresAt.toDate().getTime() < now.getTime() : false;
+  if (expired) {
+    await ref.update({ status: 'cancelled', cancelReason: 'competition_cancelled_expired', updatedAt: now });
+    return { restored: false, reason: 'expired' };
+  }
+  await ref.update({ status: 'available', usedAt: null, usedCompetitionId: null, usedCompetitionRegId: null, usedSessionId: null, updatedAt: now });
+  return { restored: true };
+};
+
 const registerForCompetition = async ({
   competitionId, memberId, memberName, isMinor, birthday, divisionId,
   gender, phone, email,
@@ -359,7 +397,9 @@ const registerForCompetition = async ({
   // 保險用欄位
   idNumber, emergencyContact, emergencyRelation, emergencyPhone,
   // 比賽用欄位
-  height, armSpan, isHonorary, memberNote, partnerGymId,
+  height, armSpan, isHonorary, memberNote, partnerGymId: _ignoredPartnerGymId,
+  // 平常練習岩館（所有賽事必填，了解選手資訊）；兒童賽可用補課券抵費（useMakeup、選填指定 makeupRightId）
+  practiceGym, useMakeup, makeupRightId,
   // 付款
   paymentDate, bankLastFive, bankName, paymentMethod, paidAmount,
   ip,
@@ -368,6 +408,11 @@ const registerForCompetition = async ({
 }) => {
   const db = getDb();
   const competition = await getCompetition(competitionId);
+  // 友館折扣已停止（2026-10-07）：新報名一律不套用，忽略呼叫端傳入的 partnerGymId
+  const partnerGymId = null;
+  if (!String(practiceGym || '').trim()) {
+    throw { code: 'MISSING_PRACTICE_GYM', message: '請填寫平常練習岩館' };
+  }
 
   if (competition.status !== 'open') {
     throw { code: 'REGISTRATION_CLOSED', message: '此賽事目前未開放報名' };
@@ -419,6 +464,15 @@ const registerForCompetition = async ({
   const teamDiscountApplied = feeInfo.teamDiscountApplied;
   const partnerGymApplied = feeInfo.partnerGymApplied;
   const partnerGymName = feeInfo.partnerGymName;
+
+  // 補課券抵費（僅兒童賽、僅會員本人名下的可用券；實際「標記已使用」在下方寫入報名的同一個交易內，防雙重使用）
+  let makeupRight = null;
+  if (useMakeup) {
+    if (competition.competitionType !== 'kids') throw { code: 'MAKEUP_NOT_ALLOWED', message: '此賽事不可使用補課券抵費' };
+    if (isGuest || String(memberId).startsWith('guest_')) throw { code: 'MAKEUP_NOT_ALLOWED', message: '訪客無法使用補課券，請以會員帳號報名' };
+    makeupRight = await pickAvailableMakeupRight(db, memberId, makeupRightId);
+    if (!makeupRight) throw { code: 'NO_MAKEUP_RIGHT', message: '沒有可用的補課券（需未使用且報名時尚未到期）' };
+  }
 
   // 必填：性別/生日/手機/Email（自動帶會員資料、會員資料缺漏由報名表補填；帶進計分系統與保險名冊）
   if (gender !== 'male' && gender !== 'female') {
@@ -491,9 +545,10 @@ const registerForCompetition = async ({
     partnerGymPending: partnerGymApplied,   // 核對通過後由員工清除
 
     isMinor: !!isMinor,
-    // 費用
-    registrationFee,
-    insuranceFee, // 保費（成人/兒童，報名時鎖定；開發票/記營收從報名費扣除）
+    // 費用（用補課券抵費：報名費/保費皆 0，originalFee 留原價供查帳）
+    registrationFee: makeupRight ? 0 : registrationFee,
+    originalFee: makeupRight ? registrationFee : null,
+    insuranceFee: makeupRight ? 0 : insuranceFee, // 保費（成人/兒童，報名時鎖定；開發票/記營收從報名費扣除）
     isChild: !!isChild,
     isEarlyBird: !!isEarlyBird,
     isTeamDiscount: teamDiscountApplied,   // 攀岩隊員 9 折
@@ -501,15 +556,18 @@ const registerForCompetition = async ({
     isCurrentStudent: feeInfo.isStudent,      // 兒童賽：報名當下是否為當期學員（一般賽為 null）
 
     // 付款
-    paymentMethod: paymentMethod || 'transfer',
-    paymentDate: paymentDate || null,
-    bankLastFive: bankLastFive || null,
-    memberPaidAmount: paidAmount ? Number(paidAmount) : null, // 會員自填實際匯款金額
-    bankName: bankName || null,
-    paymentStatus: 'pending', // pending | confirmed | refunded
-    paidAmount: null,
-    paidAt: null,
-    paidConfirmedBy: null,
+    paymentMethod: makeupRight ? 'makeup_credit' : (paymentMethod || 'transfer'),
+    paymentDate: makeupRight ? null : (paymentDate || null),
+    bankLastFive: makeupRight ? null : (bankLastFive || null),
+    memberPaidAmount: (!makeupRight && paidAmount) ? Number(paidAmount) : null, // 會員自填實際匯款金額
+    bankName: makeupRight ? null : (bankName || null),
+    paymentStatus: makeupRight ? 'confirmed' : 'pending', // pending | confirmed | refunded
+    paidAmount: makeupRight ? 0 : null,
+    paidAt: makeupRight ? now : null,
+    paidConfirmedBy: makeupRight ? 'system:makeup_credit' : null,
+    paidByMakeup: !!makeupRight,           // 以補課券抵費（免繳費；取消報名時券歸還）
+    makeupRightId: makeupRight ? makeupRight.id : null,
+    practiceGym: String(practiceGym).trim(),
     memberSignatureUrl, memberSignedAt: now, memberSignedIp: ip || null,
     parentRequired: !!isMinor,
     // 未成年：現場法定代理人簽名（guardianSignature）→ 報名即完成；否則待 email 遠端簽署
@@ -564,6 +622,14 @@ const registerForCompetition = async ({
     // 排程（比照課程 2026-07-27 政策、與陳君秀試上案例同一種誤傷風險考量），改一律人工在待收款
     // 頁確認/處理。competition.paymentDeadlineDays 設定值保留（供畫面顯示「請於 N 天內繳費」提醒
     // 用），只是不再據此寫入會觸發自動取消的 registration.paymentDeadline。
+    if (makeupRight) {
+      const mkRef = db.collection('courseMakeupRights').doc(makeupRight.id);
+      const mkSnap = await tx.get(mkRef);
+      if (!mkSnap.exists || mkSnap.data().status !== 'available') {
+        throw { code: 'MAKEUP_RIGHT_USED', message: '這張補課券剛剛已被使用，請重新選擇' };
+      }
+      tx.update(mkRef, { status: 'used', usedAt: now, usedSessionId: null, usedCompetitionId: competitionId, usedCompetitionRegId: registrationId, updatedAt: now });
+    }
     tx.set(regRef, registration);
     // 重新報名同賽事 → 舊的「已駁回」首頁通知一併消失（沿用上面已取得的 dupTx，含所有狀態，不多查一次）
     dupTx.docs.forEach(d => {
@@ -983,7 +1049,7 @@ module.exports = {
   sweepExpiredCompetitionPayments,
   SCORING_SYSTEMS,
   createCompetition, updateCompetition, getCompetitions, getCompetition,
-  registerForCompetition, signParentCompetitionWaiver,
+  registerForCompetition, signParentCompetitionWaiver, pickAvailableMakeupRight, releaseMakeupRightForRegistration,
   sendWebhook, retryWebhook, promoteNextWaitlist, startScoringSync, syncFinalResults,
   getCompetitionRegistrations, getMemberRegistrations,
   recordCompetitionRevenue, computeNetReceivedAmount,

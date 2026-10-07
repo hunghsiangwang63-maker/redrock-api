@@ -381,6 +381,7 @@ router.get('/public/:id', async (req, res) => {
     res.json({
       competition: {
         id: competition.id, name: competition.name, description: competition.description || '',
+        competitionType: competition.competitionType || 'standard',
         gymId: competition.gymId, eventDate: competition.eventDate,
         registrationStart: competition.registrationStart, registrationEnd: competition.registrationEnd,
         earlyBirdDeadline: competition.earlyBirdDeadline || null,

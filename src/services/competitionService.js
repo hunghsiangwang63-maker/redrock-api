@@ -31,6 +31,28 @@ const computeCompetitionAgeInfo = (birthday, competition) => {
   };
 };
 
+// ── 兒童賽「當期學員」判定（後端權威）──
+// 當期學員＝目前有「正式報名（status:confirmed，不含補課/試上）」且該週課「進行中」（課程未取消/未停用、
+// startDate <= 今天 <= endDate，日期欄位缺漏視為不設限）的會員。工作坊（優惠試上、按摩等單場活動）不算。
+// 訪客（guest_ 前綴，無會員帳號）一律視為非學員。
+const isCurrentCourseStudent = async (memberId) => {
+  if (!memberId || String(memberId).startsWith('guest_')) return false;
+  const db = getDb();
+  const today = taiwanToday();
+  const snap = await db.collection('courseEnrollments')
+    .where('memberId', '==', memberId).where('status', '==', 'confirmed')
+    .select('courseId', 'isMakeup', 'isTrial').get();
+  const courseIds = [...new Set(snap.docs.map(d => d.data()).filter(e => !e.isMakeup && !e.isTrial).map(e => e.courseId).filter(Boolean))];
+  if (courseIds.length === 0) return false;
+  const docs = await db.getAll(...courseIds.map(id => db.collection('courses').doc(id)));
+  return docs.some(d => {
+    if (!d.exists) return false;
+    const c = d.data();
+    return c.type !== 'workshop' && c.status !== 'cancelled' && c.isActive !== false
+      && (!c.startDate || c.startDate <= today) && (!c.endDate || c.endDate >= today);
+  });
+};
+
 // ── 報名費計算（後端權威，單一真相）：報名/改表/逾期重報/會員報名前預覽 quote 皆呼叫此函式，
 // 避免各處各自複製一份折扣邏輯導致日後改動漏同步（曾發生：會員報名頁預覽金額忘了套隊員折扣，
 // 已送出報名的後端計算是對的，只有「送出前顯示給會員看」的畫面漏算，讓隊員誤以為沒打折）。
@@ -38,17 +60,33 @@ const computeCompetitionAgeInfo = (birthday, competition) => {
 const computeCompetitionFee = async ({ competition, birthday, memberId, partnerGymId }) => {
   const fees = competition.fees || {};
   const todayStr = taiwanToday();
+  const isKidsComp = competition.competitionType === 'kids';
+  // 兒童賽：不分成人/兒童身份，只分「當期學員／非當期學員」；攀岩隊/友館折扣不適用。
+  // 早鳥規則與一般賽相同：有設早鳥截止日且今天 <= 截止日才算早鳥；沒設截止日＝全部沒有早鳥優惠。
   const isEarlyBird = !!(competition.earlyBirdDeadline && todayStr <= competition.earlyBirdDeadline);
   const ageInfo = computeCompetitionAgeInfo(birthday, competition);
   const isChild = ageInfo.isChild;
   const isMinor = ageInfo.isMinor;
-  const baseFee = isChild
-    ? (isEarlyBird ? fees.childEarlyBird : fees.childRegular) || 950
-    : (isEarlyBird ? fees.adultEarlyBird : fees.adultRegular) || 1100;
-  const insuranceFee = isChild ? (fees.insuranceChild ?? 118) : (fees.insuranceAdult ?? 261);
+  let baseFee, isStudent = null;
+  if (isKidsComp) {
+    isStudent = await isCurrentCourseStudent(memberId);
+    const regularRaw = isStudent ? fees.kidsStudent : fees.kidsNonStudent;
+    const earlyRaw = isStudent ? fees.kidsStudentEarlyBird : fees.kidsNonStudentEarlyBird;
+    // 早鳥期間且有填早鳥價才用早鳥價；沒填早鳥價就沿用一般價
+    const raw = (isEarlyBird && earlyRaw != null && earlyRaw !== '') ? earlyRaw : regularRaw;
+    if (raw == null || raw === '' || !(Number(raw) >= 0)) {
+      throw { code: 'FEES_NOT_CONFIGURED', message: '此兒童賽尚未設定學員價／非學員價，請洽館方' };
+    }
+    baseFee = Number(raw);
+  } else {
+    baseFee = isChild
+      ? (isEarlyBird ? fees.childEarlyBird : fees.childRegular) || 950
+      : (isEarlyBird ? fees.adultEarlyBird : fees.adultRegular) || 1100;
+  }
+  const insuranceFee = (isChild || isKidsComp) ? (fees.insuranceChild ?? 118) : (fees.insuranceAdult ?? 261);
 
   let teamFee = baseFee, teamOk = false;
-  if (memberId) {
+  if (memberId && !isKidsComp) {
     try {
       const { isActiveTeamMember, applyTeamDiscount } = require('./teamMemberService');
       const mDoc = await getDb().collection(COLLECTIONS.MEMBERS).doc(memberId).get();
@@ -60,7 +98,7 @@ const computeCompetitionFee = async ({ competition, birthday, memberId, partnerG
   }
   let partnerFee = baseFee, partnerOk = false, partnerGymName = null;
   const partnerRate = Number(fees.partnerGymDiscount);
-  if (partnerGymId && partnerRate > 0 && partnerRate < 1) {
+  if (!isKidsComp && partnerGymId && partnerRate > 0 && partnerRate < 1) {
     try {
       const pgDoc = await getDb().collection('systemSettings').doc('partnerGyms').get();
       const list = pgDoc.exists && Array.isArray(pgDoc.data().gyms) ? pgDoc.data().gyms : [];
@@ -75,6 +113,7 @@ const computeCompetitionFee = async ({ competition, birthday, memberId, partnerG
 
   return {
     isEarlyBird, isChild, isMinor, baseFee, insuranceFee,
+    competitionType: isKidsComp ? 'kids' : 'standard', isStudent,
     registrationFee: win.fee,
     teamDiscountApplied: win.kind === 'team',
     partnerGymApplied: win.kind === 'partner',
@@ -86,7 +125,15 @@ const computeCompetitionFee = async ({ competition, birthday, memberId, partnerG
 // 賽事管理
 // ══════════════════════════════════════════════════════
 
-const createCompetition = async ({ name, description, gymId, registrationStart, registrationEnd, earlyBirdDeadline, eventDate, eventStartTime, divisions, customFields, waiverContent, scoringSystem, webhookUrl, fees, refundPolicies, status, paymentDeadlineDays, staffId }) => {
+const assertKidsFees = (competitionType, fees) => {
+  if (competitionType !== 'kids') return;
+  const ok = (v) => v !== undefined && v !== null && v !== '' && Number(v) >= 0;
+  if (!fees || !ok(fees.kidsStudent) || !ok(fees.kidsNonStudent)) {
+    throw { code: 'KIDS_FEES_REQUIRED', message: '兒童賽請設定「當期學員價」與「非當期學員價」' };
+  }
+};
+
+const createCompetition = async ({ name, description, gymId, registrationStart, registrationEnd, earlyBirdDeadline, eventDate, eventStartTime, divisions, customFields, waiverContent, scoringSystem, webhookUrl, fees, refundPolicies, status, paymentDeadlineDays, competitionType, staffId }) => {
   if (!SCORING_SYSTEMS.includes(scoringSystem)) {
     throw { code: 'INVALID_SCORING_SYSTEM', message: 'scoringSystem 必須為 rating_system 或 competition_management_v2' };
   }
@@ -94,11 +141,13 @@ const createCompetition = async ({ name, description, gymId, registrationStart, 
     throw { code: 'INVALID_DIVISIONS', message: '請至少設定一個組別' };
   }
 
+  assertKidsFees(competitionType, fees);
   const db = getDb();
   const id = uuidv4();
   const now = new Date();
   const competition = {
     id, name, description: description || '',
+    competitionType: competitionType === 'kids' ? 'kids' : 'standard', // standard=一般賽（成人/兒童、早鳥）；kids=兒童賽（當期學員/非當期學員價）
     gymId: gymId || null,
     registrationStart, registrationEnd, eventDate,
     eventStartTime: eventStartTime || null, // 比賽開始時間 HH:MM（選填；供賽前10分鐘自動開啟計分，未填預設 09:00）
@@ -209,9 +258,14 @@ const updateCompetition = async (competitionId, updates) => {
 
   const oldDivisions = doc.data().divisions || [];
   const allowed = ['name', 'description', 'gymId', 'registrationStart', 'registrationEnd', 'earlyBirdDeadline', 'eventDate', 'eventStartTime',
-    'divisions', 'customFields', 'waiverContent', 'scoringSystem', 'webhookUrl', 'status', 'fees', 'refundPolicies', 'paymentDeadlineDays'];
+    'divisions', 'customFields', 'waiverContent', 'scoringSystem', 'webhookUrl', 'status', 'fees', 'refundPolicies', 'paymentDeadlineDays', 'competitionType'];
   const payload = { updatedAt: new Date() };
   allowed.forEach(f => { if (updates[f] !== undefined) payload[f] = updates[f]; });
+  if (payload.competitionType !== undefined) payload.competitionType = payload.competitionType === 'kids' ? 'kids' : 'standard';
+  {
+    const mergedType = payload.competitionType ?? doc.data().competitionType;
+    assertKidsFees(mergedType, payload.fees ?? doc.data().fees);
+  }
   if (payload.paymentDeadlineDays !== undefined) {
     payload.paymentDeadlineDays = (payload.paymentDeadlineDays === null || payload.paymentDeadlineDays === '') ? 3 : Math.max(1, parseInt(payload.paymentDeadlineDays) || 3);
   }
@@ -436,6 +490,8 @@ const registerForCompetition = async ({
     isChild: !!isChild,
     isEarlyBird: !!isEarlyBird,
     isTeamDiscount: teamDiscountApplied,   // 攀岩隊員 9 折
+    competitionType: feeInfo.competitionType, // standard | kids
+    isCurrentStudent: feeInfo.isStudent,      // 兒童賽：報名當下是否為當期學員（一般賽為 null）
 
     // 付款
     paymentMethod: paymentMethod || 'transfer',
@@ -924,7 +980,7 @@ module.exports = {
   sendWebhook, retryWebhook, promoteNextWaitlist, startScoringSync, syncFinalResults,
   getCompetitionRegistrations, getMemberRegistrations,
   recordCompetitionRevenue, computeNetReceivedAmount,
-  computeCompetitionAgeInfo, computeCompetitionFee, computeCompetitionRefundPolicy,
+  computeCompetitionAgeInfo, computeCompetitionFee, isCurrentCourseStudent, computeCompetitionRefundPolicy,
   getParticipantEmails, sendCompetitionNotice,
   REGISTRATION_LIST_FIELDS,
 };

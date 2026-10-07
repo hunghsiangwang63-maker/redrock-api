@@ -370,4 +370,24 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **「當期學員」定義（`isCurrentCourseStudent`，使用者拍板「只有進行中課程學員享有學員價」）**：有 `courseEnrollments` `status:'confirmed'` 且非補課/試上、所屬課程為**週課（非 workshop）、未取消/未停用、`startDate ≤ 今天 ≤ endDate`**（欄位缺漏視為不設限）。訪客（`guest_` 前綴）一律非學員。⚠️ 判定看**課程資料的 `endDate`**：若課程場次實際延長超過 endDate（如虹瑩進階班週四班 endDate 9/24、場次排到 10/8），該班學員不會被算成學員，需先把課程結束日改對；已報名該班但「尚未開課」的人也不算學員（照「進行中」字面）。
 - ✅ **前端**：員工端賽事編輯加「賽事類型」下拉（兒童賽：費用區改顯示 學員價/非學員價/保險費/兩個早鳥價；早鳥截止日欄位保留並註明「不設定＝無早鳥」，附「清除截止日」鈕；儲存前驗證兩個一般價必填），賽事卡片標「兒童賽」、報名名單備註標「當期學員／非當期學員」；會員端賽事列表同時列學員價/非學員價、報名彈窗顯示「進行中課程學員價／非學員價」（金額一律吃後端 `/quote`）；公開報名頁（訪客）以非學員價計並提示「當期學員請用會員帳號報名」。公開賽事端點 `GET /competitions/public/:id` 補回 `competitionType`（該端點是欄位白名單投影，新增賽事欄位要記得加）。
 - 📌 **12/13 兒童賽設定方式**：員工端新增賽事→類型選「兒童賽」→填學員價/非學員價/保險費（要早鳥才填早鳥價＋截止日）。價格由使用者決定，程式內無寫死。
-- 📌 **既有問題順帶發現（未修）**：一般賽編輯畫面的「隊員折扣」欄位**後端不讀**——隊員折扣實際是 `teamMemberService` 寫死的 9 折（`TEAM_DISCOUNT_RATE`），改欄位無效。
+- 📌 **（已修，見 2026-10-07 續）** 一般賽「隊員折扣」欄位原本後端不讀、實際寫死 9 折；現已改讀賽事 `fees.teamMemberDiscount`。
+
+## 目前進度（2026-10-07 續）— 賽事：隊員折扣讀欄位、有無保險、平常練習岩館、停友館折扣、兒童賽補課券抵費
+> 後端 `bb38082`／`c9ee687`／`5d6a4af`，前端 `46bd4b5`／`5dd82f6`／`df52550`，皆已部署。本機/正式環境用 service 與假資料驗證算價、報名、券歸還（測試資料已清）；會員端/公開頁/員工端畫面僅 build 通過、未實際開畫面看。
+- ✅ **隊員折扣讀賽事欄位**：`computeCompetitionFee` 改讀 `fees.teamMemberDiscount`（0<費率<1 用它、≥1＝此賽事不給隊員折扣、空/0/無效退回系統預設 9 折；<100 元不打折規則不變）；會員端列表預覽同步。三場現有賽事值皆 0.9，結果不變。
+- ✅ **賽事有無保險**：`competitions.hasInsurance`（預設/舊賽事＝有；`false`＝保險費 0、員工編輯隱藏保險費欄、會員報名/公開頁/編輯表單不要身分證、員工名單詳情不顯示保險費/身分證、名單 CSV 不輸出「身分證/護照」欄）。12/13 兒童賽已設 `hasInsurance:false`。⚠️「簽到表暨保險名冊」下載未改（身分證欄位會是空的）。公開賽事端點是欄位白名單，已補 `hasInsurance`、`competitionType`。
+- ✅ **平常練習岩館**（`registration.practiceGym`）：**所有賽事報名必填**（自由輸入文字，範例「新竹紅石／士林紅石」）；會員端報名、公開頁、報名後編輯、員工名單詳情、CSV 皆有。**同步計分系統**：`mapAthlete` 的 `team` 欄＝自訂欄位隊伍 → 否則帶 `practiceGym`（計分系統各畫面都在選手名旁顯示 team），另存 `athlete.practiceGym` 原值；會員改報名表後會重新推送（已正取且簽署完成者）。⚠️ 每次重新推送都會用 RedRock 值覆蓋計分系統的 team（原本就如此）；舊報名無此欄位。
+- ✅ **友館折扣停用**：新報名一律不套用（後端忽略 `partnerGymId`）、會員端/公開頁友館選單與編輯欄位已移除；**舊報名**（含友館折扣者）改表/逾期重報時仍沿用原折扣（`computeCompetitionFee` 仍保留友館邏輯，只是新報名不再傳）。
+- ✅ **兒童賽可用補課券抵費**（僅兒童賽、會員本人名下、訪客不可）：報名表第一步若該報名對象有可用補課券（`available`、報名當下未到期、非現金折抵、不限來源課程/班別）顯示「使用 1 張補課券抵本次報名（免繳費）」，多張可選；停課券（closure）優先、其次最早到期。抵費報名：`registrationFee`/`insuranceFee`＝0、`originalFee` 留原價、`paymentMethod:'makeup_credit'`、`paymentStatus:'confirmed'`、`paidByMakeup:true`、`makeupRightId`，跳過付款步驟；券在寫入報名的同一個 Firestore 交易內標 `used`（`usedCompetitionRegId`，防雙重使用）。**取消報名/管理員駁回 → 券歸還**（`releaseMakeupRightForRegistration`：效期內還原 available，已過期則標 cancelled 不復活）；補課券抵費者取消不需填退費帳號（`isPaidReg` 排除 `paidByMakeup`）。**取消請假**走既有方案 B 額度預檢：已用券（含抵比賽者，`MAKEUP_OVER_QUOTA` 訊息會提示「先取消比賽報名」）超過新額度就擋；比賽已辦完券不會歸還→該請假永久不可取消。員工名單標「補課券抵費」。
+- 📌 **訪客（免註冊）報名**：公開連結免註冊、一律轉帳、只算非學員價、無報到 QR（QR 需會員登入取得），當天由櫃檯名單「手動報到」。已存為 memory 待定想法（免註冊報到連結，使用者「先暫時記著」，未實作）。
+- 🧹 **員工端優惠卡/黑卡頁手機排版**（`CardsPage.jsx`，`e44c720`）：兩欄 `1fr 1fr` 改 `auto-fit minmax(min(100%,320px),1fr)`、標題列可換行、優惠卡浮水印移到右下；依程式碼推測的成因，未在手機實測。
+
+## 目前進度（2026-10-07 續2）— 課程暫停：釋放名額＋下期回課（暫停餘額）
+> 後端 `2c21e9a`／`8975a5e`／後續 `3.563.0-pause-resume-credits`，前端 `561263c`，已部署。正式環境用假資料跑完整流程（暫停核准→名額/名單、恢復、餘額收尾→預覽/套用回課→入場資格→插班報價→學員不可自行取消），測試資料已清。員工端新畫面僅 build 通過。
+- ✅ **暫停核准＝釋放名額**：該會員此課程「還沒上」的場次，`pauseStatus:'paused'`＋`pausedSeatReleased:true`、場次 `enrolledCount` −1；**不自動遞補課程候補**（遞補涉及費用、且學員恢復時要位子）。暫停中的人**不列入**：單堂名單（`getSessionRoster`）、今日課程學員（`/checkin/today-course-students`）、`getSessions` 場次人數、`getCourses` 課程層人數、候補遞補的課程容量判斷；入場資格與課程學員總名單本來就排除。既有暫停者（白孟儒 18 堂、林俊廷 3 堂）已補做釋放。
+- ✅ **恢復端點改寫**（`POST /course-adjustments/enrollments/:id/restore`，員工端目前無按鈕、僅 API）：原本只恢復單一堂且改舊集合（幾乎無作用）→ 現在恢復該會員此課程**所有**暫停中堂數並重新佔位；任一堂已被補滿→整批 409 並列出額滿日期。僅限「同一期中途回來」。
+- ✅ **暫停餘額 `coursePauseCredits`**：暫停核准建立（`remainingSessions`＝被暫停堂數）；狀態 `paused`（暫停中）→ `awaiting_resume`（原課程結束，**每小時排程 `sweepPauseCredits` 自動收尾**；結束＝無今天以後的 scheduled 場次）→ `resumed`（排完）；同期恢復標 `restored`。
+- ✅ **安排回課**（員工端課程頁新按鈕「⏸ 暫停回課」→ `PauseCreditsModal`；API `GET /course-adjustments/pause-credits`、`POST .../pause-credits/:id/arrange`，`apply:false` 預覽/`true` 套用）：員工指定「回課梯次」（同班別或同舊生範疇、同館、週課、非原課程）＋「開始日期」→ 從該日起依序把剩餘堂數排進該梯次（已額滿/學員已在名單的堂跳過並列原因；不足的留作剩餘堂數），**以補課方式**建報名（`isMakeup:true`、`pauseResume:true`、`makeupId:null`、不經補課券、不佔補課額度），場次人數 +1（交易內再驗額滿）。原課程尚未結束時擋（`COURSE_NOT_ENDED`）。學員不可自行取消這些補課（`PAUSE_RESUME_NO_SELF_CANCEL`，須洽櫃檯）。
+- ✅ **回課期間免費入場**：`eligibility.js getCourseAccess` 對 `pauseResume` 報名給課程學員資格，區間＝`resumeAccessStart`（開始日）～`resumeAccessEnd`（最後一堂補課日），不限上課當天（一般補課仍只有當天）。
+- ✅ **補課堂數用完後續上＝插班**：`computeCourseFeeForMember` 與 `handleEnrollAll` 以 `getResumeCutoff`（最後一堂 pauseResume 日期）為界——該日（含）之前視為已上過、只建立/收費之後的堂數；舊生折扣照常。**暫停者算舊生、但不算「整期續報」**（`computeAlumniStatus`：該課有暫停中的報名→`isFullTermRenewal:false`）。
+- 📌 **限制/注意**：①原課程沒結束就想下期回課會被擋（同期用「恢復」）②安排回課未發通知給學員、會員端沒有新畫面（學員只看得到補課堂數與入場資格）③白孟儒原課程到 2027/1 才結束，目前是 `paused`；林俊廷課程 10/28 結束後自動轉待安排 ④`restore` 端點要重新佔位，額滿即 409，需先調整該堂名單 ⑤版本號 `3.562.0`＝暫停釋放名額＋兒童賽/補課券抵費/練習岩館上線；`3.563.0`＝暫停餘額/回課。

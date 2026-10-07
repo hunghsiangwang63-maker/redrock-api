@@ -1457,6 +1457,7 @@ const cancelMakeup = async ({ enrollmentId, memberId }) => {
   const enrollment = enrollDoc.data();
   if (enrollment.memberId !== memberId) throw { code: 'FORBIDDEN' };
   if (enrollment.isMakeup !== true) throw { code: 'NOT_MAKEUP', message: '此報名不是補課場次' };
+  if (enrollment.pauseResume) throw { code: 'PAUSE_RESUME_NO_SELF_CANCEL', message: '這是暫停回課排定的堂數，如需調整請洽櫃檯' };
   if (enrollment.status !== 'confirmed') throw { code: 'INVALID_STATUS', message: '此補課報名狀態無法取消' };
   // 一天前：上課日前一天（含）可取消 → 今天需早於上課日
   if (!enrollment.date || taiwanToday() >= enrollment.date) {
@@ -2194,14 +2195,15 @@ const computeAlumniStatus = async (db, course, courseId, memberId) => {
   // ⚠️ .select() 排除內嵌簽名圖等大欄位——此函式讀「會員全部歷史報名」(/quote 端點常被會員瀏覽課程時觸發)，
   // 見 getCourses/getSessions 同型註解（2026-08-18/19 查獲流量異常，courseEnrollments 全文件抓取為主因）。
   const myEn = await db.collection(ENROLLMENT_COLLECTION).where('memberId', '==', memberId)
-    .select('courseId', 'isTrial', 'isMakeup', 'status').get();
+    .select('courseId', 'isTrial', 'isMakeup', 'status', 'pauseStatus').get();
   const byCourse = {};
   myEn.docs.forEach(d => {
     const e = d.data();
     if (e.isTrial || e.isMakeup) return;
     if (!e.courseId || e.courseId === courseId) return;
-    const b = byCourse[e.courseId] || (byCourse[e.courseId] = { active: 0, total: 0 });
+    const b = byCourse[e.courseId] || (byCourse[e.courseId] = { active: 0, total: 0, paused: 0 });
     b.total += 1;
+    if (e.pauseStatus === 'paused') b.paused += 1; // 暫停過的課：仍算舊生，但不算「整期續報」
     if (['confirmed', 'leave'].includes(e.status)) b.active += 1;
   });
   const otherIds = Object.keys(byCourse).filter(cid2 => byCourse[cid2].active > 0);
@@ -2216,7 +2218,7 @@ const computeAlumniStatus = async (db, course, courseId, memberId) => {
   Object.entries(otherCourseCats).forEach(([cid2, c2]) => {
     if (!sameAlumniScope(c2.categoryId, course.categoryId, groupMap)) return;
     alumni.isAlumni = true;
-    const fullTerm = !c2.totalSessions || byCourse[cid2].total >= c2.totalSessions;
+    const fullTerm = byCourse[cid2].paused === 0 && (!c2.totalSessions || byCourse[cid2].total >= c2.totalSessions);
     const recent = !c2.endDate || c2.endDate >= prevTermCutoff;
     if (fullTerm && recent) alumni.isFullTermRenewal = true;
   });
@@ -2351,7 +2353,9 @@ const computeCourseFeeForMember = async (db, { courseId, memberId, byStaff = fal
     const ss = await db.collection(SESSION_COLLECTION).where('courseId', '==', courseId).where('status', '==', 'scheduled').get();
     sess = ss.docs.map(d => ({ id: d.id, ...d.data() }));
   }
-  const completedCount = sess.filter(s => s.date < today).length;
+  // 暫停回課者：回課（補課方式）排定的最後一堂之前都算已上過，插班只收該日之後的堂數
+  const resumeCutoff = await require('./coursePauseService').getResumeCutoff(db, memberId, courseId);
+  const completedCount = sess.filter(s => s.date < today || (resumeCutoff && s.date <= resumeCutoff)).length;
   const totalCount = sess.length;
 
   const alumni = await computeAlumniStatus(db, course, courseId, memberId);
@@ -3229,6 +3233,7 @@ module.exports = {
   issueManualMakeupCredit,
   promoteWaitlist,
   promoteWaitlistForCourse,
+  getAlumniGroupMap, sameAlumniScope,
   trialPaymentDeadline,
   sweepExpiredTrialPayments,
   cancelCourseEnrollments,

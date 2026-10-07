@@ -158,7 +158,7 @@ const getCourseAccess = async (memberId) => {
   const enrollSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
     .where('memberId', '==', memberId)
     .where('status', '==', 'confirmed')
-    .select('courseId', 'pauseStatus', 'refundPending', 'isMakeup', 'isTrial', 'date', 'sessionId', 'courseAccessStart', 'courseName')
+    .select('courseId', 'pauseStatus', 'refundPending', 'isMakeup', 'isTrial', 'date', 'sessionId', 'courseAccessStart', 'courseName', 'pauseResume', 'resumeAccessStart', 'resumeAccessEnd')
     .get();
   const allEnrollments = enrollSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
@@ -166,8 +166,10 @@ const getCourseAccess = async (memberId) => {
     .filter(e => e.refundPending !== true);    // 退費審核中：即時取消課程學員入場資格（退回時恢復）
   // 補課/試上＝「當天行為」：不繼承該課程的免費入場期間，只在上課當天給入場資格（政策 2026-07-17）
   const enrollments = allEnrollments.filter(e => !e.isMakeup && !e.isTrial);
-  const dayOnly = allEnrollments.filter(e => (e.isMakeup || e.isTrial) && e.date === today);
-  if (enrollments.length === 0 && dayOnly.length === 0) return [];
+  // 暫停回課（補課方式排定）：回課期間（開始日～最後一堂補課日）享有課程學員免費入場，不限上課當天
+  const resumeRange = allEnrollments.filter(e => e.pauseResume && e.resumeAccessStart && e.resumeAccessEnd && e.resumeAccessStart <= today && today <= e.resumeAccessEnd);
+  const dayOnly = allEnrollments.filter(e => (e.isMakeup || e.isTrial) && e.date === today && !e.pauseResume);
+  if (enrollments.length === 0 && dayOnly.length === 0 && resumeRange.length === 0) return [];
 
   const courseIds = [...new Set(enrollments.map(e => e.courseId).filter(Boolean))];
   const results = [];
@@ -216,6 +218,14 @@ const getCourseAccess = async (memberId) => {
         gymId: course.gymId || null, categoryId: course.categoryId || null,
       });
     }
+  }
+
+  for (const e of resumeRange) {
+    if (results.some(r => r.courseId === e.courseId)) continue;
+    results.push({
+      id: e.id, courseId: e.courseId, courseName: e.courseName || '',
+      gymAccessStart: e.resumeAccessStart, gymAccessEnd: e.resumeAccessEnd,
+    });
   }
 
   // 補課/試上：上課當天限定的入場資格（不含課程免費期間）

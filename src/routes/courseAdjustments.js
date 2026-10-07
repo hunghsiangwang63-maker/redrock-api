@@ -529,6 +529,13 @@ router.post('/requests/:id/approve',
           }
           paused++;
         }
+        // 建立暫停餘額（剩餘堂數＝這次被暫停的堂數；供下期回課安排，見 coursePauseService）
+        if (paused > 0) {
+          try {
+            const cd = await db.collection('courses').doc(request.courseId).get();
+            await require('../services/coursePauseService').createPauseCredit(db, { request: { ...request, id: req.params.id }, pausedCount: paused, course: cd.exists ? cd.data() : null });
+          } catch (e) { console.error('建立暫停餘額失敗（暫停已核准）', e.message); }
+        }
         // 同步 header（供 members.js buildCourseMemberList 改讀 header 後仍正確排除暫停中會員）
         if (paused > 0) {
           try { await courseRegistrationService.updateHeaderPauseStatus(db, request.memberId, request.courseId, 'paused'); }
@@ -693,10 +700,41 @@ router.post('/enrollments/:enrollmentId/restore',
       }
       try { await courseRegistrationService.updateHeaderPauseStatus(db, enrollment.memberId, enrollment.courseId, null); }
       catch (e) { console.error('header pauseStatus 同步失敗（恢復）', e.message); }
+      try { await require('../services/coursePauseService').markCreditsRestored(db, enrollment.memberId, enrollment.courseId); }
+      catch (e) { console.error('暫停餘額標記恢復失敗', e.message); }
       res.json({ success: true, restored, message: `課程已恢復（${restored} 堂），學員已重新加回場次名單` });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
 );
+
+// ══════════════════════════════════════════════════════
+// 暫停回課（下期回來）：GET /pause-credits 清單、POST /pause-credits/:id/arrange 安排（apply:false 先預覽）
+// ══════════════════════════════════════════════════════
+router.get('/pause-credits', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const db = getDb();
+    const snap = await db.collection('coursePauseCredits').get();
+    const gymId = req.staff?.role === 'super_admin' ? (req.query.gymId || null) : (req.staff?.gymId || null);
+    const status = req.query.status || null;
+    const credits = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .filter(c => (!gymId || c.gymId === gymId) && (!status || c.status === status) && (status || !['restored'].includes(c.status)))
+      .sort((a, b) => (b.createdAt?._seconds || 0) - (a.createdAt?._seconds || 0));
+    res.json({ credits });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+router.post('/pause-credits/:id/arrange', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const result = await require('../services/coursePauseService').arrangeResume({
+      creditId: req.params.id, targetCourseId: req.body.targetCourseId, startDate: req.body.startDate,
+      apply: req.body.apply === true, staff: req.staff,
+    });
+    res.json(result);
+  } catch (err) {
+    if (err.code) return res.status(err.status || 400).json({ error: err.code, message: err.message });
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
 
 module.exports = router;
 

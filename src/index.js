@@ -223,7 +223,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.562.0-pause-releases-seat-competition-kids',
+    version: '3.563.0-pause-resume-credits',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
@@ -359,6 +359,10 @@ if (require.main === module) {
       runShiftReminderJob();
     }
     runCardTransferExpiry(); // 每小時掃一次逾期移轉
+    // 暫停餘額收尾：原課程結束的 paused 餘額 → awaiting_resume（待安排下期回課；冪等）
+    require('./services/coursePauseService').sweepPauseCredits()
+      .then(r => { if (r.closed > 0) console.log(`[暫停餘額] 原課程結束收尾 ${r.closed} 筆`); })
+      .catch(e => console.error('[暫停餘額] 收尾失敗', e.message));
     // 政策（2026-09-09）：試上逾期未繳費自動釋放排程已移除——陳君秀案例：她在 48 小時期限內已
     // 提交轉帳資訊（末五碼、金額全額吻合），只是館方沒點確認收款，就被排程自動取消整筆試上。
     // 比照 2026-07-27 課程政策改為一律人工：待收款頁由管理員/值班「確認」或處理，不再自動取消。

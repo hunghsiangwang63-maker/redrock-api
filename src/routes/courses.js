@@ -2330,9 +2330,11 @@ async function handleEnrollAll(req, res) {
         .get();
 
       const today = taiwanToday(); // 台灣日期
+      // 暫停回課者（以補課方式先排了一段堂數）：插班從最後一堂補課日之後起算，已排的堂數不重複建立、也不收費
+      const resumeCutoff = isGuestEnroll ? null : await require('../services/coursePauseService').getResumeCutoff(db, memberId, courseId);
       const futureSessions = sessionsSnap.docs
         .map(d => ({ id: d.id, ...d.data() }))
-        .filter(s => s.date >= today)
+        .filter(s => s.date >= today && (!resumeCutoff || s.date > resumeCutoff))
         .sort((a, b) => a.date.localeCompare(b.date));
 
       if (futureSessions.length === 0) {
@@ -2379,7 +2381,7 @@ async function handleEnrollAll(req, res) {
       // 續報/舊生比率折扣（各自開關，續報優先不疊加）、隊員9折——唯一算式見 courseService.computeWeeklyCourseFee。
       // ── fee 為純讀取、與名額/候補無關 → 置於交易外先算好 ──
       const allActiveSessions = sessionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-      const completedCount = allActiveSessions.filter(s => s.date < today).length;
+      const completedCount = allActiveSessions.filter(s => s.date < today || (resumeCutoff && s.date <= resumeCutoff)).length;
       const totalCount = allActiveSessions.length;
 
       const { isActiveTeamMember } = require('../services/teamMemberService');

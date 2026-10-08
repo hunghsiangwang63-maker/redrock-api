@@ -462,6 +462,7 @@ router.post('/public/:id/register',
         isHonorary: req.body.isHonorary,
         memberNote: req.body.memberNote,
         practiceGym: req.body.practiceGym,
+        partnerGymId: req.body.partnerGymId, // 僅身份收費賽採用，其他賽事服務層會忽略
         // 付款（訪客一律轉帳）
         paymentMethod: 'transfer',
         paymentDate: req.body.paymentDate,
@@ -563,6 +564,7 @@ router.post('/:id/register',
         isHonorary: req.body.isHonorary,
         memberNote: req.body.memberNote,
         practiceGym: req.body.practiceGym,
+        partnerGymId: req.body.partnerGymId, // 僅身份收費賽採用（友館攀岩隊員一級），其他賽事服務層會忽略
         useMakeup: !!req.body.useMakeup,
         makeupRightId: req.body.makeupRightId || null,
         paidAmount: req.body.paidAmount,
@@ -697,7 +699,7 @@ router.get('/:id/registrations/download',
           r.practiceGym || '',
           r.isPartnerGymDiscount ? `${r.partnerGym || '友館'}${r.partnerGymPending ? '(待核對)' : ''}` : '',
           r.registrationFee || '', paid,
-          r.paymentMethod === 'cash' ? '臨櫃繳款' : r.paymentMethod === 'makeup_credit' ? '補課券抵費' : (r.bankName || ''),
+          r.paymentMethod === 'cash' ? '臨櫃繳款' : r.paymentMethod === 'makeup_credit' ? '補課券抵費' : r.paymentMethod === 'free_tier' ? '免費身份' : (r.bankName || ''),
           r.paymentDate || '', r.paymentMethod === 'cash' ? '' : (r.bankLastFive || ''),
           signed, r.status === 'waitlist' ? '是' : '否',
           r.memberNote || r.customFieldValues?.notes || '', r.staffNote || '',
@@ -801,7 +803,7 @@ router.post('/registrations/:regId/cancel',
 
       // 已繳費(confirmed)的取消才算「申請退費」→ 標記 refundRequested + 存退費帳號、建待辦通知管理員；
       // 未繳費(pending)是純「取消報名」→ 無款可退，不標記退費、不通知（避免會員以為在等退費、櫃檯卻看不到）
-      const isPaidReg = reg.paymentStatus === 'confirmed' && !reg.paidByMakeup; // 補課券抵費者無款可退
+      const isPaidReg = reg.paymentStatus === 'confirmed' && !reg.paidByMakeup && !reg.paidFree; // 補課券抵費／免費身份者無款可退
       // 權威把關：已繳費取消（＝退費申請）必須帶退費銀行代碼＋帳號，否則櫃檯無從匯款
       if (isPaidReg) {
         const bankCode = String(req.body.refundBankCode || '').trim();
@@ -1130,7 +1132,7 @@ router.post('/registrations/:regId/reject-form',
       if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
       const reg = doc.data();
       if (reg.status === 'cancelled') return res.status(400).json({ error: 'ALREADY_CANCELLED', message: '此報名已取消' });
-      const wasPaid = reg.paymentStatus === 'confirmed' && !reg.paidByMakeup;
+      const wasPaid = reg.paymentStatus === 'confirmed' && !reg.paidByMakeup && !reg.paidFree;
       await ref.update({
         status: 'cancelled',
         cancelReason: `管理員駁回：${reason}`,

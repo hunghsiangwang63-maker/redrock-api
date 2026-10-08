@@ -57,7 +57,77 @@ const isCurrentCourseStudent = async (memberId) => {
 // 避免各處各自複製一份折扣邏輯導致日後改動漏同步（曾發生：會員報名頁預覽金額忘了套隊員折扣，
 // 已送出報名的後端計算是對的，只有「送出前顯示給會員看」的畫面漏算，讓隊員誤以為沒打折）。
 // 折扣（不疊加，擇優取較低價）：攀岩隊員 9 折 vs 友館折扣（心流/爬森等，會員宣告→櫃檯人工核對）。
+// ── 身份收費賽（tiered，如攀岩隊模擬賽）：依報名者身份取最優惠的一級 ──
+// 免費／100／300／400 等五級價格由賽事 fees 設定（tierTeam／tierVip／tierStudentPass／tierPartnerTeam／tierOther）：
+//   team＝當期紅石攀岩隊隊員、vip＝紅石 VIP、student_pass＝進行中課程學員或有效 90 日票／半年票會員、
+//   partner_team＝友館（心流、爬森）攀岩隊員（會員自己選友館，費用先套該級、標待核對，櫃檯比對名單，不符改回其他級）、
+//   other＝以上皆非（訪客一律此級，除非自選友館）。可疊的資格取最低價（不疊加）。
+const TIER_LABEL = { team: '攀岩隊員', vip: 'VIP', student_pass: '課程學員／90日票以上會員', partner_team: '友館攀岩隊員', other: '一般' };
+const hasActiveLongPass = async (memberId) => {
+  const snap = await getDb().collection('memberPasses').where('memberId', '==', memberId).get();
+  const today = taiwanToday();
+  return snap.docs.some(d => {
+    const p = d.data();
+    return p.status === 'active' && (!p.endDate || p.endDate >= today) && /90日|半年/.test(String(p.passTypeName || ''));
+  });
+};
+const computeTieredFee = async ({ competition, birthday, memberId, partnerGymId }) => {
+  const fees = competition.fees || {};
+  const ageInfo = computeCompetitionAgeInfo(birthday, competition);
+  const price = (k) => {
+    const v = fees[k];
+    if (v == null || v === '' || !(Number(v) >= 0)) throw { code: 'FEES_NOT_CONFIGURED', message: '此賽事尚未完成各身份收費設定，請洽館方' };
+    return Number(v);
+  };
+  const cands = [{ tier: 'other', fee: price('tierOther') }];
+  const isGuest = !memberId || String(memberId).startsWith('guest_');
+  if (!isGuest) {
+    try {
+      const mDoc = await getDb().collection(COLLECTIONS.MEMBERS).doc(memberId).get();
+      const { isActiveTeamMember } = require('./teamMemberService');
+      if (mDoc.exists && isActiveTeamMember(mDoc.data())) cands.push({ tier: 'team', fee: price('tierTeam') });
+    } catch (e) { if (e.code === 'FEES_NOT_CONFIGURED') throw e; }
+    try {
+      const { checkVip } = require('./checkin/eligibility');
+      if (await checkVip(memberId)) cands.push({ tier: 'vip', fee: price('tierVip') });
+    } catch (e) { if (e.code === 'FEES_NOT_CONFIGURED') throw e; }
+    try {
+      if ((await isCurrentCourseStudent(memberId)) || (await hasActiveLongPass(memberId))) cands.push({ tier: 'student_pass', fee: price('tierStudentPass') });
+    } catch (e) { if (e.code === 'FEES_NOT_CONFIGURED') throw e; }
+  }
+  let partnerGymName = null;
+  if (partnerGymId) {
+    try {
+      const pgDoc = await getDb().collection('systemSettings').doc('partnerGyms').get();
+      const list = pgDoc.exists && Array.isArray(pgDoc.data().gyms) ? pgDoc.data().gyms : [];
+      const hit = list.find(g => g.id === partnerGymId);
+      if (hit) { partnerGymName = hit.name; cands.push({ tier: 'partner_team', fee: price('tierPartnerTeam') }); }
+    } catch (e) { if (e.code === 'FEES_NOT_CONFIGURED') throw e; }
+  }
+  const order = ['team', 'vip', 'student_pass', 'partner_team', 'other'];
+  const win = cands.reduce((a, b) => (b.fee < a.fee || (b.fee === a.fee && order.indexOf(b.tier) < order.indexOf(a.tier))) ? b : a);
+  const hasInsurance = competition.hasInsurance !== false;
+  const insuranceFee = (!hasInsurance || win.fee === 0) ? 0
+    : (ageInfo.isChild ? (fees.insuranceChild ?? 118) : (fees.insuranceAdult ?? 261));
+  return {
+    isEarlyBird: false, isChild: ageInfo.isChild, isMinor: ageInfo.isMinor,
+    baseFee: price('tierOther'), insuranceFee, competitionType: 'tiered', isStudent: null, hasInsurance,
+    tier: win.tier, tierLabel: TIER_LABEL[win.tier],
+    registrationFee: win.fee,
+    teamDiscountApplied: false,
+    partnerGymApplied: win.tier === 'partner_team', partnerGymName: win.tier === 'partner_team' ? partnerGymName : null,
+  };
+};
+const assertTieredFees = (competitionType, fees) => {
+  if (competitionType !== 'tiered') return;
+  const ok = (v) => v !== undefined && v !== null && v !== '' && Number(v) >= 0;
+  if (!fees || !['tierTeam', 'tierVip', 'tierStudentPass', 'tierPartnerTeam', 'tierOther'].every(k => ok(fees[k]))) {
+    throw { code: 'TIER_FEES_REQUIRED', message: '身份收費賽請設定五個身份的費用（隊員／VIP／課程學員或90日票／友館隊員／其他）' };
+  }
+};
+
 const computeCompetitionFee = async ({ competition, birthday, memberId, partnerGymId }) => {
+  if (competition.competitionType === 'tiered') return computeTieredFee({ competition, birthday, memberId, partnerGymId });
   const fees = competition.fees || {};
   const todayStr = taiwanToday();
   const isKidsComp = competition.competitionType === 'kids';
@@ -151,13 +221,14 @@ const createCompetition = async ({ name, description, gymId, registrationStart, 
   }
 
   assertKidsFees(competitionType, fees);
+  assertTieredFees(competitionType, fees);
   const db = getDb();
   const id = uuidv4();
   const now = new Date();
   const competition = {
     id, name, description: description || '',
     hasInsurance: hasInsurance !== false, // 是否有保險（false＝隱藏保險費/身分證等保險相關欄位、不收保險費）
-    competitionType: competitionType === 'kids' ? 'kids' : 'standard', // standard=一般賽（成人/兒童、早鳥）；kids=兒童賽（當期學員/非當期學員價）
+    competitionType: ['kids', 'tiered'].includes(competitionType) ? competitionType : 'standard', // standard=一般賽（成人/兒童、早鳥）；kids=兒童賽（當期學員/非當期學員價）
     gymId: gymId || null,
     registrationStart, registrationEnd, eventDate,
     eventStartTime: eventStartTime || null, // 比賽開始時間 HH:MM（選填；供賽前10分鐘自動開啟計分，未填預設 09:00）
@@ -272,10 +343,11 @@ const updateCompetition = async (competitionId, updates) => {
   const payload = { updatedAt: new Date() };
   allowed.forEach(f => { if (updates[f] !== undefined) payload[f] = updates[f]; });
   if (payload.hasInsurance !== undefined) payload.hasInsurance = payload.hasInsurance !== false;
-  if (payload.competitionType !== undefined) payload.competitionType = payload.competitionType === 'kids' ? 'kids' : 'standard';
+  if (payload.competitionType !== undefined) payload.competitionType = ['kids', 'tiered'].includes(payload.competitionType) ? payload.competitionType : 'standard';
   {
     const mergedType = payload.competitionType ?? doc.data().competitionType;
     assertKidsFees(mergedType, payload.fees ?? doc.data().fees);
+    assertTieredFees(mergedType, payload.fees ?? doc.data().fees);
   }
   if (payload.paymentDeadlineDays !== undefined) {
     payload.paymentDeadlineDays = (payload.paymentDeadlineDays === null || payload.paymentDeadlineDays === '') ? 3 : Math.max(1, parseInt(payload.paymentDeadlineDays) || 3);
@@ -397,7 +469,7 @@ const registerForCompetition = async ({
   // 保險用欄位
   idNumber, emergencyContact, emergencyRelation, emergencyPhone,
   // 比賽用欄位
-  height, armSpan, isHonorary, memberNote, partnerGymId: _ignoredPartnerGymId,
+  height, armSpan, isHonorary, memberNote, partnerGymId: _partnerGymIdParam,
   // 平常練習岩館（所有賽事必填，了解選手資訊）；兒童賽可用補課券抵費（useMakeup、選填指定 makeupRightId）
   practiceGym, useMakeup, makeupRightId,
   // 付款
@@ -408,8 +480,8 @@ const registerForCompetition = async ({
 }) => {
   const db = getDb();
   const competition = await getCompetition(competitionId);
-  // 友館折扣已停止（2026-10-07）：新報名一律不套用，忽略呼叫端傳入的 partnerGymId
-  const partnerGymId = null;
+  // 友館折扣已停止（2026-10-07）：一般賽/兒童賽新報名一律不套用；只有「身份收費賽」可自選友館（友館攀岩隊員一級）
+  const partnerGymId = competition.competitionType === 'tiered' ? (_partnerGymIdParam || null) : null;
   if (!String(practiceGym || '').trim()) {
     throw { code: 'MISSING_PRACTICE_GYM', message: '請填寫平常練習岩館' };
   }
@@ -465,6 +537,8 @@ const registerForCompetition = async ({
   const partnerGymApplied = feeInfo.partnerGymApplied;
   const partnerGymName = feeInfo.partnerGymName;
 
+  // 身份收費賽免費一級（費用 0 且非友館待核對）→ 免繳費、直接視為已收款
+  const isFreeTier = feeInfo.competitionType === 'tiered' && registrationFee === 0 && !partnerGymApplied;
   // 補課券抵費（僅兒童賽、僅會員本人名下的可用券；實際「標記已使用」在下方寫入報名的同一個交易內，防雙重使用）
   let makeupRight = null;
   if (useMakeup) {
@@ -547,6 +621,7 @@ const registerForCompetition = async ({
     isMinor: !!isMinor,
     // 費用（用補課券抵費：報名費/保費皆 0，originalFee 留原價供查帳）
     registrationFee: makeupRight ? 0 : registrationFee,
+    tier: feeInfo.tier || null, // 身份收費賽：team／vip／student_pass／partner_team／other
     originalFee: makeupRight ? registrationFee : null,
     insuranceFee: makeupRight ? 0 : insuranceFee, // 保費（成人/兒童，報名時鎖定；開發票/記營收從報名費扣除）
     isChild: !!isChild,
@@ -556,15 +631,16 @@ const registerForCompetition = async ({
     isCurrentStudent: feeInfo.isStudent,      // 兒童賽：報名當下是否為當期學員（一般賽為 null）
 
     // 付款
-    paymentMethod: makeupRight ? 'makeup_credit' : (paymentMethod || 'transfer'),
+    paymentMethod: makeupRight ? 'makeup_credit' : (isFreeTier ? 'free_tier' : (paymentMethod || 'transfer')),
     paymentDate: makeupRight ? null : (paymentDate || null),
     bankLastFive: makeupRight ? null : (bankLastFive || null),
     memberPaidAmount: (!makeupRight && paidAmount) ? Number(paidAmount) : null, // 會員自填實際匯款金額
     bankName: makeupRight ? null : (bankName || null),
-    paymentStatus: makeupRight ? 'confirmed' : 'pending', // pending | confirmed | refunded
-    paidAmount: makeupRight ? 0 : null,
-    paidAt: makeupRight ? now : null,
-    paidConfirmedBy: makeupRight ? 'system:makeup_credit' : null,
+    paymentStatus: (makeupRight || isFreeTier) ? 'confirmed' : 'pending', // pending | confirmed | refunded
+    paidAmount: (makeupRight || isFreeTier) ? 0 : null,
+    paidAt: (makeupRight || isFreeTier) ? now : null,
+    paidConfirmedBy: makeupRight ? 'system:makeup_credit' : (isFreeTier ? 'system:free_tier' : null),
+    paidFree: !!isFreeTier,                // 身份收費賽的免費一級（隊員/VIP）：免繳費，取消不需退費帳號
     paidByMakeup: !!makeupRight,           // 以補課券抵費（免繳費；取消報名時券歸還）
     makeupRightId: makeupRight ? makeupRight.id : null,
     practiceGym: String(practiceGym).trim(),

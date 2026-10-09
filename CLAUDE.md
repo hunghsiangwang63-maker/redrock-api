@@ -409,3 +409,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **手動登記信箱驗證（純資料）**：周煜庭（0963615813）`emailVerified:true`＋`emailVerifiedNote`，再呼叫 `refreshBlockStatus` 重算封鎖；結果只剩 `waiver_unsigned`（風險安全聲明書未簽）。流程＝直接改欄位後必須重算封鎖狀態（`memberService.verifyEmail` 同做法）。腳本在 repo 外跑要 `NODE_PATH=$PWD/node_modules`＋`GOOGLE_APPLICATION_CREDENTIALS`＋先 `initFirebase()`。
 - 🔍 **「又出現發現新版本」查證（無程式異動）**：不是誤報——10/6 前端部署約 8 次、10/7 約 5 次、10/8 1 次，`UpdateChecker` 以原始碼內容雜湊判斷，每次真有改動就會提示一次；查證時線上版本碼穩定。若重整後同一版仍反覆跳，多半是加到主畫面的 PWA 沒真正重載（關掉重開或強制重整）。**日後前端小改動盡量合併成一次部署**，減少提示次數。
 - 📌 **員工端沒有「新增會員」畫面**（後端 `POST /members` 存在但無任何前端呼叫）：家長不註冊時，兒童需由本人/家長用 `app.redrocktaiwan.com/member/register` 自行註冊（櫃檯可協助操作）；員工端只能在既有家長會員詳情頁加家庭成員。使用者看過說明後決定**不開發**員工代建畫面。
+
+## 目前進度（2026-10-09 續）— 新竹 10/9 結帳 LinePay 多算 350 更正（純資料）
+> 回報「新竹今日 LinePay 是 3880，請確認哪裡有誤」（結帳/發票原為 4,230）。無程式異動。
+- ✅ **原因**：劉欣耘（學生入場＋租借岩鞋 350，16:29）**入場紀錄 `paymentMethod:cash`，但發票 EF33427144 選成 `linepay`** → 結帳以發票為準，LinePay 多 350、現金少 350。逐筆比對當日 22 張入場發票 vs `checkIns`，僅此一筆不一致；無「LinePay 入場卻沒開發票」。
+- ✅ **更正**：發票 `f772cd3c-507f-44a2-9200-956fcc862402` 的 `paymentMethod` linepay→cash（附 `paymentMethodCorrectionNote`）；結帳 `dailySettlements/0a437ad5-afc4-4b4f-aa81-ba485952d59a`：`linePay` 4230→**3880**、`electronic` 4230→3880、`cash` 3770→4120、`expectedCashBalance` 14818→15168、`difference` +350→**0**（附 `correctionNote`）；`actualCashBalance`（15168）不動。更正前備份在當次 scratchpad `backup-hc-1009.json`。
+- 📌 **方向判斷依據**：使用者給的對帳數字（3,880）＝系統 4,230 減 350，且更正前現金差異為 +350（實際點鈔比預期多），兩者皆支持「這筆其實收現金、發票選錯」。**第四次遇到同型（見 10/4 黃明姿），直接套用對帳模式**：發票 vs 入場紀錄付款方式不一致的那筆就是選錯。
+- 🛠 **查詢備忘**：`invoices` 編號欄位是 `invoiceNo`（`EF`＋`number`，**沒有 `invoiceNumber`**），入場發票用 `refId`＝`checkIns` id、`sourceType:'checkin'`；`checkIns` 依 `gymId`＋`checkedInAt` 範圍查需要複合索引，腳本改單查日期範圍後在記憶體過濾館別；`transactions` 同理（gymId＋createdAt 範圍缺索引）。

@@ -204,7 +204,7 @@ async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
     // 收入的付款方式統計仍只能沿用 transactions(recognitionDate) 這條路（見 GET /today 呼叫端）。
     // 定期票續約發票（checkin_renewal／pass_renewal）不計入 byMethod：續約款的付款方式已由 type:'pass'
     // 交易（GET /today 迴圈 addPay）統計，再加發票會重複（發票金額仍計入 actualTotal／bySourceType）。
-    issued.filter(i => i.sourceType !== 'checkin_merged' && i.sourceType !== 'checkin_renewal' && i.sourceType !== 'pass_renewal').forEach(i => {
+    issued.filter(i => i.sourceType !== 'checkin_merged' && i.sourceType !== 'product_merged' && i.sourceType !== 'checkin_renewal' && i.sourceType !== 'pass_renewal').forEach(i => {
       const m = i.paymentMethod || 'cash';
       result.byMethod[m] = (result.byMethod[m] || 0) + (Number(i.amount) || 0);
     });
@@ -231,6 +231,35 @@ async function computeTodayInvoiceAuthority(db, gymId, todayStart, todayEnd) {
           parts.forEach(ci => {
             const m = ci.paymentMethod || 'cash';
             result.byMethod[m] = (result.byMethod[m] || 0) + (Number(ci.amountPaid) || 0);
+          });
+        } else {
+          const m = i.paymentMethod || 'cash';
+          result.byMethod[m] = (result.byMethod[m] || 0) + (Number(i.amount) || 0);
+        }
+      });
+    }
+    // 商品銷售合併發票（product_merged）同理：依 mergedSaleIds 回頭查各筆 productSales 的真實付款方式/金額
+    // 分開累加（2026-10-10 案例：同一天兩雙岩鞋一筆現金、一筆 LinePay，補開一張 2000 發票只能標單一付款方式，
+    // 結帳 LinePay 多算 1000）。找不到銷售或加總對不上發票金額（金額被人工改過）時退回整張單一付款方式。
+    const mergedProductInvoices = issued.filter(i => i.sourceType === 'product_merged' && Array.isArray(i.mergedSaleIds) && i.mergedSaleIds.length);
+    const unsplittableProductMerged = issued.filter(i => i.sourceType === 'product_merged' && !(Array.isArray(i.mergedSaleIds) && i.mergedSaleIds.length));
+    unsplittableProductMerged.forEach(i => {
+      const m = i.paymentMethod || 'cash';
+      result.byMethod[m] = (result.byMethod[m] || 0) + (Number(i.amount) || 0);
+    });
+    if (mergedProductInvoices.length) {
+      const allSaleIds = [...new Set(mergedProductInvoices.flatMap(i => i.mergedSaleIds))];
+      const saleDocs = await db.getAll(...allSaleIds.map(id => db.collection('productSales').doc(id)));
+      const saleMap = {};
+      saleDocs.forEach(d => { if (d.exists) saleMap[d.id] = d.data(); });
+      mergedProductInvoices.forEach(i => {
+        const parts = i.mergedSaleIds.map(sid => saleMap[sid]).filter(Boolean);
+        const partsSum = parts.reduce((s, sl) => s + (Number(sl.totalAmount) || 0), 0);
+        const consistent = parts.length === i.mergedSaleIds.length && partsSum === (Number(i.amount) || 0);
+        if (consistent) {
+          parts.forEach(sl => {
+            const m = sl.paymentMethod || 'cash';
+            result.byMethod[m] = (result.byMethod[m] || 0) + (Number(sl.totalAmount) || 0);
           });
         } else {
           const m = i.paymentMethod || 'cash';

@@ -180,7 +180,7 @@ router.put('/printing-status', authenticate, async (req, res) => {
 // invoiceRecords 是不同集合，此為第 1-8 節「真實印表機」計畫專用，供日後 P5 結帳自動化讀取）。
 router.post('/print-record', authenticate, requireManagerOrStation, async (req, res) => {
   try {
-    const { sourceType, refId, memberId, memberName, itemName, amount, taxId, note, issuedAt, paymentMethod, mergedCheckinIds, amountModified, originalAmount } = req.body;
+    const { sourceType, refId, memberId, memberName, itemName, amount, taxId, note, issuedAt, paymentMethod, mergedCheckinIds, mergedSaleIds, amountModified, originalAmount } = req.body;
     // 限當館：非 super_admin 一律用自己登入/值班的館別（五流程既有呼叫本就是自己館，這裡是保險；
     // 「手動開立無來源發票」尤其需要這道權威擋，避免士林操作直接消耗新竹的號碼）
     const gymId = req.staff?.role === 'super_admin' ? (req.body.gymId || req.staff?.gymId) : req.staff?.gymId;
@@ -216,6 +216,29 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
         }
       }
     }
+    // 商品銷售合併列印（sourceType:'product_merged'，refId 為 null）——逐筆驗證：存在、同館、非退貨單、
+    // 未退貨、尚未被開過發票（個別或另一張合併發票涵蓋），任一筆不符就整批擋下，避免重複開票或開到別館/已退貨的單。
+    if (sourceType === 'product_merged') {
+      if (!Array.isArray(mergedSaleIds) || mergedSaleIds.length < 2) {
+        return res.status(400).json({ error: 'MERGE_NEED_TWO', message: '合併列印至少需要 2 筆銷售' });
+      }
+      if (new Set(mergedSaleIds).size !== mergedSaleIds.length) {
+        return res.status(400).json({ error: 'MERGE_DUPLICATE', message: '合併清單有重複的銷售' });
+      }
+      const saleDocs = await db.getAll(...mergedSaleIds.map(id => db.collection('productSales').doc(id)));
+      let salesSum = 0;
+      for (const sd of saleDocs) {
+        const sale = sd.exists ? sd.data() : null;
+        if (!sale) return res.status(404).json({ error: 'NOT_FOUND', message: `找不到銷售紀錄（id: ${sd.id}）` });
+        if (sale.gymId !== gymId) return res.status(400).json({ error: 'MERGE_CROSS_GYM', message: '合併列印只能合併同一館別的銷售' });
+        if (sale.isReturn || sale.returned) return res.status(400).json({ error: 'MERGE_RETURNED', message: '合併清單包含已退貨的銷售，請重新選取' });
+        salesSum += Number(sale.totalAmount) || 0;
+        const dup = await getActiveRealInvoice(db, 'product', sd.id);
+        if (dup) {
+          return res.status(409).json({ error: 'ALREADY_INVOICED', message: `其中一筆銷售（id: ${sd.id}）已開立過發票（${dup.invoiceNo}），請重新選取後再試`, invoice: dup });
+        }
+      }
+    }
     await checkInvoiceIssuanceTiming(db, sourceType, refId); // 課程/比賽延後開立時機把關（其餘 sourceType 不受影響）
     const allocated = await invoiceNumberService.allocateInvoiceNumber(gymId); // {track, number}
     const id = uuidv4();
@@ -243,6 +266,8 @@ router.post('/print-record', authenticate, requireManagerOrStation, async (req, 
       // 合併列印（多筆入場合開一張發票，sourceType:'checkin_merged'、refId:null）——存底下實際合併的
       // checkIns id 陣列供稽核追溯；一般單筆來源的發票此欄位不存在，不影響既有任何邏輯。
       ...(Array.isArray(mergedCheckinIds) && mergedCheckinIds.length ? { mergedCheckinIds } : {}),
+      // 商品銷售合併列印：存底下實際合併的 productSales id 陣列（供結帳依各筆付款方式拆分、查詢某筆銷售是否被合併涵蓋）
+      ...(sourceType === 'product_merged' && Array.isArray(mergedSaleIds) && mergedSaleIds.length ? { mergedSaleIds } : {}),
       ...(validity.valid ? {} : {
         voidedAt: now, voidedBy: null, voidedByName: '系統自動判定',
         voidReason: `列印當下對應交易已失效（${validity.reason}），號碼已消耗故仍記錄並直接標記作廢`,
@@ -355,7 +380,7 @@ router.get('/status', authenticate, requireManagerOrStation, async (req, res) =>
     if (!sourceType || !refId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '缺少 sourceType/refId' });
     const db = getDb();
     const real = await getActiveRealInvoice(db, sourceType, refId);
-    if (real) return res.json({ invoiceNo: real.invoiceNo, amount: real.amount, merged: real.sourceType === 'checkin_merged' });
+    if (real) return res.json({ invoiceNo: real.invoiceNo, amount: real.amount, merged: real.sourceType === 'checkin_merged' || real.sourceType === 'product_merged' });
     const legacy = await require('../services/invoiceService').getActiveInvoice(db, sourceType, refId);
     res.json(legacy ? { invoiceNo: legacy.invoiceNo || '', amount: Number(legacy.amount) || 0 } : { invoiceNo: null, amount: null });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
@@ -472,6 +497,13 @@ async function getActiveRealInvoice(db, sourceType, refId) {
     const found = mergedSnap.docs.find(d => d.data().status === 'issued');
     if (found) return { id: found.id, ...found.data() };
   }
+  // 商品銷售同理：個別銷售（sourceType:'product'）也要查有沒有被「合併列印發票」（product_merged，
+  // refId 為 null，涵蓋的銷售 id 存在 mergedSaleIds）涵蓋——避免重複開票，也讓退貨時能連動作廢合併發票。
+  if (sourceType === 'product') {
+    const mergedSnap = await db.collection('invoices').where('mergedSaleIds', 'array-contains', refId).get();
+    const found = mergedSnap.docs.find(d => d.data().status === 'issued');
+    if (found) return { id: found.id, ...found.data() };
+  }
   return null;
 }
 
@@ -583,7 +615,7 @@ router.put('/source-payment-method', authenticate, requireManagerOrStation, asyn
 // 逐筆列出區間內全部發票（含已作廢）——「今日發票列表」只看得到當天，這裡供稽核/對帳查任意區間。
 // ⚠️ 權限比照其餘 invoices 端點嚴格一級：requireManager（super_admin/gym_manager），值班/場館電腦不可下載。
 const SOURCE_TYPE_LABEL = {
-  checkin: '入場', checkin_merged: '入場（合併列印）', product: '商品銷售', rental: '器材租借', competition: '比賽報名',
+  checkin: '入場', checkin_merged: '入場（合併列印）', product: '商品銷售', product_merged: '商品銷售（合併列印）', rental: '器材租借', competition: '比賽報名',
   course: '課程', experience: '體驗課程／試上', null: '手動開立（無來源）',
 };
 router.get('/download', authenticate, requireManager, async (req, res) => {

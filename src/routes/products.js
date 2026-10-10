@@ -468,7 +468,40 @@ router.get('/sales', authenticate, checkPermission('products.sell'), async (req,
     }
     if (gymId) ref = ref.where('gymId', '==', gymId);
     const snap = await ref.orderBy('soldAt', 'desc').limit(10000).get();
-    res.json({ sales: snap.docs.map(d => ({ id: d.id, ...d.data() })) });
+    const sales = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // 每筆銷售帶上「目前有效的發票」資訊（invoice: {invoiceNo, merged, mergedCount}；沒有則不帶）——銷售紀錄頁
+    // 直接顯示「開立發票」或「已開立 EFxxxx」，不用每列各打一次 /invoices/status。涵蓋三種來源：
+    // ①真列印個別發票（invoices, sourceType:'product'）②真列印合併發票（product_merged，mergedSaleIds）
+    // ③過渡期手動記帳版（invoiceRecords）。只查有金額、未退貨的銷售（退貨單/已退貨不會有有效發票）。
+    try {
+      const invoiceable = sales.filter(x => !x.isReturn && !x.returned && (Number(x.totalAmount) || 0) > 0);
+      const ids = invoiceable.map(x => x.id);
+      const invoiceBySale = {};
+      const chunks = [];
+      for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30));
+      const readChunk = async (coll, chunk) => (await db.collection(coll).where('refId', 'in', chunk).get()).docs.map(d => d.data());
+      const [realRows, legacyRows] = await Promise.all([
+        Promise.all(chunks.map(c => readChunk('invoices', c))).then(a => a.flat()),
+        Promise.all(chunks.map(c => readChunk('invoiceRecords', c))).then(a => a.flat()),
+      ]);
+      [...legacyRows, ...realRows].forEach(inv => {
+        if (inv.sourceType === 'product' && inv.status === 'issued' && inv.refId) invoiceBySale[inv.refId] = { invoiceNo: inv.invoiceNo || '', merged: false };
+      });
+      // 合併發票 refId 為 null，改用 sourceType 查（筆數很少，不會隨銷售量成長）再依 mergedSaleIds 對應
+      let mergedQ = db.collection('invoices').where('sourceType', '==', 'product_merged');
+      if (gymId) mergedQ = mergedQ.where('gymId', '==', gymId);
+      const mergedSnap = await mergedQ.get();
+      const saleIdSet = new Set(ids);
+      mergedSnap.docs.forEach(d => {
+        const inv = d.data();
+        if (inv.status !== 'issued' || !Array.isArray(inv.mergedSaleIds)) return;
+        inv.mergedSaleIds.forEach(sid => {
+          if (saleIdSet.has(sid)) invoiceBySale[sid] = { invoiceNo: inv.invoiceNo || '', merged: true, mergedCount: inv.mergedSaleIds.length };
+        });
+      });
+      sales.forEach(x => { if (invoiceBySale[x.id]) x.invoice = invoiceBySale[x.id]; });
+    } catch (e) { console.error('[銷售紀錄帶入發票資訊失敗]', e.message); }
+    res.json({ sales });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

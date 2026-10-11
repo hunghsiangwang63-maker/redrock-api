@@ -14,6 +14,18 @@ const esc = (s) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
 
+// 由 HTML 產生純文字版：連結轉成「文字 (網址)」、其餘標籤移除。
+// 沒有傳 text 時若只放主旨，純文字模式／過濾按鈕的信箱收到的信就完全沒有連結。
+const htmlToText = (html) => String(html || '')
+  .replace(/<a\s[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, url, label) => {
+    const l = label.replace(/<[^>]+>/g, '').trim();
+    return !l || l === url ? url : `${l} (${url})`;
+  })
+  .replace(/<(br|p|\/p|\/h\d|\/div|\/li)(\s[^>]*)?\/?>/gi, '\n')
+  .replace(/<[^>]+>/g, '')
+  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'")
+  .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+
 /**
  * 核心發信函式
  */
@@ -28,7 +40,7 @@ const sendEmail = async ({ to, cc, bcc, subject, html, text, attachments }) => {
       to: Array.isArray(to) ? to : [to],
       subject,
       html,
-      text: text || subject,
+      text: text || htmlToText(html) || subject,
     };
     // 副本收件人（選填；字串或陣列）
     const ccList = (Array.isArray(cc) ? cc : (cc ? [cc] : [])).filter(Boolean);
@@ -534,6 +546,10 @@ const sendParentWaiverLink = async (memberId, memberName, parentEmail, parentNam
         <p>未成年會員 <strong>${esc(memberName)}</strong> 已完成本人簽署，需法定代理人（家長）一同簽署 <strong>風險安全聲明書</strong> 與 <strong>墜落測驗同意書</strong> 才能生效。</p>
         <p style="color:#666;font-size:13px">點擊下方連結，於同一頁面簽一次名即可完成兩份文件。</p>
         <a href="${url}" style="display:inline-block;margin:20px 0;padding:12px 28px;background:#8B1A1A;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold">前往簽署</a>
+        <p style="color:#999;font-size:12px">
+          按鈕點不開嗎？請複製下方網址貼到瀏覽器開啟：<br>
+          <a href="${url}" style="color:#8B1A1A;word-break:break-all">${url}</a>
+        </p>
         <p style="color:#999;font-size:12px">此連結 72 小時內有效。若非本人操作請忽略此信。</p>
       </div>
     `,
@@ -552,6 +568,10 @@ const sendParentCompetitionWaiverLink = async ({ memberName, competitionName, pa
         <p>${esc(parentName || '法定代理人')} 您好，</p>
         <p>未成年選手 <strong>${esc(memberName)}</strong> 已報名 <strong>${esc(competitionName)}</strong>，需法定代理人（家長／監護人）簽署比賽風險聲明書，報名才會生效。</p>
         <a href="${url}" style="display:inline-block;margin:20px 0;padding:12px 28px;background:#8B1A1A;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold">前往簽署</a>
+        <p style="color:#999;font-size:12px">
+          按鈕點不開嗎？請複製下方網址貼到瀏覽器開啟：<br>
+          <a href="${url}" style="color:#8B1A1A;word-break:break-all">${url}</a>
+        </p>
         <p style="color:#999;font-size:12px">此連結 72 小時內有效。若非本人操作請忽略此信。</p>
       </div>
     `,

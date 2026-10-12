@@ -437,3 +437,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **家長簽署頁出不來的另一成因＋註冊警語（2026-10-11 續，前端 redrock-web 已部署，buildId `member-26e7000f603e6579`）**：劉亦謹案——家長用**孩子的資料**註冊主帳號（主帳號 `isMinor:true`、系統沒有家長本人的會員），註冊後選「🙋 本人不入場」→ `MemberOnboardingGate` 因 `selfEntrySkipped` 直接放行、**不顯示主帳號的入場文件簽署頁**；家長後來按「重啟入場文件簽署」（`selfEntrySkipped` 變 `false`）才簽得出來。與「信裡沒連結」兩件事疊在一起才卡很久。判斷為資料推論，未看過家長當時畫面。**正確流程**＝家長用自己的資料註冊，再於「家庭成員」新增孩子（孩子是 `isChildAccount`，家長可在 App 內代簽）；用孩子資料當主帳號時，法代簽署只能走 Email 連結。
   - 警語（只加提示，未擋按鈕）：①`MemberRegisterPage` 生日填到未滿 18 歲時顯示黃底提示（請家長用自己資料註冊）②`MemberOnboardingGate`「本人不入場」按鈕下方與確認視窗，**僅 `member.isMinor` 時**顯示警語（未成年主帳號勿選不入場，否則不會出現簽署頁）。中英日三語已補 `memberI18n.js`。畫面僅 build 通過、未實際開畫面看。
   - 排查備忘：同電話可能有多位會員（主帳號＋家庭成員共用電話），用 `isChildAccount`／`parentId`／`selfEntrySkipped`／`createdAt` 還原誰是主帳號、誰先建立。
+
+## 目前進度（2026-10-12）— 免註冊比賽報名補同意書／法定代理人資料、報名存同意書快照、葉育昕實繳更正（後端 `/health` `3.568.0-comp-waiver-snapshot-guardian-contact`；前端 buildId `member-2805ab9041afabcf`）
+> 起因：使用者問「免註冊報名要看得到同意書才簽名；未註冊如何取得入場 QR」。查證發現公開報名頁（`PublicCompetitionRegisterPage`）只有簽名框、**完全沒顯示同意書**（後端公開端點本就回傳 `waiverContent`，頁面沒用）。
+- ✅ **公開報名頁**：簽名前顯示「參賽同意書」（賽事 `waiverContent.zh`，沒填用預設中英日全文；內容長時可捲動），並與會員端一致需勾兩項才能送出（已閱讀同意參賽規定與風險聲明／同意照片影像使用）。**未成年**另需填法定代理人**姓名、電話、與選手關係**（皆必填）＋簽名；後端驗證 `GUARDIAN_NAME_REQUIRED`／`GUARDIAN_PHONE_REQUIRED`／`GUARDIAN_RELATION_REQUIRED`（正式環境已測）。
+- ✅ **預設同意書文字抽成共用** `redrock-web/src/utils/competitionWaiverDefaults.js`（`DEFAULT_COMP_WAIVER` zh/en/ja），會員端與公開頁共用；以後改預設文字只改這一處。賽事自訂同意書只有繁中（英日版訪客看到仍是繁中，會員端同）。
+- ✅ **報名存同意書快照 `waiverSnapshot`**（會員端與免註冊兩條路徑，`registerForCompetition`）：`{source:'competition'|'default', text, lang, photoConsent, savedAt}`。賽事有自訂內容→存**後端**的（不信前端）；沒填→存前端帶上來的 `waiverShownText`（≤20000 字）與 `waiverLang`。舊報名無快照。報名名單查詢是欄位白名單，不會帶出快照；員工端目前**沒有檢視快照的畫面**。服務層建測試報名讀回驗證後已刪（簽名圖內嵌在報名文件，無殘留）。
+- ⚠️ **未做／注意**：①會員端未成年報名的法代資料維持原流程（法代簽名那邊沒收姓名/電話/關係）②頁面僅 build 通過、未實際開畫面看 ③「攀岩隊模擬賽(初賽)」同意書欄位是空的→訪客會看到預設文字，上線前確認適用 ④**免登入報到 QR 連結尚未做**——訪客仍無 QR、當天靠櫃檯「手動報到」；設計討論結論：QR 內容只有隨機代碼 `compchk:<uuid>`（不含個資），連結頁建議只顯示賽事名/QR/遮罩姓名/已報到狀態，**待使用者決定組別是否顯示、姓名是否遮罩**。
+- ✅ **葉育昕（新竹，矯正班 11-12月周三B班）實繳更正（純資料）**：`memberPaidAmount` 8400→**7980**、`staffNote`「待退款 420元」→「10/12 已linepay 退款 420元」，**兩處都要改**：`courseRegistrations/8e5c4a7e-…`（總表）與 `courseEnrollments/98ad457d-…`（`payEnrollmentId`）。應繳 `fee` 7980 與營收 `transactions`（7980 轉帳）原本就對、未動；420 為退回她多匯的款，**未新增退款交易**（只改報名欄位）。備份 scratchpad `backup-ye.json`。
+- 📌 **備忘**：課程報名的「實繳／會員自報匯款金額」＝`memberPaidAmount`（總表＋付款報名各存一份）；「實收覆寫」是另一個欄位 `receivedAmountOverride`，別混。

@@ -436,6 +436,9 @@ router.post('/public/:id/register',
       if (ageInfo.isMinor && !req.body.guardianSignature) {
         return res.status(400).json({ error: 'GUARDIAN_SIGNATURE_REQUIRED', message: '未滿 18 歲需法定代理人簽名' });
       }
+      if (ageInfo.isMinor && !String(req.body.parentName || '').trim()) {
+        return res.status(400).json({ error: 'GUARDIAN_NAME_REQUIRED', message: '未滿 18 歲需填寫法定代理人姓名' });
+      }
 
       const memberId = `guest_${uuidv4()}`;
       const registration = await competitionService.registerForCompetition({

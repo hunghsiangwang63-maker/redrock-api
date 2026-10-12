@@ -439,6 +439,12 @@ router.post('/public/:id/register',
       if (ageInfo.isMinor && !String(req.body.parentName || '').trim()) {
         return res.status(400).json({ error: 'GUARDIAN_NAME_REQUIRED', message: '未滿 18 歲需填寫法定代理人姓名' });
       }
+      if (ageInfo.isMinor && !String(req.body.parentPhone || '').trim()) {
+        return res.status(400).json({ error: 'GUARDIAN_PHONE_REQUIRED', message: '未滿 18 歲需填寫法定代理人電話' });
+      }
+      if (ageInfo.isMinor && !String(req.body.parentRelation || '').trim()) {
+        return res.status(400).json({ error: 'GUARDIAN_RELATION_REQUIRED', message: '未滿 18 歲需填寫與法定代理人的關係' });
+      }
 
       const memberId = `guest_${uuidv4()}`;
       const registration = await competitionService.registerForCompetition({
@@ -465,6 +471,7 @@ router.post('/public/:id/register',
         isHonorary: req.body.isHonorary,
         memberNote: req.body.memberNote,
         practiceGym: req.body.practiceGym,
+        waiverShownText: req.body.waiverShownText, waiverLang: req.body.waiverLang, photoConsent: req.body.photoConsent,
         partnerGymId: req.body.partnerGymId, // 僅身份收費賽採用，其他賽事服務層會忽略
         // 付款（訪客一律轉帳）
         paymentMethod: 'transfer',
@@ -567,6 +574,7 @@ router.post('/:id/register',
         isHonorary: req.body.isHonorary,
         memberNote: req.body.memberNote,
         practiceGym: req.body.practiceGym,
+        waiverShownText: req.body.waiverShownText, waiverLang: req.body.waiverLang, photoConsent: req.body.photoConsent,
         partnerGymId: req.body.partnerGymId, // 僅身份收費賽採用（友館攀岩隊員一級），其他賽事服務層會忽略
         useMakeup: !!req.body.useMakeup,
         makeupRightId: req.body.makeupRightId || null,

@@ -472,6 +472,8 @@ const registerForCompetition = async ({
   height, armSpan, isHonorary, memberNote, partnerGymId: _partnerGymIdParam,
   // 平常練習岩館（所有賽事必填，了解選手資訊）；兒童賽可用補課券抵費（useMakeup、選填指定 makeupRightId）
   practiceGym, useMakeup, makeupRightId,
+  // 簽名當下的同意書快照（賽事沒填同意書時，前端顯示的是程式內建預設文字，由前端帶上來）
+  waiverShownText, waiverLang, photoConsent,
   // 付款
   paymentDate, bankLastFive, bankName, paymentMethod, paidAmount,
   ip,
@@ -644,6 +646,14 @@ const registerForCompetition = async ({
     paidByMakeup: !!makeupRight,           // 以補課券抵費（免繳費；取消報名時券歸還）
     makeupRightId: makeupRight ? makeupRight.id : null,
     practiceGym: String(practiceGym).trim(),
+    // 同意書快照：賽事有自訂內容時以後端的為準（不信前端），否則存前端顯示的預設全文
+    waiverSnapshot: {
+      source: competition.waiverContent?.zh ? 'competition' : 'default',
+      text: competition.waiverContent?.zh || String(waiverShownText || '').slice(0, 20000),
+      lang: competition.waiverContent?.zh ? 'zh' : (['zh', 'en', 'ja'].includes(waiverLang) ? waiverLang : null),
+      photoConsent: !!photoConsent,
+      savedAt: now,
+    },
     memberSignatureUrl, memberSignedAt: now, memberSignedIp: ip || null,
     parentRequired: !!isMinor,
     // 未成年：現場法定代理人簽名（guardianSignature）→ 報名即完成；否則待 email 遠端簽署

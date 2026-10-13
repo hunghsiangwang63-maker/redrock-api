@@ -497,7 +497,7 @@ router.get('/eligibility/:memberId', authenticate, requireManagerOrStation, asyn
         },
         blackCard: { available: blackCards.length > 0, cards: blackCards.map(c => ({ id: c.id, remainingCredits: c.remainingCredits })) },
         bonus: { available: bonuses.length > 0, bonuses: bonuses.map(b => ({ id: b.id, expiresAt: b.expiresAtFormatted })) },
-        singleEntryTicket: { available: validTickets.length > 0, tickets: validTickets.map(t => ({ id: t.id, ticketType: t.ticketType || null, validDate: t.validDate || null })) },
+        singleEntryTicket: { available: validTickets.length > 0, tickets: validTickets.map(t => ({ id: t.id, ticketType: t.ticketType || null, validDate: t.validDate || null, source: t.source || null, amount: t.amount ?? null, paymentMethod: t.paymentMethod || null, expiresAt: t.expiresAt || null })) },
       },
     });
   } catch (err) {

@@ -459,6 +459,16 @@ async function createPayment({ provider = 'mock', orderType, orderRef = {}, gymI
     if (toggles[provider] === false) throw { code: 'METHOD_DISABLED', message: '此付款方式尚未開放' };
   }
   if (!orderType) throw { code: 'MISSING_ORDER_TYPE', message: '缺少 orderType' };
+  // 入場 pay-first 的流程開關（systemSettings/paymentMethods.onlineFlows.entry）：後端權威把關，不只靠前端藏入口。
+  // 讀取失敗時視為關閉（寧可擋也不要在管理員已關閉時放行）；僅 entry，其他流程沿用既有行為。
+  if (orderType === 'entry' && provider !== 'mock') {
+    let entryOn = false;
+    try {
+      const pm = await db.collection('systemSettings').doc('paymentMethods').get();
+      entryOn = pm.exists && pm.data().onlineFlows?.entry === true;
+    } catch (e) { entryOn = false; }
+    if (!entryOn) throw { code: 'ONLINE_FLOW_DISABLED', message: '入場線上付款目前未開放，請至櫃檯付款' };
+  }
   // 已註冊的 orderType 一律後端權威解析金額/場館/會員（前端不送）；未註冊者（mock）沿用傳入值
   let finalAmount = amount, finalGymId = gymId, finalMemberId = memberId, finalMemberName = memberName;
   if (orderResolvers[orderType]) {

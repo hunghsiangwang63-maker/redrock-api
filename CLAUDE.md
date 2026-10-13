@@ -458,3 +458,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - ⚠️ **這次口述名字與資料不符**（使用者說「陳珮瑜」，實為「林珮瑜」；資料庫無陳珮瑜）：我先改了資料才確認人選，使用者事後確認是林珮瑜。**口述姓名查無或對不上時，先列出候選並確認，再改資料。**
   - 付款後沒跳出 QR 的成因**未查明**（程式有 `?paid=1` 導回與「20 分鐘內新開通線上入場券自動產生 QR」保底，MemberQRPage）；推測是停留在街口 App／導回頁面沒載入，未驗證。待補：她的裝置與付完款停在哪。
 - ✅ **電話入場提示已付款的線上入場券（3.570.0＋員工端）**：`/checkin/eligibility/:memberId` 的 `instruments.singleEntryTicket.tickets` 多回 `source/amount/paymentMethod/expiresAt`；`CheckinPage.jsx` 電話入場在選定會員後，若有 `source==='online-entry'` 的未使用券，顯示黃色提示框「已用○○線上付款 NT$○，有未使用的入場券，請直接使用，不要再收費」＋「使用此入場券入場」切換鈕（設定 `phoneInstrument`，走既有 `/checkin/direct`）。只提示線上付款來源的券；VIP／定期票／課程學員也會顯示。**畫面僅 build 通過、未用真實資料驗證**（林珮瑜那張已用掉）。
+
+## 目前進度（2026-10-13 續）— 林子雲虹瑩進階班 10/13 補課（額外補課券＋週二班超收一位＋入場改補課券）＋線上入場付款設定查證
+> 純資料操作，無程式異動。會員 `dc502ee4-57c9-49b7-9b07-9deb7341d7e4`（林子雲，0963004187，原班虹瑩進階班週四班，士林）。
+- ✅ **補課券**：館方「再給一張」→ `courseMakeupRights/c8f6720e-749a-42b4-8107-9ac00fc67c14`（`source:'manual'`、`exempt:true`、效期當日，存 2026-10-12T16:00Z＝台灣 10/13 00:00），已標 `used`。**未記錄她缺的是哪一天**（使用者未提供）。
+- ✅ **名單**：補到今天 19:30「虹瑩進階班 8-9月週二班」（場次 `a6b7b0ce…`），**館方同意超收一位**（enrolledCount 4/3）。報名 `courseEnrollments/88412951-59cd-4b3c-9e54-e695d3cc5ff8`（`isMakeup:true`、手動三筆寫入，同 10/06 做法；`makeupTarget:'off'` 被刻意繞過）。備份 `backup-ziyun2.json`。
+- ✅ **入場更正**：她原本用「已付費入場」放行（checkIn `626loNsaoZoE8Gk7G6Hv`，`already_paid`、金額 0、無交易/發票）→ 改成 `entryType:'course_access'`、`paymentMethod:'cash'`（沿用欄位）、`amountPaid:0`＋`correctionNote`，不影響營收。備份 `backup-ziyun3.json`。
+- ✅ **點名**：查 `courseAttendance` 該場次已有一筆 `present`（入場時 `markTodayCourseAttendanceOnEntry` 自動標記，與 entryType 無關），**不需補點名**。⚠️ 我一度以為報名文件沒出席欄位就是沒點名——**出席紀錄在 `courseAttendance`（sessionId＋memberId），不在 `courseEnrollments`**，查點名請看前者。
+- 📌 **補課登記慣例（虹瑩等不自動發券的班，第二次遇到）**：發額外券→手動報名＋場次人數＋券 used 三筆寫入（可超收）→若學員已先用別的方式入場，改該筆 checkIn 為課程學員入場。
+- 📌 **線上入場付款設定**（`systemSettings/paymentMethods`）：`enabled` 為 transfer/cash/taiwanpay/linepay/jkopay 全開；`onlineFlows` 只有 `entry:true`（街口線上先付再入場）。要改回「櫃檯付款」只需把 `onlineFlows.entry` 設 false，**不用改程式**；街口在 iPhone 付完不會自動回到網頁（停在街口 App），所以林珮瑜那類「沒跳出 QR」是此流程的已知痛點，使用者尚未決定是否關閉。

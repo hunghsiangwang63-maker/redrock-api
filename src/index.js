@@ -191,6 +191,7 @@ app.use('/climbing-routes', require('./routes/climbingRoutes'));
 app.use('/courses',      require('./routes/courses'));
 app.use('/vip',          require('./routes/vip'));
 app.use('/course-categories', require('./routes/courseCategories'));
+app.use('/climb-levels', require('./routes/climbLevels'));
 app.use('/products',      require('./routes/products'));
 app.use('/settings',       require('./routes/settings'));
 app.use('/stations',       require('./routes/stations'));
@@ -223,7 +224,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.568.0-comp-waiver-snapshot-guardian-contact',
+    version: '3.569.0-climb-levels',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),

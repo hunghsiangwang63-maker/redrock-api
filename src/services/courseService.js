@@ -2408,6 +2408,12 @@ const getCourses = async (gymId, _categoryId = null) => {
   const _cacheKey = _categoryId ? `cat:${_categoryId}` : (gymId || '__all__');
   const _cached = _coursesCache.get(_cacheKey);
   if (_cached && _cached.expiresAt > Date.now()) return _cached.data;
+  // 單館／單班別視圖：全系統(__all__)快取還新鮮時，直接由它篩出，不再各自重算（單館約 670 筆、單班別數百筆讀取）。
+  // 每門課的欄位是逐門獨立計算的，所以「全系統結果篩出」與「各自單獨計算」逐項相同、順序也相同（createdAt 由新到舊）——2026-10-14 實測 2 個館＋15 個班別全部一致。
+  if (gymId || _categoryId) {
+    const _g = _coursesCache.get('__all__');
+    if (_g && _g.expiresAt > Date.now()) return _g.data.filter(c => (!gymId || c.gymId === gymId) && (!_categoryId || c.categoryId === _categoryId));
+  }
   if (_coursesInflight.has(_cacheKey)) return _coursesInflight.get(_cacheKey);
   const _p = _computeCourses(gymId, _cacheKey, _categoryId).finally(() => { if (_coursesInflight.get(_cacheKey) === _p) _coursesInflight.delete(_cacheKey); });
   _coursesInflight.set(_cacheKey, _p);
@@ -2564,6 +2570,9 @@ const getSessions = async (gymId, fromDate, toDate, courseId = null) => {
     // 原本員工端用「整館＋課程開始日起 180 天」查全館，正式環境單次 20+ 秒、超過前端 10 秒逾時，
     // 錯誤被吞掉顯示「尚無場次」（2026-10-14 查獲）。
     ref = ref.where('courseId', '==', courseId);
+    // 若呼叫端同時給了日期範圍（試上只看未來 14 天），一併限縮：只讀那幾堂與它們的報名統計，而不是整門課 22 堂
+    if (fromDate) ref = ref.where('date', '>=', fromDate);
+    if (toDate) ref = ref.where('date', '<=', toDate);
   } else {
     if (gymId) ref = ref.where('gymId', '==', gymId);
     ref = ref
@@ -2937,11 +2946,13 @@ const getTrialSessions = async (gymId, fromDate, toDate, opts = {}) => {
   const _trialChunks = [];
   for (let i = 0; i < candidateIds.length; i += 30) _trialChunks.push(candidateIds.slice(i, i + 30));
   // 各批查詢獨立→並行（原逐批 await，2026-10-14）
-  const _trialEnrSnaps = await Promise.all(_trialChunks.map(chunk => db.collection(ENROLLMENT_COLLECTION)
-    .where('courseId', 'in', chunk).where('status', '==', 'confirmed')
-    .select('courseId', 'memberId', 'isMakeup', 'isTrial').get()));
-  for (const enrSnap of _trialEnrSnaps) {
-    enrSnap.docs.forEach(x => { const e = x.data(); if (e.isMakeup || e.isTrial) return; (regularByCourse[e.courseId] = regularByCourse[e.courseId] || new Set()).add(e.memberId); });
+  // 「常態在籍不重複人數」改讀報名總表（每人每課 1 筆；與 getCourses 課程層人數同一來源，2026-10-14），
+  // 不再逐堂掃報名紀錄（每門課約 130 筆）。此人數只用於非週課的 trialTarget=auto 判斷（週課一律列出）。
+  const _trialRegSnaps = await Promise.all(_trialChunks.map(chunk => db.collection(REGISTRATION_COLLECTION)
+    .where('courseId', 'in', chunk)
+    .select('courseId', 'memberId', 'status').get()));
+  for (const regSnap of _trialRegSnaps) {
+    regSnap.docs.forEach(x => { const e = x.data(); if (e.status !== 'confirmed' || !e.courseId || !e.memberId) return; (regularByCourse[e.courseId] = regularByCourse[e.courseId] || new Set()).add(e.memberId); });
   }
   const trialCourses = {};
   candidates.forEach(c => {
@@ -2957,7 +2968,7 @@ const getTrialSessions = async (gymId, fromDate, toDate, opts = {}) => {
   const rawTo = toDate || dayjs(from).add(60, 'day').format('YYYY-MM-DD');
   const to = rawTo < cap ? rawTo : cap;
   const sessions = _scopeIds
-    ? (await Promise.all(Object.keys(trialCourses).map(id => getSessions(null, null, null, id))))
+    ? (await Promise.all(Object.keys(trialCourses).map(id => getSessions(null, from, to, id))))
         .flat().filter(s => s.date >= from && s.date <= to)
         .sort((a, b) => a.date.localeCompare(b.date) || (a.startTime || '').localeCompare(b.startTime || ''))
     : await getSessions(gymId, from, to);

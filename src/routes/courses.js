@@ -2842,6 +2842,7 @@ const warmPublicCategories = async () => {
     const snap = await getDb().collection('courseCategories').get();
     const catIds = snap.docs.filter(d => d.data().isActive !== false).map(d => d.id);
     const courseIds = new Set(), sessionIds = new Set(), gyms = new Set();
+    await courseService.getCourses(null); // 先算一次全系統；各班別頁／各館 getCourses 都由這份快取篩出，不再各自重算
     for (const id of catIds) {
       try {
         const out = await publicCategoryRoute.warm(id, { params: { categoryId: id } });

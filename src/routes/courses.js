@@ -99,10 +99,63 @@ router.post('/',
 // 公開讀取（免登入，供公開報名頁顯示課程/場次資訊）
 // ══════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════
+// 公開頁回應快取＋背景更新（stale-while-revalidate，2026-10-14）
+//  - 新鮮期（預設 120 秒）內直接回；過了新鮮期但同一版本內（課程沒被異動，見 courseService.getCoursesCacheVersion）
+//    → 先回舊資料、背景重算，客人不用等；課程有異動或超過 24 小時 → 才同步重算。
+//  - 同一個 key 同時多個請求只算一次（in-flight 去重）。
+//  - **只快取 200 成功回應**（404/5xx 不快取，避免亂打網址把記憶體撐大）；最多 400 筆，超過先進先出淘汰。
+//  - 取捨：座位數等資料在「很久沒人看的頁面」第一位訪客可能是舊的（最久 24 小時），但背景會立刻更新、再看就是新的，
+//    且報名動作一律由後端即時驗證名額，不受影響。
+// 原因：Railway 慢實例上單筆讀取約 500ms，公開頁多步查詢可達數秒～20 秒；公開頁是免登入、客人會直接碰到。
+// ══════════════════════════════════════════════════════
+const SWR_MAX_ENTRIES = 400;
+const makeSwrRoute = (handler, { keyOf, freshMs = 120000, maxStaleMs = 24 * 3600000 }) => {
+  const cache = new Map();    // key → { ver, at, status, body }
+  const inflight = new Map(); // key → Promise<{status, body}>
+  const compute = (key, req, ver) => {
+    if (inflight.has(key)) return inflight.get(key);
+    const p = (async () => {
+      const out = { status: 200, body: null };
+      const fakeRes = { status(c) { out.status = c; return this; }, json(b) { out.body = b; return this; } };
+      await handler(req, fakeRes);
+      if (out.status === 200 && out.body) {
+        if (cache.size >= SWR_MAX_ENTRIES && !cache.has(key)) cache.delete(cache.keys().next().value);
+        cache.set(key, { ver, at: Date.now(), status: 200, body: out.body });
+      }
+      return out;
+    })().finally(() => { inflight.delete(key); });
+    inflight.set(key, p);
+    return p;
+  };
+  const route = async (req, res) => {
+    const key = keyOf(req);
+    const ver = courseService.getCoursesCacheVersion();
+    const hit = cache.get(key);
+    try {
+      if (hit && hit.ver === ver) {
+        const age = Date.now() - hit.at;
+        if (age < freshMs) return res.status(hit.status).json(hit.body);
+        if (age < maxStaleMs) { // 過了新鮮期：先回舊資料，背景更新（失敗只記 log，下次再試）
+          compute(key, req, ver).catch(e => console.error('[公開頁背景更新失敗]', key, e.message));
+          return res.status(hit.status).json(hit.body);
+        }
+      }
+      const out = await compute(key, req, ver);
+      return res.status(out.status).json(out.body);
+    } catch (err) {
+      return res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  };
+  route.warm = (key, req) => compute(key, req, courseService.getCoursesCacheVersion());
+  return route;
+};
+
 // GET /courses/public/categories — 全部班別總覽（免登入，供公開「課程總覽」首頁的第一層用；
 // 路由順序須放在 /public/:courseId 之前，否則會被貪婪的 :courseId 參數吃掉）。
 // 沿用既有 getCourses（單一真相），依 categoryId 分組算出每個班別的梯次數/價格範圍，
 // 與會員端 MemberCoursesPage 瀏覽頁第一層同一套篩選口徑（active/isActive/未結束/尚有未來場次）。
+
 router.get('/public/categories', async (req, res) => {
   try {
     const all = await courseService.getCourses(null);
@@ -132,7 +185,7 @@ router.get('/public/categories', async (req, res) => {
 });
 
 // GET /courses/public/:courseId — 課程詳情+未來場次（免登入）
-router.get('/public/:courseId', async (req, res) => {
+const publicCourseHandler = async (req, res) => {
   try {
     const db = getDb();
     const courseDoc = await db.collection('courses').doc(req.params.courseId).get();
@@ -179,68 +232,12 @@ router.get('/public/:courseId', async (req, res) => {
       futureActiveCount,
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
-});
+};
+const publicCourseRoute = makeSwrRoute(publicCourseHandler, { keyOf: r => r.params.courseId });
+router.get('/public/:courseId', publicCourseRoute);
 
 // GET /courses/public/category/:categoryId — 班別詳情+底下全部梯次（免登入，供「一個班別多梯次」的公開報名頁使用）
 // 例：入門班有三個梯次（週一/週三/週五），這裡一次列出，訪客自己挑要報哪一梯。
-// 公開班別頁回應快取＋背景更新（stale-while-revalidate）：
-//  - 新鮮期 120 秒內直接回；過了新鮮期但同一版本內（課程沒被異動）→ 先回舊資料、背景重算，客人不用等；
-//  - 課程有異動（invalidateCoursesCache 遞增版本號）或超過 24 小時 → 才同步重算（伺服器啟動時會預熱，見 warmPublicCategories）。
-// 原本每次重算 getCourses（掃全系統 133 門課＋2,500 筆報名）＋getTrialSessions（11 次查詢＋35 次單筆讀取、
-// 約 1,900 筆文件、無快取），慢實例上單次 17~21 秒（2026-10-14）；免登入公開頁客人會直接碰到。
-// 現在只算這個班別，冷的時候也大幅變輕。同時多個請求只算一次（in-flight 去重）。
-// 人數資料本來就來自 5 分鐘快取的 getCourses，不會比以前更舊太多。只快取 <500 的回應（5xx 不快取）。
-const _publicCategoryCache = new Map(); // categoryId → { ver, at, status, body, refreshing }
-const PUBLIC_CATEGORY_FRESH_MS = 120000;
-const PUBLIC_CATEGORY_MAX_STALE_MS = 24 * 3600000;
-const _computePublicCategory = async (req) => {
-  const out = { status: 200, body: null };
-  const fakeRes = { status(c) { out.status = c; return this; }, json(b) { out.body = b; return this; } };
-  await publicCategoryHandler(req, fakeRes);
-  return out;
-};
-const _inflightPublicCategory = new Map(); // categoryId → Promise<out>
-const _refreshPublicCategory = (key, req, ver) => {
-  if (_inflightPublicCategory.has(key)) return _inflightPublicCategory.get(key);
-  const p = _computePublicCategory(req).then(out => {
-    if (out.status < 500) _publicCategoryCache.set(key, { ver, at: Date.now(), status: out.status, body: out.body });
-    return out;
-  }).finally(() => { _inflightPublicCategory.delete(key); });
-  _inflightPublicCategory.set(key, p);
-  return p;
-};
-// 伺服器啟動後預熱所有開放班別的公開頁快取（依序、背景執行；單一班別約數百筆讀取），
-// 讓部署後第一位客人不必等冷計算（慢實例上冷計算可達 10 秒以上，2026-10-14）。失敗只記 log。
-const warmPublicCategories = async () => {
-  try {
-    const snap = await getDb().collection('courseCategories').get();
-    const ids = snap.docs.filter(d => d.data().isActive !== false).map(d => d.id);
-    const ver = courseService.getCoursesCacheVersion();
-    for (const id of ids) {
-      try { await _refreshPublicCategory(id, { params: { categoryId: id } }, ver); } catch (e) { console.error('[公開班別頁預熱失敗]', id, e.message); }
-    }
-    console.log(`[公開班別頁預熱] 完成 ${ids.length} 個班別`);
-  } catch (e) { console.error('[公開班別頁預熱失敗]', e.message); }
-};
-router.get('/public/category/:categoryId', async (req, res) => {
-  const key = req.params.categoryId;
-  const ver = courseService.getCoursesCacheVersion();
-  const hit = _publicCategoryCache.get(key);
-  try {
-    if (hit && hit.ver === ver) {
-      const age = Date.now() - hit.at;
-      if (age < PUBLIC_CATEGORY_FRESH_MS) return res.status(hit.status).json(hit.body);
-      if (age < PUBLIC_CATEGORY_MAX_STALE_MS) { // 過了新鮮期：先回舊資料，背景更新（失敗只記 log，下次再試）
-        _refreshPublicCategory(key, req, ver).catch(e => console.error('[公開班別頁背景更新失敗]', e.message));
-        return res.status(hit.status).json(hit.body);
-      }
-    }
-    const out = await _refreshPublicCategory(key, req, ver);
-    return res.status(out.status).json(out.body);
-  } catch (err) {
-    return res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
-  }
-});
 const publicCategoryHandler = async (req, res) => {
   try {
     const db = getDb();
@@ -314,9 +311,11 @@ const publicCategoryHandler = async (req, res) => {
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 };
+const publicCategoryRoute = makeSwrRoute(publicCategoryHandler, { keyOf: r => r.params.categoryId });
+router.get('/public/category/:categoryId', publicCategoryRoute);
 
 // GET /courses/public/session/:sessionId — 試上場次詳情（免登入，供公開試上預約頁顯示）
-router.get('/public/session/:sessionId', async (req, res) => {
+const publicSessionHandler = async (req, res) => {
   try {
     const db = getDb();
     const sDoc = await db.collection('courseSessions').doc(req.params.sessionId).get();
@@ -334,7 +333,9 @@ router.get('/public/session/:sessionId', async (req, res) => {
       trialPrice: courseService.getEffectiveTrialPrice(course, trialRules),
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
-});
+};
+const publicSessionRoute = makeSwrRoute(publicSessionHandler, { keyOf: r => r.params.sessionId });
+router.get('/public/session/:sessionId', publicSessionRoute);
 
 // ══════════════════════════════════════════════════════
 // 場次
@@ -2832,6 +2833,38 @@ router.post('/public/:courseId/enroll-all', async (req, res) => {
 
   return handleEnrollAll(req, res);
 });
+
+// 伺服器啟動後預熱公開頁快取（背景、依序）：全部開放班別的班別頁 → 各館 getCourses → 這些班別底下每個梯次的詳情頁 →
+// 班別頁裡出現的場次（工作坊場次、額滿梯次的可試上場次）詳情。讀取量約 2 千筆（含兩館 getCourses 各約 670 筆），
+// 部署頻繁的日子才需要留意；失敗只記 log。讓部署後第一位客人不必等冷計算（慢實例上冷計算可達 10 秒以上，2026-10-14）。
+const warmPublicCategories = async () => {
+  try {
+    const snap = await getDb().collection('courseCategories').get();
+    const catIds = snap.docs.filter(d => d.data().isActive !== false).map(d => d.id);
+    const courseIds = new Set(), sessionIds = new Set(), gyms = new Set();
+    for (const id of catIds) {
+      try {
+        const out = await publicCategoryRoute.warm(id, { params: { categoryId: id } });
+        ((out.body && out.body.cohorts) || []).forEach(c => {
+          courseIds.add(c.id); if (c.gymId) gyms.add(c.gymId);
+          (c.sessions || []).forEach(x => sessionIds.add(x.id));
+          (c.trialSessions || []).forEach(x => sessionIds.add(x.id));
+        });
+      } catch (e) { console.error('[公開頁預熱失敗:班別]', id, e.message); }
+    }
+    for (const g of gyms) { try { await courseService.getCourses(g); } catch (e) { console.error('[公開頁預熱失敗:getCourses]', g, e.message); } }
+    // 梯次／場次詳情各自獨立：每次同時 4 個（讀取量不變、縮短慢實例上的預熱時間；不要開太大以免瞬間打爆資料庫）
+    const pool = async (ids, fn, label) => {
+      const list = [...ids];
+      for (let i = 0; i < list.length; i += 4) {
+        await Promise.all(list.slice(i, i + 4).map(id => fn(id).catch(e => console.error(`[公開頁預熱失敗:${label}]`, id, e.message))));
+      }
+    };
+    await pool(courseIds, id => publicCourseRoute.warm(id, { params: { courseId: id } }), '梯次');
+    await pool(sessionIds, id => publicSessionRoute.warm(id, { params: { sessionId: id } }), '場次');
+    console.log(`[公開頁預熱] 完成：班別 ${catIds.length}、梯次 ${courseIds.size}、場次 ${sessionIds.size}`);
+  } catch (e) { console.error('[公開頁預熱失敗]', e.message); }
+};
 
 module.exports = router;
 module.exports.warmPublicCategories = warmPublicCategories;

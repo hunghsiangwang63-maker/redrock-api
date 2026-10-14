@@ -73,6 +73,9 @@
 
 ## 七、固定對外 IP（Static Outbound IPs，2026-08-12 為街口 JKOPay 白名單啟用）
 
+> ⚠️ **2026-10-14 已全數取消（歷史記錄，以下僅供日後想重開時參考）**：決定不使用街口線上支付（`onlineFlows.entry` 已關、後端 `createPayment` 對 entry 有把關，見 CLAUDE.md 10/13 續），故不再需要固定 IP。①`railway outbound-network static-ip disable --service redrock-api`（CLI 可操作；需重新部署才生效，已 redeploy）②Railway 方案 **Pro → Hobby**（只能在網頁 Workspace → Plans「Downgrade to Hobby」，CLI/API 無此功能；**不要按 Billing 的 Cancel Plan**）。下方三組 IP 已釋放；**街口那邊登記的白名單未動**（要解約需自行聯絡街口技術窗口）。重開固定 IP 需要 Pro 方案，且**不保證拿到同樣的 IP**（共用池）。降級後差異：日誌保留 30→7 天、單人工作區、儲存 5GB、社群支援、月內含額度 $5。
+
+
 - **緣由**：街口特約商戶串接審核通過後，要求提供後端伺服器的固定 IP 供其 API 白名單（否則我方主動呼叫街口 Entry/Inquiry API 會被拒）。Railway 預設**無固定對外 IP**（浮動/共用），故升級 **Railway Pro 方案**（$20/月起，原 Hobby $5/月）並在 `redrock-api` 服務 Settings → Networking 開啟 **Enable Static IPs**。
 - **目前 3 組固定 IP**（流量在三者間負載平衡，**街口白名單須三個都加**，否則會出現「有時候能連、有時候不能」的間歇性失敗）：
   - `208.77.246.240`

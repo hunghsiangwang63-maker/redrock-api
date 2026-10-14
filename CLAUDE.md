@@ -494,3 +494,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **員工端課程頁載入失敗不再靜默**（`CoursesPage.jsx`）：班別／課程列表／場次／月曆四個載入函式原本 `catch (e) {}` 吞錯（月曆只清空），改為頂部**紅色提示**「⚠️ ○○載入失敗（連線逾時／伺服器回應 N），畫面上的資料可能不完整，不是真的沒有資料」＋「重新載入」按鈕（成功後自動清除，過期回應不誤報）。**其餘員工端頁面仍有 `catch (e) {}`（SettingsPage 21 處、CheckinPage 4、VipPage 3、PassesPage 2、GymsPage 2…）未改**；`makeup-types` 那處也未改。
   - ⚠️ **提示畫面我沒有實際看過**：員工端要登入，我這邊只驗了 build、bundle 含新文案、版本碼與線上一致；沒有真的製造逾時看到紅色提示。
 
+
+## 目前進度（2026-10-14 續2）— 員工端「讀取失敗」全域紅色提示（前端 buildId `staff-2cfe8a46d61e847e`，後端無異動）
+> 承上段：員工端各頁 `catch (e) {}` 共約 45 處（SettingsPage 21、CheckinPage 4、VipPage 3、PassesPage 3、GymsPage 2、RentalsPage 2、ExperienceBookingsPage 2、DailySettlement/Installments/Members/Sales/Schedule 各 1…），逐頁改容易漏，改成**集中處理**。
+- ✅ **`api/client.js`（員工端共用 client）回應攔截器**：GET 失敗且為「逾時／斷線／伺服器 5xx」→ 發 `window` 事件 `staff-load-error`（`{url, detail}`）。**不提示**：4xx（權限/找不到/參數錯，屬預期回應）、非 GET、背景輪詢端點（`/pending-tasks`、`/version.json`、`/client-errors`、`/_diag`）、被取消的請求。
+- ✅ **新 `components/LoadErrorBanner.jsx`**（掛在 `StaffLayout` 主內容區 `<Outlet />` 上方）：收到事件顯示紅色「⚠️ ○○資料載入失敗（連線逾時/網路連線失敗/伺服器回應 N），畫面上的空白或缺漏不代表沒有資料」＋「重新整理」鈕＋✕；同一頁多個失敗合併顯示（依網址前綴對應中文名，對不到顯示「部分」）；**切換頁面自動清除**；課程頁（`/courses`、`/course-categories`）自己已有「重新載入」提示，這兩類網址不重複顯示。新增員工端 API 前綴時，要顯示中文名就補 `LABELS`。
+- ✅ **唯一的「寫入動作」吞錯**：`SettingsPage.handleToggleStation`（啟用/停用館別電腦）失敗改顯示錯誤訊息（原本靜默、畫面像是成功）。盤點 45 處只有這一處是寫入，其餘皆為讀取。
+- **驗證**：Node 模擬攔截器 7 情境——GET 逾時／斷線／500 → 發事件；GET 404／403、`/pending-tasks` 逾時、POST 500 → 不發。**banner 畫面本身與整合行為我沒實際看過**（員工端要登入，只驗 build、攔截器邏輯、版本碼與線上一致）。
+- ⚠️ **刻意沒動**：各頁的 `catch (e) {}` 程式碼本身仍在（提示改由全域攔截負責）；`MemberOnboardingGate` 內 `/auth/member/me` 的 `catch (_) {}` 是會員端刻意 fallback（失敗沿用舊值）；寫入類失敗各頁原本多數已有自己的錯誤訊息，不由全域提示。若日後想連 POST/PUT 失敗也全域提示，要先逐頁確認不會與頁內訊息重複。
+- 📌 **已知取捨**：同時出現「頁內自己的提示」與全域提示的頁面可能看到兩條；背景輪詢端點失敗不提示（避免短暫斷線一直跳）。

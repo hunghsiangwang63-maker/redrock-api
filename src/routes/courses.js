@@ -308,6 +308,11 @@ router.get('/:courseId/quote', authenticateAny, async (req, res) => {
 
 router.get('/sessions', authenticateAny, async (req, res) => {
   try {
+    // 員工端單一梯次場次管理：帶 courseId + withStats=1 → 只查該梯次、但仍回完整人數統計（請假/補課/試上…）
+    if (req.query.courseId && req.query.withStats === '1' && req.staff) {
+      const sessions = await courseService.getSessions(null, null, null, req.query.courseId);
+      return res.json({ sessions });
+    }
     // 快速路徑：帶 courseId → 只查該課程場次（單一等值查詢、極小 payload），供報名時算插班費用即時取得
     if (req.query.courseId) {
       const db = getDb();

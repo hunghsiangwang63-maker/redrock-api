@@ -2524,13 +2524,20 @@ const getCourses = async (gymId) => {
 };
 
 // ── 查詢場次列表 ──────────────────────────────────────────────────
-const getSessions = async (gymId, fromDate, toDate) => {
+const getSessions = async (gymId, fromDate, toDate, courseId = null) => {
   const db = getDb();
   let ref = db.collection(SESSION_COLLECTION);
-  if (gymId) ref = ref.where('gymId', '==', gymId);
-  ref = ref
-    .where('date', '>=', fromDate || taiwanToday())
-    .where('date', '<=', toDate || dayjs().add(30, 'day').format('YYYY-MM-DD'));
+  if (courseId) {
+    // 單一梯次（員工端場次管理）：只查該課程場次、不限日期；人數統計沿用下方同一套（只算這批場次，量小）。
+    // 原本員工端用「整館＋課程開始日起 180 天」查全館，正式環境單次 20+ 秒、超過前端 10 秒逾時，
+    // 錯誤被吞掉顯示「尚無場次」（2026-10-14 查獲）。
+    ref = ref.where('courseId', '==', courseId);
+  } else {
+    if (gymId) ref = ref.where('gymId', '==', gymId);
+    ref = ref
+      .where('date', '>=', fromDate || taiwanToday())
+      .where('date', '<=', toDate || dayjs().add(30, 'day').format('YYYY-MM-DD'));
+  }
   const snap = await ref.get();
   const sessions = snap.docs.map(d => ({ id: d.id, ...d.data() }))
     .sort((a, b) => a.date.localeCompare(b.date) || (a.startTime || '').localeCompare(b.startTime || ''));

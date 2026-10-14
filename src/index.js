@@ -224,7 +224,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.575.0-transfer-confirm-parallel',
+    version: '3.575.1-diag-latency',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
@@ -267,6 +267,26 @@ app.post('/client-errors', (req, res) => {
 app.get('/_diag/query-stats', require('./middleware/auth').authenticate, (req, res) => {
   if (req.staff?.role !== 'super_admin') return res.status(403).json({ error: 'FORBIDDEN' });
   res.json(queryDiag.getStats());
+});
+
+// ── 暫時診斷：Railway→Firestore 往返延遲（2026-10-14，查「單次查詢約 1 秒」；限 super_admin，只讀 staff/courses 少量文件，查完會移除）──
+app.get('/_diag/latency', require('./middleware/auth').authenticate, async (req, res) => {
+  if (req.staff?.role !== 'super_admin') return res.status(403).json({ error: 'FORBIDDEN' });
+  const db = require('./config/firebase').getDb();
+  const T = () => Number(process.hrtime.bigint() / 1000000n);
+  const out = {};
+  const time = async (label, fn) => { const t = T(); await fn(); out[label] = T() - t; };
+  const ref = db.collection('staff').doc(req.staff.id);
+  await time('doc_get_1st', () => ref.get());
+  await time('doc_get_2nd', () => ref.get());
+  await time('doc_get_3rd', () => ref.get());
+  await time('doc_get_x5_sequential', async () => { for (let i = 0; i < 5; i++) await ref.get(); });
+  await time('doc_get_x5_parallel', () => Promise.all([1, 2, 3, 4, 5].map(() => ref.get())));
+  await time('query_limit1', () => db.collection('courseSessions').where('gymId', '==', 'gym-hsinchu').limit(1).get());
+  await time('query_month_138docs', () => db.collection('courseSessions').where('gymId', '==', 'gym-hsinchu').where('date', '>=', '2026-10-01').where('date', '<=', '2026-10-31').get());
+  await time('query_month_again', () => db.collection('courseSessions').where('gymId', '==', 'gym-hsinchu').where('date', '>=', '2026-10-01').where('date', '<=', '2026-10-31').get());
+  out.env = { node: process.version, region: process.env.RAILWAY_REPLICA_REGION || null, grpcPreferRest: process.env.FIRESTORE_PREFER_REST || null, cpuCount: require('os').cpus().length, loadavg: require('os').loadavg() };
+  res.json(out);
 });
 
 // ── 404 Handler ───────────────────────────────────────────────────

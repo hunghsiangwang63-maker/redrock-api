@@ -224,7 +224,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.581.0-public-category-warmup',
+    version: '3.582.0-latency-monitor',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
@@ -298,6 +298,7 @@ app.get('/_diag/latency', require('./middleware/auth').authenticate, async (req,
     t = T();
     await new Promise((resolve, reject) => { const so = tls.connect({ host, port: 443, servername: host, ALPNProtocols: ['h2'] }, () => { out.tls_handshake_total = T() - t; so.destroy(); resolve(); }); so.on('error', reject); so.setTimeout(8000, () => { so.destroy(); reject(new Error('tls timeout')); }); });
   } catch (e) { out.net_error = e.message; }
+  out.monitor = require('./services/latencyMonitor').getState();
   out.env = { node: process.version, region: process.env.RAILWAY_REPLICA_REGION || null, grpcPreferRest: process.env.FIRESTORE_PREFER_REST || null, cpuCount: require('os').cpus().length, loadavg: require('os').loadavg() };
   res.json(out);
 });
@@ -322,6 +323,9 @@ if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`🏔  RedRock API Server running on port ${PORT}`);
   });
+
+  // 後端讀取延遲自我監測：啟動後 10 秒量一次、之後每 30 分鐘；偏慢時通知超級管理員（見 services/latencyMonitor.js）
+  try { require('./services/latencyMonitor').start(); } catch (e) { console.error('[延遲監測] 啟動略過:', e.message); }
 
   // 啟動後 20 秒預熱公開班別頁快取（背景、依序；失敗只記 log，不影響服務）
   setTimeout(() => { try { require('./routes/courses').warmPublicCategories(); } catch (e) { console.error('[預熱略過]', e.message); } }, 20000);

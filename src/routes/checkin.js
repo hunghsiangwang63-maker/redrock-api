@@ -11,6 +11,7 @@ const memberService = require('../services/memberService');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
+const { isManagerRole } = require('../utils/roles');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -753,7 +754,7 @@ router.get('/today',
 
       // 個人帳號登入(非館別電腦值班、非管理層)完全看不到今日統計，僅館別電腦值班/各館管理員/總管理員可見
       const isPersonalLogin = req.staff.type === 'staff';
-      const isManagement = ['super_admin', 'gym_manager'].includes(req.staff.role);
+      const isManagement = isManagerRole(req.staff.role);
       if (isPersonalLogin && !isManagement) {
         return res.json({ statsByGym: [], total: 0, recent: [], restricted: true });
       }
@@ -1003,7 +1004,7 @@ router.get('/history',
       // 要擋的「瀏覽整天入場記錄」性質不同，故只在有帶 memberId 時才放行，不影響上面一般瀏覽仍限
       // 管理員個人帳號的既有規則；個人（未打卡值班）正職/兼職帳號仍不放行，維持限「櫃檯」使用。
       if (!isMemberToken) {
-        const isManagerPersonal = req.staff?.type === 'staff' && ['super_admin', 'gym_manager'].includes(req.staff?.role);
+        const isManagerPersonal = req.staff?.type === 'staff' && isManagerRole(req.staff?.role);
         const isCounterMemberLookup = !!req.query.memberId && ['operator', 'station'].includes(req.staff?.type);
         if (!isManagerPersonal && !isCounterMemberLookup) {
           return res.status(403).json({ error: 'MANAGER_ONLY', message: '此功能限管理員個人帳號使用' });

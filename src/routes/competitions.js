@@ -10,6 +10,7 @@ const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { getDb, COLLECTIONS } = require('../config/firebase');
 const competitionService = require('../services/competitionService');
 const emailService = require('../services/emailService');
+const { isManagerRole } = require('../utils/roles');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -888,7 +889,7 @@ router.post('/registrations/:regId/confirm-payment',
       if (!regDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到報名' });
       const reg = regDoc.data();
       // 收款確認權限：臨櫃現金→值班 operator/館別電腦 或管理員；轉帳→僅管理員（與課程收款規則一致）
-      const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+      const isManager = isManagerRole(req.staff?.role);
       const isStationMode = ['operator', 'station'].includes(req.staff?.type);
       if (reg.paymentMethod === 'cash') {
         if (!isManager && !isStationMode) return res.status(403).json({ error: 'MANAGER_OR_STATION_REQUIRED', message: '現金收款確認限值班人員或管理員' });
@@ -946,7 +947,7 @@ router.post('/registrations/:regId/verify-partner-gym',
   async (req, res) => {
     try {
       const db = getDb();
-      const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+      const isManager = isManagerRole(req.staff?.role);
       const isStationMode = ['operator', 'station'].includes(req.staff?.type);
       if (!isManager && !isStationMode) return res.status(403).json({ error: 'MANAGER_OR_STATION_REQUIRED', message: '友館折扣核對限值班人員或管理員' });
       const ref = db.collection('competitionRegistrations').doc(req.params.regId);

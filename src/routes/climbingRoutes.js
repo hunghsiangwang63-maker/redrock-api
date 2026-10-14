@@ -55,6 +55,7 @@ const { taiwanToday, taiwanMonthStart } = require('../utils/taiwanDate');
 const { isChildOf } = require('../utils/memberOwnership');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
+const { isManagerRole } = require('../utils/roles');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -65,7 +66,7 @@ const validate = (req, res, next) => {
 // 路線編輯 gate（比照 gyms.js requireAnnounceEditor：管理員/場館電腦/正職；part_time 個人擋）
 const routeEditorGate = (req, res, next) => {
   const role = req.staff?.role;
-  const isManager = ['super_admin', 'gym_manager'].includes(role);
+  const isManager = isManagerRole(role);
   const isStation = ['operator', 'station'].includes(req.staff?.type);
   if (isManager || isStation || role === 'full_time') return next();
   return res.status(403).json({ error: 'ROUTE_EDIT_FORBIDDEN', message: '路線編輯僅限管理員、場館電腦或正職員工' });

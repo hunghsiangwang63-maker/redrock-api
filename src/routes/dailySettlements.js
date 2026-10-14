@@ -11,6 +11,7 @@ const { getDb } = require('../config/firebase');
 const { authenticate, checkPermission, requireStationAuth, requireManager } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
+const { isManagerRole } = require('../utils/roles');
 
 // ── 偶數月最後一個營業日提醒（換發票本／設定下一期發票號碼）──────────────────
 // 判斷：今天是偶數月 && 今天有營業 && 「明天到月底」都沒有營業日（=今天是這個月最後一次結帳機會）。
@@ -925,7 +926,7 @@ router.put('/:id/unlock', authenticate, checkPermission('super_admin'), async (r
 router.get('/monthly-export', authenticate, requireManager, async (req, res) => {
   try {
     const role = req.staff?.role;
-    if (!['super_admin', 'gym_manager'].includes(role)) {
+    if (!isManagerRole(role)) {
       return res.status(403).json({ error: 'FORBIDDEN', message: '僅管理員可下載月銷售紀錄' });
     }
     const db = getDb();
@@ -1103,7 +1104,7 @@ const GYM_TAX = {
 router.get('/invoice-export', authenticate, requireManager, async (req, res) => {
   try {
     const role = req.staff?.role;
-    if (!['super_admin', 'gym_manager'].includes(role)) {
+    if (!isManagerRole(role)) {
       return res.status(403).json({ error: 'FORBIDDEN', message: '僅管理員可下載' });
     }
     const db = getDb();

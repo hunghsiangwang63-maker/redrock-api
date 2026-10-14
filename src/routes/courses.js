@@ -23,6 +23,7 @@ const { isUnder4, isMinor } = require('../utils/age');
 const { getDb, getStorage, COLLECTIONS } = require('../config/firebase');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
+const { isManagerRole } = require('../utils/roles');
 const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const validate = (req, res, next) => {
@@ -917,7 +918,7 @@ router.post('/enrollments/:enrollmentId/verify-partner-gym',
   authenticate, auditLog('course.verify_partner_gym'),
   async (req, res) => {
     try {
-      const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+      const isManager = isManagerRole(req.staff?.role);
       const isStationMode = ['operator', 'station'].includes(req.staff?.type);
       if (!isManager && !isStationMode) return res.status(403).json({ error: 'MANAGER_OR_STATION_REQUIRED', message: '友館價核對限值班人員或管理員' });
       const result = await courseService.verifyCoursePartnerGym(req.params.enrollmentId, !!req.body.approved, req.staff);
@@ -2047,7 +2048,7 @@ router.post('/manual-makeup-credit',
       const { memberId, courseId } = req.body || {};
       if (!memberId || !courseId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '請提供 memberId 與 courseId' });
       const db = getDb();
-      const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+      const isManager = isManagerRole(req.staff?.role);
       if (!isManager) {
         const courseDoc = await db.collection('courses').doc(courseId).get();
         const categoryId = courseDoc.exists ? courseDoc.data().categoryId : null;

@@ -12,6 +12,7 @@ const { authenticate, authenticateAny } = require('../middleware/auth');
 const { getDb, getStorage } = require('../config/firebase');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { v4: uuidv4 } = require('uuid');
+const { isManagerRole } = require('../utils/roles');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -165,7 +166,7 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
     const pmOverride = (req.body.paymentMethod && PM_ALLOWED.includes(req.body.paymentMethod) && req.body.paymentMethod !== t.paymentMethod)
       ? req.body.paymentMethod : null;
     const pm = pmOverride || t.paymentMethod;
-    const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+    const isManager = isManagerRole(req.staff?.role);
     const isStationMode = ['operator', 'station'].includes(req.staff?.type);
     // 付款方式更正僅限管理員（2026-08-29 拍板；值班/其他員工不開放——明確 403、不靜默忽略，
     // 避免「以為改了其實沒改」）。

@@ -14,6 +14,7 @@ const dayjs = require('dayjs');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 const { isActiveTeamMember, applyTeamDiscount } = require('../services/teamMemberService');
 const { getMember } = require('../services/memberService');
+const { isManagerRole } = require('../utils/roles');
 
 // 取得指定館的庫存
 const getGymStock = (variant, gymId) => {
@@ -140,7 +141,7 @@ router.put('/:id', authenticate, checkPermission('products.manage'), async (req,
 // ── DELETE /products/:id/permanent - 永久刪除（僅管理員 super_admin / gym_manager）──
 router.delete('/:id/permanent', authenticate, checkPermission('products.manage'), async (req, res) => {
   try {
-    if (!['super_admin', 'gym_manager'].includes(req.staff?.role)) {
+    if (!isManagerRole(req.staff?.role)) {
       return res.status(403).json({ error: 'FORBIDDEN', message: '僅管理員可永久刪除商品' });
     }
     const db = getDb();

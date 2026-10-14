@@ -1238,10 +1238,12 @@ router.get('/insurance-download', authenticate, requireManager, async (req, res)
       if (doc.exists) bookings = [{ id: doc.id, ...doc.data() }];
     } else {
       // ⚠️ .select() 排除簽名圖大欄位——buildInsuranceXlsBuffer 只用 bookingDate/participants
-      let ref = db.collection('experienceBookings').where('status', '!=', 'cancelled');
+      // ⚠️ `status != cancelled` 搭配 gymId 等值需要複合索引（未建→FAILED_PRECONDITION 500，2026-10-14 查獲；
+      // 前端舊版又沒檢查回應、會把錯誤文字存成 .xls）。改只用 gymId 單一條件，狀態在記憶體排除（專案慣例，不加複合索引）。
+      let ref = db.collection('experienceBookings');
       if (effectiveGymId) ref = ref.where('gymId', '==', effectiveGymId);
-      const snap = await ref.select('bookingDate', 'participants').get();
-      bookings = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const snap = await ref.select('bookingDate', 'participants', 'status').get();
+      bookings = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(b => b.status !== 'cancelled');
       if (from) bookings = bookings.filter(b => b.bookingDate >= from);
       if (to)   bookings = bookings.filter(b => b.bookingDate <= to);
     }

@@ -24,6 +24,7 @@ const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 const { findMatchingSpecialHours } = require('../utils/gymDailyHours');
+const { isManagerRole } = require('../utils/roles');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -39,7 +40,7 @@ const ANNOUNCE_COLLECTION = 'gymAnnouncements';
 // part_time 個人帳號擋下。（休館／特殊時間仍受 announceTypeGuard 限管理員）
 const requireAnnounceEditor = (req, res, next) => {
   const role = req.staff?.role;
-  const isManager = ['super_admin', 'gym_manager'].includes(role);
+  const isManager = isManagerRole(role);
   const isStation = ['operator', 'station'].includes(req.staff?.type);
   if (isManager || isStation || role === 'full_time') return next();
   return res.status(403).json({ error: 'ANNOUNCE_FORBIDDEN', message: '公告編輯僅限管理員、場館電腦或正職員工' });
@@ -58,7 +59,7 @@ const announceGymGuard = (req, res, next) => {
 // 值班 operator（full/part 角色）僅可發一般／輪播／路線更換。
 const MANAGER_ONLY_TYPES = ['closure', 'special_hours'];
 const announceTypeGuard = (req, res, next) => {
-  const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+  const isManager = isManagerRole(req.staff?.role);
   if (isManager) return next();
   if (MANAGER_ONLY_TYPES.includes(req.body?.type)) {
     return res.status(403).json({ error: 'MANAGER_ONLY_TYPE', message: '休館／特殊營業時間公告限管理員發布' });
@@ -462,7 +463,7 @@ router.post('/:id/announcements/:aid/image',
       const db = getDb();
       const doc = await db.collection(ANNOUNCE_COLLECTION).doc(req.params.aid).get();
       if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到公告' });
-      const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+      const isManager = isManagerRole(req.staff?.role);
       if (!isManager && MANAGER_ONLY_TYPES.includes(doc.data().type)) {
         return res.status(403).json({ error: 'MANAGER_ONLY_TYPE', message: '休館／特殊營業時間公告限管理員編輯' });
       }
@@ -595,7 +596,7 @@ router.delete('/:id/announcements/:aid',
     try {
       const db = getDb();
       // 值班（非管理員）不可下架休館／特殊營業時間公告（會反向影響票期補償）
-      const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+      const isManager = isManagerRole(req.staff?.role);
       if (!isManager) {
         const cur = await db.collection(ANNOUNCE_COLLECTION).doc(req.params.aid).get();
         if (cur.exists && MANAGER_ONLY_TYPES.includes(cur.data().type)) {

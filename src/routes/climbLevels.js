@@ -16,6 +16,7 @@ const { v4: uuidv4 } = require('uuid');
 const { authenticate, authenticateAny } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const { taiwanToday } = require('../utils/taiwanDate');
+const { isManagerRole } = require('../utils/roles');
 
 const DEFS = 'climbLevelDefs';
 const RECORDS = 'climbLevelRecords';
@@ -31,7 +32,7 @@ const DEFAULT_PROGRAMS = {
   },
 };
 
-const isAdmin = (staff) => staff && ['super_admin', 'gym_manager'].includes(staff.role);
+const isAdmin = (staff) => staff && isManagerRole(staff.role);
 const requireAdmin = (req, res, next) => (isAdmin(req.staff)
   ? next()
   : res.status(403).json({ error: 'FORBIDDEN', message: '僅管理員可操作' }));

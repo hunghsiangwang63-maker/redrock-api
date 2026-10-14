@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { getDb, COLLECTIONS } = require('../config/firebase');
+const { isManagerRole } = require('../utils/roles');
 
 // 權限矩陣＝「個人帳號(type:'staff')登入」的能力。
 // 值班 operator 另享「櫃檯權限」(COUNTER_PERMS，見下)一律放行，不受此矩陣 full/part 收窄影響。
@@ -288,7 +289,7 @@ const auditLog = (action) => {
 // 註：純station token(僅stationId無staffId)無法通過上層authenticate查到staff文件，
 //     必須先打卡值班轉換成operator身份才能呼叫此類API，故此處同時保留station判斷為防禦性寫法
 const requireManagerOrStation = (req, res, next) => {
-  const isManager = ['super_admin', 'gym_manager'].includes(req.staff?.role);
+  const isManager = isManagerRole(req.staff?.role);
   const isStationMode = ['operator', 'station'].includes(req.staff?.type);
   if (!isManager && !isStationMode) {
     return res.status(403).json({
@@ -303,7 +304,7 @@ const requireManagerOrStation = (req, res, next) => {
 // 與 requireManagerOrStation 不同：operator/station 值班身份、full_time/part_time 個人帳號皆擋下，
 // 只認角色。gym_manager 即使在 operator 值班模式(type==='operator')也放行（其 role 仍為 gym_manager）。
 const requireManager = (req, res, next) => {
-  if (['super_admin', 'gym_manager'].includes(req.staff?.role)) return next();
+  if (isManagerRole(req.staff?.role)) return next();
   return res.status(403).json({
     error: 'MANAGER_REQUIRED',
     message: '此功能僅限管理員（館別管理員或系統管理員）使用',

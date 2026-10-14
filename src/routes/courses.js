@@ -183,35 +183,48 @@ router.get('/public/:courseId', async (req, res) => {
 
 // GET /courses/public/category/:categoryId — 班別詳情+底下全部梯次（免登入，供「一個班別多梯次」的公開報名頁使用）
 // 例：入門班有三個梯次（週一/週三/週五），這裡一次列出，訪客自己挑要報哪一梯。
-// 公開班別頁回應快取（60 秒；課程有異動時 invalidateCoursesCache 會遞增版本號，舊快取自動作廢）。
-// 原本每次都重算 getCourses＋（有額滿梯次時）getTrialSessions（11 次查詢＋35 次單筆讀取、約 1,900 筆文件、無快取），
-// 慢實例上單次 20 秒以上（2026-10-14 查獲）；免登入公開頁會被客人直接碰到。
-// 同時多個冷請求只算一次（in-flight 去重）。人數資料本來就來自 5 分鐘快取的 getCourses，60 秒不會更舊。
-const _publicCategoryCache = new Map(); // categoryId → { ver, expiresAt, status, body } | { inflight, ver }
-const PUBLIC_CATEGORY_TTL_MS = 60000;
+// 公開班別頁回應快取＋背景更新（stale-while-revalidate）：
+//  - 新鮮期 120 秒內直接回；過了新鮮期但同一版本內（課程沒被異動）→ 先回舊資料、背景重算，客人不用等；
+//  - 課程有異動（invalidateCoursesCache 遞增版本號）或超過 1 小時 → 才同步重算。
+// 原本每次重算 getCourses（掃全系統 133 門課＋2,500 筆報名）＋getTrialSessions（11 次查詢＋35 次單筆讀取、
+// 約 1,900 筆文件、無快取），慢實例上單次 17~21 秒（2026-10-14）；免登入公開頁客人會直接碰到。
+// 現在只算這個班別，冷的時候也大幅變輕。同時多個請求只算一次（in-flight 去重）。
+// 人數資料本來就來自 5 分鐘快取的 getCourses，不會比以前更舊太多。只快取 <500 的回應（5xx 不快取）。
+const _publicCategoryCache = new Map(); // categoryId → { ver, at, status, body, refreshing }
+const PUBLIC_CATEGORY_FRESH_MS = 120000;
+const PUBLIC_CATEGORY_MAX_STALE_MS = 3600000;
+const _computePublicCategory = async (req) => {
+  const out = { status: 200, body: null };
+  const fakeRes = { status(c) { out.status = c; return this; }, json(b) { out.body = b; return this; } };
+  await publicCategoryHandler(req, fakeRes);
+  return out;
+};
+const _inflightPublicCategory = new Map(); // categoryId → Promise<out>
+const _refreshPublicCategory = (key, req, ver) => {
+  if (_inflightPublicCategory.has(key)) return _inflightPublicCategory.get(key);
+  const p = _computePublicCategory(req).then(out => {
+    if (out.status < 500) _publicCategoryCache.set(key, { ver, at: Date.now(), status: out.status, body: out.body });
+    return out;
+  }).finally(() => { _inflightPublicCategory.delete(key); });
+  _inflightPublicCategory.set(key, p);
+  return p;
+};
 router.get('/public/category/:categoryId', async (req, res) => {
   const key = req.params.categoryId;
   const ver = courseService.getCoursesCacheVersion();
   const hit = _publicCategoryCache.get(key);
-  if (hit && hit.body && hit.ver === ver && hit.expiresAt > Date.now()) return res.status(hit.status).json(hit.body);
-  if (hit && hit.inflight && hit.ver === ver) {
-    try { const r = await hit.inflight; return res.status(r.status).json(r.body); } catch (e) { /* 往下自己算 */ }
-  }
-  const inflight = (async () => {
-    const out = { status: 200, body: null };
-    const fakeRes = { status(c) { out.status = c; return this; }, json(b) { out.body = b; return this; } };
-    await publicCategoryHandler(req, fakeRes);
-    return out;
-  })();
-  _publicCategoryCache.set(key, { inflight, ver });
   try {
-    const r = await inflight;
-    // 只快取成功與「找不到/未開放」（404）；5xx 不快取，下次重算
-    if (r.status < 500) _publicCategoryCache.set(key, { ver, expiresAt: Date.now() + PUBLIC_CATEGORY_TTL_MS, status: r.status, body: r.body });
-    else _publicCategoryCache.delete(key);
-    return res.status(r.status).json(r.body);
+    if (hit && hit.ver === ver) {
+      const age = Date.now() - hit.at;
+      if (age < PUBLIC_CATEGORY_FRESH_MS) return res.status(hit.status).json(hit.body);
+      if (age < PUBLIC_CATEGORY_MAX_STALE_MS) { // 過了新鮮期：先回舊資料，背景更新（失敗只記 log，下次再試）
+        _refreshPublicCategory(key, req, ver).catch(e => console.error('[公開班別頁背景更新失敗]', e.message));
+        return res.status(hit.status).json(hit.body);
+      }
+    }
+    const out = await _refreshPublicCategory(key, req, ver);
+    return res.status(out.status).json(out.body);
   } catch (err) {
-    _publicCategoryCache.delete(key);
     return res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }
 });
@@ -226,7 +239,7 @@ const publicCategoryHandler = async (req, res) => {
     // 沿用既有 getCourses（單一真相：類別介紹/海報/規則解析、尚有名額判斷、statusLabel 皆在裡面）；不分館別，兩館的梯次都列出
     // 排除 statusLabel==='ended'（已結束的梯次，即使 status 欄位仍是 active 也不該顯示可報名）；
     // 'ongoing'（已開課、插班中）、'enrolling'/'starting_soon'/'full' 皆保留——插班與候補本就支援。
-    const all = await courseService.getCourses(null);
+    const all = await courseService.getCoursesByCategory(req.params.categoryId); // 只算這個班別（不掃全系統）
     const cohorts = all.filter(c => c.categoryId === req.params.categoryId && c.status === 'active' && c.isActive !== false && c.statusLabel !== 'ended');
 
     // 工作坊型梯次另附未來場次清單（供訪客在同一頁挑選具體場次）
@@ -262,7 +275,7 @@ const publicCategoryHandler = async (req, res) => {
     const fullWeeklyIds = withSessions.filter(c => c.type !== 'workshop' && isCohortFull(c)).map(c => c.id);
     const trialByCourse = {};
     if (fullWeeklyIds.length > 0) {
-      const trialSessions = await courseService.getTrialSessions(null);
+      const trialSessions = await courseService.getTrialSessions(null, undefined, undefined, { courseIds: fullWeeklyIds }); // 只算這些額滿梯次
       trialSessions.forEach(s => {
         if (!fullWeeklyIds.includes(s.courseId) || s.isFull) return;
         (trialByCourse[s.courseId] = trialByCourse[s.courseId] || []).push({

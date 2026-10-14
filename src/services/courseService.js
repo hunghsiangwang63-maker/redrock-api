@@ -2403,24 +2403,37 @@ const getCoursesCacheVersion = () => _coursesCacheVersion;
 const _coursesInflight = new Map(); // key → Promise：快取冷的時候多個請求同時進來，只算一次（避免同時重複掃描全課程）
 const invalidateCoursesCache = () => { _coursesCache.clear(); _coursesInflight.clear(); _coursesCacheVersion++; };
 
-const getCourses = async (gymId) => {
-  const _cacheKey = gymId || '__all__';
+const getCourses = async (gymId, _categoryId = null) => {
+  const _cacheKey = _categoryId ? `cat:${_categoryId}` : (gymId || '__all__');
   const _cached = _coursesCache.get(_cacheKey);
   if (_cached && _cached.expiresAt > Date.now()) return _cached.data;
   if (_coursesInflight.has(_cacheKey)) return _coursesInflight.get(_cacheKey);
-  const _p = _computeCourses(gymId, _cacheKey).finally(() => { if (_coursesInflight.get(_cacheKey) === _p) _coursesInflight.delete(_cacheKey); });
+  const _p = _computeCourses(gymId, _cacheKey, _categoryId).finally(() => { if (_coursesInflight.get(_cacheKey) === _p) _coursesInflight.delete(_cacheKey); });
   _coursesInflight.set(_cacheKey, _p);
   return _p;
 };
+// 只算單一班別底下的梯次（欄位與 getCourses 逐項相同；公開班別頁用，不必掃全系統 133 門課與 2,500 筆報名）
+const getCoursesByCategory = (categoryId) => getCourses(null, categoryId);
 
-const _computeCourses = async (gymId, _cacheKey) => {
+const _computeCourses = async (gymId, _cacheKey, _categoryId = null) => {
   const _ver = _coursesCacheVersion;
   const db = getDb();
-  let ref = db.collection(COURSE_COLLECTION).where('status', 'in', ['active', 'cancelled']);
-  if (gymId) ref = ref.where('gymId', '==', gymId);
-  ref = ref.orderBy('createdAt', 'desc');
-  const snap = await ref.get();
-  const courses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  let courses;
+  if (_categoryId) {
+    // 單一欄位等值查詢（自動索引，不依賴複合索引）；狀態/排序在記憶體處理，語意同下方原查詢
+    // （status in [active,cancelled]、依 createdAt 由新到舊；orderBy 本來就會排除沒有 createdAt 的文件）
+    const _ms = (t) => (t?.toMillis ? t.toMillis() : (t?._seconds ? t._seconds * 1000 : (t ? new Date(t).getTime() : 0)));
+    const cs = await db.collection(COURSE_COLLECTION).where('categoryId', '==', _categoryId).get();
+    courses = cs.docs.map(d => ({ id: d.id, ...d.data() }))
+      .filter(c => ['active', 'cancelled'].includes(c.status) && c.createdAt != null)
+      .sort((a, b) => _ms(b.createdAt) - _ms(a.createdAt));
+  } else {
+    let ref = db.collection(COURSE_COLLECTION).where('status', 'in', ['active', 'cancelled']);
+    if (gymId) ref = ref.where('gymId', '==', gymId);
+    ref = ref.orderBy('createdAt', 'desc');
+    const snap = await ref.get();
+    courses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
   const courseIds = courses.map(c => c.id);
 
   // ⚠️ 以下「類別」「報名人數」「場次」三組查詢彼此獨立（都只依賴上面查到的課程清單）→ 同時發出。
@@ -2893,11 +2906,19 @@ const clearSessionSubstitute = async ({ sessionId, staff }) => {
 
 // ── 開放試上的週課近期場次（會員「體驗課程」頁列出）─────────────────
 // 回傳每個可試上場次：課名/教練/日期時間/試上費/剩餘名額/是否額滿。
-const getTrialSessions = async (gymId, fromDate, toDate) => {
+const getTrialSessions = async (gymId, fromDate, toDate, opts = {}) => {
   const db = getDb();
+  // opts.courseIds：只算指定課程（公開班別頁只需要該班別底下額滿梯次的可試上場次；不必掃全系統）
+  const _scopeIds = Array.isArray(opts.courseIds) ? opts.courseIds : null;
+  if (_scopeIds && _scopeIds.length === 0) return [];
   let cq = db.collection(COURSE_COLLECTION);
   if (gymId) cq = cq.where('gymId', '==', gymId);
-  const [courseSnap, catSnap] = await Promise.all([cq.get(), db.collection(CATEGORY_COLLECTION).get()]); // 兩者獨立→並行（2026-10-14）
+  const [courseSnap, catSnap] = await Promise.all([
+    _scopeIds
+      ? db.getAll(..._scopeIds.map(id => db.collection(COURSE_COLLECTION).doc(id))).then(docs => ({ docs: docs.filter(d => d.exists && (!gymId || d.data().gymId === gymId)) }))
+      : cq.get(),
+    db.collection(CATEGORY_COLLECTION).get(),
+  ]); // 兩者獨立→並行（2026-10-14）
   const cats = {}; catSnap.docs.forEach(d => { cats[d.id] = d.data(); });
   // 候選：開放試上（allowTrial）且未取消/未停用
   const candidates = courseSnap.docs.map(d => ({ id: d.id, ...d.data() }))
@@ -2932,7 +2953,11 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
   const cap = dayjs(taiwanToday()).add(14, 'day').format('YYYY-MM-DD');
   const rawTo = toDate || dayjs(from).add(60, 'day').format('YYYY-MM-DD');
   const to = rawTo < cap ? rawTo : cap;
-  const sessions = await getSessions(gymId, from, to);
+  const sessions = _scopeIds
+    ? (await Promise.all(Object.keys(trialCourses).map(id => getSessions(null, null, null, id))))
+        .flat().filter(s => s.date >= from && s.date <= to)
+        .sort((a, b) => a.date.localeCompare(b.date) || (a.startTime || '').localeCompare(b.startTime || ''))
+    : await getSessions(gymId, from, to);
   return sessions
     // 額滿仍可候補（waitlist 未滿）→ 保留列出（前端標「額滿・可候補」）；正取+候補皆滿才排除
     .filter(s => {
@@ -3275,6 +3300,7 @@ module.exports = {
   getCourses,
   invalidateCoursesCache,
   getCoursesCacheVersion,
+  getCoursesByCategory,
   computeCourseFeeForMember,
   computeWeeklyCourseFee,
   computeWorkshopRefund,

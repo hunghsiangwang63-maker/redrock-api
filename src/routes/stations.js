@@ -20,11 +20,7 @@ const requireSuperAdmin = (req, res, next) => {
   next();
 };
 
-const validate = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors.array() });
-  next();
-};
+const { validate } = require('../middleware/validate');
 
 const signToken = (payload, expiresIn) =>
   jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: expiresIn || '30d' });

@@ -9,11 +9,7 @@ const { getDb, COLLECTIONS } = require('../config/firebase');
 const memberService = require('../services/memberService');
 const { v4: uuidv4 } = require('uuid');
 
-const validate = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors.array() });
-  next();
-};
+const { validate } = require('../middleware/validate');
 
 // ── GET /vip - 取得 VIP 名單（唯讀，含場館電腦值班；新增/編輯/刪除仍限 vip.manage）──
 router.get('/',

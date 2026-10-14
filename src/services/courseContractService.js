@@ -7,11 +7,7 @@ const { isMinor } = require('../utils/age');
 const { buildCourseContractPdfBuffer } = require('../utils/courseContractPdf');
 const { sendCourseContractPdf } = require('./emailService');
 
-const resolveGymEmail = async (db, gymId) => {
-  if (!gymId) return null;
-  const d = await db.collection('gyms').doc(gymId).get();
-  return d.exists ? (d.data().email || null) : null;
-};
+const { resolveGymEmail } = require('../utils/gymEmail');
 
 const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
 

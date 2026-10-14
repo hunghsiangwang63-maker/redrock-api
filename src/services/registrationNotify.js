@@ -23,11 +23,7 @@ const MASSAGE_NOTICE_HTML = `
     <div>7. 按摩床為岩館無償借用，使用前後請協助清潔。</div>
   </div>`;
 
-const resolveGymEmail = async (db, gymId) => {
-  if (!gymId) return null;
-  const d = await db.collection('gyms').doc(gymId).get();
-  return d.exists ? (d.data().email || null) : null;
-};
+const { resolveGymEmail } = require('../utils/gymEmail');
 
 const resolveBank = async (db, gymId) => {
   if (!gymId) return null;

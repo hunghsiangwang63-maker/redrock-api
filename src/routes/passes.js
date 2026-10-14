@@ -44,17 +44,7 @@ function normalizeRenewalDiscount(rd) {
   if (value <= 0) return null;
   return { mode: rd.mode, value: rd.mode === 'percent' ? Math.min(100, value) : value };
 }
-const validate = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: errors.array().map(e => `${e.path}: ${e.msg}`).join('；'),
-      details: errors.array(),
-    });
-  }
-  next();
-};
+const { validateWithMessage: validate } = require('../middleware/validate');
 
 // ════════════════════════════════════════════════════════════════
 // 定期票

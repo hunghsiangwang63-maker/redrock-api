@@ -22,7 +22,7 @@ const getDiscountCardValidityMonths = async () => {
     return Number.isFinite(n) && n >= 1 ? n : null; // null = 無限期
   } catch { return null; }
 };
-const EXPIRY_WARNING_DAYS = 30;
+const { EXPIRY_WARNING_DAYS } = require('../config/constants'); // 到期前幾天提醒（共用常數）
 
 // ── 轉入舊優惠卡（設定剩餘次數）──────────────────────────────────
 // 直接建到 discountCards（入場資格讀此集合），沿用全部既有邏輯：8折入場、移轉。

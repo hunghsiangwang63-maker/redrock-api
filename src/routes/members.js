@@ -12,13 +12,7 @@ const XLSX = require('xlsx');
 const { sanitizeSheet } = require('../utils/xlsxSafe');
 
 // ── 驗證錯誤處理 ──────────────────────────────────────────────────
-const validate = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors.array() });
-  }
-  next();
-};
+const { validate } = require('../middleware/validate');
 
 // ── GET /members - 搜尋/列出會員 ────────────────────────────────
 router.get('/',

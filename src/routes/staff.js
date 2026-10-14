@@ -24,17 +24,7 @@ const sanitizeMakeupOverrideCategoryIds = (input) => {
   return ids;
 };
 
-const validate = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: errors.array().map(e => `${e.path}: ${e.msg}`).join('；'),
-      details: errors.array(),
-    });
-  }
-  next();
-};
+const { validateWithMessage: validate } = require('../middleware/validate');
 
 const ROLES = ['super_admin', 'gym_manager', 'full_time', 'part_time'];
 

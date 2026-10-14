@@ -14,7 +14,7 @@ const EXPIRY_HOURS = 24;
 const cardColl = (type) => (type === 'black' ? 'legacyBlackCards' : 'discountCards');
 const ownerField = (type) => (type === 'black' ? 'memberId' : 'ownerMemberId');
 
-const toDate = (v) => (v?.toDate ? v.toDate() : (v?._seconds ? new Date(v._seconds * 1000) : (v ? new Date(v) : null)));
+const { toDate } = require('../utils/firestoreDate');
 
 // 單次移轉點數上限（可設定，預設 10；讀取失敗安全預設 10）——與單次入場券批次移轉共用同一設定
 const getCardTransferLimit = async () => {

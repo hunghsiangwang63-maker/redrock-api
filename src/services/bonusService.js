@@ -13,7 +13,7 @@ const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 
 const COLLECTION = 'discountBonuses';
-const EXPIRY_WARNING_DAYS = 30;
+const { EXPIRY_WARNING_DAYS } = require('../config/constants'); // 到期前幾天提醒（共用常數）
 
 // ── 紅利使用期限（月）：讀系統設定 systemSettings/bonus.validityMonths，預設/失敗回 6 ──
 const getBonusValidityMonths = async () => {

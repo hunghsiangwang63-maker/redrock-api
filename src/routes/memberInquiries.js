@@ -32,11 +32,7 @@ const notifyInquiryManagers = ({ gymId, inquiryId, memberName, subject }) =>
     referenceId: inquiryId, referenceType: 'memberInquiry', link: '/staff/pending-tasks',
   });
 
-const validate = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors.array() });
-  next();
-};
+const { validate } = require('../middleware/validate');
 
 const DEFAULT_FAQ = [
   { id: 'forgot-password', question: '忘記密碼怎麼辦？', answer: '請至登入頁點選「忘記密碼」，輸入註冊時的 Email，系統會寄送重設密碼連結，設定新密碼後即可重新登入。' },

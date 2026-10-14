@@ -13,11 +13,7 @@ const { getDb, COLLECTIONS } = require('../config/firebase');
 const dayjs = require('dayjs');
 const { isManagerRole } = require('../utils/roles');
 
-const validate = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors.array() });
-  next();
-};
+const { validate } = require('../middleware/validate');
 
 // ── POST /checkin/verify ─────────────────────────────────────────
 // 會員端或工作人員端皆可呼叫

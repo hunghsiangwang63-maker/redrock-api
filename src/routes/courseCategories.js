@@ -11,14 +11,10 @@ const { getDb, getStorage } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const multer = require('multer');
 
-const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const { uploadImage } = require('../middleware/uploadImage');
 const GROUPS = ['adult', 'youth', 'special', 'workshop'];
 
-const validate = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors.array() });
-  next();
-};
+const { validate } = require('../middleware/validate');
 
 // 班別可編輯欄位（規則欄位＝該班別所有梯次的預設，梯次可個別覆寫）
 const EDITABLE = [

@@ -11,7 +11,7 @@ const dayjs = require('dayjs');
 
 const TEAM_DISCOUNT_RATE = 0.9;       // 九折
 const TEAM_DISCOUNT_MIN_AMOUNT = 100; // 最低適用金額
-const EXPIRY_WARNING_DAYS = 30;       // 到期前幾天提醒
+const { EXPIRY_WARNING_DAYS } = require('../config/constants'); // 到期前幾天提醒（共用常數）
 
 // ── 設定隊員身份（管理員）────────────────────────────────────────
 const setTeamMember = async ({ memberId, since, until, staffId }) => {

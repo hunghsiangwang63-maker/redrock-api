@@ -20,17 +20,13 @@ const { body, validationResult } = require('express-validator');
 const { authenticate, checkPermission, requireManagerOrStation, auditLog } = require('../middleware/auth');
 const { getDb, getStorage, COLLECTIONS } = require('../config/firebase');
 const multer = require('multer');
-const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const { uploadImage } = require('../middleware/uploadImage');
 const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 const { findMatchingSpecialHours } = require('../utils/gymDailyHours');
 const { isManagerRole } = require('../utils/roles');
 
-const validate = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors.array() });
-  next();
-};
+const { validate } = require('../middleware/validate');
 
 const ANNOUNCE_COLLECTION = 'gymAnnouncements';
 

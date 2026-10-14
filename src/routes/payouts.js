@@ -23,11 +23,7 @@ const GYM_IDS = ['gym-hsinchu', 'gym-shilin'];
 const GYM_LABEL = { 'gym-hsinchu': '新竹館', 'gym-shilin': '士林館' };
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-const validate = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors.array() });
-  next();
-};
+const { validate } = require('../middleware/validate');
 
 // 依角色決定實際查詢/寫入用的 gymId：gym_manager 一律鎖自己館（忽略 request 帶的值）；
 // super_admin 用 request 指定的值（可為 undefined＝不限館別）。

@@ -8,17 +8,7 @@ const { authenticate, checkPermission } = require('../middleware/auth');
 const scheduleService = require('../services/scheduleService');
 const { getDb } = require('../config/firebase');
 
-const validate = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: errors.array().map(e => `${e.path}: ${e.msg}`).join('；'),
-      details: errors.array(),
-    });
-  }
-  next();
-};
+const { validateWithMessage: validate } = require('../middleware/validate');
 
 // ── 權限輔助：gym_manager只能操作自己館，super_admin不限 ────────────
 const resolveGymId = (req, requestedGymId) => {

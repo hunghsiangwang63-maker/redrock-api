@@ -12,11 +12,7 @@ const { isChild } = require('../utils/age');
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { normalizeBarcode } = require('../utils/cardBarcode');
 
-const validate = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors.array() });
-  next();
-};
+const { validate } = require('../middleware/validate');
 
 // 後端權威：購買者/受贈者未滿 13 歲（兒童，以出生日期判定、不受 VIP/隊員影響）→ 回 err 物件供 route 回 400。
 // 無 memberId（如 POS 匿名購買）不擋。

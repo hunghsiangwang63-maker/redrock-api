@@ -7,11 +7,7 @@ const { authenticate, authenticateAny, requireManagerOrStation } = require('../m
 const { getStorage } = require('../config/firebase');
 const memberReminderService = require('../services/memberReminderService');
 
-const validate = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors.array() });
-  next();
-};
+const { validate } = require('../middleware/validate');
 
 const dateOrEmpty = (v) => !v || /^\d{4}-\d{2}-\d{2}$/.test(v);
 
@@ -21,7 +17,7 @@ const imageUrlValidator = body('imageUrl').optional({ checkFalsy: true }).isLeng
 const REMINDER_FIELDS = ['title', 'subtitle', 'icon', 'link', 'imageUrl', 'showFrom', 'showUntil'];
 const pickFields = (body) => REMINDER_FIELDS.reduce((o, k) => { o[k] = body[k]; return o; }, {});
 
-const uploadImage = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB 上限（建議 500KB 內，見前端提示）
+const { uploadImage5MB: uploadImage } = require('../middleware/uploadImage'); // 5MB 上限（建議 500KB 內，見前端提示）
 
 // ── POST /member-reminders/upload-image — 上傳提醒圖片（先傳圖拿 URL，再放進新增/推播的表單一起送出） ──
 router.post('/upload-image',

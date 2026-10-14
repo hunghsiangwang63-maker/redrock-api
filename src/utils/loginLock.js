@@ -9,7 +9,7 @@ const { getDb } = require('../config/firebase');
 const MAX_FAIL = 10;      // 放寬：連錯 10 次才鎖
 const LOCK_MINUTES = 10;  // 鎖定 10 分鐘
 
-const toDate = (v) => (v?.toDate ? v.toDate() : (v?._seconds ? new Date(v._seconds * 1000) : (v ? new Date(v) : null)));
+const { toDate } = require('./firestoreDate');
 
 // 是否鎖定中 → { locked:boolean, mins?:number }
 function checkLocked(data, now = new Date()) {

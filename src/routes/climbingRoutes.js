@@ -57,11 +57,7 @@ const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 const { isManagerRole } = require('../utils/roles');
 
-const validate = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ error: 'VALIDATION_ERROR', details: errors.array() });
-  next();
-};
+const { validate } = require('../middleware/validate');
 
 // 路線編輯 gate（比照 gyms.js requireAnnounceEditor：管理員/場館電腦/正職；part_time 個人擋）
 const routeEditorGate = (req, res, next) => {

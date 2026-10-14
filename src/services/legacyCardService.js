@@ -14,7 +14,7 @@ const dayjs = require('dayjs');
 const COLLECTION = 'legacyBlackCards';
 const BLACK_CARD_CREDITS = 12;
 const TRANSFER_VALIDITY_MONTHS = 12;
-const EXPIRY_WARNING_DAYS = 30;
+const { EXPIRY_WARNING_DAYS } = require('../config/constants'); // 到期前幾天提醒（共用常數）
 
 // ── 綁定舊黑卡至會員帳號 ─────────────────────────────────────────
 const bindBlackCard = async ({ barcode, memberId, remainingCredits, gymId, staffId }) => {

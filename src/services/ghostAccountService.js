@@ -34,8 +34,7 @@ const VALUE_COLLECTIONS = [
   ['fallTests', 'memberId'],
 ];
 
-const toDate = (v) =>
-  v?.toDate ? v.toDate() : (v?._seconds ? new Date(v._seconds * 1000) : (v ? new Date(v) : null));
+const { toDate } = require('../utils/firestoreDate');
 
 // 名下是否有任何有價值資料（子女或任一集合有紀錄）→ 回集合名，無則 null
 const findValue = async (db, memberId) => {

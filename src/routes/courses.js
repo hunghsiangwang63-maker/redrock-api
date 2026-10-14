@@ -185,14 +185,14 @@ router.get('/public/:courseId', async (req, res) => {
 // 例：入門班有三個梯次（週一/週三/週五），這裡一次列出，訪客自己挑要報哪一梯。
 // 公開班別頁回應快取＋背景更新（stale-while-revalidate）：
 //  - 新鮮期 120 秒內直接回；過了新鮮期但同一版本內（課程沒被異動）→ 先回舊資料、背景重算，客人不用等；
-//  - 課程有異動（invalidateCoursesCache 遞增版本號）或超過 1 小時 → 才同步重算。
+//  - 課程有異動（invalidateCoursesCache 遞增版本號）或超過 24 小時 → 才同步重算（伺服器啟動時會預熱，見 warmPublicCategories）。
 // 原本每次重算 getCourses（掃全系統 133 門課＋2,500 筆報名）＋getTrialSessions（11 次查詢＋35 次單筆讀取、
 // 約 1,900 筆文件、無快取），慢實例上單次 17~21 秒（2026-10-14）；免登入公開頁客人會直接碰到。
 // 現在只算這個班別，冷的時候也大幅變輕。同時多個請求只算一次（in-flight 去重）。
 // 人數資料本來就來自 5 分鐘快取的 getCourses，不會比以前更舊太多。只快取 <500 的回應（5xx 不快取）。
 const _publicCategoryCache = new Map(); // categoryId → { ver, at, status, body, refreshing }
 const PUBLIC_CATEGORY_FRESH_MS = 120000;
-const PUBLIC_CATEGORY_MAX_STALE_MS = 3600000;
+const PUBLIC_CATEGORY_MAX_STALE_MS = 24 * 3600000;
 const _computePublicCategory = async (req) => {
   const out = { status: 200, body: null };
   const fakeRes = { status(c) { out.status = c; return this; }, json(b) { out.body = b; return this; } };
@@ -208,6 +208,19 @@ const _refreshPublicCategory = (key, req, ver) => {
   }).finally(() => { _inflightPublicCategory.delete(key); });
   _inflightPublicCategory.set(key, p);
   return p;
+};
+// 伺服器啟動後預熱所有開放班別的公開頁快取（依序、背景執行；單一班別約數百筆讀取），
+// 讓部署後第一位客人不必等冷計算（慢實例上冷計算可達 10 秒以上，2026-10-14）。失敗只記 log。
+const warmPublicCategories = async () => {
+  try {
+    const snap = await getDb().collection('courseCategories').get();
+    const ids = snap.docs.filter(d => d.data().isActive !== false).map(d => d.id);
+    const ver = courseService.getCoursesCacheVersion();
+    for (const id of ids) {
+      try { await _refreshPublicCategory(id, { params: { categoryId: id } }, ver); } catch (e) { console.error('[公開班別頁預熱失敗]', id, e.message); }
+    }
+    console.log(`[公開班別頁預熱] 完成 ${ids.length} 個班別`);
+  } catch (e) { console.error('[公開班別頁預熱失敗]', e.message); }
 };
 router.get('/public/category/:categoryId', async (req, res) => {
   const key = req.params.categoryId;
@@ -229,12 +242,10 @@ router.get('/public/category/:categoryId', async (req, res) => {
   }
 });
 const publicCategoryHandler = async (req, res) => {
-  const _T0 = Date.now(); const _tm = {}; const _lap = (k) => { _tm[k] = Date.now() - _T0; };
   try {
     const db = getDb();
     const catDoc = await db.collection('courseCategories').doc(req.params.categoryId).get();
     if (!catDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此班別' });
-    _lap('catDoc');
     const cat = catDoc.data();
     if (cat.isActive === false) return res.status(404).json({ error: 'NOT_ACTIVE', message: '此班別目前未開放' });
 
@@ -242,7 +253,6 @@ const publicCategoryHandler = async (req, res) => {
     // 排除 statusLabel==='ended'（已結束的梯次，即使 status 欄位仍是 active 也不該顯示可報名）；
     // 'ongoing'（已開課、插班中）、'enrolling'/'starting_soon'/'full' 皆保留——插班與候補本就支援。
     const all = await courseService.getCoursesByCategory(req.params.categoryId); // 只算這個班別（不掃全系統）
-    _lap('getCoursesByCategory');
     const cohorts = all.filter(c => c.categoryId === req.params.categoryId && c.status === 'active' && c.isActive !== false && c.statusLabel !== 'ended');
 
     // 工作坊型梯次另附未來場次清單（供訪客在同一頁挑選具體場次）
@@ -260,7 +270,6 @@ const publicCategoryHandler = async (req, res) => {
       return { ...c, sessions };
     }));
 
-    _lap('workshopSessions');
     // ⚠️ computeStatusLabel() 對已開課（today>=startDate）的梯次一律先回傳 'ongoing'，額滿判斷
     // （enrolledCount>=maxStudents）那一行永遠排在它後面、對已開課課程完全不會被執行到——
     // 也就是說任何「已開課、插班中」的梯次，statusLabel 實際上永遠不可能是 'full'，不管報名人數
@@ -288,7 +297,6 @@ const publicCategoryHandler = async (req, res) => {
       });
     }
 
-    _lap('trial'); console.log('[公開班別頁計時 診斷]', req.params.categoryId.slice(0,8), JSON.stringify(_tm));
     res.json({
       category: {
         id: catDoc.id, name: cat.name, description: cat.description || '', imageUrl: cat.imageUrl || null,
@@ -2826,4 +2834,4 @@ router.post('/public/:courseId/enroll-all', async (req, res) => {
 });
 
 module.exports = router;
-
+module.exports.warmPublicCategories = warmPublicCategories;

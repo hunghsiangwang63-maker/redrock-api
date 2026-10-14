@@ -21,6 +21,7 @@ const COURSE_COLLECTION     = 'courses';
 const SESSION_COLLECTION    = 'courseSessions';
 const ENROLLMENT_COLLECTION = 'courseEnrollments';
 const ATTENDANCE_COLLECTION = 'courseAttendance';
+const REGISTRATION_COLLECTION = 'courseRegistrations'; // 報名總表（每位學員每門課 1 筆；課程層人數的權威來源）
 const MAKEUP_COLLECTION     = 'courseMakeupRights';
 const CATEGORY_COLLECTION   = 'courseCategories';
 
@@ -2444,14 +2445,16 @@ const _computeCourses = async (gymId, _cacheKey, _categoryId = null) => {
   const _todayW = taiwanToday();
   const [_catSnap, _enrollRes, _sessRes] = await Promise.all([
     db.collection('courseCategories').get().catch(() => null),
-    Promise.all(_chunks.map(chunk => Promise.all([
-      db.collection(ENROLLMENT_COLLECTION)
-        .where('courseId', 'in', chunk).where('status', '==', 'confirmed')
-        .select('courseId', 'memberId', 'isMakeup', 'isTrial', 'pauseStatus').get(),
-      db.collection(ENROLLMENT_COLLECTION)
-        .where('courseId', 'in', chunk).where('status', '==', 'waitlist')
-        .select('courseId', 'memberId').get(),
-    ]))),
+    // ⚠️ 課程層「不重複學員數／候補數」改讀「報名總表」(courseRegistrations，每位學員每門課 1 筆) 而非逐堂報名紀錄
+    // (courseEnrollments，每人每堂各 1 筆，全系統 1,955 筆只對應 326 組「學員×課程」)——2026-10-14。
+    // 同時修正舊算法的錯誤：學員退費/取消後，其「已上過的堂次」報名紀錄仍保留 confirmed（保留出席紀錄），
+    // 舊算法只要有任何一筆 confirmed 就算在籍→已取消的學員繼續佔名額（實測 矯正班9-10月週三B班 顯示 4/4 額滿、實為 3 人）。
+    // 總表狀態＝在籍與否的權威（confirmed/waitlist/cancelled）。
+    // .select() 排除總表內嵌的兩張簽名圖（見 courseRegistrationService 註解）。
+    Promise.all(_chunks.map(chunk =>
+      db.collection(REGISTRATION_COLLECTION)
+        .where('courseId', 'in', chunk)
+        .select('courseId', 'memberId', 'status').get())),
     Promise.all(_chunks.map(chunk =>
       db.collection(SESSION_COLLECTION)
         .where('courseId', 'in', chunk).where('date', '>=', _todayW)
@@ -2475,19 +2478,19 @@ const _computeCourses = async (gymId, _cacheKey, _categoryId = null) => {
   // 複合索引已存在（firestore.indexes.json），不需要另外部署索引。
   const enrolledByCourse = {};
   const waitlistByCourse = {};
-  for (const [enrollSnap, waitlistSnap] of _enrollRes) {
-    enrollSnap.docs.forEach(d => {
-      const e = d.data();
-      if (e.isMakeup || e.isTrial) return; // 常態上課人數：補課/試上為單堂行為，不計入課程層人數（場次層另有計）
-      if (e.pauseStatus === 'paused') return; // 暫停中釋放名額，不計入課程層人數
-      if (!enrolledByCourse[e.courseId]) enrolledByCourse[e.courseId] = new Set();
-      enrolledByCourse[e.courseId].add(e.memberId);
-    });
-    // 課程層候補人數（不重複計算同一會員，同一位候補會員在週課每個未來場次各有一筆 waitlist 副本）
-    waitlistSnap.docs.forEach(d => {
-      const e = d.data();
-      if (!waitlistByCourse[e.courseId]) waitlistByCourse[e.courseId] = new Set();
-      waitlistByCourse[e.courseId].add(e.memberId);
+  for (const regSnap of _enrollRes) {
+    regSnap.docs.forEach(d => {
+      const r = d.data();
+      if (!r.courseId || !r.memberId) return;
+      if (r.status === 'confirmed') {
+        // 常態在籍人數（不重複學員）。補課/試上為單堂行為、不產生總表紀錄，故不會被算入（實測無例外）；
+        // 暫停中的學員總表狀態仍為 confirmed → 仍算在籍（與舊算法在「已有上過堂次」時的結果一致；
+        // 舊算法只有「全部堂次都暫停」時才會不算，目前全庫 0 筆，此邊界差異已知）。
+        (enrolledByCourse[r.courseId] = enrolledByCourse[r.courseId] || new Set()).add(r.memberId);
+      } else if (r.status === 'waitlist') {
+        // 課程層候補人數（不重複學員）
+        (waitlistByCourse[r.courseId] = waitlistByCourse[r.courseId] || new Set()).add(r.memberId);
+      }
     });
   }
 

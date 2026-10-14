@@ -2549,12 +2549,14 @@ const getSessions = async (gymId, fromDate, toDate, courseId = null) => {
   const chunks = [];
   for (let i = 0; i < sessionIds.length; i += 30) chunks.push(sessionIds.slice(i, i + 30)); // Firestore 'in' 上限30
   const allEnrollments = [];
-  for (const chunk of chunks) {
+  // 各組 in 查詢彼此獨立 → 同時發出（原本逐組 await，全館學期 17+ 組排隊 20 秒以上、月曆 8 秒；2026-10-14 改並行，讀取文件數不變）
+  const enrollSnaps = await Promise.all(chunks.map(chunk =>
     // .select() 只抓需要欄位——避免拖回每筆內嵌的簽名圖(base64)，見 getCourses 同型註解
-    const enrollSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', 'in', chunk)
-      .select('sessionId', 'status', 'isMakeup', 'isTrial', 'pauseStatus').get();
+    db.collection(ENROLLMENT_COLLECTION).where('sessionId', 'in', chunk)
+      .select('sessionId', 'status', 'isMakeup', 'isTrial', 'pauseStatus').get()));
+  enrollSnaps.forEach(enrollSnap => {
     enrollSnap.docs.forEach(d => { const e = d.data(); if (e.pauseStatus !== 'paused') allEnrollments.push(e); }); // 暫停中不計入場次人數
-  }
+  });
 
   const statsBySession = {};
   const _initStat = () => ({ enrolledCount: 0, leaveCount: 0, makeupCount: 0, trialCount: 0, regularCount: 0, crossMakeupCount: 0 });
@@ -2571,8 +2573,9 @@ const getSessions = async (gymId, fromDate, toDate, courseId = null) => {
     }
   });
   // 跨期補課（crossCohortMakeups，非會員名單）也佔名額 → 批次計入
-  for (const chunk of chunks) {
-    const xs = await db.collection('crossCohortMakeups').where('targetSessionId', 'in', chunk).get();
+  const xSnaps = await Promise.all(chunks.map(chunk =>
+    db.collection('crossCohortMakeups').where('targetSessionId', 'in', chunk).get()));
+  for (const xs of xSnaps) {
     xs.docs.forEach(d => {
       const x = d.data();
       if (x.status !== 'booked' || !x.targetSessionId) return;

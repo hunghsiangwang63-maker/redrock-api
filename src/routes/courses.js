@@ -183,7 +183,39 @@ router.get('/public/:courseId', async (req, res) => {
 
 // GET /courses/public/category/:categoryId — 班別詳情+底下全部梯次（免登入，供「一個班別多梯次」的公開報名頁使用）
 // 例：入門班有三個梯次（週一/週三/週五），這裡一次列出，訪客自己挑要報哪一梯。
+// 公開班別頁回應快取（60 秒；課程有異動時 invalidateCoursesCache 會遞增版本號，舊快取自動作廢）。
+// 原本每次都重算 getCourses＋（有額滿梯次時）getTrialSessions（11 次查詢＋35 次單筆讀取、約 1,900 筆文件、無快取），
+// 慢實例上單次 20 秒以上（2026-10-14 查獲）；免登入公開頁會被客人直接碰到。
+// 同時多個冷請求只算一次（in-flight 去重）。人數資料本來就來自 5 分鐘快取的 getCourses，60 秒不會更舊。
+const _publicCategoryCache = new Map(); // categoryId → { ver, expiresAt, status, body } | { inflight, ver }
+const PUBLIC_CATEGORY_TTL_MS = 60000;
 router.get('/public/category/:categoryId', async (req, res) => {
+  const key = req.params.categoryId;
+  const ver = courseService.getCoursesCacheVersion();
+  const hit = _publicCategoryCache.get(key);
+  if (hit && hit.body && hit.ver === ver && hit.expiresAt > Date.now()) return res.status(hit.status).json(hit.body);
+  if (hit && hit.inflight && hit.ver === ver) {
+    try { const r = await hit.inflight; return res.status(r.status).json(r.body); } catch (e) { /* 往下自己算 */ }
+  }
+  const inflight = (async () => {
+    const out = { status: 200, body: null };
+    const fakeRes = { status(c) { out.status = c; return this; }, json(b) { out.body = b; return this; } };
+    await publicCategoryHandler(req, fakeRes);
+    return out;
+  })();
+  _publicCategoryCache.set(key, { inflight, ver });
+  try {
+    const r = await inflight;
+    // 只快取成功與「找不到/未開放」（404）；5xx 不快取，下次重算
+    if (r.status < 500) _publicCategoryCache.set(key, { ver, expiresAt: Date.now() + PUBLIC_CATEGORY_TTL_MS, status: r.status, body: r.body });
+    else _publicCategoryCache.delete(key);
+    return res.status(r.status).json(r.body);
+  } catch (err) {
+    _publicCategoryCache.delete(key);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+const publicCategoryHandler = async (req, res) => {
   try {
     const db = getDb();
     const catDoc = await db.collection('courseCategories').doc(req.params.categoryId).get();
@@ -255,7 +287,7 @@ router.get('/public/category/:categoryId', async (req, res) => {
       })),
     });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
-});
+};
 
 // GET /courses/public/session/:sessionId — 試上場次詳情（免登入，供公開試上預約頁顯示）
 router.get('/public/session/:sessionId', async (req, res) => {

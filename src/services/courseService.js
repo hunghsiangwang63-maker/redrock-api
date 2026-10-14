@@ -2397,13 +2397,24 @@ const COURSES_CACHE_TTL_MS = 300000;
 // 課程文件本身異動（建立/取消/重開/刪除/改設定，皆為低頻、少數幾個呼叫點）主動清快取，
 // 避免這類明顯、使用者剛做完動作就會回頭查看的變更也要等 TTL 過期才生效；報名/場次人數
 // 變動（呼叫點多、分散在十幾處）則不主動清，交給 TTL 自然過期（見上方 getCourses 註解）。
-const invalidateCoursesCache = () => _coursesCache.clear();
+// 快取版本號：每次 invalidateCoursesCache 遞增，供「依 getCourses 結果衍生的其他快取」（如公開班別頁回應）判斷是否過期
+let _coursesCacheVersion = 0;
+const getCoursesCacheVersion = () => _coursesCacheVersion;
+const _coursesInflight = new Map(); // key → Promise：快取冷的時候多個請求同時進來，只算一次（避免同時重複掃描全課程）
+const invalidateCoursesCache = () => { _coursesCache.clear(); _coursesInflight.clear(); _coursesCacheVersion++; };
 
 const getCourses = async (gymId) => {
   const _cacheKey = gymId || '__all__';
   const _cached = _coursesCache.get(_cacheKey);
   if (_cached && _cached.expiresAt > Date.now()) return _cached.data;
+  if (_coursesInflight.has(_cacheKey)) return _coursesInflight.get(_cacheKey);
+  const _p = _computeCourses(gymId, _cacheKey).finally(() => { if (_coursesInflight.get(_cacheKey) === _p) _coursesInflight.delete(_cacheKey); });
+  _coursesInflight.set(_cacheKey, _p);
+  return _p;
+};
 
+const _computeCourses = async (gymId, _cacheKey) => {
+  const _ver = _coursesCacheVersion;
   const db = getDb();
   let ref = db.collection(COURSE_COLLECTION).where('status', 'in', ['active', 'cancelled']);
   if (gymId) ref = ref.where('gymId', '==', gymId);
@@ -2412,11 +2423,31 @@ const getCourses = async (gymId) => {
   const courses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   const courseIds = courses.map(c => c.id);
 
+  // ⚠️ 以下「類別」「報名人數」「場次」三組查詢彼此獨立（都只依賴上面查到的課程清單）→ 同時發出。
+  // 原本逐步 await（類別 → 報名逐批 → 場次逐批，冷快取約 12 個先後排隊的往返），慢實例上單次往返
+  // ~0.5 秒 → 公開班別頁冷載入 20 秒以上（2026-10-14）；並行後只剩 2 個先後步驟，讀取文件數不變。
+  const _chunks = [];
+  for (let i = 0; i < courseIds.length; i += 30) _chunks.push(courseIds.slice(i, i + 30));
+  const _todayW = taiwanToday();
+  const [_catSnap, _enrollRes, _sessRes] = await Promise.all([
+    db.collection('courseCategories').get().catch(() => null),
+    Promise.all(_chunks.map(chunk => Promise.all([
+      db.collection(ENROLLMENT_COLLECTION)
+        .where('courseId', 'in', chunk).where('status', '==', 'confirmed')
+        .select('courseId', 'memberId', 'isMakeup', 'isTrial', 'pauseStatus').get(),
+      db.collection(ENROLLMENT_COLLECTION)
+        .where('courseId', 'in', chunk).where('status', '==', 'waitlist')
+        .select('courseId', 'memberId').get(),
+    ]))),
+    Promise.all(_chunks.map(chunk =>
+      db.collection(SESSION_COLLECTION)
+        .where('courseId', 'in', chunk).where('date', '>=', _todayW)
+        .select('courseId', 'status', 'enrolledCount', 'maxStudents').get().catch(() => null))), // 場次查詢失敗不阻斷課程列表
+  ]);
+
   // 類別名對照（供會員端「課程總覽」依類別分組顯示；課程只存 categoryId）
   const catMap = {};
-  try {
-    (await db.collection('courseCategories').get()).docs.forEach(d => { catMap[d.id] = d.data(); });
-  } catch (e) {}
+  if (_catSnap) _catSnap.docs.forEach(d => { catMap[d.id] = d.data(); });
 
   // 計算各課程目前報名人數（不重複計算同一會員，weekly課程會有多筆場次報名紀錄）
   // ⚠️ .select() 只抓需要的欄位——courseEnrollments 每筆會內嵌簽名圖(base64 PNG，平均
@@ -2431,16 +2462,7 @@ const getCourses = async (gymId) => {
   // 複合索引已存在（firestore.indexes.json），不需要另外部署索引。
   const enrolledByCourse = {};
   const waitlistByCourse = {};
-  for (let i = 0; i < courseIds.length; i += 30) {
-    const chunk = courseIds.slice(i, i + 30);
-    const [enrollSnap, waitlistSnap] = await Promise.all([
-      db.collection(ENROLLMENT_COLLECTION)
-        .where('courseId', 'in', chunk).where('status', '==', 'confirmed')
-        .select('courseId', 'memberId', 'isMakeup', 'isTrial', 'pauseStatus').get(),
-      db.collection(ENROLLMENT_COLLECTION)
-        .where('courseId', 'in', chunk).where('status', '==', 'waitlist')
-        .select('courseId', 'memberId').get(),
-    ]);
+  for (const [enrollSnap, waitlistSnap] of _enrollRes) {
     enrollSnap.docs.forEach(d => {
       const e = d.data();
       if (e.isMakeup || e.isTrial) return; // 常態上課人數：補課/試上為單堂行為，不計入課程層人數（場次層另有計）
@@ -2464,20 +2486,14 @@ const getCourses = async (gymId) => {
   // 縮小範圍（courseId+date 複合索引已存在），已結束課程這裡幾乎不會掃到任何文件。
   const workshopAnyOpen = {};
   const hasFutureSessionByCourse = {};
-  const _todayW = taiwanToday();
-  for (let i = 0; i < courseIds.length; i += 30) {
-    const chunk = courseIds.slice(i, i + 30);
-    try {
-      const ss = await db.collection(SESSION_COLLECTION)
-        .where('courseId', 'in', chunk).where('date', '>=', _todayW)
-        .select('courseId', 'status', 'enrolledCount', 'maxStudents').get();
-      ss.docs.forEach(d => {
-        const s = d.data();
-        if (s.status === 'cancelled') return;
-        hasFutureSessionByCourse[s.courseId] = true;
-        if ((s.enrolledCount || 0) < (s.maxStudents || 0)) workshopAnyOpen[s.courseId] = true;
-      });
-    } catch (e) { /* 場次查詢失敗不阻斷課程列表 */ }
+  for (const ss of _sessRes) {
+    if (!ss) continue; // 該批場次查詢失敗（已吞掉，不阻斷課程列表）
+    ss.docs.forEach(d => {
+      const s = d.data();
+      if (s.status === 'cancelled') return;
+      hasFutureSessionByCourse[s.courseId] = true;
+      if ((s.enrolledCount || 0) < (s.maxStudents || 0)) workshopAnyOpen[s.courseId] = true;
+    });
   }
 
   const result = courses.map(c => {
@@ -2519,7 +2535,7 @@ const getCourses = async (gymId) => {
       anySessionOpen: c.type === 'workshop' ? !!workshopAnyOpen[c.id] : undefined,
     };
   });
-  _coursesCache.set(_cacheKey, { data: result, expiresAt: Date.now() + COURSES_CACHE_TTL_MS });
+  if (_ver === _coursesCacheVersion) _coursesCache.set(_cacheKey, { data: result, expiresAt: Date.now() + COURSES_CACHE_TTL_MS }); // 計算期間若被主動清快取，不寫入已過期的結果
   return result;
 };
 
@@ -2881,8 +2897,7 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
   const db = getDb();
   let cq = db.collection(COURSE_COLLECTION);
   if (gymId) cq = cq.where('gymId', '==', gymId);
-  const courseSnap = await cq.get();
-  const catSnap = await db.collection(CATEGORY_COLLECTION).get();
+  const [courseSnap, catSnap] = await Promise.all([cq.get(), db.collection(CATEGORY_COLLECTION).get()]); // 兩者獨立→並行（2026-10-14）
   const cats = {}; catSnap.docs.forEach(d => { cats[d.id] = d.data(); });
   // 候選：開放試上（allowTrial）且未取消/未停用
   const candidates = courseSnap.docs.map(d => ({ id: d.id, ...d.data() }))
@@ -2895,11 +2910,13 @@ const getTrialSessions = async (gymId, fromDate, toDate) => {
   // 欄位投影、沒縮小查詢範圍；2026-09-03 查 Firestore 查詢洞察資料確認這類全表掃描是全站單日
   // 讀取次數最大宗，這裡改成只查候選課程本身）。
   const candidateIds = candidates.map(c => c.id);
-  for (let i = 0; i < candidateIds.length; i += 30) {
-    const chunk = candidateIds.slice(i, i + 30);
-    const enrSnap = await db.collection(ENROLLMENT_COLLECTION)
-      .where('courseId', 'in', chunk).where('status', '==', 'confirmed')
-      .select('courseId', 'memberId', 'isMakeup', 'isTrial').get();
+  const _trialChunks = [];
+  for (let i = 0; i < candidateIds.length; i += 30) _trialChunks.push(candidateIds.slice(i, i + 30));
+  // 各批查詢獨立→並行（原逐批 await，2026-10-14）
+  const _trialEnrSnaps = await Promise.all(_trialChunks.map(chunk => db.collection(ENROLLMENT_COLLECTION)
+    .where('courseId', 'in', chunk).where('status', '==', 'confirmed')
+    .select('courseId', 'memberId', 'isMakeup', 'isTrial').get()));
+  for (const enrSnap of _trialEnrSnaps) {
     enrSnap.docs.forEach(x => { const e = x.data(); if (e.isMakeup || e.isTrial) return; (regularByCourse[e.courseId] = regularByCourse[e.courseId] || new Set()).add(e.memberId); });
   }
   const trialCourses = {};
@@ -3257,6 +3274,7 @@ module.exports = {
   getSessionRoster,
   getCourses,
   invalidateCoursesCache,
+  getCoursesCacheVersion,
   computeCourseFeeForMember,
   computeWeeklyCourseFee,
   computeWorkshopRefund,

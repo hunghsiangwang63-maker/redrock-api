@@ -224,7 +224,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.575.1-diag-latency',
+    version: '3.575.2-diag-latency',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
@@ -285,6 +285,18 @@ app.get('/_diag/latency', require('./middleware/auth').authenticate, async (req,
   await time('query_limit1', () => db.collection('courseSessions').where('gymId', '==', 'gym-hsinchu').limit(1).get());
   await time('query_month_138docs', () => db.collection('courseSessions').where('gymId', '==', 'gym-hsinchu').where('date', '>=', '2026-10-01').where('date', '<=', '2026-10-31').get());
   await time('query_month_again', () => db.collection('courseSessions').where('gymId', '==', 'gym-hsinchu').where('date', '>=', '2026-10-01').where('date', '<=', '2026-10-31').get());
+  // 網路分層：DNS / TCP / TLS（到 Firestore API 主機，判斷延遲卡在哪一層）
+  try {
+    const dns = require('dns'), net = require('net'), tls = require('tls');
+    const host = 'firestore.googleapis.com';
+    let t = T(); const addrs = await dns.promises.lookup(host, { all: true }); out.dns_ms = T() - t; out.dns_addrs = addrs.map(a => a.address).slice(0, 4);
+    for (const n of [1, 2, 3]) {
+      t = T();
+      await new Promise((resolve, reject) => { const so = net.connect({ host: addrs[0].address, port: 443 }, () => { out['tcp_connect_' + n] = T() - t; so.destroy(); resolve(); }); so.on('error', reject); so.setTimeout(8000, () => { so.destroy(); reject(new Error('tcp timeout')); }); });
+    }
+    t = T();
+    await new Promise((resolve, reject) => { const so = tls.connect({ host, port: 443, servername: host, ALPNProtocols: ['h2'] }, () => { out.tls_handshake_total = T() - t; so.destroy(); resolve(); }); so.on('error', reject); so.setTimeout(8000, () => { so.destroy(); reject(new Error('tls timeout')); }); });
+  } catch (e) { out.net_error = e.message; }
   out.env = { node: process.version, region: process.env.RAILWAY_REPLICA_REGION || null, grpcPreferRest: process.env.FIRESTORE_PREFER_REST || null, cpuCount: require('os').cpus().length, loadavg: require('os').loadavg() };
   res.json(out);
 });

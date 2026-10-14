@@ -474,3 +474,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **2026-10-14 取消固定對外 IP、Railway Pro 降 Hobby**（決定不用街口線上支付，不再需要街口 API 白名單）：`railway outbound-network static-ip disable` ＋ redeploy（部署 `f156e6a2` SUCCESS、`/health` ok 3.571.0）；方案由使用者在網頁降級（我這邊的降級操作被自動安全檢查擋下，未繞過）。**驗證**：`railway api` 查 workspace `plan: HOBBY`、`subscriptionModel: USER`；`railway outbound-network status` 為 Static IPs disabled；`railway usage` 計費週期 10/13–11/13、預估 $0.60。10/14 當天已先扣 Pro $20（降級不退）。細節與重開須知見 `docs/outage-playbook.md` 第七節。⚠️ 街口側白名單未處理、街口合約是否解約未確認。
   - 📌 **Railway CLI 可用**：`railway outbound-network status|static-ip enable/disable`、`railway usage`、`railway api '<graphql>'`（查 `me.workspaces{plan}`）、`railway redeploy --service redrock-api -y`、`railway deployment list`；方案升降級只能走網頁。
 
+
+## 目前進度（2026-10-14）— 員工端「課程場次出不來」＝查詢逾時被吞掉；getSessions 全面並行（後端 `/health` `3.575.0-transfer-confirm-parallel`；前端 buildId `staff-7fc63a6a1db7bf29`）
+> 回報截圖：員工端 課程→場次管理，選「【新竹館】小蜘蛛人初級班 9-1…」顯示「共 0 堂／尚無場次」。**資料沒問題**（9-1 月各梯次都有 20+ 堂場次）。
+- 🐞 **根因**：`CoursesPage.loadSessions` 呼叫 `GET /courses/sessions` 抓「整館、課程開始日起 180 天」的所有場次（新竹約 500 筆），後端 `courseService.getSessions` 再逐組（每 30 場次一組、17+ 組）**依序 await** 撈報名與跨期補課來算人數 → 單次 **24~30 秒**；員工端 axios `timeout: 10000`（`api/client.js`）先逾時，`catch (e) {}` 把錯誤吞掉、`sessions` 維持空陣列 → 畫面顯示「尚無場次」。**不是沒資料，是逾時＋靜默吞錯**。
+- ✅ **修 1（場次管理）**：`getSessions` 新增第 4 參數 `courseId`（只查該梯次、不限日期，人數統計沿用同一套）；路由 `GET /courses/sessions?courseId=&withStats=1`（僅員工，會員端與報名算費用用的 `?courseId=` 快速路徑**行為不變**）；前端 `loadSessions(course)` 有選梯次就走這條。22 堂 2.9 秒→**0.3 秒**；與舊結果逐欄比對（enrolled/leave/makeup/trial/crossMakeup/registered/expected/instructor/status）無差異。
+- ✅ **修 2（月曆等所有 getSessions 呼叫端）**：報名／跨期補課／課程教練三組查詢**彼此獨立→合併成一個 `Promise.all`**，各組 in 查詢也並行。月曆（新竹 10 月，138 場次）**5~8 秒→0.5~0.8 秒**，整學期 24 秒→1.2 秒；與舊結果逐欄比對無差異。**讀取文件數不變**（費用不增；修 1 還讓場次管理讀取量降到約 1/20）。
+- ✅ **修 3（同型）**：`courseRegistrationService.getTransferConfirmationData`（課程報名報表的確認收款/匯款資料，依 enrollId 分 30 筆一組查 `transferRecords`）原逐組 await → 並行；284 筆 ids 實測 460→117 ms，結果與舊版 JSON 完全相同。
+- 📌 **掃描結果（同型「逐組 await in 查詢」）**：`products.js:481` 已是並行；`fallTestBookings.js:134` 只有本人＋子女（極少組）；`courseService.getMakeupCandidateSessions` 的三處迴圈組數很少（班別/補課類型）。其餘未發現會隨資料量成長的同型寫法。
+- 💡 **教訓**：①**員工端 client timeout 只有 10 秒**，任何會隨資料量成長的列表端點超過就會「靜默變空」（`catch (e) {}` 吞錯），排查「列表出不來」先用管理員 token 直接打 API 量時間（`curl -w %{time_total}`），別先懷疑資料 ②**Firestore 查詢獨立就並行**（`Promise.all`），逐組 `await` 的耗時＝組數×單次往返；Railway→Firestore（asia-east1，同區）每次往返實測仍偏高（單次 query 端點約 1 秒，含認證查員工），並行是最有效的緩解 ③`loadSessions`／`loadCourses` 這類 `catch (e) {}` 仍多處存在，之後若再出現「空畫面」先看是不是吞錯。
+- ⚠️ **未驗證**：員工端畫面我沒有實際登入看（只驗 API 與 build/deploy 版本一致）；`catch (e) {}` 吞錯的畫面行為**未改**（沒加錯誤提示）。

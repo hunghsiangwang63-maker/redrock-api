@@ -133,10 +133,11 @@ const getTransferConfirmationData = async (db, enrollIds) => {
   const ids = [...new Set((enrollIds || []).filter(Boolean))];
   const confirmedMap = {};
   const proofMap = {};
-  for (let i = 0; i < ids.length; i += 30) {
-    const chunk = ids.slice(i, i + 30);
-    if (!chunk.length) break;
-    const snap = await db.collection('transferRecords').where('refId', 'in', chunk).get();
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30));
+  // 各組 in 查詢彼此獨立 → 並行（原本逐組 await，報名多時排隊很久；2026-10-14）
+  const snaps = await Promise.all(chunks.map(chunk => db.collection('transferRecords').where('refId', 'in', chunk).get()));
+  for (const snap of snaps) {
     snap.docs.forEach(d => {
       const t = d.data();
       if (t.status === 'confirmed' && t.confirmedAmount != null) {

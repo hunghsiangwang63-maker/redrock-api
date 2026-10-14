@@ -229,10 +229,12 @@ router.get('/public/category/:categoryId', async (req, res) => {
   }
 });
 const publicCategoryHandler = async (req, res) => {
+  const _T0 = Date.now(); const _tm = {}; const _lap = (k) => { _tm[k] = Date.now() - _T0; };
   try {
     const db = getDb();
     const catDoc = await db.collection('courseCategories').doc(req.params.categoryId).get();
     if (!catDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此班別' });
+    _lap('catDoc');
     const cat = catDoc.data();
     if (cat.isActive === false) return res.status(404).json({ error: 'NOT_ACTIVE', message: '此班別目前未開放' });
 
@@ -240,6 +242,7 @@ const publicCategoryHandler = async (req, res) => {
     // 排除 statusLabel==='ended'（已結束的梯次，即使 status 欄位仍是 active 也不該顯示可報名）；
     // 'ongoing'（已開課、插班中）、'enrolling'/'starting_soon'/'full' 皆保留——插班與候補本就支援。
     const all = await courseService.getCoursesByCategory(req.params.categoryId); // 只算這個班別（不掃全系統）
+    _lap('getCoursesByCategory');
     const cohorts = all.filter(c => c.categoryId === req.params.categoryId && c.status === 'active' && c.isActive !== false && c.statusLabel !== 'ended');
 
     // 工作坊型梯次另附未來場次清單（供訪客在同一頁挑選具體場次）
@@ -257,6 +260,7 @@ const publicCategoryHandler = async (req, res) => {
       return { ...c, sessions };
     }));
 
+    _lap('workshopSessions');
     // ⚠️ computeStatusLabel() 對已開課（today>=startDate）的梯次一律先回傳 'ongoing'，額滿判斷
     // （enrolledCount>=maxStudents）那一行永遠排在它後面、對已開課課程完全不會被執行到——
     // 也就是說任何「已開課、插班中」的梯次，statusLabel 實際上永遠不可能是 'full'，不管報名人數
@@ -284,6 +288,7 @@ const publicCategoryHandler = async (req, res) => {
       });
     }
 
+    _lap('trial'); console.log('[公開班別頁計時 診斷]', req.params.categoryId.slice(0,8), JSON.stringify(_tm));
     res.json({
       category: {
         id: catDoc.id, name: cat.name, description: cat.description || '', imageUrl: cat.imageUrl || null,

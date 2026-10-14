@@ -484,3 +484,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📌 **掃描結果（同型「逐組 await in 查詢」）**：`products.js:481` 已是並行；`fallTestBookings.js:134` 只有本人＋子女（極少組）；`courseService.getMakeupCandidateSessions` 的三處迴圈組數很少（班別/補課類型）。其餘未發現會隨資料量成長的同型寫法。
 - 💡 **教訓**：①**員工端 client timeout 只有 10 秒**，任何會隨資料量成長的列表端點超過就會「靜默變空」（`catch (e) {}` 吞錯），排查「列表出不來」先用管理員 token 直接打 API 量時間（`curl -w %{time_total}`），別先懷疑資料 ②**Firestore 查詢獨立就並行**（`Promise.all`），逐組 `await` 的耗時＝組數×單次往返；Railway→Firestore（asia-east1，同區）每次往返實測仍偏高（單次 query 端點約 1 秒，含認證查員工），並行是最有效的緩解 ③`loadSessions`／`loadCourses` 這類 `catch (e) {}` 仍多處存在，之後若再出現「空畫面」先看是不是吞錯。
 - ⚠️ **未驗證**：員工端畫面我沒有實際登入看（只驗 API 與 build/deploy 版本一致）；`catch (e) {}` 吞錯的畫面行為**未改**（沒加錯誤提示）。
+
+## 目前進度（2026-10-14 續）— Railway→Firestore 單次往返忽快忽慢（依實例）＋員工端課程頁載入失敗不再靜默（後端 `3.576.0-latency-diag-kept`；前端 buildId `staff-f93ac17fd515412d`）
+> 承上段「場次出不來」兩個遺留項。
+- 🔍 **單次往返偏慢的查證（新增診斷端點 `GET /_diag/latency`，super_admin、只讀少量文件，保留供日後使用）**：同一版程式在不同部署實例上量到**天差地別**——`3.575.1` 那個實例：讀一筆 staff 文件 **約 520 ms**（連續 5 次 2.6 秒、並行 5 次 0.8 秒＝每次請求都有固定約 0.5 秒底噪，非頻寬問題；cpuCount 48、loadavg 約 2）；重新部署成 `3.575.2` 後：同一個動作 **約 50~60 ms**（連續 5 次 0.27 秒、當月 138 場次查詢約 110 ms；DNS 1ms／TCP 1ms／TLS 7ms；cpuCount 32），連量 8 次都穩定。→ **慢不在 DNS/TCP/TLS，也不在 Firestore 位置（asia-east1，Railway 在 asia-southeast1）；是「該實例（宿主機）」的差異**，換一個實例就好了。先前整天看到的「單次 query 約 1 秒」應是落在慢實例上。
+  - ⚠️ **結論是推論，樣本很小（只比較到 2 個實例）**；為何某些實例慢**未查出**（懷疑宿主機網路路徑或鄰居干擾；跟固定 IP 無關——慢實例是在固定 IP 關閉並 redeploy 之後才量到的）。
+  - 📌 **日後再覺得後端整體變慢**：先用管理員 token 打 `/_diag/latency`；`doc_get_1st` 約 50ms＝正常，約 500ms＝這個實例慢，重新部署（`railway redeploy --service redrock-api -y`，或任何 push）通常換到快的實例。**我想連續重新部署多次取樣被自動安全檢查擋下（Production Deploy），未繞過，所以「慢實例出現的機率」未知。**
+  - 附帶：`getSessions` 並行化（上段）在慢實例上更重要（往返次數 5→3，原本 5 次×0.5 秒）。
+- ✅ **員工端課程頁載入失敗不再靜默**（`CoursesPage.jsx`）：班別／課程列表／場次／月曆四個載入函式原本 `catch (e) {}` 吞錯（月曆只清空），改為頂部**紅色提示**「⚠️ ○○載入失敗（連線逾時／伺服器回應 N），畫面上的資料可能不完整，不是真的沒有資料」＋「重新載入」按鈕（成功後自動清除，過期回應不誤報）。**其餘員工端頁面仍有 `catch (e) {}`（SettingsPage 21 處、CheckinPage 4、VipPage 3、PassesPage 2、GymsPage 2…）未改**；`makeup-types` 那處也未改。
+  - ⚠️ **提示畫面我沒有實際看過**：員工端要登入，我這邊只驗了 build、bundle 含新文案、版本碼與線上一致；沒有真的製造逾時看到紅色提示。
+

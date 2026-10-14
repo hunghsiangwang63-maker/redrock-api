@@ -224,7 +224,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.575.2-diag-latency',
+    version: '3.576.0-latency-diag-kept',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
@@ -269,7 +269,8 @@ app.get('/_diag/query-stats', require('./middleware/auth').authenticate, (req, r
   res.json(queryDiag.getStats());
 });
 
-// ── 暫時診斷：Railway→Firestore 往返延遲（2026-10-14，查「單次查詢約 1 秒」；限 super_admin，只讀 staff/courses 少量文件，查完會移除）──
+// ── 診斷：Railway→Firestore 往返延遲（2026-10-14 起保留；限 super_admin，只讀 staff＋courseSessions 少量文件）──
+// 用法：管理員 token GET /_diag/latency；doc_get 約 50ms＝正常、約 500ms＝這個實例落在慢主機（見 CLAUDE.md 2026-10-14 續）
 app.get('/_diag/latency', require('./middleware/auth').authenticate, async (req, res) => {
   if (req.staff?.role !== 'super_admin') return res.status(403).json({ error: 'FORBIDDEN' });
   const db = require('./config/firebase').getDb();

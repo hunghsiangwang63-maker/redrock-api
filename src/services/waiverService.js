@@ -24,15 +24,18 @@ const signWaiver = async ({ memberId, memberName, isMinor, isChildAccount, signa
 
   // 檢查是否已簽（鎖定後不可修改）——只需要 isComplete 一個欄位；DocumentReference 沒有 .select()，
   // 改用 collection query + documentId() 過濾（QuerySnapshot：.empty/.docs[0] 取代 .exists/.data()）
-  const existingSnap = await db.collection(COLLECTIONS.WAIVERS)
-    .where(FieldPath.documentId(), '==', memberId).select('isComplete').limit(1).get();
+  // （與下方「waiver 內容範本」讀取互不相依 → 同時發出；已鎖定的少數情況多讀一筆範本，2026-10-14）
+  const [existingSnap, contentDoc] = await Promise.all([
+    db.collection(COLLECTIONS.WAIVERS)
+      .where(FieldPath.documentId(), '==', memberId).select('isComplete').limit(1).get(),
+    // 取得目前的 waiver 內容範本，作為簽署當下的文字快照（之後即使範本內容更新，
+    // 已簽署紀錄仍會顯示簽署當時的版本，確保簽署紀錄的法律效力不受後續編輯影響）
+    db.collection('systemSettings').doc('waiver').get(),
+  ]);
   if (!existingSnap.empty && existingSnap.docs[0].data().isComplete) {
     throw { code: 'WAIVER_LOCKED', message: 'Waiver 已簽署完成，不可修改' };
   }
 
-  // 取得目前的 waiver 內容範本，作為簽署當下的文字快照（之後即使範本內容更新，
-  // 已簽署紀錄仍會顯示簽署當時的版本，確保簽署紀錄的法律效力不受後續編輯影響）
-  const contentDoc = await db.collection('systemSettings').doc('waiver').get();
   const contentSnapshot = contentDoc.exists ? { zh: contentDoc.data().zh || '', en: contentDoc.data().en || '', ja: contentDoc.data().ja || '' } : { zh: '', en: '', ja: '' };
 
   // 上傳簽名圖
@@ -171,12 +174,15 @@ const signEntryDocs = async ({
 
   // 「本人是否已簽過 waiver」看 memberSignedAt（比 isComplete 精準——isComplete 對「等家長」
   // 與「本人已簽」皆為 false，但 memberSignedAt 只在本人真的簽過才會有值）
-  const waiverSnap = await db.collection(COLLECTIONS.WAIVERS)
-    .where(FieldPath.documentId(), '==', memberId).select('memberSignedAt').limit(1).get();
-  const needsWaiver = waiverSnap.empty || !waiverSnap.docs[0].data().memberSignedAt;
-
   const fallTestService = require('./fallTestService');
-  const needsFallTest = !(await fallTestService.hasConsentSignature(memberId));
+  // 兩個檢查互不相依 → 同時發出（2026-10-14）
+  const [waiverSnap, hasConsent] = await Promise.all([
+    db.collection(COLLECTIONS.WAIVERS)
+      .where(FieldPath.documentId(), '==', memberId).select('memberSignedAt').limit(1).get(),
+    fallTestService.hasConsentSignature(memberId),
+  ]);
+  const needsWaiver = waiverSnap.empty || !waiverSnap.docs[0].data().memberSignedAt;
+  const needsFallTest = !hasConsent;
 
   if (!needsWaiver && !needsFallTest) {
     throw { code: 'ALREADY_COMPLETE', message: '兩份文件皆已完成簽署' };

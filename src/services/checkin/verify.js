@@ -42,8 +42,14 @@ const verifyEntry = async (memberId, gymId) => {
 
   const isTeam = isActiveTeamMember(member);
 
+  // 3~5. VIP／定期票／課程入館三項查詢互不相依 → 同時發出（原逐項 await），再依原順序判斷（VIP→定期票→課程，
+  // 回傳內容不變）。代價：VIP／持定期票者多讀 1~2 次（課程入館）；沒被等待的查詢用 _early 吞 rejection。
+  const _early = (pr) => { pr.catch(() => {}); return pr; };
+  const _vipP = _early(checkVip(memberId));
+  const _passesP = _early(getValidPasses(memberId, gymId));
+  const _courseP = _early(getCourseAccess(memberId));
   // 3. VIP
-  const vip = await checkVip(memberId);
+  const vip = await _vipP;
   if (vip) {
     return {
       allowed: true, status: 'ok', entryType: 'vip', freeEntry: true,
@@ -53,7 +59,7 @@ const verifyEntry = async (memberId, gymId) => {
   }
 
   // 4. 定期票
-  const passes = await getValidPasses(memberId, gymId);
+  const passes = await _passesP;
   if (passes.length > 0) {
     const p = passes[0];
     // 續約偵測：有效定期票中，任一張到期 ≤14 天者可於產生 QR 時一併續約（取最先偵測到者）
@@ -71,7 +77,7 @@ const verifyEntry = async (memberId, gymId) => {
   }
 
   // 5. 課程入館（邏輯待實作，保留位置）
-  const courseAccess = await getCourseAccess(memberId);
+  const courseAccess = await _courseP;
   if (courseAccess.length > 0) {
     const e = courseAccess[0];
     return {
@@ -92,14 +98,21 @@ const verifyEntry = async (memberId, gymId) => {
 
   // 7. 員工（full_time / part_time）— 由 staff token 判斷，這裡不處理
   // 8. 無免費資格 → 需要選擇付費方式
-  const discountCards = await getValidDiscountCards(memberId);
-  const blackCards = await getMemberBlackCards(memberId);
-  const singleEntryTickets = await getValidSingleEntryTickets(memberId);
-  const bonuses = await require('../bonusService').getMemberBonuses(memberId);
-  const buyablePassTypes = await getBuyablePassTypes(gymId);   // 入場可購買的定期票種（該館適用）
+  // 以下九項讀取（卡/票/紅利/可購票種/原價/兩個優惠設定/入場類型設定）彼此獨立 → 同時發出（原逐項 await＝9 個先後往返）。
+  // 讀取內容與數量與原本完全相同。
+  const [discountCards, blackCards, singleEntryTickets, bonuses, buyablePassTypes, discountOriginalPrice, pvConfig, pgmConfig, etDoc] = await Promise.all([
+    getValidDiscountCards(memberId),
+    getMemberBlackCards(memberId),
+    getValidSingleEntryTickets(memberId),
+    require('../bonusService').getMemberBonuses(memberId),
+    getBuyablePassTypes(gymId),                 // 入場可購買的定期票種（該館適用）
+    getOriginalEntryPrice(memberType),          // 折扣券入場 8 折基準（原價依會員身份）
+    getPartnerVendorConfig(),                   // 特約廠商優惠設定
+    getPartnerGymMemberConfig(),                // 友館隊員折扣設定
+    db.collection('systemSettings').doc('entryTypes').get(),
+  ]);
 
   // 折扣券入場 8 折基準（原價依會員身份）；有效隊員再疊加 9 折；兒童不適用折扣券
-  const discountOriginalPrice = await getOriginalEntryPrice(memberType);
   let discountCardPrice = Math.round(discountOriginalPrice * DISCOUNT_CARD_RATE);
   if (isTeam && discountOriginalPrice >= TEAM_DISCOUNT_MIN_AMOUNT) discountCardPrice = Math.round(discountCardPrice * PRICES.team_discount_rate);
   const canUseDiscountCard = memberType !== 'child' && discountCards.length > 0;
@@ -110,11 +123,8 @@ const verifyEntry = async (memberId, gymId) => {
   const withTeam = (price) => (isTeam && price >= TEAM_DISCOUNT_MIN_AMOUNT
     ? Math.round(price * PRICES.team_discount_rate) : price);
   // 特約廠商優惠設定（啟用 + 金額）；停用或金額 0 → eligible 一律 false（前端不顯示勾選）
-  const pvConfig = await getPartnerVendorConfig();
   const pvOn = pvConfig.enabled && pvConfig.discount > 0;
-  const pgmConfig = await getPartnerGymMemberConfig();
   const pgmOn = pgmConfig.enabled && pgmConfig.rate > 0 && pgmConfig.rate < 1;
-  const etDoc = await db.collection('systemSettings').doc('entryTypes').get();
   const configuredTypes = (etDoc.exists ? (etDoc.data().types || []) : [])
     .filter(t => t && t.id !== 'course_access' && typeof t.price === 'number' && t.active !== false)
     .filter(t => {

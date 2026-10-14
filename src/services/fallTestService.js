@@ -101,6 +101,8 @@ async function hasConsentSignature(memberId) {
  */
 async function signConsent({ memberId, signatureData, watchPercent, agreedParagraphs, isMinor }) {
   const db = getDb();
+  // 設定與「是否已簽過」互不相依 → 同時發出（驗證與跳過的判斷順序不變；驗證失敗時多讀一次，2026-10-14）
+  const alreadyP = hasConsentSignature(memberId); alreadyP.catch(() => {});
   const settings = await getFallTestSettings(db);
 
   if (!(watchPercent >= settings.watchPercentRequired)) {
@@ -111,7 +113,7 @@ async function signConsent({ memberId, signatureData, watchPercent, agreedParagr
   }
 
   // 避免重複建立：已有簽署紀錄的會員（含合併簽署時另一份文件才是真正缺項的情況）不再疊加新的一筆
-  if (await hasConsentSignature(memberId)) {
+  if (await alreadyP) {
     return { skipped: true, reason: 'already_signed' };
   }
 

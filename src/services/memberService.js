@@ -16,7 +16,17 @@ const generateQRCode = async (memberId) => {
 };
 
 // ── 判斷封鎖原因 ──────────────────────────────────────────────────
-const getBlockReasons = async (memberId, memberData) => {
+// 取封鎖判斷所需的兩筆資料（Waiver 小欄位＋已通過墜測）——與會員文件互不相依，可與 getMember 同時發出
+const fetchBlockInputs = (memberId) => {
+  const db = getDb();
+  return Promise.all([
+    db.collection(COLLECTIONS.WAIVERS).where(FieldPath.documentId(), '==', memberId)
+      .select('isComplete', 'parentRequired', 'parentSignedAt', 'memberSignedAt').limit(1).get(),
+    db.collection(COLLECTIONS.FALL_TESTS).where('memberId', '==', memberId).where('result', '==', 'passed').get(),
+  ]);
+};
+
+const getBlockReasons = async (memberId, memberData, prefetched = null) => {
   const db = getDb();
   const reasons = [];
 
@@ -29,11 +39,7 @@ const getBlockReasons = async (memberId, memberData) => {
   // waivers 文件平均 ~76KB（內嵌簽名 base64 圖），此函式呼叫頻繁（會員詳情/登入等多處），加 .select()。
   // DocumentReference 沒有 .select()——改用 collection query + documentId() 過濾
   // （QuerySnapshot：.empty/.docs[0] 取代 .exists/.data()）。
-  const [waiverSnap, fallTests] = await Promise.all([
-    db.collection(COLLECTIONS.WAIVERS).where(FieldPath.documentId(), '==', memberId)
-      .select('isComplete', 'parentRequired', 'parentSignedAt', 'memberSignedAt').limit(1).get(),
-    db.collection(COLLECTIONS.FALL_TESTS).where('memberId', '==', memberId).where('result', '==', 'passed').get(),
-  ]);
+  const [waiverSnap, fallTests] = prefetched || await fetchBlockInputs(memberId);
   const waiverExists = !waiverSnap.empty;
   const waiverData = waiverExists ? waiverSnap.docs[0].data() : null;
 
@@ -760,29 +766,45 @@ const createMember = async (memberData, staffId, options = {}) => {
   await db.collection(COLLECTIONS.MEMBERS).doc(memberId).set(member);
   invalidateMemberSearchCache(); // 讓剛建立的會員立刻可被搜尋到（見 searchMembers 上方註解）
 
-  // 舊系統墜測效期自動認領（電話+姓名比對，命中即免重測）→ 在算封鎖狀態前完成，避免被誤判需墜測
-  await claimLegacyFallTest(db, memberId, member);
-  // 攀岩隊員自動認領（Climbio 名單；隊員墜測效期同步至隊籍到期日）
-  await claimLegacyTeamMember(db, memberId, member);
-  // 舊系統 90 日票自動認領（BeClass 名單；效期內才發、沿用原起訖日、通知管理員）
-  await claimLegacyPass(db, memberId, member);
-  // BeClass 比賽報名自動認領（memberId 空的匯入報名掛上帳號）
-  await claimLegacyCompetitionReg(db, memberId, member);
-  // 課程名單預留自動認領（店員先建名單但當時查無會員 → 註冊時姓名比對自動加入該課程）
-  await claimPendingCourseEnrollment(db, memberId, member);
-  // 前期請假補課券自動媒合（手機比對；館方先在 crossCohortMakeups 建 autoIssue 紀錄）
-  await claimPendingPrevLeaveRights(db, memberId, member);
-  // 舊系統課程舊生名單自動認領（如 BeClass 小蜘蛛人歷史報名 → 判定「舊生報名優惠」）
-  await claimLegacyCourseAlumni(db, memberId, member);
-  // Climbio VIP 名單自動認領（無期限；全家 VIP 含子帳號繼承）
-  await claimLegacyVip(db, memberId, member);
-
-  await claimGuestExperienceBookings(db, memberId, member);
-  // 待指派體驗單日券自動認領（逐參加者發券時比對不到、之後本人註冊 → 姓名+生日命中綁本人）
-  await claimPendingExperienceTickets(db, memberId, member);
-  // 公開訪客報名認領（比賽/課程整期/工作坊/試上；電話比對，見各函式說明）
-  await claimGuestCourseEnrollments(db, memberId, member);
-  await claimGuestCompetitionRegistrations(db, memberId, member);
+  // ⚠️ 2026-10-14：12 個自動認領原本逐個 await（每個至少 1 次資料庫往返，累計約 13 個先後往返；Railway 慢實例上
+  // 新會員自助註冊超過客人端 10 秒逾時）。12 個函式皆自己吞錯、不會拋出；依「碰同一批資料／有先後相依」分成幾條鏈，
+  // 鏈內維持原順序、各鏈同時執行，全部做完才算封鎖狀態（原本也是全部做完才算）。
+  //  鏈1 墜測相關＋課程報名：舊墜測 → 攀岩隊員（同步墜測效期，依賴前者）→ 課程名單預留（會碰墜測/報名）→ 前期請假補課券 → 公開訪客課程報名
+  //  鏈2 90 日票　　　　　：claimLegacyPass（只碰舊票/會員票）
+  //  鏈3 比賽報名　　　　：BeClass 比賽報名 → 公開訪客比賽報名（同為 competitionRegistrations，維持原順序）
+  //  鏈4 舊生名單　　　　：claimLegacyCourseAlumni　　鏈5 VIP：claimLegacyVip　　（各自只更新會員文件的不同欄位）
+  //  鏈6 體驗　　　　　　：訪客體驗預約 → 待指派體驗單日券
+  await Promise.all([
+    (async () => {
+      // 舊系統墜測效期自動認領（電話+姓名比對，命中即免重測）→ 在算封鎖狀態前完成，避免被誤判需墜測
+      await claimLegacyFallTest(db, memberId, member);
+      // 攀岩隊員自動認領（Climbio 名單；隊員墜測效期同步至隊籍到期日）
+      await claimLegacyTeamMember(db, memberId, member);
+      // 課程名單預留自動認領（店員先建名單但當時查無會員 → 註冊時姓名比對自動加入該課程）
+      await claimPendingCourseEnrollment(db, memberId, member);
+      // 前期請假補課券自動媒合（手機比對；館方先在 crossCohortMakeups 建 autoIssue 紀錄）
+      await claimPendingPrevLeaveRights(db, memberId, member);
+      // 公開訪客報名認領（課程整期/工作坊/試上；電話比對，見函式說明）
+      await claimGuestCourseEnrollments(db, memberId, member);
+    })(),
+    // 舊系統 90 日票自動認領（BeClass 名單；效期內才發、沿用原起訖日、通知管理員）
+    claimLegacyPass(db, memberId, member),
+    (async () => {
+      // BeClass 比賽報名自動認領（memberId 空的匯入報名掛上帳號）
+      await claimLegacyCompetitionReg(db, memberId, member);
+      // 公開訪客比賽報名認領（電話比對）
+      await claimGuestCompetitionRegistrations(db, memberId, member);
+    })(),
+    // 舊系統課程舊生名單自動認領（如 BeClass 小蜘蛛人歷史報名 → 判定「舊生報名優惠」）
+    claimLegacyCourseAlumni(db, memberId, member),
+    // Climbio VIP 名單自動認領（無期限；全家 VIP 含子帳號繼承）
+    claimLegacyVip(db, memberId, member),
+    (async () => {
+      await claimGuestExperienceBookings(db, memberId, member);
+      // 待指派體驗單日券自動認領（逐參加者發券時比對不到、之後本人註冊 → 姓名+生日命中綁本人）
+      await claimPendingExperienceTickets(db, memberId, member);
+    })(),
+  ]);
 
   // 計算並更新封鎖狀態
   const blockReasons = await getBlockReasons(memberId, member);
@@ -928,8 +950,11 @@ const getMemberByPhone = async (phone) => {
 // ── 更新封鎖狀態 ──────────────────────────────────────────────────
 const refreshBlockStatus = async (memberId) => {
   const db = getDb();
+  // 會員文件與封鎖判斷用的 Waiver／墜測查詢互不相依 → 同時發出（原先 getMember 之後才查，多一個先後往返；2026-10-14）。
+  // 會員不存在時 getMember 照舊拋 MEMBER_NOT_FOUND（預先發出的查詢若失敗，用空 catch 吞掉避免 unhandledRejection）。
+  const inputsP = fetchBlockInputs(memberId); inputsP.catch(() => {});
   const member = await getMember(memberId);
-  const blockReasons = await getBlockReasons(memberId, member);
+  const blockReasons = await getBlockReasons(memberId, member, await inputsP);
 
   await db.collection(COLLECTIONS.MEMBERS).doc(memberId).update({
     isBlocked: blockReasons.length > 0,

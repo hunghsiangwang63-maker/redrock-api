@@ -177,15 +177,27 @@ const runEntryGates = async (memberId, gymId, { skipDuplicate = false, expTicket
   const db = getDb();
   const today = taiwanToday();
 
+  // ⚠️ 2026-10-14：五個關卡的資料查詢（同日重複／會員／Waiver／墜測／分期逾期）彼此獨立、全是唯讀 → 先同時發出，
+  // 再「依原順序」逐關判斷（回傳內容與擋下順序完全不變）。原本逐關 await＝5 個先後往返（Railway 慢實例每個約 0.5 秒，
+  // 入場驗票／產生 QR／電話入場累計超過客人端 10 秒逾時）。代價：前面關卡擋下時，後面幾項查詢白讀（少數情況：已入場/
+  // 未簽署/墜測未過），一般放行情況讀取量與原本相同。預先發出的查詢若沒被等待就 return，用 _early 吞掉其 rejection，
+  // 避免 unhandledRejection；被等待時錯誤仍照原樣在原本的位置拋出。
+  const _early = (pr) => { pr.catch(() => {}); return pr; };
+  const _dupP = skipDuplicate ? null : _early(db.collection(COLLECTIONS.CHECK_INS)
+    .where('memberId', '==', memberId)
+    .where('gymId', '==', gymId)
+    .where('isCancelled', '==', false)
+    .where('checkedInAt', '>=', new Date(today + 'T00:00:00+08:00'))
+    .where('checkedInAt', '<=', new Date(today + 'T23:59:59+08:00'))
+    .get());
+  const _memberP = _early(getMember(memberId));
+  const _waiverP = _early(checkWaiver(memberId));
+  const _fallP = _early(checkFallTest(memberId));
+  const _instP = _early(require('../installmentService').hasOverdueInstallment(installmentMemberId || memberId));
+
   // 0. 同日同館重複入場
-  if (!skipDuplicate) {
-    const todaySnap = await db.collection(COLLECTIONS.CHECK_INS)
-      .where('memberId', '==', memberId)
-      .where('gymId', '==', gymId)
-      .where('isCancelled', '==', false)
-      .where('checkedInAt', '>=', new Date(today + 'T00:00:00+08:00'))
-      .where('checkedInAt', '<=', new Date(today + 'T23:59:59+08:00'))
-      .get();
+  if (_dupP) {
+    const todaySnap = await _dupP;
     if (!todaySnap.empty) {
       const existing = todaySnap.docs[0].data();
       const hhmm = new Date(existing.checkedInAt.toDate().getTime() + 8 * 3600000).toISOString().slice(11, 16);
@@ -198,10 +210,10 @@ const runEntryGates = async (memberId, gymId, { skipDuplicate = false, expTicket
     }
   }
 
-  const member = await getMember(memberId);
+  const member = await _memberP;
 
   // 1. Waiver
-  const waiver = await checkWaiver(memberId);
+  const waiver = await _waiverP;
   if (!waiver.complete) {
     const isPendingParent = waiver.reason === 'incomplete';
     return {
@@ -215,7 +227,7 @@ const runEntryGates = async (memberId, gymId, { skipDuplicate = false, expTicket
   // 2. 墜落測驗（例外1：持當日有效體驗券者未過墜測可入場，但須簽墜測同意書／
   //    例外2：小蜘蛛人系列週課正式學員，未簽同意書或未過墜測皆可入場、僅顯示醒目提醒——
   //    2026-09-02 政策，僅限這個班別群組，其餘課程/一般會員維持原本嚴格擋下）
-  const fallTest = await checkFallTest(memberId);
+  const fallTest = await _fallP;
   let fallTestWarning = null;
   if (!fallTest.passed) {
     // 例外判定：'using'＝此次入場正在使用體驗券（createPendingCheckIn 實際入場，較嚴謹）；
@@ -256,8 +268,7 @@ const runEntryGates = async (memberId, gymId, { skipDuplicate = false, expTicket
   }
 
   // 3. 分期付款逾期（子女入場可指定查家長分期：installmentMemberId）
-  const { hasOverdueInstallment } = require('../installmentService');
-  if (await hasOverdueInstallment(installmentMemberId || memberId)) {
+  if (await _instP) {
     return {
       blocked: true, member, reason: 'installment_overdue', status: 'blocked',
       httpStatus: 403, code: 'INSTALLMENT_OVERDUE',

@@ -131,209 +131,7 @@ const claimLegacyFallTest = async (db, memberId, member) => {
   } catch (e) { console.error('claimLegacyFallTest 失敗', e.message); return null; }
 };
 
-// ── 舊系統攀岩隊員自動認領（Climbio 名單，隊籍至 2026-12-31）────────────
-// 建立會員時電話+姓名比對 legacyTeamMembers → 標記隊員（isTeamMember/since/until），
-// 並確保墜測有效（隊員墜測效期與隊籍同步至 until；若 claimLegacyFallTest 已先認領則不重複建）。
-// ── 舊系統 90 日票自動認領（BeClass 名單 legacyPasses）────────────
-// 電話+姓名比對命中且【票尚在效期內】→ 依名單「原起訖日」發放 90 日定期票（全館通用）
-// 到會員定期票列表（memberPasses），並站內通知管理員（同館 gym_manager + super_admin）。
-const claimLegacyPass = async (db, memberId, member) => {
-  try {
-    if (member.isChildAccount) return null;
-    const phone = (member.phone || '').trim();
-    if (!phone || !member.name) return null;
-    const snap = await db.collection('legacyPasses').where('phone', '==', phone).get();
-    if (snap.empty) return null;
-    const today = taiwanToday();
-    const hit = snap.docs.find(d => {
-      const x = d.data();
-      return x.claimed !== true && legacyNameMatch(x.name, member.name)
-        && String(x.endDate || '') >= today;   // 注意有效期限：已過期不發
-    });
-    if (!hit) return null;
-    const legacy = hit.data();
-    const now = new Date();
-    // 票種：90日定期票（全館 shared）；找不到票種仍發放（欄位快照為主）
-    let passTypeId = null, passTypeName = '90日定期票';
-    const ptSnap = await db.collection('passTypes').where('name', '==', '90日定期票').limit(1).get();
-    if (!ptSnap.empty) { passTypeId = ptSnap.docs[0].id; passTypeName = ptSnap.docs[0].data().name; }
-    const passId = uuidv4();
-    await db.collection('memberPasses').doc(passId).set({
-      id: passId, memberId, memberName: member.name || '',
-      gymId: legacy.gymId || 'gym-hsinchu',           // 售出館（付款館別）
-      passTypeId, passTypeName,
-      scope: 'shared', targetGymId: null,             // 全館通用
-      startDate: legacy.startDate, endDate: legacy.endDate,   // 沿用名單原效期、不重算
-      credits: null, originalCredits: null,
-      status: 'active', paymentStatus: 'confirmed', paymentId: null,
-      soldByStaffId: 'legacy-90day-migration',
-      source: 'legacy-90day',
-      notes: `舊系統 90 日票移轉（BeClass #${legacy.seq || ''}，發票 ${legacy.invoice || '—'}）`,
-      createdAt: now, updatedAt: now,
-    });
-    await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now });
-    // 通知管理員（同館 gym_manager + super_admin）
-    try {
-      const { notifyGymManagers } = require('./notificationService');
-      await notifyGymManagers({
-        gymId: legacy.gymId || 'gym-hsinchu',
-        type: 'legacy_pass_claimed',
-        title: '舊系統 90 日票已認領',
-        body: `${member.name}（${phone}）註冊會員，已自動發放 90 日定期票（${legacy.startDate} ~ ${legacy.endDate}，全館通用）。`,
-        referenceId: passId, referenceType: 'memberPass',
-      });
-    } catch (e) { console.error('90日票認領通知失敗（票已發放）:', e.message); }
-    console.log(`✅ 舊系統90日票認領: ${member.name} ${phone} → ${legacy.startDate}~${legacy.endDate}`);
-    return passId;
-  } catch (e) {
-    console.error('claimLegacyPass 失敗（不阻斷建立會員）:', e.message);
-    return null;
-  }
-};
 
-// 課程名單預留自動認領：店員先把人加進課程名單但當時查無會員，存 pendingCourseClaims；
-// 該人日後註冊時以「姓名」比對（未對到者只有姓名、無電話）自動加入該課程全部場次。
-// ⚠ name-only 比對有同名碰撞風險（低風險名單場景可接受；認領後通知管理員可人工核對）。
-const claimPendingCourseEnrollment = async (db, memberId, member) => {
-  try {
-    // 子帳號「不跳過」：兒童課程（小蜘蛛人等）的學員本來就是子會員，名單認領以「上課者姓名」比對
-    // （墜測/隊員/90日票認領才因共用電話跳過子帳號；課程認領為 name-only、無此顧慮）
-    if (!member.name) return null;
-    const snap = await db.collection('pendingCourseClaims').where('claimed', '==', false).get();
-    if (snap.empty) return null;
-    const hits = snap.docs.filter(d => legacyNameMatch(d.data().name, member.name));
-    if (!hits.length) return null;
-    const now = new Date();
-    const claimed = [];
-    for (const hit of hits) {
-      const claim = hit.data();
-      const cdoc = await db.collection('courses').doc(claim.courseId).get();
-      if (!cdoc.exists) { await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now, note: '課程已不存在' }); continue; }
-      const c = cdoc.data();
-      const ssnap = await db.collection('courseSessions').where('courseId', '==', claim.courseId).get();
-      const allSessions = ssnap.docs.map(d => ({ id: d.id, ...d.data() }));
-      const sessions = allSessions.filter(s => s.status !== 'cancelled').sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-      // 休館停課場次：認領者一併補發「停課補課券」（exempt、不佔配額）——與已在名單學員待遇一致。
-      // 認領前已請假的日期（leaveDates）落在停課日 → 課沒上成、不發（比照既有學員請假者不補）。
-      const closureSessions = allSessions.filter(s => s.status === 'cancelled' && /休館|closure/.test(String(s.cancelReason || '')));
-      // 去重：已在名單則只標記已認領、不重複建
-      const ex = await db.collection('courseEnrollments').where('courseId', '==', claim.courseId).where('memberId', '==', memberId).select('status').get();
-      const already = ex.docs.some(d => ['confirmed', 'leave', 'waitlist'].includes(d.data().status));
-      if (!already && sessions.length) {
-        const gymId = c.gymId || claim.gymId || null;
-        const gymAccessStart = c.unlimitedPracticeStart || c.startDate || sessions[0].date;
-        const gymAccessEnd = c.unlimitedPracticeEnd || (c.endDate ? dayjs(c.endDate).add(c.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : sessions[sessions.length - 1].date);
-        // 認領時自動登錄請假（claim.leaveDates：認領前已請過假的日期）→ 該堂標 leave、不佔名額；
-        // 認領後跑補課額度重算（min(cap, 有效請假數)）自動給補課券
-        const leaveDates = Array.isArray(claim.leaveDates) ? claim.leaveDates : [];
-        const batch = db.batch(); const cnt = {}; const _claimEnrollIds = [];
-        for (const [i, s] of sessions.entries()) {
-          const eid = uuidv4();
-          _claimEnrollIds.push(eid);
-          const isLeave = leaveDates.includes(s.date);
-          batch.set(db.collection('courseEnrollments').doc(eid), {
-            id: eid, memberId, memberName: member.name, sessionId: s.id, courseId: claim.courseId, courseName: c.name, gymId,
-            date: s.date, startTime: s.startTime, endTime: s.endTime,
-            status: isLeave ? 'leave' : 'confirmed', waitlistPosition: null, paymentId: null, paymentMethod: 'roster-claim',
-            ...(isLeave ? { leaveReason: '補登記（認領時自動登錄請假）', leaveAt: now } : {}),
-            originalPrice: c.price || 0, enrollmentFee: 0, installment: false, firstPayment: 0, secondPayment: 0,
-            paymentStatus: 'confirmed', paymentConfirmed: true, paymentDeadline: null,
-            gymAccessStart, gymAccessEnd, enrolledBy: 'roster-claim', enrolledAt: now,
-            // healthNote/bankLastFive/memberPaidAmount 比照 enroll-all 只寫在第一堂（i===0）；其餘欄位本就每堂
-            // 都是相同固定值（referralSource/confirmedLeavePolicy 等），無逐堂複製問題。header（下方）保留完整值，
-            // 課程層/場次名單讀取皆已改為 header-first、slot 只是 idx0 快照。
-            paymentDate: null, bankLastFive: i === 0 ? (claim.bankLastFive || null) : null,
-            healthNote: i === 0 ? (claim.healthNote || null) : null, referralSource: null,
-            confirmedLeavePolicy: false, confirmedExtensionPolicy: false, confirmedRefundPolicy: false, portraitSignature: null, guardianSignature: null,
-            memberPaidAmount: i === 0 ? (claim.paidAmount ?? null) : null,   // BeClass 等外部名單帶入的實際匯款金額（名單顯示用）
-            notes: claim.paymentNote ? `名單預留自動認領；${claim.paymentNote}` : '名單預留自動認領（註冊時姓名比對加入）', createdAt: now, updatedAt: now,
-          });
-          if (!isLeave) cnt[s.id] = (cnt[s.id] || 0) + 1;   // 請假堂不佔名額
-        }
-        for (const s of sessions) if (cnt[s.id]) batch.update(db.collection('courseSessions').doc(s.id), { enrolledCount: (s.enrolledCount || 0) + cnt[s.id], updatedAt: now });
-        await batch.commit();
-        // 雙寫（Phase 1）：名單認領批次寫入，一次認領對應一筆 header（純新增、失敗不阻斷認領）
-        try {
-          const { createRegistrationHeader } = require('./courseRegistrationService');
-          await createRegistrationHeader(db, {
-            memberId, memberName: member.name,
-            courseId: claim.courseId, courseName: c.name, gymId,
-            status: 'confirmed',
-            paymentMethod: 'roster-claim', paymentStatus: 'confirmed',
-            fee: 0, originalFee: c.price || 0,
-            healthNote: claim.healthNote || null,
-            bankLastFive: claim.bankLastFive || null,
-            memberPaidAmount: claim.paidAmount ?? null,
-            sessionCount: sessions.length,
-            sourceEnrollmentIds: _claimEnrollIds,
-            enrolledBy: 'roster-claim',
-          });
-        } catch (e) { console.error('[雙寫] courseRegistrations header 建立失敗（不影響認領）:', e.message); }
-        // 停課補課券（豁免配額；效期＝課程結束+補課天數；leaveDates 停課日不發）
-        try {
-          if (closureSessions.length) {
-            const rulesC = require('./courseService').resolveRules(c, await require('./courseService').getCategoryOf(db, c.categoryId));
-            const expC = dayjs(c.endDate || new Date()).add(rulesC.makeupDeadlineDays ?? 60, 'day').toDate();
-            for (const cs of closureSessions) {
-              if (leaveDates.includes(cs.date)) continue;
-              const rid = uuidv4();
-              await db.collection('courseMakeupRights').doc(rid).set({
-                id: rid, memberId, originalEnrollmentId: null,
-                courseId: claim.courseId, courseName: c.name || '', categoryId: c.categoryId || null,
-                gymId: c.gymId || null, tags: c.tags || [],
-                status: 'available', expiresAt: expC, usedSessionId: null, usedAt: null,
-                source: 'closure', exempt: true, closureDate: cs.date || null,
-                notes: '認領時補發（該堂於認領前已休館停課）', createdAt: now, updatedAt: now,
-              });
-            }
-            console.log(`[課程認領] ${member.name} 補發停課券 ${closureSessions.filter(x=>!leaveDates.includes(x.date)).length} 張`);
-          }
-        } catch (e) { console.error('[課程認領] 停課券補發失敗', e.message); }
-        // 有登錄請假 → 重算補課額度（自動給補課券；lazy require 避免循環依賴）
-        if (leaveDates.length) {
-          try { await require('./courseService').reconcileMakeupEntitlement(db, memberId, claim.courseId); }
-          catch (e) { console.error('認領請假補課額度重算失敗（報名已建立）:', e.message); }
-        }
-      }
-      await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now });
-      claimed.push(c.name);
-      // 定期票 × 課程免費期間重疊補償（政策 2026-07-17；冪等、不阻斷）
-      try { await require('./passOverlapService').applyCourseOverlapPassExtension({ memberId, courseId: claim.courseId }); }
-      catch (e) { console.error('課程重疊補償失敗（認領已完成）:', e.message); }
-      try {
-        const { notifyGymManagers } = require('./notificationService');
-        await notifyGymManagers({
-          gymId: c.gymId || claim.gymId || 'gym-hsinchu', type: 'course_roster_claimed',
-          title: '課程名單自動認領', body: `${member.name} 註冊會員，已自動加入課程名單：${c.name}${already ? '（原已在名單）' : ''}。請核對是否為同一人。`,
-          referenceId: claim.courseId, referenceType: 'course',
-          link: claim.courseId ? `/staff/courses?course=${claim.courseId}` : null,
-        });
-      } catch (e) { console.error('課程名單認領通知失敗（已認領）:', e.message); }
-      console.log(`✅ 課程名單認領: ${member.name} → ${c.name}`);
-    }
-    // 政策：認領課程學員一律預設「墜測通過」（免重測；移轉式、不需同意書，比照 claimLegacyFallTest）。
-    // 僅在有認領到課程且該會員尚無 passed 墜測時建立；waiver 仍須另行簽署（不豁免）。
-    if (claimed.length) {
-      const passedSnap = await db.collection('fallTests').where('memberId', '==', memberId).where('result', '==', 'passed').get();
-      if (passedSnap.empty) {
-        const ftId = uuidv4();
-        const exp = dayjs().add(1, 'year').toDate();
-        await db.collection('fallTests').doc(ftId).set({
-          id: ftId, memberId, result: 'passed',
-          testedBy: 'course-claim', testedByName: '課程學員認領預設',
-          testedAt: now, expiresAt: exp, source: 'course-roster-claim',
-          notes: '課程學員認領預設通過墜測（免重測）', createdAt: now, updatedAt: now,
-        });
-        await db.collection(COLLECTIONS.MEMBERS).doc(memberId).update({ fallTestPassed: true, fallTestExpiresAt: exp, updatedAt: now });
-        console.log(`[課程認領] ${member.name} 預設墜測通過（至 ${dayjs(exp).format('YYYY-MM-DD')}）`);
-      }
-    }
-    return claimed;
-  } catch (e) {
-    console.error('claimPendingCourseEnrollment 失敗（不阻斷建立會員）:', e.message);
-    return null;
-  }
-};
 
 // 前期請假補課券自動媒合（2026-10-04，宋沛德案例）：前期（舊梯次）學員欠補課、但本期沒有報名任何課，
 // 註冊前沒有 memberId 可掛券。館方先在 crossCohortMakeups 建一筆待安排紀錄並帶 autoIssue
@@ -396,29 +194,6 @@ const claimPendingPrevLeaveRights = async (db, memberId, member) => {
 // 僅補 isAlumni，不補續報(isFullTermRenewal)（匯入資料只證明曾報名繳費，非整期出席佐證）。
 const normalizePhone = (p) => String(p || '').replace(/[^0-9]/g, '');
 
-const claimLegacyCourseAlumni = async (db, memberId, member) => {
-  try {
-    const phone = normalizePhone(member.phone);
-    if (!phone || !member.name) return null;
-    const snap = await db.collection('legacyCourseAlumni').where('phone', '==', phone).get();
-    if (snap.empty) return null;
-    const hits = snap.docs.filter(d => d.data().claimed !== true && legacyNameMatch(d.data().name, member.name));
-    if (!hits.length) return null;
-    const now = new Date();
-    const catIds = new Set();
-    for (const hit of hits) {
-      const x = hit.data();
-      if (x.categoryId) catIds.add(x.categoryId);
-      await hit.ref.update({ claimed: true, claimedBy: memberId, claimedAt: now });
-    }
-    if (!catIds.size) return null;
-    await db.collection(COLLECTIONS.MEMBERS).doc(memberId).update({
-      legacyAlumniCategoryIds: [...catIds], updatedAt: now,
-    });
-    console.log(`[舊生名單認領] ${member.name} ${phone} → categoryIds=${[...catIds].join(',')}`);
-    return [...catIds];
-  } catch (e) { console.error('claimLegacyCourseAlumni 失敗（不阻斷建立會員）:', e.message); return null; }
-};
 
 // ── VIP 自動認領（Climbio VIP 名單，無期限）─────────────────────
 // legacyVips：{ name, phone(可空), family(全家), claimed }。
@@ -588,45 +363,6 @@ const claimGuestCompetitionRegistrations = async (db, memberId, member) => {
   } catch (e) { console.error('claimGuestCompetitionRegistrations 失敗（不阻斷建立會員）:', e.message); }
 };
 
-// ── BeClass 比賽報名自動認領 ─────────────────────────────────────
-// 匯入的比賽報名（memberId:null＋claimPhone/claimName）：會員註冊時電話+姓名比對命中
-// → 報名掛上帳號（App 顯示我的比賽、可用報到 QR）＋通知管理員。
-const claimLegacyCompetitionReg = async (db, memberId, member) => {
-  try {
-    if (member.isChildAccount === true && !member.parentMemberId) return null;
-    const phone = (member.phone || '').trim();
-    if (!phone || !member.name) return null;
-    const snap = await db.collection('competitionRegistrations')
-      .where('claimPhone', '==', phone)
-      .select('memberId', 'memberName', 'competitionId', 'competitionName', 'divisionName').get();
-    if (snap.empty) return null;
-    let claimed = 0;
-    for (const d of snap.docs) {
-      const r = d.data();
-      if (r.memberId) continue;                                   // 已認領
-      if (!legacyNameMatch(r.memberName, member.name)) continue;  // 姓名相符（防共用電話冒領）
-      await d.ref.update({ memberId, claimedAt: new Date(), updatedAt: new Date() });
-      claimed++;
-      try {
-        const { notifyGymManagers } = require('./notificationService');
-        const comp = (await db.collection('competitions').doc(r.competitionId).get()).data();
-        await notifyGymManagers({
-          gymId: comp?.gymId || 'gym-hsinchu',
-          type: 'competition_reg_claimed',
-          title: 'BeClass 比賽報名已認領',
-          body: `${member.name}（${phone}）註冊會員，已自動掛上「${r.competitionName || ''}」報名（${r.divisionName || ''}）。`,
-          referenceId: d.id, referenceType: 'competitionRegistration',
-          link: r.competitionId ? `/staff/competitions?comp=${r.competitionId}` : null,
-        });
-      } catch (e) { console.error('比賽報名認領通知失敗', e.message); }
-      console.log(`✅ BeClass比賽報名認領: ${member.name} ${phone} → ${r.competitionName}`);
-    }
-    return claimed || null;
-  } catch (e) {
-    console.error('claimLegacyCompetitionReg 失敗（不阻斷建立會員）:', e.message);
-    return null;
-  }
-};
 
 const claimLegacyTeamMember = async (db, memberId, member) => {
   try {
@@ -769,34 +505,26 @@ const createMember = async (memberData, staffId, options = {}) => {
   // ⚠️ 2026-10-14：12 個自動認領原本逐個 await（每個至少 1 次資料庫往返，累計約 13 個先後往返；Railway 慢實例上
   // 新會員自助註冊超過客人端 10 秒逾時）。12 個函式皆自己吞錯、不會拋出；依「碰同一批資料／有先後相依」分成幾條鏈，
   // 鏈內維持原順序、各鏈同時執行，全部做完才算封鎖狀態（原本也是全部做完才算）。
-  //  鏈1 墜測相關＋課程報名：舊墜測 → 攀岩隊員（同步墜測效期，依賴前者）→ 課程名單預留（會碰墜測/報名）→ 前期請假補課券 → 公開訪客課程報名
-  //  鏈2 90 日票　　　　　：claimLegacyPass（只碰舊票/會員票）
-  //  鏈3 比賽報名　　　　：BeClass 比賽報名 → 公開訪客比賽報名（同為 competitionRegistrations，維持原順序）
-  //  鏈4 舊生名單　　　　：claimLegacyCourseAlumni　　鏈5 VIP：claimLegacyVip　　（各自只更新會員文件的不同欄位）
-  //  鏈6 體驗　　　　　　：訪客體驗預約 → 待指派體驗單日券
+  //  鏈1 墜測相關＋課程報名：舊墜測 → 攀岩隊員（同步墜測效期，依賴前者）→ 前期請假補課券 → 公開訪客課程報名
+  //  鏈2 訪客比賽報名　　：claimGuestCompetitionRegistrations
+  //  鏈3 VIP：claimLegacyVip（只更新會員文件的 VIP 相關欄位）
+  //  鏈4 體驗　　　　　　：訪客體驗預約 → 待指派體驗單日券
+  //  （2026-10-14 已移除：舊 90 日票認領〔來源 legacyPasses 23 筆已全數認領〕、BeClass 比賽報名認領〔12 筆全已綁會員〕、
+  //   課程名單預留認領〔pendingCourseClaims 49 筆全已認領，且全專案已無任何程式會建立新預留〕——來源資料皆已處理完畢；
+  //   以及舊生名單認領〔legacyCourseAlumni 151 筆中 116 筆已認領、剩 35 筆；使用者 2026-10-14 決定移除，這 35 位日後註冊將不再自動判定舊生報名優惠〕）
   await Promise.all([
     (async () => {
       // 舊系統墜測效期自動認領（電話+姓名比對，命中即免重測）→ 在算封鎖狀態前完成，避免被誤判需墜測
       await claimLegacyFallTest(db, memberId, member);
       // 攀岩隊員自動認領（Climbio 名單；隊員墜測效期同步至隊籍到期日）
       await claimLegacyTeamMember(db, memberId, member);
-      // 課程名單預留自動認領（店員先建名單但當時查無會員 → 註冊時姓名比對自動加入該課程）
-      await claimPendingCourseEnrollment(db, memberId, member);
       // 前期請假補課券自動媒合（手機比對；館方先在 crossCohortMakeups 建 autoIssue 紀錄）
       await claimPendingPrevLeaveRights(db, memberId, member);
       // 公開訪客報名認領（課程整期/工作坊/試上；電話比對，見函式說明）
       await claimGuestCourseEnrollments(db, memberId, member);
     })(),
-    // 舊系統 90 日票自動認領（BeClass 名單；效期內才發、沿用原起訖日、通知管理員）
-    claimLegacyPass(db, memberId, member),
-    (async () => {
-      // BeClass 比賽報名自動認領（memberId 空的匯入報名掛上帳號）
-      await claimLegacyCompetitionReg(db, memberId, member);
-      // 公開訪客比賽報名認領（電話比對）
-      await claimGuestCompetitionRegistrations(db, memberId, member);
-    })(),
-    // 舊系統課程舊生名單自動認領（如 BeClass 小蜘蛛人歷史報名 → 判定「舊生報名優惠」）
-    claimLegacyCourseAlumni(db, memberId, member),
+    // 公開訪客比賽報名認領（電話比對）
+    claimGuestCompetitionRegistrations(db, memberId, member),
     // Climbio VIP 名單自動認領（無期限；全家 VIP 含子帳號繼承）
     claimLegacyVip(db, memberId, member),
     (async () => {

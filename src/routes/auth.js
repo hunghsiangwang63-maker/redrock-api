@@ -699,6 +699,57 @@ router.put('/member/profile',
   }
 );
 
+// ── PUT /auth/member/password - 會員登入後修改密碼 ───────────────
+router.put('/member/password',
+  authenticateMember,
+  [
+    body('currentPassword').notEmpty().withMessage('請輸入目前密碼'),
+    body('newPassword').isLength({ min: 8 }).withMessage('新密碼至少 8 碼'),
+  ],
+  validate,
+  async (req, res) => {
+    try {
+      if (!req.member) return res.status(403).json({ error: 'FORBIDDEN', message: '僅會員可使用' });
+      const db = getDb();
+      const bcrypt = require('bcryptjs');
+      const { currentPassword, newPassword } = req.body;
+      const member = req.member;
+      if (!member.passwordHash) {
+        return res.status(400).json({ error: 'NO_PASSWORD', message: '此帳號尚未設定密碼，請用「忘記密碼」設定' });
+      }
+      // 沿用登入的鎖定機制（5 次 / 15 分鐘），避免拿到登入狀態的人暴力猜目前密碼
+      const now = new Date();
+      if (member.loginLockedUntil) {
+        const lu = member.loginLockedUntil.toDate?.() || new Date(member.loginLockedUntil._seconds * 1000);
+        if (lu > now) {
+          return res.status(429).json({ error: 'ACCOUNT_LOCKED', message: `錯誤次數過多，請 ${Math.ceil((lu - now) / 60000)} 分鐘後再試` });
+        }
+      }
+      const ref = db.collection(COLLECTIONS.MEMBERS).doc(member.id);
+      if (!(await bcrypt.compare(currentPassword, member.passwordHash))) {
+        const failCount = (member.loginFailCount || 0) + 1;
+        const upd = { loginFailCount: failCount };
+        if (failCount >= 5) upd.loginLockedUntil = new Date(now.getTime() + 15 * 60000);
+        await ref.update(upd);
+        return res.status(400).json({ error: 'WRONG_PASSWORD', message: '目前密碼不正確' });
+      }
+      if (await bcrypt.compare(newPassword, member.passwordHash)) {
+        return res.status(400).json({ error: 'SAME_PASSWORD', message: '新密碼不可與目前密碼相同' });
+      }
+      await ref.update({
+        passwordHash: await bcrypt.hash(newPassword, 10),
+        loginFailCount: 0,
+        loginLockedUntil: null,
+        resetPasswordToken: null,
+        resetPasswordExpiry: null,
+        passwordChangedAt: new Date(),
+        updatedAt: new Date(),
+      });
+      res.json({ success: true, message: '密碼已更新' });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
 // ── POST /auth/member/reset-password ───────────────────────────
 router.post('/member/reset-password',
   [

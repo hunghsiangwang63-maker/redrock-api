@@ -108,6 +108,7 @@ const clientErrorLimiter = rateLimit({
 app.use(globalLimiter);
 app.use('/members/self-register', registerLimiter);
 app.use('/auth/member/resend-verification', resendLimiter);
+app.use('/experience-bookings/participants-parse', rateLimit({ windowMs: 60*60*1000, max: 60, standardHeaders: true, legacyHeaders: false, message: { error: 'TOO_MANY_REQUESTS', message: '上傳次數過多，請稍後再試' } })); // 免登入 Excel 解析（防濫用）
 app.use('/experience-bookings/public', publicBookLimiter); // 含訪客單次體驗預約與訪客試上預約（trialSessionId 分支）
 app.use('/courses/public/:courseId/enroll-all', publicBookLimiter); // 訪客週課整期公開報名
 app.use('/courses/public/sessions/:sessionId/enroll', publicBookLimiter); // 訪客單堂工作坊公開報名
@@ -224,7 +225,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.592.0-inquiry-reply-email',
+    version: '3.593.0-experience-20-participants-xlsx',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),

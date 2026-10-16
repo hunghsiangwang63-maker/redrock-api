@@ -17,6 +17,10 @@ const { COURSE_TYPES, parseBookingTime, courseTypeLabel, addExperienceToCourseAn
         cleanupExperienceCourseAndSchedule, syncExperienceTickets, voidExperienceTickets, buildInsuranceXlsBuffer,
         defaultSettings, recordExperienceRevenue, reverseExperienceRevenue } = require('../services/experienceService');
 const { isUnder4, isMinor } = require('../utils/age');
+const multer = require('multer');
+const { MAX_PARTICIPANTS, buildTemplateBuffer, parseParticipantsBuffer } = require('../utils/participantsSheet');
+const sheetUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 1 } });
+const tooManyMsg = { code:'TOO_MANY_PARTICIPANTS', message:`參加人員最多 ${MAX_PARTICIPANTS} 人` };
 const { checkMemberOwnership } = require('../utils/memberOwnership');
 const { notifyRoleInGym } = require('../services/notificationService');
 // 訪客體驗/試上原本 email 選填，導致寄不出「已收到預約」通知信（蘇晁永案例：填了預約但
@@ -216,6 +220,7 @@ router.post('/', authenticateAny, async (req, res) => {
     if (!gymId) return res.status(400).json({ code:'MISSING_GYM', message:'請選擇場館' });
     if (!bookingDate) return res.status(400).json({ code:'MISSING_DATE', message:'請填寫體驗日期' });
     if (!participants?.length) return res.status(400).json({ code:'MISSING_PARTICIPANTS', message:'請填寫參加人員資料' });
+    if (participants.length > MAX_PARTICIPANTS) return res.status(400).json(tooManyMsg);
 
     // 後端權威：未滿 4 歲無法報名體驗。解析參加者——
     //  1) 若帶 childMemberId → 該子會員；否則登入會員本人（memberId）。
@@ -297,6 +302,28 @@ router.post('/', authenticateAny, async (req, res) => {
   } catch(err) { res.status(500).json({ error:'SERVER_ERROR', message:err.message }); }
 });
 
+// ── 參加人員 Excel 範本下載／上傳解析（免登入；員工端、會員端、公開預約頁共用）──
+// 只在記憶體解析、不存檔、不寫 log（內含身分證字號）。解析結果由前端填入名單，客人確認後才送出預約。
+router.get('/participants-template', (req, res) => {
+  const buf = buildTemplateBuffer();
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', "attachment; filename*=UTF-8''" + encodeURIComponent('體驗課程參加人員範本.xlsx'));
+  res.send(buf);
+});
+router.post('/participants-parse', (req, res) => {
+  sheetUpload.single('file')(req, res, (uerr) => {
+    if (uerr) return res.status(400).json({ code:'UPLOAD_ERROR', message: uerr.code === 'LIMIT_FILE_SIZE' ? '檔案過大（上限 2MB）' : '上傳失敗' });
+    if (!req.file) return res.status(400).json({ code:'NO_FILE', message:'請選擇 Excel 檔案' });
+    if (!/\.(xlsx|xls|csv)$/i.test(req.file.originalname || '')) return res.status(400).json({ code:'BAD_TYPE', message:'僅支援 .xlsx／.xls／.csv 檔案' });
+    try {
+      res.json({ success: true, ...parseParticipantsBuffer(req.file.buffer) });
+    } catch (e) {
+      const known = ['EMPTY_FILE', 'TOO_MANY', 'BAD_FORMAT'].includes(e.code);
+      res.status(400).json({ code: known ? e.code : 'PARSE_ERROR', message: known ? e.message : '無法讀取檔案，請使用範本格式' });
+    }
+  });
+});
+
 // ── GET /experience-bookings/public-settings - 公開讀取（免登入，供公開預約頁顯示課程類型/價格/場館）──
 router.get('/public-settings', async (req, res) => {
   try {
@@ -333,6 +360,7 @@ router.post('/public', async (req, res) => {
     if (!gymId) return res.status(400).json({ code:'MISSING_GYM', message:'請選擇場館' });
     if (!bookingDate) return res.status(400).json({ code:'MISSING_DATE', message:'請選擇體驗日期' });
     if (!participants?.length) return res.status(400).json({ code:'MISSING_PARTICIPANTS', message:'請填寫參加人員資料' });
+    if (participants.length > MAX_PARTICIPANTS) return res.status(400).json(tooManyMsg);
     if (!bankName || !String(bankName).trim()) return res.status(400).json({ code:'MISSING_BANK_NAME', message:'請填寫匯款銀行名稱' });
     if (!paymentDate || !String(paymentDate).trim()) return res.status(400).json({ code:'MISSING_PAYMENT_DATE', message:'請填寫轉帳日期' });
     if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code:'MISSING_TRANSFER', message:'請填寫匯款帳號末五碼' });
@@ -966,6 +994,7 @@ router.put('/:id/participants', authenticate, async (req, res) => {
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此預約' });
     const participants = Array.isArray(req.body.participants) ? req.body.participants : [];
+    if (participants.length > MAX_PARTICIPANTS) return res.status(400).json(tooManyMsg);
     await ref.update({ participants, numParticipants: participants.length, updatedAt: new Date() });
     const b = { id: doc.id, ...doc.data(), participants, numParticipants: participants.length };
     // 已發過券才連動（加人補發/減人作廢未用票）

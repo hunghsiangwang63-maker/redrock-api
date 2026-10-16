@@ -652,9 +652,29 @@ const sendCompetitionRegistrationModified = async (to, { memberName, competition
   });
 };
 
+// ── 問題諮詢：館方回覆後通知提問會員 ─────────
+const sendInquiryReplyNotice = async (to, { memberName, subject, reply }) => {
+  return sendEmail({
+    to,
+    subject: `【紅石攀岩】您的提問已有回覆－${subject}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">問題諮詢回覆通知</h2>
+        <p>親愛的 ${esc(memberName)}，</p>
+        <p>您的提問 <strong>「${esc(subject)}」</strong> 館方已回覆：</p>
+        <div style="background:#FBF5F5;border-radius:8px;padding:16px;margin:16px 0;line-height:1.8;white-space:pre-wrap">${esc(reply)}</div>
+        <p>您也可以登入會員 App，在「問題諮詢」查看完整對話或再次提問：</p>
+        <p><a href="${esc(CLIENT_URL)}/member/inquiries" style="display:inline-block;background:#8B1A1A;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none">前往查看</a></p>
+        <p style="color:#999;font-size:12px">此為系統自動發送的信件，請勿直接回覆。紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+  });
+};
+
 module.exports = {
   esc, // HTML 跳脫（供各路由組信件時共用）
   sendEmail,
+  sendInquiryReplyNotice,
   sendEmailVerification,
   sendCourseNotification,
   sendInstallmentReminder,

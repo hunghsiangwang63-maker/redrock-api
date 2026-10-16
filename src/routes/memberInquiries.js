@@ -20,6 +20,7 @@ const { authenticate, authenticateMember } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const { v4: uuidv4 } = require('uuid');
 const { notifyGymManagers } = require('../services/notificationService');
+const { sendInquiryReplyNotice } = require('../services/emailService');
 
 const GYM_IDS = ['gym-hsinchu', 'gym-shilin'];
 
@@ -227,6 +228,20 @@ router.post('/:id/reply', authenticate,
         repliedAt: now, repliedByName: req.staff.name || '',
         unread: true, updatedAt: now,
       });
+      // 寄 Email 通知提問會員（子會員無信箱時用家長的）；失敗只記 log，不影響回覆成功
+      (async () => {
+        try {
+          const mDoc = await db.collection('members').doc(d.memberId).get();
+          const m = mDoc.exists ? mDoc.data() : {};
+          let to = m.email || '';
+          if (!to && m.parentMemberId) {
+            const pDoc = await db.collection('members').doc(m.parentMemberId).get();
+            to = pDoc.exists ? (pDoc.data().email || '') : '';
+          }
+          if (!to) return;
+          await sendInquiryReplyNotice(to, { memberName: d.memberName || m.name || '', subject: d.subject || '', reply: text });
+        } catch (e) { console.error('[Inquiry] 回覆通知信失敗:', e.message); }
+      })();
       res.json({ success: true });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }

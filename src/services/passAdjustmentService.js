@@ -114,11 +114,18 @@ const createPassRequest = async ({ passId, memberId, type, reasonKey, reasonDeta
     .where('passId', '==', passId).where('status', '==', 'pending').limit(1).get();
   if (!pendingSnap.empty) throw { code: 'REQUEST_PENDING', message: '此張定期票已有申請處理中，請等待審核結果' };
 
+  // 定期票文件不一定有 memberName（部分來源建立的票沒寫入），沒有就查會員資料，避免待辦只顯示「 — 事由」
+  let memberName = pass.memberName || '';
+  if (!memberName) {
+    const mDoc = await db.collection(COLLECTIONS.MEMBERS).doc(memberId).get();
+    memberName = mDoc.exists ? (mDoc.data().name || '') : '';
+  }
+
   const id = uuidv4();
   const now = new Date();
   const request = {
     id, passId, memberId,
-    memberName: pass.memberName || '',
+    memberName,
     passTypeName: pass.passTypeName,
     type, reasonKey,
     reasonLabel: REQUEST_REASONS.find(r => r.key === reasonKey)?.label,

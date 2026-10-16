@@ -624,3 +624,9 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ⚠️ 未驗證：三個頁面畫面未實際點過；問題列細項訊息僅中文；20 人預約未跑過完整確認流程（發券、建場次、教練排班）。
 - 🧾 資料操作：刪除陳世修重複體驗預約 `exp_1792133661366_x3ue`、匯款資訊填入保留的 `exp_1792064588596_7808`。
 - 📊 10/16 傍晚量測：實例單筆讀取約 510ms（慢實例），已重新部署換實例。
+
+## 目前進度（2026-10-16 續2）— 課程分期現金收款自動寫入結帳加減項（後端 `/health` `3.594.0-installment-cash-adjustment`）
+> 起因：莊曜安（士林）技巧班分期第1期臨櫃現金 3,763，標記已繳只記了營收（`transactions`），結帳加減項沒有 → 今日結帳看不到這筆現金。已先手動補一筆「＋現金補入 3,763」。
+- ✅ `installmentService.markInstallmentPaid`／`markInstallmentPlanPaidInFull`：**課程（`relatedType:'course'`）＋現金**時，經 `recordDepositMovement` 寫「現金補入」加減項（`refId`＝分期計畫 id；一次繳清合併成一筆）。**定期票不加**：其營收收款日即時認列，現金已在結帳的 pass 交易統計內，再加會重複；非現金（轉帳等）`recordDepositMovement` 自動略過。
+- 📌 **未處理的路徑**：建立計畫時的第1期（`createInstallmentPlan` 的 `firstPaymentMethod`）不加——課程插班的現金走「待收款頁確認」流程，確認時已寫現金補入；`transfers.js` 不碰分期，不會與本次改動重複。
+- 🧪 假館 `gym-e2e-test` 驗證：課程＋現金（單期100、一次繳清200）各寫一筆；課程＋轉帳、定期票＋現金皆不寫（測後清除）。

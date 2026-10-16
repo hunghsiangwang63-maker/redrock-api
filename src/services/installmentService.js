@@ -95,6 +95,21 @@ const recordInstallmentRevenue = async (db, plan, period, paymentMethod, staffId
   });
 };
 
+// ── 現金收款 → 今日結帳「現金補入」加減項 ─────────────────────────
+// 課程分期的營收認列在最後一堂（recognitionDate），不會進當天結帳的現金統計；櫃檯收的現金必須靠
+// 加減項補進抽屜現金（2026-10-16 莊曜安第一期現金漏記）。定期票（relatedType:'pass'）收款日即時認列，
+// 現金已由結帳的 pass 交易統計算入，再記加減項會重複，故只處理課程。非現金由 recordDepositMovement 略過。
+const recordInstallmentCashAdjustment = async (plan, amount, paymentMethod, label) => {
+  if (plan.relatedType !== 'course' || !plan.gymId) return;
+  try {
+    await require('./paymentRecording').recordDepositMovement({
+      gymId: plan.gymId, amount, sign: '+', type: '現金補入', paymentMethod,
+      note: `${plan.memberName || ''} ${plan.itemName} 分期${label}（現金）`.trim(),
+      refId: plan.id,
+    });
+  } catch (e) { console.error('[分期] 現金加減項記錄失敗', e.message); }
+};
+
 // ── 建立分期付款計畫 ──────────────────────────────────────────────
 const createInstallmentPlan = async ({ memberId, memberName, gymId, relatedType, relatedId, itemName, recognitionDate, installments, firstPaymentMethod, staffId, staffName }) => {
   if (!['course', 'pass'].includes(relatedType)) {
@@ -224,6 +239,8 @@ const markInstallmentPaid = async ({ planId, seq, paymentMethod, staffId, staffN
     const paidPeriod = updatedInstallments.find(i => i.seq === seq);
     await recordInstallmentRevenue(db, { ...plan, installments: updatedInstallments }, paidPeriod, paymentMethod, staffId, staffName);
   } catch (e) { console.error('[分期] 繳款記帳失敗', e.message); }
+  const paidNow = updatedInstallments.find(i => i.seq === seq);
+  await recordInstallmentCashAdjustment(plan, paidNow?.amount, paymentMethod, `第${seq}期`);
 
   // ⚠ 回傳的 plan.status 務必用剛算好的 newStatus，不能沿用更新前讀出的舊 plan.status
   // （2026-08-09 修：先前回傳一律是舊值，資料庫本身寫得對，只有回傳給呼叫端的這份資料是舊的）
@@ -318,6 +335,9 @@ const markInstallmentPlanPaidInFull = async ({ planId, paymentMethod, staffId, s
       recordedCount++;
     } catch (e) { console.error(`[分期] 一次繳清記帳失敗 plan=${planId} seq=${p.seq}`, e.message); }
   }
+
+  const unpaidTotal = unpaid.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+  await recordInstallmentCashAdjustment(plan, unpaidTotal, paymentMethod, '一次繳清');
 
   return { plan: { ...plan, installments: updatedInstallments, status: 'completed' }, recordedCount };
 };

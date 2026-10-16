@@ -145,6 +145,36 @@ router.post('/:id/followup', authenticateMember,
   }
 );
 
+// ── 編輯訊息：會員只能改自己的提問/追問，員工只能改館方回覆；改後標記 edited，原順序與時間不變。
+//    同步維持舊欄位（第 0 則＝content、最後一則館方回覆＝reply），相容仍讀舊欄位的畫面。 ──
+const editMessage = (who) => async (req, res) => {
+  try {
+    const db = getDb();
+    const ref = db.collection('memberInquiries').doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此提問' });
+    const d = doc.data();
+    if (who === 'member' && d.memberId !== req.member.id) return res.status(403).json({ error: 'FORBIDDEN', message: '無權操作' });
+    const messages = buildMessages(d);
+    const idx = parseInt(req.params.idx, 10);
+    const m = messages[idx];
+    if (!m) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此訊息' });
+    if (m.from !== who) return res.status(403).json({ error: 'FORBIDDEN', message: who === 'member' ? '只能編輯自己的提問' : '只能編輯館方回覆' });
+    const text = req.body.text.trim();
+    const now = new Date();
+    messages[idx] = { ...m, text, edited: true, editedAt: now, ...(who === 'staff' ? { editedByName: req.staff.name || '' } : {}) };
+    const update = { messages, updatedAt: now };
+    if (idx === 0) update.content = text;
+    const lastStaff = messages.map(x => x.from).lastIndexOf('staff');
+    if (who === 'staff' && idx === lastStaff) update.reply = text;
+    await ref.update(update);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+};
+const editBody = [body('text').trim().notEmpty().isLength({ max: 1000 }).withMessage('請填寫內容（1000字以內）')];
+router.put('/:id/messages/:idx', authenticateMember, editBody, validate, editMessage('member'));
+router.put('/:id/messages/:idx/staff', authenticate, editBody, validate, editMessage('staff'));
+
 // ── POST /member-inquiries/:id/read：會員標記已讀取回覆（清 unread，供底部導航角標消失） ──
 router.post('/:id/read', authenticateMember, async (req, res) => {
   try {

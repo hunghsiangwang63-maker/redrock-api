@@ -34,6 +34,17 @@ const notifyInquiryManagers = ({ gymId, inquiryId, memberName, subject }) =>
 
 const { validate } = require('../middleware/validate');
 
+const MAX_MESSAGES = 50;
+
+// 對話串：新資料存在 messages 陣列；舊資料（只有 content/reply）即時還原成同樣形狀，
+// 第一次追加訊息時一併寫回，之後都走 messages。
+const buildMessages = (d) => {
+  if (Array.isArray(d.messages) && d.messages.length) return d.messages;
+  const out = [{ from: 'member', text: d.content || '', at: d.createdAt || null }];
+  if (d.reply) out.push({ from: 'staff', text: d.reply, at: d.repliedAt || null, byName: d.repliedByName || '' });
+  return out;
+};
+
 const DEFAULT_FAQ = [
   { id: 'forgot-password', question: '忘記密碼怎麼辦？', answer: '請至登入頁點選「忘記密碼」，輸入註冊時的 Email，系統會寄送重設密碼連結，設定新密碼後即可重新登入。' },
   { id: 'onboarding', question: '入場前為什麼要簽署文件、安排墜落測驗？', answer: '首次入場需完成「風險安全聲明書」與「墜落測驗同意書」簽署，並到館完成墜落測驗（由現場人員登記通過與否），以確保每位入場者都了解基本的抱石安全守則以及注意事項。全部完成後即可自助入場，不需每次臨櫃辦理。' },
@@ -63,7 +74,7 @@ router.get('/my', authenticateMember, async (req, res) => {
   try {
     const db = getDb();
     const snap = await db.collection('memberInquiries').where('memberId', '==', req.member.id).get();
-    const items = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const items = snap.docs.map(d => ({ id: d.id, ...d.data(), messages: buildMessages(d.data()) }))
       .sort((a, b) => (b.createdAt?._seconds || 0) - (a.createdAt?._seconds || 0));
     res.json({ items });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
@@ -108,6 +119,32 @@ router.post('/', authenticateMember,
   }
 );
 
+// ── POST /member-inquiries/:id/followup：會員針對已回覆的提問再次提問（追加到同一串對話，
+//    狀態回到待回覆、重新進員工端待辦並通知該館管理員） ──
+router.post('/:id/followup', authenticateMember,
+  [body('content').trim().notEmpty().isLength({ max: 1000 }).withMessage('請填寫內容（1000字以內）')],
+  validate,
+  async (req, res) => {
+    try {
+      const db = getDb();
+      const ref = db.collection('memberInquiries').doc(req.params.id);
+      const doc = await ref.get();
+      if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此提問' });
+      const d = doc.data();
+      if (d.memberId !== req.member.id) return res.status(403).json({ error: 'FORBIDDEN', message: '無權操作' });
+      if (d.status !== 'replied') return res.status(400).json({ error: 'NOT_REPLIED', message: '館方回覆後才能再次提問' });
+      const messages = buildMessages(d);
+      if (messages.length >= MAX_MESSAGES) return res.status(400).json({ error: 'TOO_MANY_MESSAGES', message: '此提問對話已達上限，請另外提出新問題' });
+      const now = new Date();
+      messages.push({ from: 'member', text: req.body.content.trim(), at: now });
+      await ref.update({ messages, status: 'pending', unread: false, updatedAt: now });
+      notifyInquiryManagers({ gymId: d.gymId, inquiryId: doc.id, memberName: d.memberName, subject: `（再次提問）${d.subject}` })
+        .catch(e => console.error('[會員提問通知]', e.message));
+      res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
 // ── POST /member-inquiries/:id/read：會員標記已讀取回覆（清 unread，供底部導航角標消失） ──
 router.post('/:id/read', authenticateMember, async (req, res) => {
   try {
@@ -132,13 +169,13 @@ router.get('/', authenticate, async (req, res) => {
     if (gymId) query = query.where('gymId', '==', gymId);
     if (req.query.status) query = query.where('status', '==', req.query.status);
     const snap = await query.get();
-    const items = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const items = snap.docs.map(d => ({ id: d.id, ...d.data(), messages: buildMessages(d.data()) }))
       .sort((a, b) => (b.createdAt?._seconds || 0) - (a.createdAt?._seconds || 0));
     res.json({ items });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
-// ── POST /member-inquiries/:id/reply：員工回覆（任何登入員工皆可，純溝通性質不設限） ──
+// ── POST /member-inquiries/:id/reply：員工回覆／新增回覆（任何登入員工皆可，純溝通性質不設限） ──
 router.post('/:id/reply', authenticate,
   [body('reply').trim().notEmpty().withMessage('請填寫回覆內容')],
   validate,
@@ -148,10 +185,17 @@ router.post('/:id/reply', authenticate,
       const ref = db.collection('memberInquiries').doc(req.params.id);
       const doc = await ref.get();
       if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此提問' });
+      const d = doc.data();
+      const messages = buildMessages(d);
+      if (messages.length >= MAX_MESSAGES) return res.status(400).json({ error: 'TOO_MANY_MESSAGES', message: '此提問對話已達上限' });
+      const now = new Date();
+      const text = req.body.reply.trim();
+      // 已回覆過的提問可再「新增回覆」；reply/repliedAt 一律放最新一則（相容舊畫面與通知）
+      messages.push({ from: 'staff', text, at: now, byName: req.staff.name || '' });
       await ref.update({
-        status: 'replied', reply: req.body.reply.trim(),
-        repliedAt: new Date(), repliedByName: req.staff.name || '',
-        unread: true, updatedAt: new Date(),
+        messages, status: 'replied', reply: text,
+        repliedAt: now, repliedByName: req.staff.name || '',
+        unread: true, updatedAt: now,
       });
       res.json({ success: true });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }

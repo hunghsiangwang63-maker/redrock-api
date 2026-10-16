@@ -484,7 +484,7 @@ router.get('/', authenticate, async (req, res) => {
           createdAt: r.createdAt?._seconds || 0,
           gymId: r.gymId || null, memberName: r.memberName,
           link: '/staff/pending-tasks',
-          record: { id: d.id, ...r },
+          record: { id: d.id, ...r, messages: Array.isArray(r.messages) && r.messages.length ? r.messages : [{ from:'member', text:r.content||'', at:r.createdAt||null }, ...(r.reply ? [{ from:'staff', text:r.reply, at:r.repliedAt||null, byName:r.repliedByName||'' }] : [])] },
         });
       });
     } catch(e) {}

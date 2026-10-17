@@ -630,3 +630,7 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ `installmentService.markInstallmentPaid`／`markInstallmentPlanPaidInFull`：**課程（`relatedType:'course'`）＋現金**時，經 `recordDepositMovement` 寫「現金補入」加減項（`refId`＝分期計畫 id；一次繳清合併成一筆）。**定期票不加**：其營收收款日即時認列，現金已在結帳的 pass 交易統計內，再加會重複；非現金（轉帳等）`recordDepositMovement` 自動略過。
 - 📌 **未處理的路徑**：建立計畫時的第1期（`createInstallmentPlan` 的 `firstPaymentMethod`）不加——課程插班的現金走「待收款頁確認」流程，確認時已寫現金補入；`transfers.js` 不碰分期，不會與本次改動重複。
 - 🧪 假館 `gym-e2e-test` 驗證：課程＋現金（單期100、一次繳清200）各寫一筆；課程＋轉帳、定期票＋現金皆不寫（測後清除）。
+
+## 目前進度（2026-10-17）— 林佑誠無法簽署：waiver 殘留「本人已簽」狀態（後端 `/health` `3.595.0-entry-docs-stale-waiver`）
+- 🐞 7/17 被退回重簽（舊版 `waiver/reset` 清錯欄位，9/27 才修）→ `isComplete=false` 但 `memberSignedAt` 殘留，`signEntryDocs` 判定兩份都已簽回 `ALREADY_COMPLETE`，簽署頁卻因 `isComplete=false` 顯示表單 → 送出必失敗，卡 3 個月。全庫僅此一筆，已清殘留欄位（備份 scratchpad）。
+- ✅ `signEntryDocs`：`needsWaiver` 加 `(!isComplete && !parentRequired)`——不需家長卻未完成＝矛盾殘留，視為缺 waiver 允許重簽；需家長者（等家長簽的正常狀態）不受影響。

@@ -178,10 +178,14 @@ const signEntryDocs = async ({
   // 兩個檢查互不相依 → 同時發出（2026-10-14）
   const [waiverSnap, hasConsent] = await Promise.all([
     db.collection(COLLECTIONS.WAIVERS)
-      .where(FieldPath.documentId(), '==', memberId).select('memberSignedAt').limit(1).get(),
+      .where(FieldPath.documentId(), '==', memberId).select('memberSignedAt', 'isComplete', 'parentRequired').limit(1).get(),
     fallTestService.hasConsentSignature(memberId),
   ]);
-  const needsWaiver = waiverSnap.empty || !waiverSnap.docs[0].data().memberSignedAt;
+  // 殘留狀態防呆（2026-10-17，林佑誠）：舊版 waiver/reset 沒清 memberSignedAt，留下「isComplete=false
+  // 但本人已簽時間仍在」且不需家長的矛盾資料 → 視為缺 waiver，允許重簽（需家長者 isComplete=false 是
+  // 正常的「等家長」，不可重簽）
+  const wd = waiverSnap.empty ? null : waiverSnap.docs[0].data();
+  const needsWaiver = !wd || !wd.memberSignedAt || (!wd.isComplete && !wd.parentRequired);
   const needsFallTest = !hasConsent;
 
   if (!needsWaiver && !needsFallTest) {

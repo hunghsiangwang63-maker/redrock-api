@@ -567,6 +567,24 @@ const SOURCE_PM_COLLECTION = { checkin: 'checkIns', rental: 'equipmentRentals', 
 const SOURCE_PM_TXN_TYPE = { checkin: 'checkin', rental: 'rental', product: 'product', competition: 'competition', experience: 'course' };
 const VALID_PAYMENT_METHODS = ['cash', 'transfer', 'linepay', 'jkopay', 'taiwanpay'];
 
+// 印完發票後才改付款方式（2026-10-19 紀永薇）：結帳的付款方式以「發票」為權威，所以來源單據改了、
+// 發票也要跟著改，否則結帳仍照舊（現金少算、電子支付多算）。只改該來源「單張」有效發票；
+// 合併發票（checkin_merged／product_merged）本來就依各筆來源拆分付款方式，不在此處理。
+async function syncDirectInvoicePaymentMethod(db, sourceType, refId, paymentMethod, now) {
+  try {
+    const snap = await db.collection('invoices')
+      .where('sourceType', '==', sourceType).where('refId', '==', refId).where('status', '==', 'issued').get();
+    const batch = db.batch();
+    let n = 0;
+    snap.docs.forEach(d => {
+      if (d.data().paymentMethod === paymentMethod) return;
+      batch.update(d.ref, { paymentMethod, paymentMethodCorrectionNote: '開票後於開票畫面更正付款方式，同步更新發票', updatedAt: now });
+      n++;
+    });
+    if (n) await batch.commit();
+  } catch (e) { console.error('[付款方式修正] 發票同步失敗:', e.message); }
+}
+
 router.put('/source-payment-method', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     const { sourceType, refId, paymentMethod } = req.body;
@@ -587,6 +605,7 @@ router.put('/source-payment-method', authenticate, requireManagerOrStation, asyn
           await updateRegistrationStatusByCourseMember(db, en.memberId, en.courseId, { paymentMethod });
         } catch (e) { console.error('[付款方式修正] 課程 header 同步失敗:', e.message); }
       }
+      await syncDirectInvoicePaymentMethod(db, sourceType, refId, paymentMethod, now);
       return res.json({ success: true, paymentMethod });
     }
 
@@ -607,6 +626,7 @@ router.put('/source-payment-method', authenticate, requireManagerOrStation, asyn
       }
     } catch (e) { console.error('[付款方式修正] 交易同步失敗:', e.message); }
 
+    await syncDirectInvoicePaymentMethod(db, sourceType, refId, paymentMethod, now);
     res.json({ success: true, paymentMethod });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

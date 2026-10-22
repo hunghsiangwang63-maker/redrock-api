@@ -634,3 +634,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 ## 目前進度（2026-10-17）— 林佑誠無法簽署：waiver 殘留「本人已簽」狀態（後端 `/health` `3.595.0-entry-docs-stale-waiver`）
 - 🐞 7/17 被退回重簽（舊版 `waiver/reset` 清錯欄位，9/27 才修）→ `isComplete=false` 但 `memberSignedAt` 殘留，`signEntryDocs` 判定兩份都已簽回 `ALREADY_COMPLETE`，簽署頁卻因 `isComplete=false` 顯示表單 → 送出必失敗，卡 3 個月。全庫僅此一筆，已清殘留欄位（備份 scratchpad）。
 - ✅ `signEntryDocs`：`needsWaiver` 加 `(!isComplete && !parentRequired)`——不需家長卻未完成＝矛盾殘留，視為缺 waiver 允許重簽；需家長者（等家長簽的正常狀態）不受影響。
+
+## 目前進度（2026-10-22）— 新竹矯正班 11-12月周三A班改週四（純資料，無程式異動）；Railway 速度檢查
+- ✅ **課程 `530fb8d2-703f-45c8-96d1-8aee55120400` 改為「矯正班 11-12月周四A班」**：週三 19:30–21:30 → **週四 20:00–21:30**，11/5–12/24 共 8 堂（原 11/4–12/23，堂數不變，所以每場次日期 +1 天即可，名單不用重排）；已有 2 人報名（鍾昀達、謝宗樺）。**依使用者指示不通知學員。**
+- 🔍 **為什麼不能只在員工端編輯課程**：`PUT /courses/:id` 改 `weekdays`／`startDate`／`endDate` **只改課程文件、不會搬場次**；只有 `startTime`／`endTime` 會連動場次與報名快照，`maxStudents` 連動場次。直接改會造成課程是週四、場次與報名仍是週三。
+- ✅ **做法（腳本，改前備份 scratchpad `backup-correct-wed-a.json`）**：課程（`weekdays:[4]`、日期、時間、`cohortName`、`name`）＋8 個 `courseSessions`（`date`+1、時間、`courseName`）＋16 筆 `courseEnrollments`（`date`+1、時間、`courseName`）＋2 筆 `courseRegistrations`（`courseName`）。共 27 份文件，改後讀回核對。事前查無 `scheduleShifts`／`scheduleEvents`／`courseAttendance`／`courseMakeupRights` 連到該課程，故無需搬動。腳本直接寫庫不會觸發 `invalidateCoursesCache`，課程快取最久約 5 分鐘、公開頁約 2 分鐘後更新。
+- ⚠️ 未確認：新竹 11/5 有全天「定線-F區」活動（`scheduleEvents`），是否影響晚間課未問；員工端／會員端畫面未實際查看。
+- 📌 **日後「課程改星期／整期日期」同型需求**：先查場次、報名（`date` 快照）、教練排班、點名、補課券是否連到該課程；若新舊場次數相同可逐場平移，否則需另行增刪場次與報名。
+- 📊 **Railway 速度檢查**（部署 `3.596.0`）：`/_diag/latency` 單筆讀取 51～72ms、延遲監測中位數 60ms（門檻 250ms），非慢實例；診斷請求本身 2.3 秒是內部 TCP 連線量測偶發約 1 秒所致，未深查。

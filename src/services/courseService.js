@@ -1445,6 +1445,8 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
   const course = cDoc.exists ? cDoc.data() : {};
   const rules = resolveRules(course, await getCategoryOf(db, course.categoryId));
   const expiresAt = makeupExpiryDayjs(course, rules, session.date).toDate();
+  // 每位正取學員發幾張：沿用班別「每次請假發幾張」（青少年進階班一堂 3 小時＝2 張，可補 2 次 1.5 小時課），預設 1
+  const perStudent = Math.max(1, Number(rules.makeupPerLeave) || 1);
 
   const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId)
     .select('status', 'isTrial', 'isMakeup', 'makeupId', 'experienceBookingId', 'memberId').get();
@@ -1480,16 +1482,18 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
     if (e.status === 'confirmed') {
       // 正取：報名標休館取消＋發豁免補課券（不佔請假配額、不受上限、reconcile 不收斂）
       await d.ref.update({ status: 'cancelled', cancelReason: 'closure', cancelledAt: now, updatedAt: now });
-      const rid = uuidv4();
-      await db.collection(MAKEUP_COLLECTION).doc(rid).set({
-        id: rid, memberId: e.memberId, originalEnrollmentId: d.id,
-        courseId: session.courseId, courseName: course.name || session.courseName || '',
-        categoryId: course.categoryId || null, gymId: course.gymId || session.gymId || null, tags: course.tags || [],
-        status: 'available', expiresAt, usedSessionId: null, usedAt: null,
-        source: 'closure', exempt: true, closureDate: session.date || null,
-        createdAt: now, updatedAt: now,
-      });
-      issued++;
+      for (let n = 0; n < perStudent; n++) {
+        const rid = uuidv4();
+        await db.collection(MAKEUP_COLLECTION).doc(rid).set({
+          id: rid, memberId: e.memberId, originalEnrollmentId: d.id,
+          courseId: session.courseId, courseName: course.name || session.courseName || '',
+          categoryId: course.categoryId || null, gymId: course.gymId || session.gymId || null, tags: course.tags || [],
+          status: 'available', expiresAt, usedSessionId: null, usedAt: null,
+          source: 'closure', exempt: true, closureDate: session.date || null,
+          createdAt: now, updatedAt: now,
+        });
+        issued++;
+      }
       if (e.memberId) notifyMap.set(e.memberId, 'issued');
     }
     // leave/waitlist：一併標休館取消（請假者本就有配額補課券、reconcile 會依剩餘請假數收斂）

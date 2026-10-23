@@ -676,5 +676,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **有家庭成員**：點快速入場先跳「選擇入場人員」選單（本人＋子會員，`selfEntrySkipped` 的本人不列），已設定者顯示「身分・方案 ⚡」一鍵產 QR，未設定者走一般流程並預選該成員。舊版（一帳號一份）若把子會員的選擇存在本人那格，本人這格會忽略。
   - 🧪 驗證：把 `buildMethods`／`resolveQuick` 原始碼直接取出，用假資料跑 16 種情境（黑卡/優惠券/入場券用罄、身分消失、定期票過期、免費資格變更、付款方式停用或缺漏、租借＋付款…），行為皆符合預期；**畫面、記憶存取、`?quick=1&who=` 帶入、子會員清單載入後才驗票、產 QR 失敗改顯示警示頁等串接都沒實際走過**。
   - 順手修：快速入場產 QR 時粉袋租借狀態沒帶回畫面（合計少算 NT$50），`handleGenerateQR` 成功後補 `setRentChalk`。
-- 📌 線上付款（街口 `onlineFlows.entry`）仍關閉；入場頁的線上付款與「付款後自動產 QR」程式碼仍在（休眠），使用者說線上付款現在都不用了，**尚未決定是否清掉**。
+- 📌 線上付款（街口 `onlineFlows.entry`）仍關閉；入場頁休眠的線上付款程式碼已於同日清掉（redrock-web `a80ec2a`：PaymentFlow／onlinePay／?paid=1／justPaid 等；`autoGenQR` 與 `passContractRef` 保留）。
 - 📌 同日另一段作業（本 session 前半）：Meta Business Suite 粉專快速回覆更新（連結改 app.redrocktaiwan.com、常見問題 2 請假補課規則、營業時間與優惠票價）；紅石會員 App 新手教學資訊圖（SVG→PNG，含 QR、小紅石吉祥物；檔案在 `~/Documents/Codex/2026-10-23/3-4-app-app-redrocktaiwan-com/outputs/`）與 FB／IG 文案——皆非 repo 內容。
+
+
+## 目前進度（2026-10-23 續2）— 颱風停課（10/23、10/24）：新竹、士林未使用補課券到期日延後一週（純資料，無程式異動）
+> 使用者指示：「因 10/23、10/24 颱風停課，新竹、士林紅石已發出的補課券，在 10/22 後到期者，到期日都延後一週。」
+- ✅ **範圍**：`courseMakeupRights` 中 `gymId` 為 `gym-hsinchu`／`gym-shilin`、`status:'available'`（未使用）、到期日（台灣日）> 2026-10-22 者，共 **100 張**（來源：reconcile 59、closure 30、manual 6、prev_leave 5）。`expiresAt` 全部 +7 天（保留原時分，台灣 00:00），改後逐張核對差皆為 7 天；最近一批 10/23→10/30、10/25→11/1、10/29→11/5，最遠 2027-03-02→03-09。
+- ✅ **留痕**：每張加 `originalExpiresAt`（原到期日）、`typhoon1023Extended:true`（防重複套用）、`expiryNote`、`updatedAt`。備份（改前到期日）在 `~/Documents/Codex/2026-10-23/3-4-app-app-redrocktaiwan-com/work/backup-typhoon-rights.json`（非 repo 內，要長期保留請另存）。
+- ⚠️ **刻意沒動**：已使用／已作廢的券；到期日早於 10/22 但狀態仍是 available 的過期券（如 9/30、8/15，不復活）；無 `gymId` 的 2 張 available（7/31、8/31，已過期）；跨期補課待安排（`crossCohortMakeups`）的 `deadline`／`autoIssue.expiresAt`；課程的 `makeupDeadlineDate`（日後 `reconcileMakeupEntitlement` 復活／新建券仍依課程設定算到期日，不會帶這 7 天）。
+- 📌 **範圍解讀**：「10/22 後到期」＝所有 10/23 以後到期者（含 12 月到隔年 3 月），使用者說「都延後一週」；若只想延近期到期的，可依 `typhoon1023Extended`＋`originalExpiresAt` 把遠期的還原。**未通知學員、未另發停課補課券。**
+- 📌 **日後類似「全面延補課券效期」**：先唯讀試算（依 gymId／status／到期日分組列張數與來源）→備份→批次更新（每批 ≤400）→以標記欄位回查核對；`expiresAt` 台灣 00:00 存成前一日 16:00Z，別用日期字串直接加。

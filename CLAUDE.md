@@ -656,3 +656,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 > 使用者要求「編輯比賽資訊中的賽事說明、同意書內容（繁中）要跟編輯班別課程說明一樣可以放大」。
 - ✅ `CompetitionsPage.jsx` 賽事編輯表單兩個 `textarea`：`resize:'none'` 改 `'vertical'`（右下角可拖曳），並補 `fontFamily:'inherit'`、`lineHeight:1.7`（同課程說明）；預設高度賽事說明 3→4 行、同意書（繁中）4→8 行。其餘文字框（退費政策、報名原因等）未動。
 - 🧪 build 兩 target 成功、部署後 `staff.redrocktaiwan.com/version.json` 與本機一致（`staff-f4bec5d52dbcf433`）；commit 在 redrock-web（先 commit 再 build＋deploy）。**未實際登入員工端拖曳驗證。**
+
+## 目前進度（2026-10-23）— 單堂休館停課：Email 通知＋補寄端點＋會員首頁提醒（後端 `/health` `3.599.0-closure-home-reminder`）
+> commit `a7d0abc`（寄信）、`d5dbfef`（補寄端點，版本 `3.598.0`）、`7969329`（首頁提醒）。**前兩筆是同日另一段作業完成，本段只依 git diff 記錄**；首頁提醒是本 session 做的。
+- ✅ **停課寄 Email**（`courseService.closureCancelSession` → `sendClosureEmails`）：對受影響學員（正取＝已發補課券 `issued`、補課學員＝券已還原 `restored`）背景寄信，子會員無信箱用家長信箱，失敗只記 log；寄完在場次寫 `closureNoticeSentAt`。`emailService.sendCourseClosureNotice`。
+- ✅ **補寄端點**（`courses.js`→`resendClosureNotices`）：停課當時沒寄的場次可補寄；場次需為 `cancelled`、預設已寄過（`closureNoticeSentAt`）會擋 `ALREADY_NOTIFIED`，`force` 才重寄。收件人由報名 `status:cancelled`＋`cancelReason:closure`（排除試上）重建。
+- ✅ **會員首頁提醒**（`memberReminderService.upsertClosureReminder`，由 `sendClosureEmails` 在寄信前呼叫，失敗不影響寄信）：沿用既有 `memberHomeReminders`（首頁「課程活動提醒」輪播，**前端免改**）。標題「🚫 ○○班 MM/DD 休館停課」、副標含時段與「已發補課券／補課券已還原」；`showFrom`＝停課當下、`showUntil`＝上課當天；固定 doc id `closure_<sessionId>_<對象id>`（同場次同對象只一則，重複呼叫＝覆寫）；`sourceType:'closure_notice'`。**子會員（`isChildAccount`）的提醒掛在家長 id**（`GET /member-reminders/my` 只讀登入者本人 id，子會員沒有自己的登入），標題前加孩子姓名；停課日已過（補寄舊場次）不建。
+- 🧪 **驗證（如實）**：用假 id 在真實 Firestore 測 `upsertClosureReminder`（標題/副標、家長帳號查得到、過期日期回 null），測後已刪除；**完整停課流程未實際跑**（會動真實課程），會員端首頁畫面未登入看過。補寄端點補建首頁提醒的路徑同一函式，未單獨測。
+- 📊 **部署後速度（10:08）**：單筆讀取 56～74ms、連讀 5 次 272ms、監測中位數 98ms（門檻 250ms），非慢實例，免換。

@@ -664,3 +664,17 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **會員首頁提醒**（`memberReminderService.upsertClosureReminder`，由 `sendClosureEmails` 在寄信前呼叫，失敗不影響寄信）：沿用既有 `memberHomeReminders`（首頁「課程活動提醒」輪播，**前端免改**）。標題「🚫 ○○班 MM/DD 休館停課」、副標含時段與「已發補課券／補課券已還原」；`showFrom`＝停課當下、`showUntil`＝上課當天；固定 doc id `closure_<sessionId>_<對象id>`（同場次同對象只一則，重複呼叫＝覆寫）；`sourceType:'closure_notice'`。**子會員（`isChildAccount`）的提醒掛在家長 id**（`GET /member-reminders/my` 只讀登入者本人 id，子會員沒有自己的登入），標題前加孩子姓名；停課日已過（補寄舊場次）不建。
 - 🧪 **驗證（如實）**：用假 id 在真實 Firestore 測 `upsertClosureReminder`（標題/副標、家長帳號查得到、過期日期回 null），測後已刪除；**完整停課流程未實際跑**（會動真實課程），會員端首頁畫面未登入看過。補寄端點補建首頁提醒的路徑同一函式，未單獨測。
 - 📊 **部署後速度（10:08）**：單筆讀取 56～74ms、連讀 5 次 272ms、監測中位數 98ms（門檻 250ms），非慢實例，免換。
+
+## 目前進度（2026-10-23 續）— 家庭成員墜測影片可省略＋補課選單可報兒童賽＋首頁八格改版與「快速入場」（後端 `/health` `3.600.0-family-video-waive`；前端 buildId `member-067df1b208d57997`）
+> 後端 commit `b14d75b`；前端(redrock-web) `9d27cf0`、`1ba3307`、`8828f2d`、`a0a188f`、`2b4b44e`、`bb29ec0`。**會員端畫面全部僅 build＋部署，未實際登入點過**（我不能替使用者輸入密碼、使用者當下遠端無法操作；測試帳號 0900123123 沒登入過）。
+- ✅ **家長名下已有人看完安全影片，第二位起的子會員省略影片**（`fallTestService.familyVideoWatched`、`signConsent` 寫 `videoWaived:'family'`；`GET /fall-tests/video-waived/:memberId`；簽署頁 `MemberWaiverPage` 省略影片區塊）：勾選段落與簽名照舊；判定＝同一位家長名下任何人（含家長自己）已有 `watchPercent≥門檻` 的簽署紀錄。
+- ✅ **補課選單（「我的課程→補課資格→選擇補課」）列出開放報名中的兒童賽**（`MemberCoursesPage`）：每場一顆「報名比賽」→ `/member/competitions?comp=<id>`，報名表第一步用既有「使用補課券抵費」（後端 10/07 已有，沒動）。**決策：兒童賽（`competitionType:'kids'`）一律可用補課券抵費，不做逐場開關**；身份收費賽／一般賽不可。補課券屬小朋友時，報名表要先選對報名對象。
+- ✅ **首頁八格改版**（`MemberHomePage`）：比賽報名＋體驗課程合併成「📝 報名」一格（點開底部選單：課程報名／體驗課程／比賽報名）；空出的格放在入場 QR 旁，是「⚡ 快速入場」（**格子下方不放小字**，會讓八格高度不一）。**路由與分享連結全部沒變**（`/member/courses?course=`、`/member/competitions?comp=`、`/member/experience` 等；站內通知與首頁提醒卡的連結也不受影響），只是首頁入口收在一起。
+- ✅ **快速入場**（`MemberQRPage` `?quick=1&who=<人員id>`、`utils/quickEntry.js`）：記住「每位入場人員」常用的入場選擇，**只存這台裝置 localStorage**（`memberQuickEntry_<登入者id>[_<人員id>]`）；記場館、身分、方案（單次付費／優惠券／黑卡／紅利／入場券／免費資格）、租借、付款方式；**不記**購買定期票／優惠券、友館隊員／特約廠商優惠、續約、線上付款自動產的 QR。租借器材步驟有預設勾選的「記住這次的選擇」。
+  - 按快速入場→**重新向後端 `/checkin/verify`** 後比對即時資格（`resolveQuick`＋抽出共用的 `buildMethods`）：仍可用→自動產 QR；黑卡／優惠券／紅利／入場券用罄、身分消失、免費資格（定期票、課程學員）失效或類型改變、付款方式被停用、產 QR 失敗→停在「⚠️ 無法使用快速入場」頁，寫明原因，「重新選擇入場方式」「清除快速入場設定」。入場人員已不在家庭成員→頁首黃色提示走一般流程。**不比對價格**（單次價變了直接用新價）。
+  - 快速入場產的 QR 頁多一顆「更改付款方式並重新產生 QR」（只在有付款相關時顯示；回到選付款方式頁、其餘選擇不變，新付款方式變成新的預設）。
+  - **有家庭成員**：點快速入場先跳「選擇入場人員」選單（本人＋子會員，`selfEntrySkipped` 的本人不列），已設定者顯示「身分・方案 ⚡」一鍵產 QR，未設定者走一般流程並預選該成員。舊版（一帳號一份）若把子會員的選擇存在本人那格，本人這格會忽略。
+  - 🧪 驗證：把 `buildMethods`／`resolveQuick` 原始碼直接取出，用假資料跑 16 種情境（黑卡/優惠券/入場券用罄、身分消失、定期票過期、免費資格變更、付款方式停用或缺漏、租借＋付款…），行為皆符合預期；**畫面、記憶存取、`?quick=1&who=` 帶入、子會員清單載入後才驗票、產 QR 失敗改顯示警示頁等串接都沒實際走過**。
+  - 順手修：快速入場產 QR 時粉袋租借狀態沒帶回畫面（合計少算 NT$50），`handleGenerateQR` 成功後補 `setRentChalk`。
+- 📌 線上付款（街口 `onlineFlows.entry`）仍關閉；入場頁的線上付款與「付款後自動產 QR」程式碼仍在（休眠），使用者說線上付款現在都不用了，**尚未決定是否清掉**。
+- 📌 同日另一段作業（本 session 前半）：Meta Business Suite 粉專快速回覆更新（連結改 app.redrocktaiwan.com、常見問題 2 請假補課規則、營業時間與優惠票價）；紅石會員 App 新手教學資訊圖（SVG→PNG，含 QR、小紅石吉祥物；檔案在 `~/Documents/Codex/2026-10-23/3-4-app-app-redrocktaiwan-com/outputs/`）與 FB／IG 文案——皆非 repo 內容。

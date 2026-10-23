@@ -1453,6 +1453,7 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
   const now = new Date();
   let issued = 0, makeupRestored = 0, trialAffected = 0;
   const notifyMap = new Map(); // memberId → 'issued' | 'restored'（停課後寄信通知）
+  const leaveEntries = []; // 請假狀態的學員：停課後 reconcile 會收回其請假補課券，需補發停課券（見下方）
   for (const d of enSnap.docs) {
     const e = d.data();
     if (!['confirmed', 'leave', 'waitlist'].includes(e.status)) continue;
@@ -1496,9 +1497,11 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
       }
       if (e.memberId) notifyMap.set(e.memberId, 'issued');
     }
-    // leave/waitlist：一併標休館取消（請假者本就有配額補課券、reconcile 會依剩餘請假數收斂）
+    // leave/waitlist：一併標休館取消。請假者的請假補課券會被 reconcile 依剩餘請假數收回（這堂請假隨場次取消而失效），
+    // 若不補發停課券，請假者反而什麼都沒有（正取學員卻有）——2026-10-23 曾郁淇案例；補發規則見下方 leaveEntries。
     if (e.status !== 'confirmed') {
       await d.ref.update({ status: 'cancelled', cancelReason: 'closure', cancelledAt: now, updatedAt: now });
+      if (e.status === 'leave' && e.memberId) leaveEntries.push({ memberId: e.memberId, enrollmentId: d.id });
     }
     // 這筆場次剛好是這位會員報名 header 的 payEnrollmentId → 頂替到另一筆仍有效的場次（見上方說明）
     await repointPayEnrollmentIfNeeded(db, e.memberId, session.courseId, d.id);
@@ -1511,8 +1514,29 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
   await syncCourseSessionCount(db, session.courseId, -1, now);
   // 請假者配額重算（該堂請假因場次取消而失效 → 額度收斂）
   const leaveMembers = [...new Set(enSnap.docs.map(d => d.data()).filter(e => e.status === 'leave').map(e => e.memberId))];
+  const reconcileResult = new Map();
   for (const mid of leaveMembers) {
-    await reconcileMakeupEntitlement(db, mid, session.courseId).catch(() => {});
+    const rec = await reconcileMakeupEntitlement(db, mid, session.courseId).catch(() => null);
+    reconcileResult.set(mid, rec);
+  }
+  // 請假者補發停課券（與正取學員同張數）：若其「已使用」的補課券超過重算後的額度（used > entitlement），代表他已用掉
+  // 這堂請假產生的券去補課，不再重複補償；否則（請假券未用／已被收回）補發 perStudent 張。
+  for (const { memberId, enrollmentId } of leaveEntries) {
+    const rec = reconcileResult.get(memberId);
+    if (rec && rec.used > rec.entitlement) continue;
+    for (let n = 0; n < perStudent; n++) {
+      const rid = uuidv4();
+      await db.collection(MAKEUP_COLLECTION).doc(rid).set({
+        id: rid, memberId, originalEnrollmentId: enrollmentId,
+        courseId: session.courseId, courseName: course.name || session.courseName || '',
+        categoryId: course.categoryId || null, gymId: course.gymId || session.gymId || null, tags: course.tags || [],
+        status: 'available', expiresAt, usedSessionId: null, usedAt: null,
+        source: 'closure', exempt: true, closureDate: session.date || null,
+        createdAt: now, updatedAt: now,
+      });
+      issued++;
+    }
+    if (!notifyMap.has(memberId)) notifyMap.set(memberId, 'issued');
   }
   // 通知學員：寄 Email；背景執行，失敗只記 log，不影響停課結果
   if (notifyMap.size) {

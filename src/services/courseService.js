@@ -1374,6 +1374,61 @@ const repointPayEnrollmentIfNeeded = async (db, memberId, courseId, cancelledEnr
   } catch (e) { console.error('[repointPayEnrollmentIfNeeded]', e.message); }
 };
 
+// 休館停課通知信：entries＝Map(memberId → {voucher:'issued'|'restored', expiresAt})；子會員無信箱用家長的。
+// 回傳 {sent, skippedNoEmail}；單人失敗只記 log。
+const sendClosureEmails = async (db, session, course, entries) => {
+  const emailService = require('./emailService');
+  let sent = 0, skippedNoEmail = 0;
+  for (const [mid, { voucher, expiresAt }] of entries) {
+    try {
+      const mDoc = await db.collection('members').doc(mid).get();
+      const m = mDoc.exists ? mDoc.data() : {};
+      let to = m.email || '';
+      if (!to && m.parentMemberId) {
+        const pDoc = await db.collection('members').doc(m.parentMemberId).get();
+        to = pDoc.exists ? (pDoc.data().email || '') : '';
+      }
+      if (!to) { skippedNoEmail++; continue; }
+      await emailService.sendCourseClosureNotice({
+        email: to, memberName: m.name || '', gymId: course.gymId || session.gymId || null,
+        courseName: course.name || session.courseName || '', date: session.date,
+        startTime: session.startTime, endTime: session.endTime, voucher, expiresAt,
+      });
+      sent++;
+    } catch (err) { console.error('[休館停課-學員通知]', mid, err.message); }
+  }
+  return { sent, skippedNoEmail };
+};
+
+// 補寄已停課場次的通知信（停課當時沒寄的）。預設已寄過就擋（防重複），force 才重寄。
+const resendClosureNotices = async ({ sessionId, force }) => {
+  const db = getDb();
+  const sDoc = await db.collection(SESSION_COLLECTION).doc(sessionId).get();
+  if (!sDoc.exists) throw { code: 'SESSION_NOT_FOUND' };
+  const session = sDoc.data();
+  if (session.status !== 'cancelled') throw { code: 'NOT_CANCELLED', message: '此場次未取消' };
+  if (session.closureNoticeSentAt && !force) throw { code: 'ALREADY_NOTIFIED', message: '此場次已寄過停課通知' };
+  const cDoc = await db.collection(COURSE_COLLECTION).doc(session.courseId).get();
+  const course = cDoc.exists ? cDoc.data() : {};
+  const enSnap = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId).get();
+  const entries = new Map();
+  for (const d of enSnap.docs) {
+    const e = d.data();
+    if (e.status !== 'cancelled' || e.cancelReason !== 'closure' || e.isTrial || !e.memberId) continue;
+    let rightDoc = null;
+    if (e.isMakeup && e.makeupId) rightDoc = await db.collection(MAKEUP_COLLECTION).doc(e.makeupId).get();
+    else if (!e.isMakeup) {
+      const rs = await db.collection(MAKEUP_COLLECTION).where('originalEnrollmentId', '==', d.id).get();
+      rightDoc = rs.docs.find(x => x.data().source === 'closure') || null;
+    }
+    const expiresAt = rightDoc && rightDoc.exists ? (rightDoc.data().expiresAt?.toDate?.() || null) : null;
+    if (!entries.has(e.memberId) || !e.isMakeup) entries.set(e.memberId, { voucher: e.isMakeup ? 'restored' : 'issued', expiresAt });
+  }
+  const r = await sendClosureEmails(db, session, course, entries);
+  await sDoc.ref.update({ closureNoticeSentAt: new Date() });
+  return { ...r, recipients: entries.size, sessionDate: session.date, courseName: course.name || '' };
+};
+
 const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) => {
   const db = getDb();
   const sDoc = await db.collection(SESSION_COLLECTION).doc(sessionId).get();
@@ -1449,28 +1504,12 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
   for (const mid of leaveMembers) {
     await reconcileMakeupEntitlement(db, mid, session.courseId).catch(() => {});
   }
-  // 通知學員：寄 Email（子會員無信箱用家長的）；背景執行，失敗只記 log，不影響停課結果
+  // 通知學員：寄 Email；背景執行，失敗只記 log，不影響停課結果
   if (notifyMap.size) {
-    (async () => {
-      const emailService = require('./emailService');
-      for (const [mid, voucher] of notifyMap) {
-        try {
-          const mDoc = await db.collection('members').doc(mid).get();
-          const m = mDoc.exists ? mDoc.data() : {};
-          let to = m.email || '';
-          if (!to && m.parentMemberId) {
-            const pDoc = await db.collection('members').doc(m.parentMemberId).get();
-            to = pDoc.exists ? (pDoc.data().email || '') : '';
-          }
-          if (!to) continue;
-          await emailService.sendCourseClosureNotice({
-            email: to, memberName: m.name || '', gymId: course.gymId || session.gymId || null,
-            courseName: course.name || session.courseName || '', date: session.date,
-            startTime: session.startTime, endTime: session.endTime, voucher, expiresAt,
-          });
-        } catch (err) { console.error('[休館停課-學員通知]', mid, err.message); }
-      }
-    })();
+    const entries = new Map([...notifyMap].map(([mid, voucher]) => [mid, { voucher, expiresAt }]));
+    sendClosureEmails(db, session, course, entries)
+      .then(() => sDoc.ref.update({ closureNoticeSentAt: new Date() }))
+      .catch(err => console.error('[休館停課-學員通知]', err.message));
   }
   return { issued, makeupRestored, trialAffected, notified: notifyMap.size, sessionDate: session.date, courseName: course.name || '' };
 };
@@ -3324,6 +3363,7 @@ module.exports = {
   cancelMakeup,
   cancelWorkshopEnrollment,
   closureCancelSession,
+  resendClosureNotices,
   reconcileMakeupEntitlement,
   issueManualMakeupCredit,
   promoteWaitlist,

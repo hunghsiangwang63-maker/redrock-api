@@ -457,6 +457,21 @@ router.post('/sessions/:sessionId/closure-cancel',
   }
 );
 
+// POST /courses/sessions/:sessionId/closure-notify - 補寄休館停課通知信（已寄過預設擋，body.force 才重寄）
+router.post('/sessions/:sessionId/closure-notify',
+  authenticate, checkPermission('courses.manage'), auditLog('session.closure_notify'),
+  async (req, res) => {
+    try {
+      const result = await courseService.resendClosureNotices({ sessionId: req.params.sessionId, force: !!req.body?.force });
+      res.json({ success: true, ...result });
+    } catch (err) {
+      if (err.code === 'SESSION_NOT_FOUND') return res.status(404).json(err);
+      if (err.code) return res.status(400).json(err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  }
+);
+
 // POST /courses/cross-makeups/:id/done - 跨期補課結案（上完課標 done；名單顯示為出席）
 router.post('/cross-makeups/:id/done',
   authenticate, checkPermission('courses.manage'), auditLog('cross_makeup.done'),

@@ -701,3 +701,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
   - **驗證**：假館假課程（班別＝青少年進階班）三人：請假且券未用→2 張停課券（原請假券 `over_limit` 作廢）、請假且券已用→不補、正取→2 張；測後清空。
   - ⚠️ 補發的曾郁淇與 10/24 其他停課券一樣**沒另行通知**學員；`reconcile` 對 `used` 的判斷是「非豁免券已用數」，若該生用的是別堂請假產生的券也會被視為已用而不補（邊界情況，已知）。
   - 📌 **曾郁淇請假次數**：10/24 那筆報名停課後已是 `cancelled/closure`，不算請假（請假次數＝該課程 `status:'leave'` 的報名數）；她這班 21 堂只剩 10/24 取消、其餘 20 堂正取，請假次數 **0**。報名上殘留的 `leaveAt` 只是舊紀錄，不影響計算；停課券為豁免券，不佔請假額度。**日後查「某人請假幾次」看 `status:'leave'` 的報名，別看 `leaveAt`。**
+
+## 目前進度（2026-10-23 續4）— 新竹矯正班 11-12月周四A班停開：鍾昀達改掛周三B、謝宗樺代填退費單、停用該班（純資料，無程式異動）
+> 使用者指示：周四A班因故停開，鍾昀達改至周三B班；謝宗樺代填退費單（原因：其他事由致難以履約，台新銀行 812、帳號 20521070199043）；楊雅雯已自填退費申請；以上完成後把周四A班設為停用。課程 id：周四A `530fb8d2-703f-45c8-96d1-8aee55120400`、周三B `7ff66925-5c8a-4612-905d-2d381202ffee`（max 2、8 堂 11/4–12/23 20:30–22:00、教練晉瑋）。
+- ✅ **鍾昀達改掛周三B班（腳本直接改資料，改前備份 `~/Documents/Codex/2026-10-23/3-4-app-app-redrocktaiwan-com/work/backup-zhong-move.json`，非 repo 內）**：系統沒有「換班」功能（`transfer-request` 是「人對人轉讓」），沿用 2026-07-19 林依岑「改掛」SOP 的精神，但改成**原文件改指向**而非取消重建：8 筆 `courseEnrollments` 依日期順序一對一改指周三B 的 8 個場次（`courseId`／`sessionId`／`date`／`startTime`／`endTime`／`courseName`，`gymAccessStart`＝場次當天、`gymAccessEnd`＝隔天，加 `movedFromCourseId`／`movedFromDate`／`moveNote`）；報名總表 header 改 `courseId`／`courseName`（`sourceEnrollmentIds`／`payEnrollmentId` 不變，所以付款狀態、費用 7,560〔攀岩隊員 9 折〕、已確認匯款全部沿用，沒有重收費）；`transferRecords` 與 `transactions`（`relatedId`＝新 courseId、備註改班名）同步；兩班場次 `enrolledCount` 周四A −1、周三B +1。改後讀回：鍾在周三B 8 堂 confirmed、周四A 0 筆、header 指向周三B。
+- ⚠️ **周三B 因此 3/2（超收 1 位）**：原本已 2/2 額滿（葉育昕、蔡宗錞），使用者指示直接移入。**鍾已簽的課程合約仍是舊班別、上課時間由週四 20:00 變週三 20:30，未重發合約、未通知學員。**
+- ✅ **謝宗樺退費單（走正式 `POST /course-adjustments/enrollments/:id/refund-request`，員工 token 帶 `memberId`）**：`crefund_1792765541118_l7q8`，`reasonKey:'other'`（其他事由致難以履約），退款帳戶 812 台新銀行 20521070199043，**戶名未提供留空**（審核時要補）；建議退 8,400（開課前手續費 0%、剩 8/8 堂），狀態 pending、**未核准**；其 8 筆報名依規則凍結（`refundPending`）。
+- 📌 **楊雅雯（`crefund_1792765149266_hyy6`，10/23 22:19 自填，建議退 7,560、郵局 700）維持待審核，未動。⚠️ 她的轉帳 7,560 在 `transferRecords` 仍是 pending（未確認收款）**——核准退費前要先確認她是否真的匯款，否則會退一筆沒收到的錢。
+- ✅ **周四A班停用**：`PUT /courses/:id {isActive:false}`（員工端「停用」同一支 API：會員課程總覽隱藏，不通知學員、不動報名）。狀態讀回 `isActive:false`、`status:'active'`；剩謝宗樺、楊雅雯各 8 筆 confirmed（凍結）。
+- 📌 **日後「班停開、學員改去別班」**：先查目標班是否額滿；移動＝8 堂報名依序改指新班場次＋header／匯款／交易同步＋兩邊場次人數增減；已確認匯款的費用不重收、不退；要退費的人走 `refund-request`（可由員工代填，銀行資料需使用者提供）；最後才停用舊班。合約與通知需另外決定。

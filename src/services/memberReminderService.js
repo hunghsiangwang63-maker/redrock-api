@@ -143,7 +143,32 @@ async function broadcastToCourseEnrollees(courseId, payload, staff) {
   return batchCreateForMembers(memberIds, payload, staff, 'course_broadcast', courseId, '📚');
 }
 
+// 休館停課：對受影響學員的首頁提醒（顯示到上課當天）。子會員提醒掛在家長帳號（子會員沒有自己的登入）。
+// 固定 doc id＝同場次同對象只會有一則（重複呼叫是覆寫、不會重複）；停課日已過則不建。
+async function upsertClosureReminder({ sessionId, memberId, parentMemberId, memberName, courseName, date, startTime, endTime, voucher }) {
+  const today = taiwanToday();
+  if (!date || date < today) return null;
+  const targetId = parentMemberId || memberId;
+  const who = parentMemberId && memberName ? `${memberName} ` : '';
+  const time = startTime ? `${startTime}${endTime ? '～' + endTime : ''}` : '';
+  const voucherText = voucher === 'restored' ? '您的補課券已還原，可重新安排補課。' : '已發補課券，可至「課程」安排補課。';
+  const now = new Date();
+  const id = `closure_${sessionId}_${targetId}`;
+  const data = {
+    memberId: targetId,
+    title: `${who}${courseName || '課程'} ${date.slice(5).replace('-', '/')} 休館停課`,
+    subtitle: `${time ? time + ' 該堂停課。' : '該堂停課。'}${voucherText}`.slice(0, 200),
+    icon: '🚫', link: null, imageUrl: null,
+    showFrom: today, showUntil: date,
+    sourceType: 'closure_notice', sourceId: sessionId,
+    createdBy: null, createdByName: '系統', createdAt: now, updatedAt: now,
+  };
+  await getDb().collection(COLLECTION).doc(id).set(data);
+  return { id, ...data };
+}
+
 module.exports = {
+  upsertClosureReminder,
   createReminder,
   updateReminder,
   deleteReminder,

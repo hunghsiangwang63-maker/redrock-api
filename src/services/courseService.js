@@ -1376,13 +1376,19 @@ const repointPayEnrollmentIfNeeded = async (db, memberId, courseId, cancelledEnr
 
 // 休館停課通知信：entries＝Map(memberId → {voucher:'issued'|'restored', expiresAt})；子會員無信箱用家長的。
 // 回傳 {sent, skippedNoEmail}；單人失敗只記 log。
-const sendClosureEmails = async (db, session, course, entries) => {
+const sendClosureEmails = async (db, sessionId, session, course, entries) => {
   const emailService = require('./emailService');
   let sent = 0, skippedNoEmail = 0;
   for (const [mid, { voucher, expiresAt }] of entries) {
     try {
       const mDoc = await db.collection('members').doc(mid).get();
       const m = mDoc.exists ? mDoc.data() : {};
+      // 會員 App 首頁提醒（失敗不影響寄信）
+      await require('./memberReminderService').upsertClosureReminder({
+        sessionId, memberId: mid, parentMemberId: m.isChildAccount ? m.parentMemberId : null,
+        memberName: m.name || '', courseName: course.name || session.courseName || '', date: session.date,
+        startTime: session.startTime, endTime: session.endTime, voucher,
+      }).catch(err => console.error('[休館停課-首頁提醒]', mid, err.message));
       let to = m.email || '';
       if (!to && m.parentMemberId) {
         const pDoc = await db.collection('members').doc(m.parentMemberId).get();
@@ -1424,7 +1430,7 @@ const resendClosureNotices = async ({ sessionId, force }) => {
     const expiresAt = rightDoc && rightDoc.exists ? (rightDoc.data().expiresAt?.toDate?.() || null) : null;
     if (!entries.has(e.memberId) || !e.isMakeup) entries.set(e.memberId, { voucher: e.isMakeup ? 'restored' : 'issued', expiresAt });
   }
-  const r = await sendClosureEmails(db, session, course, entries);
+  const r = await sendClosureEmails(db, sessionId, session, course, entries);
   await sDoc.ref.update({ closureNoticeSentAt: new Date() });
   return { ...r, recipients: entries.size, sessionDate: session.date, courseName: course.name || '' };
 };
@@ -1507,7 +1513,7 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
   // 通知學員：寄 Email；背景執行，失敗只記 log，不影響停課結果
   if (notifyMap.size) {
     const entries = new Map([...notifyMap].map(([mid, voucher]) => [mid, { voucher, expiresAt }]));
-    sendClosureEmails(db, session, course, entries)
+    sendClosureEmails(db, sessionId, session, course, entries)
       .then(() => sDoc.ref.update({ closureNoticeSentAt: new Date() }))
       .catch(err => console.error('[休館停課-學員通知]', err.message));
   }

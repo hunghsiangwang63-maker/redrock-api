@@ -1389,6 +1389,7 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
     .select('status', 'isTrial', 'isMakeup', 'makeupId', 'experienceBookingId', 'memberId').get();
   const now = new Date();
   let issued = 0, makeupRestored = 0, trialAffected = 0;
+  const notifyMap = new Map(); // memberId → 'issued' | 'restored'（停課後寄信通知）
   for (const d of enSnap.docs) {
     const e = d.data();
     if (!['confirmed', 'leave', 'waitlist'].includes(e.status)) continue;
@@ -1412,6 +1413,7 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
           makeupRestored++;
         }
       }
+      if (e.memberId && !notifyMap.has(e.memberId)) notifyMap.set(e.memberId, 'restored');
       continue;
     }
     if (e.status === 'confirmed') {
@@ -1427,6 +1429,7 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
         createdAt: now, updatedAt: now,
       });
       issued++;
+      if (e.memberId) notifyMap.set(e.memberId, 'issued');
     }
     // leave/waitlist：一併標休館取消（請假者本就有配額補課券、reconcile 會依剩餘請假數收斂）
     if (e.status !== 'confirmed') {
@@ -1446,7 +1449,30 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
   for (const mid of leaveMembers) {
     await reconcileMakeupEntitlement(db, mid, session.courseId).catch(() => {});
   }
-  return { issued, makeupRestored, trialAffected, sessionDate: session.date, courseName: course.name || '' };
+  // 通知學員：寄 Email（子會員無信箱用家長的）；背景執行，失敗只記 log，不影響停課結果
+  if (notifyMap.size) {
+    (async () => {
+      const emailService = require('./emailService');
+      for (const [mid, voucher] of notifyMap) {
+        try {
+          const mDoc = await db.collection('members').doc(mid).get();
+          const m = mDoc.exists ? mDoc.data() : {};
+          let to = m.email || '';
+          if (!to && m.parentMemberId) {
+            const pDoc = await db.collection('members').doc(m.parentMemberId).get();
+            to = pDoc.exists ? (pDoc.data().email || '') : '';
+          }
+          if (!to) continue;
+          await emailService.sendCourseClosureNotice({
+            email: to, memberName: m.name || '', gymId: course.gymId || session.gymId || null,
+            courseName: course.name || session.courseName || '', date: session.date,
+            startTime: session.startTime, endTime: session.endTime, voucher, expiresAt,
+          });
+        } catch (err) { console.error('[休館停課-學員通知]', mid, err.message); }
+      }
+    })();
+  }
+  return { issued, makeupRestored, trialAffected, notified: notifyMap.size, sessionDate: session.date, courseName: course.name || '' };
 };
 
 // ── 取消補課（會員；上課一天前）────────────────────────────────────

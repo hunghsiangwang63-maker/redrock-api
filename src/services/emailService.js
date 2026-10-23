@@ -671,8 +671,42 @@ const sendInquiryReplyNotice = async (to, { memberName, subject, reply }) => {
   });
 };
 
+// ── 休館停課：單堂停課後通知學員（正取學員＝已發補課券；補課學員＝補課券已還原）─────────
+const sendCourseClosureNotice = async ({ email, memberName, gymId, courseName, date, startTime, endTime, voucher, expiresAt }) => {
+  const gymLabel = REG_GYM_LABEL[gymId] || '';
+  const displayName = `${gymLabel ? `【${gymLabel}】` : ''}${courseName || ''}`;
+  const timeText = startTime ? `${startTime}${endTime ? '～' + endTime : ''}` : '';
+  const exp = expiresAt ? require('dayjs')(expiresAt).format('YYYY/MM/DD') : '';
+  const voucherLine = voucher === 'restored'
+    ? `您原先預約此堂的<strong>補課券已退回</strong>${exp ? `（補課期限至 ${esc(exp)}）` : ''}，請至會員 App 重新選擇補課場次。`
+    : `本堂不會扣除您的上課堂數，系統已為您<strong>發放 1 張補課券</strong>${exp ? `（補課期限至 ${esc(exp)}）` : ''}，請至會員 App「我的課程」選擇補課場次。`;
+  return sendEmail({
+    to: email,
+    subject: `【紅石攀岩】課程停課通知 － ${displayName} ${date || ''}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">課程停課通知</h2>
+        <p>親愛的 ${esc(memberName)}，</p>
+        <p>因館方營運因素（休館或營業時間調整），以下課程該堂停課，造成不便敬請見諒：</p>
+        <div style="background:#FBF5F5;border-radius:8px;padding:16px;margin:16px 0;line-height:1.8">
+          <div><strong>課程：</strong>${esc(displayName)}</div>
+          <div><strong>停課日期：</strong>${esc(date || '')}${timeText ? ' ' + esc(timeText) : ''}</div>
+        </div>
+        <p>${voucherLine}</p>
+        <p><a href="${esc(CLIENT_URL)}/member/courses" style="display:inline-block;background:#8B1A1A;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none">前往我的課程</a></p>
+        <div style="background:#F7F3F3;border-radius:8px;padding:12px 16px;margin:8px 0 16px">
+          <div><strong>新竹館：</strong>03-6686635</div>
+          <div><strong>士林館：</strong>02-28837591</div>
+        </div>
+        <p style="color:#999;font-size:12px">此為系統自動發送的信件，請勿直接回覆。紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+  });
+};
+
 module.exports = {
-  esc, // HTML 跳脫（供各路由組信件時共用）
+  esc,
+  sendCourseClosureNotice, // HTML 跳脫（供各路由組信件時共用）
   sendEmail,
   sendInquiryReplyNotice,
   sendEmailVerification,

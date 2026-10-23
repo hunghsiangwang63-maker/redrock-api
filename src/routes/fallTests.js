@@ -200,6 +200,20 @@ router.post('/:testId/extend', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /fall-tests/video-waived/:memberId — 簽署時可否省略安全影片（同一位家長名下已有人看完） ──
+router.get('/video-waived/:memberId', authenticateAny, async (req, res) => {
+  try {
+    if (req.member && req.member.id !== req.params.memberId) {
+      const deny = await checkMemberOwnership(req.member, req.params.memberId, { onMissing: 403, message: '只能查看自己或子會員' });
+      if (deny) return res.status(deny.status).json(deny.body);
+    }
+    const { getFallTestSettings, familyVideoWatched } = require('../services/fallTestService');
+    const settings = await getFallTestSettings(getDb());
+    const waived = await familyVideoWatched(req.params.memberId, settings.watchPercentRequired || 90);
+    res.json({ waived });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /fall-tests/signature/:memberId - 取得會員最新簽署副本 ─────────
 router.get('/signature/:memberId', authenticateAny, async (req, res) => {
   try {

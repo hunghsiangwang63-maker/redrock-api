@@ -99,14 +99,41 @@ async function hasConsentSignature(memberId) {
  *
  * @throws 帶 { status, code, message } 的 Error（呼叫端據此回應／略過）
  */
+/**
+ * 家庭沿用影片觀看：子會員（isChildAccount＋parentMemberId）所屬家庭（家長本人＋其他子會員）
+ * 只要已有人「真的看完影片」（簽署紀錄 watchPercent ≥ 門檻），這位子會員代簽時就可省略影片；
+ * 條款勾選與簽名照舊。非子會員（成人、無 parentMemberId）一律回 false。
+ */
+async function familyVideoWatched(memberId, requiredPercent) {
+  const db = getDb();
+  const mDoc = await db.collection('members').doc(memberId).get();
+  const m = mDoc.exists ? mDoc.data() : null;
+  if (!m || !m.isChildAccount || !m.parentMemberId) return false;
+  const sibSnap = await db.collection('members').where('parentMemberId', '==', m.parentMemberId).select().get();
+  const ids = new Set([m.parentMemberId, ...sibSnap.docs.map(d => d.id)]);
+  ids.delete(memberId);
+  const list = [...ids];
+  for (let i = 0; i < list.length; i += 30) {
+    const snap = await db.collection('fallTestSignatures')
+      .where('memberId', 'in', list.slice(i, i + 30)).select('watchPercent').get();
+    if (snap.docs.some(d => (d.data().watchPercent || 0) >= requiredPercent)) return true;
+  }
+  return false;
+}
+
 async function signConsent({ memberId, signatureData, watchPercent, agreedParagraphs, isMinor }) {
   const db = getDb();
   // 設定與「是否已簽過」互不相依 → 同時發出（驗證與跳過的判斷順序不變；驗證失敗時多讀一次，2026-10-14）
   const alreadyP = hasConsentSignature(memberId); alreadyP.catch(() => {});
   const settings = await getFallTestSettings(db);
 
+  let videoWaived = false;
   if (!(watchPercent >= settings.watchPercentRequired)) {
-    const e = new Error(`請觀看至少 ${settings.watchPercentRequired}% 的影片`); e.status = 400; e.code = 'INSUFFICIENT_WATCH'; throw e;
+    // 同一位家長名下已有人看完影片 → 子會員可省略（2026-10-23）
+    videoWaived = await familyVideoWatched(memberId, settings.watchPercentRequired);
+    if (!videoWaived) {
+      const e = new Error(`請觀看至少 ${settings.watchPercentRequired}% 的影片`); e.status = 400; e.code = 'INSUFFICIENT_WATCH'; throw e;
+    }
   }
   if (!agreedParagraphs || !Array.isArray(agreedParagraphs) || agreedParagraphs.length === 0) {
     const e = new Error('請閱讀並勾選所有條款後再簽署'); e.status = 400; e.code = 'MISSING_AGREEMENT'; throw e;
@@ -122,7 +149,8 @@ async function signConsent({ memberId, signatureData, watchPercent, agreedParagr
     id: signId,
     memberId,
     signatureData: signatureData || '',
-    watchPercent,
+    watchPercent: watchPercent || 0,
+    ...(videoWaived ? { videoWaived: 'family' } : {}),
     agreedParagraphs,
     contentSnapshot: {
       zh: settings.contentZh || '',
@@ -145,4 +173,4 @@ async function signConsent({ memberId, signatureData, watchPercent, agreedParagr
   return { signatureId: signId, skipped: false };
 }
 
-module.exports = { getFallTestSettings, recordFallTestResult, signConsent, hasConsentSignature };
+module.exports = { getFallTestSettings, recordFallTestResult, signConsent, hasConsentSignature, familyVideoWatched };

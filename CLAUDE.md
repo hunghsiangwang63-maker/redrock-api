@@ -710,3 +710,18 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 📌 **楊雅雯（`crefund_1792765149266_hyy6`，10/23 22:19 自填，建議退 7,560、郵局 700）維持待審核，未動。⚠️ 她的轉帳 7,560 在 `transferRecords` 仍是 pending（未確認收款）**——核准退費前要先確認她是否真的匯款，否則會退一筆沒收到的錢。
 - ✅ **周四A班停用**：`PUT /courses/:id {isActive:false}`（員工端「停用」同一支 API：會員課程總覽隱藏，不通知學員、不動報名）。狀態讀回 `isActive:false`、`status:'active'`；剩謝宗樺、楊雅雯各 8 筆 confirmed（凍結）。
 - 📌 **日後「班停開、學員改去別班」**：先查目標班是否額滿；移動＝8 堂報名依序改指新班場次＋header／匯款／交易同步＋兩邊場次人數增減；已確認匯款的費用不重收、不退；要退費的人走 `refund-request`（可由員工代填，銀行資料需使用者提供）；最後才停用舊班。合約與通知需另外決定。
+
+## 目前進度（2026-10-24）— Railway 平台資安事件：輪替金鑰（Firebase／計分／Resend／JWT）＋Render 備援同步（後端 `/health` `3.604.0-diag-resend-prefix`）
+> 起因：使用者問「這週的 Railway 安全事件對我們有影響嗎」。Railway 於 10/21 公告：攻擊者（10/20–10/21）取得客戶**加密的環境變數**並解開一部分，約 1.85% 工作區受影響；Railway **無法確認哪些變數被解開，受影響工作區的所有變數一律視為可能外洩**；已撤銷所有 Railway 存取權杖、重設 GitHub App 連線；使用者帳號本身未被存取、原始碼是否被看到尚未排除。官方報告：`blog.railway.com/p/preliminary-report-october-security-incident`。我們**不確定是否在受影響範圍內**（沒查到 Railway 通知信；本機 Railway CLI 10/22 前後被登出＝平台統一撤銷權杖，不代表我們被入侵）。GCP 用量使用者查過**沒有異常**，但這不能證明沒外洩。
+- ✅ **已輪替（Railway 與 Render 備援兩邊都換）**：①**Firebase 管理員金鑰**（`redrock-dev-a35c1`，`FIREBASE_PRIVATE_KEY`／`FIREBASE_PRIVATE_KEY_ID`）：新 `8a2a8577a4…`；舊的 3 把（`51b6aca85d`、`94b5c692f3`、`ac20…`）已在 GCP 刪除並**實測失效**（UNAUTHENTICATED）②**計分系統金鑰**（`redrock-comp`，`COMP_FIREBASE_SA` 整包 JSON）：新 `fc5d4ea69c…`；舊的（`1b8cf86d1c`、`2b65…`）已刪③**Resend 寄信金鑰**：新「redrock-api 2026-10」（只能寄信，`re_3ipf…`）；舊的「Onboarding」（`re_VGmb`）與**從未使用的完整權限「redrock」（`re_fHFq`）**已刪；新金鑰以寄出「新裝置登入驗證碼」確認可用④**`JWT_SECRET`**：換新值（Railway 與 Render 同值）；實測舊登入憑證 401、新憑證 200、Render 認得 Railway 簽的憑證。**換完所有人被登出一次**（員工、館別電腦站台、值班打卡、會員都要重新登入；入場 QR／簽署連結／報名連結不是 JWT，不受影響）。
+- ⚠️ **刻意沒換（使用者決定不處理）**：`EDGE_SECRET`（`EDGE_ENFORCE=false`，目前不擋任何東西，日後若啟用邊緣驗證要 Railway＋Render＋Cloudflare Transform Rule 三處一起換）；`SMTP_*`（`smtp.gmail.com`／`redrocktaiwan@gmail.com`；**程式完全沒在讀**，是舊寄信方式殘留，但 `SMTP_PASS` 可能是該 Gmail 的應用程式密碼，仍建議日後到 Google 帳戶撤銷並刪掉這四個變數）；**LinePay／街口金流金鑰存在 Firestore `paymentSettings`**（若 Firebase 金鑰外洩等同暴露，目前無異常跡象，未請對方換）；Gmail 應用程式密碼。
+- 🐞 **踩雷／教訓（務必記住）**：
+  1. **Render 冷備（`redrock-api-backup.onrender.com`）有一份同樣的環境變數**，Railway 改了就**必須手動同步到 Render**（`docs/outage-playbook.md` 早有寫）。這次換 Firebase 金鑰時我漏了，Render 一度登入回 `16 UNAUTHENTICATED`（切換備援會失效），事後補上。**新增／輪替任何變數：Railway＋Render 都要改，並用 `/_diag/latency` 的 `keyIds` 驗證兩台實際用哪一把。**
+  2. **`/_diag/latency` 新增 `keyIds`**（`firebase`／`comp`＝金鑰編號前 10 碼、`resend`＝前 7 碼；只有 super_admin 看得到）。登入成功**不能**證明用了新金鑰（舊金鑰還有效時一樣成功），換完金鑰要看 `keyIds`。GCP 服務帳戶金鑰頁**沒有「停用」只有刪除**，所以靠 `keyIds` 證明沒人在用舊的才刪。
+  3. **不要用 `railway variables --kv | cut -d= -f1` 列變數名稱**：多行值（如 `COMP_FIREBASE_SA` 的私鑰）會被當成一行行印出，**我因此兩次把金鑰內容印在畫面上**（計分私鑰片段、完整權限 Resend 金鑰）。要列名稱改用 `railway variables list --json` 後在 python 裡只印 key。
+  4. **Railway 上曾有一個「名稱」含完整權限 Resend 金鑰的異常變數**（名稱形如 `RESEND_API_KEY   re_…\nFROM_EMAIL   noreply@…`，應是以前整段貼成名稱）；已刪。**變數名稱本身也可能是機密**，檢查時也要看名稱。
+  5. **用 `!` 讓使用者在自己的 session 把金鑰寫進 Railway**（`pbcopy`／`$(cat 檔案)`），金鑰不會進對話；**但複製我給的指令會蓋掉剪貼簿裡的金鑰**——正確做法是先手打 `pbpaste > ~/xxx.key` 存成暫存檔，之後指令讀檔，最後 `rm -f` 並 `printf '' | pbcopy`。變數名稱**手打容易錯**（這次把 `RESEND_API_KEY` 打成 `RESENT_API_KEY`，多出一個含金鑰的變數，已刪）。
+  6. 驗證登入憑證失效要用**一定要登入的端點**（`/members?limit=1`、`/pending-tasks`）；`/gyms` 是公開的，拿它測會誤判舊憑證仍有效。
+  7. 被安全檢查擋下的動作（讀取 Railway 變數內容、`pbpaste` 金鑰）：不繞過，請使用者用 `/permissions` 加 `Bash(railway variables *)` 規則，或由使用者在自己的 session 執行。
+- 📌 **本機金鑰檔**：`~/Documents/RedRock/憑證/` 只剩新的兩把（`redrock-dev-a35c1-…-8a2a8577a4.json`、`redrock-comp-…-fc5d4ea69c.json`）；腳本用 `readdirSync(...).find(x=>x.includes('adminsdk'))` 挑檔，**兩把並存時可能挑到計分那把**，寫新腳本請指定完整檔名。
+- ⚠️ **未做／未驗證**：Railway 是否有寄通知信給使用者未確認；GCP 稽核日誌我沒看（使用者回報用量無異常）；Resend 後台寄信紀錄 10/20 後有無陌生寄信我沒看到。**Railway 最終報告出來後要回頭看**（原始碼是否外洩、受影響名單）。

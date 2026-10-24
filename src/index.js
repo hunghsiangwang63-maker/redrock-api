@@ -225,7 +225,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.603.0-diag-key-ids',
+    version: '3.604.0-diag-resend-prefix',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),
@@ -302,7 +302,7 @@ app.get('/_diag/latency', require('./middleware/auth').authenticate, async (req,
   out.monitor = require('./services/latencyMonitor').getState();
   // 換金鑰後確認「這台伺服器實際在用哪一把」：只回前 10 碼金鑰編號（非金鑰本身），僅 super_admin 看得到
   const compKeyId = (() => { try { return JSON.parse(process.env.COMP_FIREBASE_SA || '{}').private_key_id || null; } catch (e) { return 'unparseable'; } })();
-  out.keyIds = { firebase: (process.env.FIREBASE_PRIVATE_KEY_ID || '').slice(0, 10) || null, comp: compKeyId ? String(compKeyId).slice(0, 10) : null };
+  out.keyIds = { firebase: (process.env.FIREBASE_PRIVATE_KEY_ID || '').slice(0, 10) || null, comp: compKeyId ? String(compKeyId).slice(0, 10) : null, resend: (process.env.RESEND_API_KEY || '').slice(0, 7) || null };
   out.env = { node: process.version, region: process.env.RAILWAY_REPLICA_REGION || null, grpcPreferRest: process.env.FIRESTORE_PREFER_REST || null, cpuCount: require('os').cpus().length, loadavg: require('os').loadavg() };
   res.json(out);
 });

@@ -744,3 +744,6 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **總頁**：5 則舊連結全改（體驗課程、新客人、一般入場須知、新竹支付方式、士林支付方式）＋基本資訊兒童規則；改完重讀 16 則：`forms.gle` 0、`reurl.cc` 0。
 - ⚠️ **未做／限制**：總頁「優惠票價」「Redrock Information（英文）」等其他欄位沒逐字核對現行價格（英文版仍寫「kid from 6 to 12」）；新竹清單這次讀到 14 則（早上 17 則），疑為讀取方式漏抓、非被刪，要確定請在粉專內搜「forms.gle」「600」。我**沒有送出任何訊息給客人**（改預存回覆時曾誤把士林支付方式帶進輸入框草稿，已清空）。
 - 🛠 **操作備忘（Meta 編輯器）**：預存回覆編輯框是 contenteditable，用 JS `Range` 選取目標文字（連結／整行）後再「輸入」取代，改完用 JS 讀 `innerText` 確認再按儲存；**搜尋框點 ✕ 才會清除篩選**（JS 改 input 值無效）；清單 ⋮ 選單位置固定，但點之前先截圖確認，點到「傳訊息」附近會把預存回覆帶進輸入框（草稿，需手動清除）。
+
+## 目前進度（2026-10-25 續）— 補寄 Spencer 贈票英文感謝信（`sendPassGiftNotice` 新增 `lang:'en'`）
+- ✅ 贈票緣由＝感謝 Spencer Perkins 協助處理場館漏水；使用者要求英文信、註明系統信件勿回覆。`emailService.sendPassGiftNotice` 新增選填 `lang:'en'`＋`thanksEn`（英文版、可帶一段感謝文字；預設中文版行為不變）。已寄至其會員信箱（Resend id `01a17376…`），票上補 `giftNoticeSentAt`／`giftNoticeNote`。信中票名寫 Adult 30-Day Pass (All Gyms)，有效 2026-10-25～11-24。**員工端贈送視窗仍只寄中文版**，英文信目前靠腳本（`railway run node` 帶 `RESEND_API_KEY`）補寄。

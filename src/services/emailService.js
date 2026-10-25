@@ -705,7 +705,36 @@ const sendCourseClosureNotice = async ({ email, memberName, gymId, courseName, d
 };
 
 // ── 館方贈送定期票：通知會員（不寫贈送原因，那是內部紀錄）─────────────────────
-const sendPassGiftNotice = async ({ email, memberName, passTypeName, scope, targetGymId, gymId, startDate, endDate, credits }) => {
+const sendPassGiftNotice = async ({ email, memberName, passTypeName, scope, targetGymId, gymId, startDate, endDate, credits, lang, thanksEn }) => {
+  if (lang === 'en') {
+    const gymEn = { 'gym-hsinchu': 'Hsinchu', 'gym-shilin': 'Shilin' };
+    const scopeEn = scope === 'shared'
+      ? 'Valid at both gyms (Hsinchu and Shilin)'
+      : `Valid at the ${gymEn[targetGymId] || gymEn[gymId] || 'designated'} gym only`;
+    return sendEmail({
+      to: email,
+      subject: `[RedRock Climbing] A gift from us: ${passTypeName}`,
+      html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">🎁 A gift pass for you</h2>
+        <p>Dear ${esc(memberName)},</p>
+        ${thanksEn ? `<p>${esc(thanksEn)}</p>` : ''}
+        <p>We have activated a pass on your account. We hope to see you climbing soon!</p>
+        <div style="background:#FBF5F5;border-radius:8px;padding:16px;margin:16px 0;line-height:1.8">
+          <div><strong>Pass:</strong> ${esc(passTypeName)}</div>
+          <div><strong>Where:</strong> ${esc(scopeEn)}</div>
+          <div><strong>Valid:</strong> ${esc(startDate)} – ${esc(endDate)}</div>
+        </div>
+        <p>Just show the entry QR code in the RedRock member app when you arrive; the pass is applied automatically, with no extra charge.</p>
+        <p><a href="${esc(CLIENT_URL)}/member/passes" style="display:inline-block;background:#8B1A1A;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none">View my pass</a></p>
+        <div style="background:#F7F3F3;border-radius:8px;padding:12px 16px;margin:8px 0 16px">
+          <div><strong>Hsinchu:</strong> +886-3-668-6635</div>
+          <div><strong>Shilin:</strong> +886-2-2883-7591</div>
+        </div>
+        <p style="color:#999;font-size:12px">This is an automated system email. Please do not reply. RedRock | redrocktaiwan.com</p>
+      </div>`,
+    });
+  }
   const scopeText = scope === 'shared'
     ? '全館通用（新竹館、士林館皆可使用）'
     : `僅限${REG_GYM_LABEL[targetGymId] || REG_GYM_LABEL[gymId] || '指定場館'}使用`;

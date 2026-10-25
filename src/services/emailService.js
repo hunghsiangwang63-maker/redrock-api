@@ -704,8 +704,42 @@ const sendCourseClosureNotice = async ({ email, memberName, gymId, courseName, d
   });
 };
 
+// ── 館方贈送定期票：通知會員（不寫贈送原因，那是內部紀錄）─────────────────────
+const sendPassGiftNotice = async ({ email, memberName, passTypeName, scope, targetGymId, gymId, startDate, endDate, credits }) => {
+  const scopeText = scope === 'shared'
+    ? '全館通用（新竹館、士林館皆可使用）'
+    : `僅限${REG_GYM_LABEL[targetGymId] || REG_GYM_LABEL[gymId] || '指定場館'}使用`;
+  const validText = credits != null && credits !== ''
+    ? `${esc(startDate)} 起，共 ${esc(String(credits))} 次（效期至 ${esc(endDate)}）`
+    : `${esc(startDate)} ～ ${esc(endDate)}`;
+  return sendEmail({
+    to: email,
+    subject: `【紅石攀岩】您獲贈一張定期票：${passTypeName}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">🎁 您獲贈一張定期票</h2>
+        <p>親愛的 ${esc(memberName)}，</p>
+        <p>紅石攀岩館已為您開通一張定期票，歡迎多多來攀岩：</p>
+        <div style="background:#FBF5F5;border-radius:8px;padding:16px;margin:16px 0;line-height:1.8">
+          <div><strong>票種：</strong>${esc(passTypeName)}</div>
+          <div><strong>使用範圍：</strong>${esc(scopeText)}</div>
+          <div><strong>有效期間：</strong>${validText}</div>
+        </div>
+        <p>到館時直接出示會員 App 的入場 QR 碼即可，系統會自動使用這張定期票，不需另外付費。</p>
+        <p><a href="${esc(CLIENT_URL)}/member/passes" style="display:inline-block;background:#8B1A1A;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none">查看我的定期票</a></p>
+        <div style="background:#F7F3F3;border-radius:8px;padding:12px 16px;margin:8px 0 16px">
+          <div><strong>新竹館：</strong>03-6686635</div>
+          <div><strong>士林館：</strong>02-28837591</div>
+        </div>
+        <p style="color:#999;font-size:12px">此為系統自動發送的信件，請勿直接回覆。紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+  });
+};
+
 module.exports = {
   esc,
+  sendPassGiftNotice,
   sendCourseClosureNotice, // HTML 跳脫（供各路由組信件時共用）
   sendEmail,
   sendInquiryReplyNotice,

@@ -11,6 +11,9 @@ const { v4: uuidv4 } = require('uuid');
 const dayjs = require('dayjs');
 const memberService = require('../services/memberService');
 const { isChild } = require('../utils/age');
+const { isManagerRole } = require('../utils/roles');
+// 員工端新增定期票可選的收款方式（贈送不算收款方式，另以 isGift 表示）
+const PASS_PAYMENT_METHODS = ['cash', 'transfer', 'linepay', 'jkopay', 'taiwanpay'];
 
 // 由票種效期算到期日：優先「月數」（一個月一個月算，7/6→10/6；月底自動夾到當月最後一天，
 // 例 1/31＋1月→2/28），未設月數則沿用「天數」（曆日）。
@@ -307,11 +310,30 @@ router.post('/',
     body('memberId').notEmpty(),
     body('passTypeId').notEmpty(),
     body('startDate').isDate(),
+    body('isGift').optional({ nullable: true }).isBoolean(),
+    body('giftReason').optional({ nullable: true }).isString().isLength({ max: 200 }),
+    body('paymentMethod').optional({ nullable: true, checkFalsy: true }).isIn(PASS_PAYMENT_METHODS).withMessage('收款方式不正確'),
   ],
   validate,
   async (req, res) => {
     try {
       const db = getDb();
+      const isGift = req.body.isGift === true || req.body.isGift === 'true';
+      // 贈送限管理員／館長（requireManager 已擋；這裡明確再驗一次，避免日後放寬 requireManager 時連帶放行贈送）
+      if (isGift && !isManagerRole(req.staff?.role)) {
+        return res.status(403).json({ error: 'GIFT_MANAGER_REQUIRED', message: '贈送定期票僅限管理員或館長' });
+      }
+      const giftReason = String(req.body.giftReason || '').trim();
+      if (isGift && !giftReason) return res.status(400).json({ error: 'GIFT_REASON_REQUIRED', message: '請填寫贈送原因' });
+      // 場館（營收與票的歸屬）：帳號有館別就用該館；管理員（無館別）必須指定，否則營收會掛在「無場館」，哪一館結帳都看不到
+      let gymId = req.staff.gymId || null;
+      if (!gymId) {
+        const wantGym = String(req.body.gymId || '').trim();
+        if (!wantGym) return res.status(400).json({ error: 'GYM_REQUIRED', message: '請選擇定期票所屬場館（新竹館／士林館）' });
+        const gymDoc = await db.collection(COLLECTIONS.GYMS).doc(wantGym).get();
+        if (!gymDoc.exists) return res.status(400).json({ error: 'INVALID_GYM', message: '找不到指定的場館' });
+        gymId = wantGym;
+      }
       // 後端權威：未滿 13 歲（兒童）不可購買定期票（用出生日期判定，不受 VIP/隊員 memberType 影響）
       const _buyer = await memberService.getMember(req.body.memberId).catch(() => null);
       if (isChild(_buyer)) return res.status(400).json({ code: 'CHILD_NO_PASS', message: '未滿 13 歲無法購買定期票' });
@@ -321,21 +343,31 @@ router.post('/',
       // 有效隊員購買定期票 9 折（後端權威，依買者身份）
       const { isActiveTeamMember, TEAM_DISCOUNT_MIN_AMOUNT } = require('../services/teamMemberService');
       const _isTeamBuyer = _buyer && isActiveTeamMember(_buyer);
-      const salePrice = (_isTeamBuyer && (passType.price || 0) >= TEAM_DISCOUNT_MIN_AMOUNT)
+      const listSalePrice = (_isTeamBuyer && (passType.price || 0) >= TEAM_DISCOUNT_MIN_AMOUNT)
         ? Math.round(passType.price * 0.9) : (passType.price || 0);
+      // 贈送＝不收款、不記營收、不分期
+      const salePrice = isGift ? 0 : listSalePrice;
+      // 要收款（有金額、非贈送、非線上付款回呼）一定要明確選收款方式——不再預設現金：
+      // 過去畫面沒顯示付款方式、背後卻默默當現金記營收（2026-10-25 朱智萩案例）
+      if (salePrice > 0 && !req.body.deferPayment && !req.body.paymentMethod) {
+        return res.status(400).json({ error: 'PAYMENT_METHOD_REQUIRED', message: '請選擇收款方式（現金／轉帳…），或改選「贈送」' });
+      }
       const passId = uuidv4();
       const now = new Date();
       const endDate = computePassEndDate(req.body.startDate, passType);
+      const userNotes = String(req.body.notes || '').trim();
       const pass = {
         id: passId, memberId: req.body.memberId,
-        gymId: req.staff.gymId, passTypeId: req.body.passTypeId,
+        gymId, passTypeId: req.body.passTypeId,
         passTypeName: passType.name, scope: passType.scope,
         targetGymId: passType.targetGymId,
         startDate: req.body.startDate, endDate,
         credits: passType.credits, originalCredits: passType.credits,
         status: 'active', paymentId: req.body.paymentId || null,
         paymentStatus: req.body.deferPayment ? 'pending' : 'confirmed',
-        soldByStaffId: req.staff.id, notes: req.body.notes || '',
+        soldByStaffId: req.staff.id,
+        notes: isGift ? [`館方贈送：${giftReason}`, userNotes].filter(Boolean).join('｜') : userNotes,
+        ...(isGift ? { isGift: true, giftReason, giftedBy: req.staff.id, giftedByName: req.staff.name || '', giftedAt: now } : {}),
         createdAt: now, updatedAt: now,
       };
       await db.collection(COLLECTIONS.MEMBER_PASSES).doc(passId).set(pass);
@@ -349,23 +381,23 @@ router.post('/',
         const periods = installmentService.buildPeriodsFromConfig(passType.installment, salePrice, today);
         if (periods) {
           passPlan = await installmentService.createInstallmentPlan({
-            memberId: req.body.memberId, memberName: req.body.memberName || '',
-            gymId: req.staff.gymId, relatedType: 'pass', relatedId: passId, itemName: passType.name,
+            memberId: req.body.memberId, memberName: req.body.memberName || _buyer?.name || '',
+            gymId, relatedType: 'pass', relatedId: passId, itemName: passType.name,
             recognitionDate: null, installments: periods,
-            firstPaymentMethod: req.body.paymentMethod || 'cash', staffId: req.staff.id, staffName: req.staff.name,
+            firstPaymentMethod: req.body.paymentMethod, staffId: req.staff.id, staffName: req.staff.name,
           });
         }
       }
-      // 記錄交易（一次付清；分期改由計畫逐期記帳，此處略過；deferPayment 由付款 callback 記）
+      // 記錄交易（一次付清；分期改由計畫逐期記帳，此處略過；deferPayment 由付款 callback 記；贈送不記）
       if (salePrice > 0 && !req.body.deferPayment && !passPlan) {
         const { recordTransaction } = require('../utils/revenueLedger');
         await recordTransaction(db, {
-          gymId: req.staff.gymId,
+          gymId,
           type: 'pass',
           totalAmount: salePrice,
-          paymentMethod: req.body.paymentMethod || 'cash',
+          paymentMethod: req.body.paymentMethod,
           memberId: req.body.memberId,
-          memberName: req.body.memberName || '',
+          memberName: req.body.memberName || _buyer?.name || '',
           relatedId: passId,
           notes: `定期票購買：${passType.name}${_isTeamBuyer && salePrice < (passType.price||0) ? '（隊員9折）' : ''}`,
           staffId: req.staff.id,
@@ -373,11 +405,34 @@ router.post('/',
         });
       }
 
+      // 贈送：寫入異動歷史（員工端「編輯定期票」視窗可見）＋寄通知信給會員（失敗不影響票已建立，結果回傳給前端顯示）
+      let giftNotice = null;
+      if (isGift) {
+        try {
+          await require('../services/passAdjustmentService').logAdjustment({
+            passId, type: 'gift', beforeData: null,
+            afterData: { passTypeName: passType.name, startDate: req.body.startDate, endDate, gymId },
+            reason: giftReason, operatorId: req.staff.id, operatorName: req.staff.name || '', operatorType: 'staff',
+          });
+        } catch (e) { console.error('贈送定期票異動紀錄寫入失敗（票已建立）:', e.message); }
+        try {
+          if (!_buyer?.email) giftNotice = 'no_email';
+          else {
+            const r = await require('../services/emailService').sendPassGiftNotice({
+              email: _buyer.email, memberName: _buyer.name || '', passTypeName: passType.name, scope: passType.scope,
+              targetGymId: passType.targetGymId, gymId, startDate: req.body.startDate, endDate, credits: passType.credits,
+            });
+            giftNotice = r && r.success ? 'sent' : (r && r.skipped ? 'skipped' : 'failed');
+            if (giftNotice === 'sent') await db.collection(COLLECTIONS.MEMBER_PASSES).doc(passId).update({ giftNoticeSentAt: new Date() });
+          }
+        } catch (e) { console.error('贈送定期票通知信失敗（票已建立）:', e.message); giftNotice = 'failed'; }
+      }
+
       // 定期票 × 課程免費期間重疊補償（買票方向；買者已是課程學員 → 新票期間重疊即延長，冪等不阻斷）
       try { await require('../services/passOverlapService').applyCourseOverlapForMember(req.body.memberId); }
       catch (e) { console.error('課程重疊補償失敗（票已建立）:', e.message); }
 
-      res.status(201).json({ pass, installmentPlan: passPlan, message: '定期票建立成功' });
+      res.status(201).json({ pass, installmentPlan: passPlan, giftNotice, message: isGift ? '定期票已贈送' : '定期票建立成功' });
     } catch (err) {
       res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
     }

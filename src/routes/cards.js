@@ -42,6 +42,7 @@ const checkCardRegistry = async (db, cardType, normalizedBarcode) => {
     return { ok: false, status: 409, body: { error: 'CARD_TYPE_MISMATCH', message: `此卡號屬於${label}，非您選擇的卡別，請確認卡號或改用正確的綁定功能` } };
   }
   if (!data.sold) return { ok: false, status: 400, body: { error: 'CARD_NOT_SOLD', message: '此卡號尚未售出，無法綁定' } };
+  if (data.usedUp) return { ok: false, status: 409, body: { error: 'CARD_USED_UP', message: '此卡片已使用完畢，無法轉入' } };
   if (data.bound) return { ok: false, status: 409, body: { error: 'CARD_ALREADY_BOUND', message: '此卡號已經綁定過，無法重複綁定' } };
   return { ok: true, tracked: true };
 };

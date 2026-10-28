@@ -170,6 +170,33 @@ router.get('/my-upcoming',
   }
 );
 
+// ── GET /schedule/my-courses - 登入員工本人當月「帶課」場次（教練視角；含代班/停課/補課人數）──
+// 課程 instructor 為自由文字暱稱，比對規則見 coachCourseService。站台/值班帳號無個人身分→回空陣列。
+router.get('/my-courses',
+  authenticate,
+  async (req, res) => {
+    try {
+      if (req.staff?.type && req.staff.type !== 'staff') return res.json({ sessions: [] });
+      const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : require('dayjs')().format('YYYY-MM');
+      const sessions = await require('../services/coachCourseService').getMyMonthSessions(req.staff, month);
+      res.json({ sessions, month });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
+// ── GET /schedule/my-courses/:sessionId/roster - 本人場次的學員名單（驗證為本人場次；不含電話）──
+router.get('/my-courses/:sessionId/roster',
+  authenticate,
+  async (req, res) => {
+    try {
+      const svc = require('../services/coachCourseService');
+      if (req.staff?.type && req.staff.type !== 'staff') return res.status(403).json({ error: 'FORBIDDEN' });
+      if (!(await svc.isMySession(req.staff, req.params.sessionId))) return res.status(403).json({ error: 'NOT_YOUR_SESSION', message: '非您帶的課程場次' });
+      res.json({ roster: await svc.getMyRoster(req.params.sessionId) });
+    } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+  }
+);
+
 // ── GET /schedule - 查詢某館某月份排班（月曆檢視，所有員工皆可查看自己館）──
 router.get('/',
   authenticate, checkPermission('schedule.read'),

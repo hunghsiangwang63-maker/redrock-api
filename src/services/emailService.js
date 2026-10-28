@@ -766,6 +766,26 @@ const sendPassGiftNotice = async ({ email, memberName, passTypeName, scope, targ
   });
 };
 
+
+// 帶課教練通知信：學員請假／銷假／補課／取消補課／新報名時寄給該堂教練（與員工端「通知」頁同步）
+const sendCoachCourseNotice = async (to, { coachName, title, body }) => {
+  const STAFF_URL = process.env.STAFF_APP_URL || 'https://staff.redrocktaiwan.com';
+  return sendEmail({
+    to,
+    subject: `【紅石攀岩】帶課通知：${title}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">帶課通知：${esc(title)}</h2>
+        <p>${esc(coachName)} 您好，您帶的課程有異動：</p>
+        <div style="background:#FBF5F5;border-radius:8px;padding:16px;margin:16px 0;line-height:1.8;white-space:pre-wrap">${esc(body)}</div>
+        <p>可登入員工端，在「值班月曆」查看您的課程與學員名單：</p>
+        <p><a href="${esc(STAFF_URL)}/staff/schedule" style="display:inline-block;background:#8B1A1A;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none">前往值班月曆</a></p>
+        <p style="color:#999;font-size:12px">此為系統自動發送的信件，請勿直接回覆。紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+  });
+};
+
 module.exports = {
   esc,
   sendPassGiftNotice,
@@ -790,5 +810,6 @@ module.exports = {
   sendTrialCancelledNotice,
   sendCompetitionRegistrationModified,
   sendCourseContractPdf,
+  sendCoachCourseNotice,
   sendPassContractPdf,
 };

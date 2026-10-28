@@ -930,6 +930,13 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     });
   } catch (e) { console.error('[雙寫] courseRegistrations header 建立失敗（不影響報名）:', e.message); }
 
+  require('./coachCourseService').notifyCoaches({
+    gymId: enrollment.gymId, courseId: session.courseId, sessionId, type: 'course_enroll',
+    title: isFull ? '課程報名（候補）' : '課程報名',
+    body: `${member.name || '學員'} ${isFull ? '加入候補' : '報名'}：${session.courseName || ''} ${session.date} ${session.startTime || ''}`,
+    referenceId: enrollment.id || null,
+  });
+
   return {
     enrollment,
     feeInfo,
@@ -1155,7 +1162,7 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
 
   // 通知同館管理員：釋出名額（過渡期補課由櫃檯以舊表單安排，需知道哪堂空出位子）
   await notifyCourseManagers({
-    gymId: enrollment.gymId, type: 'course_leave',
+    gymId: enrollment.gymId, type: 'course_leave', coach: { courseId: enrollment.courseId, sessionId: enrollment.sessionId },
     title: '課程請假',
     body: `${enrollment.memberName || '學員'} 已請假：${enrollment.courseName || ''} ${enrollment.date} ${enrollment.startTime || ''}` +
       (noMakeupCourse ? '（此課程不提供補課，如需協助請洽管理人員）'
@@ -1178,8 +1185,14 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
 //       補課那堂已上過 → 擋（MAKEUP_TAKEN，不可反悔）。
 // ── 課程異動通知（同館 gym_manager＋super_admin；失敗不阻斷主流程）───────
 // 薄包裝：實際迴圈/錯誤隔離邏輯收斂在 notificationService.notifyGymManagers（2026-09-12）。
-const notifyCourseManagers = ({ gymId, type, title, body, referenceId, link }) =>
-  notifyGymManagers({ gymId, type, title, body, referenceId, referenceType: 'courseEnrollment', link });
+// coach：{courseId, sessionId} 有帶時，同事件也通知該堂帶課教練（員工端通知頁＋Email，見 coachCourseService.notifyCoaches）
+const notifyCourseManagers = ({ gymId, type, title, body, referenceId, link, coach }) => {
+  if (coach) {
+    // 背景執行、永不阻斷主流程（內部已吞例外）
+    require('./coachCourseService').notifyCoaches({ gymId, courseId: coach.courseId, sessionId: coach.sessionId, type, title, body, referenceId });
+  }
+  return notifyGymManagers({ gymId, type, title, body, referenceId, referenceType: 'courseEnrollment', link });
+};
 
 const cancelLeave = async ({ enrollmentId, memberId }) => {
   const db = getDb();
@@ -1247,7 +1260,7 @@ const cancelLeave = async ({ enrollmentId, memberId }) => {
   const rec = await reconcileMakeupEntitlement(db, memberId, enrollment.courseId, rules2, { ...enrollment, id: enrollmentId });
 
   await notifyCourseManagers({
-    gymId: enrollment.gymId, type: 'course_leave_cancel',
+    gymId: enrollment.gymId, type: 'course_leave_cancel', coach: { courseId: enrollment.courseId, sessionId: enrollment.sessionId },
     title: '取消請假（銷假）',
     body: `${enrollment.memberName || '學員'} 已取消請假、恢復上課：${enrollment.courseName || ''} ${enrollment.date} ${enrollment.startTime || ''}（名額收回）`,
     referenceId: enrollmentId,
@@ -1575,7 +1588,7 @@ const cancelMakeup = async ({ enrollmentId, memberId }) => {
     }
   }
   await notifyCourseManagers({
-    gymId: enrollment.gymId, type: 'course_makeup_cancel',
+    gymId: enrollment.gymId, type: 'course_makeup_cancel', coach: { courseId: enrollment.courseId, sessionId: enrollment.sessionId },
     title: '取消補課',
     body: `${enrollment.memberName || '學員'} 已取消補課：${enrollment.courseName || ''} ${enrollment.date} ${enrollment.startTime || ''}（釋出 1 個名額）`,
     referenceId: enrollmentId,
@@ -2057,7 +2070,7 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
   await makeupDoc.ref.update({ status: 'used', usedSessionId: targetSessionId, usedAt: now, updatedAt: now });
 
   await notifyCourseManagers({
-    gymId: session.gymId, type: 'course_makeup_booked',
+    gymId: session.gymId, type: 'course_makeup_booked', coach: { courseId: session.courseId, sessionId: targetSessionId },
     title: '補課預約',
     body: `${_mName || '學員'} 已預約補課：${session.courseName || ''} ${session.date} ${session.startTime || ''}（佔 1 個名額）`,
     referenceId: enrollmentId,
@@ -2866,6 +2879,12 @@ const enrollTrial = async ({ memberId, memberName, sessionId, gymId, trialFee, b
   await db.collection(SESSION_COLLECTION).doc(sessionId).update(
     isFull ? { waitlistCount: (session.waitlistCount || 0) + 1, updatedAt: now }
            : { enrolledCount: (session.enrolledCount || 0) + 1, updatedAt: now });
+  require('./coachCourseService').notifyCoaches({
+    gymId: enrollment.gymId, courseId: session.courseId, sessionId, type: 'course_enroll_trial',
+    title: isFull ? '單堂試上候補' : '單堂試上報名',
+    body: `${memberName || '學員'} ${isFull ? '加入單堂試上候補' : '報名單堂試上'}：${session.courseName || ''} ${session.date} ${session.startTime || ''}`,
+    referenceId: enrollmentId,
+  });
   return { enrollmentId, sessionId, status: enrollment.status };
 };
 

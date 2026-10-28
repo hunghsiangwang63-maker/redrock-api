@@ -2789,6 +2789,14 @@ async function handleEnrollAll(req, res) {
         })();
       }
 
+      // 通知帶課教練（員工端通知頁＋Email；背景執行、不阻斷報名）
+      require('../services/coachCourseService').notifyCoaches({
+        gymId: futureSessions[0]?.gymId || gymId, courseId, type: 'course_enroll',
+        title: isWaitlist ? '課程報名（候補）' : '課程報名',
+        body: `${req.body.memberName || req.member?.name || '學員'} ${isWaitlist ? '加入候補' : '報名'}：${course.name}（${futureSessions.length} 堂）`,
+        referenceId: firstEnrollmentId, referenceType: 'courseEnrollment',
+      });
+
       res.status(201).json({
         enrollmentId: firstEnrollmentId,
         installmentPlan: coursePlan,

@@ -67,4 +67,50 @@ const getMyRoster = async (sessionId) => {
   }));
 };
 
-module.exports = { getMyMonthSessions, isMySession, getMyRoster, makeMatcher, splitNames };
+
+// ── 通知帶課教練（員工端「通知」頁＋Email）────────────────────────────
+// 學員請假／銷假／補課／取消補課／新報名時呼叫。教練判定與月曆同一套（makeMatcher）；代班場次通知「現任教練」。
+// 永不拋錯、不阻斷主流程。管理層（gym_manager／super_admin）本來就會收到同事件的管理員通知，這裡不再重複發站內通知，但仍寄信。
+let _staffCache = { at: 0, list: [] };
+const getActiveStaff = async () => {
+  if (Date.now() - _staffCache.at < 5 * 60 * 1000) return _staffCache.list;
+  const snap = await getDb().collection('staff').where('isActive', '==', true).get();
+  _staffCache = { at: Date.now(), list: snap.docs.map(d => ({ id: d.id, ...d.data() })) };
+  return _staffCache.list;
+};
+const findCoachStaff = async ({ courseId, sessionId }) => {
+  const db = getDb();
+  let instr = '', coachId = null;
+  if (sessionId) {
+    const sd = await db.collection('courseSessions').doc(sessionId).get();
+    if (sd.exists) { instr = sd.data().instructor || ''; coachId = sd.data().coachId || null; courseId = courseId || sd.data().courseId; }
+  }
+  if (!instr && courseId) {
+    const cd = await db.collection('courses').doc(courseId).get();
+    if (cd.exists) instr = cd.data().instructor || '';
+  }
+  if (!instr && !coachId) return [];
+  const staff = await getActiveStaff();
+  return staff.filter(s => s.role && (s.id === coachId || makeMatcher(s)(instr)));
+};
+const notifyCoaches = async ({ gymId, courseId, sessionId, type, title, body, referenceId, referenceType = 'courseEnrollment' }) => {
+  try {
+    const coaches = await findCoachStaff({ courseId, sessionId });
+    if (!coaches.length) return 0;
+    const { createNotification } = require('./notificationService');
+    const { sendCoachCourseNotice } = require('./emailService');
+    await Promise.all(coaches.map(async (c) => {
+      try {
+        if (!['gym_manager', 'super_admin'].includes(c.role)) {
+          await createNotification({ gymId, targetRole: c.role, targetStaffId: c.id, type: `coach_${type}`, title: `【帶課】${title}`, body, referenceId, referenceType, link: '/staff/schedule' });
+        }
+      } catch (e) { console.error('[帶課通知-站內]', c.name, e.message); }
+      try {
+        if (c.email) await sendCoachCourseNotice(c.email, { coachName: c.name, title, body });
+      } catch (e) { console.error('[帶課通知-Email]', c.name, e.message); }
+    }));
+    return coaches.length;
+  } catch (e) { console.error('[帶課通知]', e.message); return 0; }
+};
+
+module.exports = { notifyCoaches, findCoachStaff, getMyMonthSessions, isMySession, getMyRoster, makeMatcher, splitNames };

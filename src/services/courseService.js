@@ -2845,6 +2845,19 @@ const getMakeupCandidateSessions = async (db, { categoryId, gymId, excludeCourse
 
 // ── 試上報名：將會員加入某場次名單（isTrial，佔名額）──────────────────
 // 輕量版（不含分期/插班費計算）；計入預計上課、佔名額；防止重複試上同一場。
+// 試上報名「已付款」→ 通知帶課教練（員工端通知頁＋Email；背景執行、永不拋錯）
+const notifyTrialPaidToCoaches = (enrollment) => {
+  try {
+    const waitlist = enrollment.status === 'waitlist';
+    require('./coachCourseService').notifyCoaches({
+      gymId: enrollment.gymId, courseId: enrollment.courseId, sessionId: enrollment.sessionId, type: 'course_enroll_trial',
+      title: waitlist ? '單堂試上候補（已付款）' : '單堂試上報名（已付款）',
+      body: `${enrollment.memberName || '學員'} ${waitlist ? '已付款，列入單堂試上候補' : '已付款，報名單堂試上'}：${enrollment.courseName || ''} ${enrollment.date} ${enrollment.startTime || ''}`,
+      referenceId: enrollment.id || null,
+    });
+  } catch (e) { console.error('[試上通知教練]', e.message); }
+};
+
 const enrollTrial = async ({ memberId, memberName, sessionId, gymId, trialFee, bookingId, staffId, paymentStatus = 'paid', paymentDeadline = null, maxWaitlist = null }) => {
   const db = getDb();
   const now = new Date();
@@ -2879,12 +2892,9 @@ const enrollTrial = async ({ memberId, memberName, sessionId, gymId, trialFee, b
   await db.collection(SESSION_COLLECTION).doc(sessionId).update(
     isFull ? { waitlistCount: (session.waitlistCount || 0) + 1, updatedAt: now }
            : { enrolledCount: (session.enrolledCount || 0) + 1, updatedAt: now });
-  require('./coachCourseService').notifyCoaches({
-    gymId: enrollment.gymId, courseId: session.courseId, sessionId, type: 'course_enroll_trial',
-    title: isFull ? '單堂試上候補' : '單堂試上報名',
-    body: `${memberName || '學員'} ${isFull ? '加入單堂試上候補' : '報名單堂試上'}：${session.courseName || ''} ${session.date} ${session.startTime || ''}`,
-    referenceId: enrollmentId,
-  });
+  // 付款確認後才通知帶課教練：報名當下已收款（paymentStatus:'paid'，如櫃檯代報／確認收款時才建名單）立即通知；
+  // 待繳費（pending）則等「確認收款」把名單標 paid 時由 notifyTrialPaidToCoaches 通知（見 experienceBookings /confirm、transfers confirm）。
+  if (paymentStatus === 'paid') notifyTrialPaidToCoaches(enrollment);
   return { enrollmentId, sessionId, status: enrollment.status };
 };
 
@@ -3402,6 +3412,7 @@ const sendCourseNoticeBatch = async ({ courseIds, subject, html, staffId, staffN
 };
 
 module.exports = {
+  notifyTrialPaidToCoaches,
   RULE_DEFAULTS, resolveRules, getCategoryOf,
   createWeeklySessions,
   updateSession,

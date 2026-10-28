@@ -569,7 +569,10 @@ router.post('/:id/confirm', authenticate, async (req, res) => {
         if (!enDoc.exists || enDoc.data().status === 'cancelled') {
           return res.status(400).json({ error: 'TRIAL_EXPIRED', message: '此試上名額已因逾期未繳費釋出，請會員重新報名' });
         }
+        const _trialWasPaid = enDoc.data().paymentStatus === 'paid';
         await enDoc.ref.update({ paymentStatus: 'paid', paymentDeadline: null, updatedAt: new Date() });
+        // 付款確認後才通知帶課教練（冪等：名單原本就已付款——如改教練重呼叫 /confirm——不重複通知）
+        if (!_trialWasPaid) courseService.notifyTrialPaidToCoaches({ id: enDoc.id, ...enDoc.data() });
         await ref.update({ status: 'confirmed', confirmedBy: req.staff.id, confirmedByName: req.staff.name, confirmedAt: new Date(), updatedAt: new Date(), ...noteUpdate });
         await recordExperienceRevenue(db, ref, booking, req.staff).catch(e => console.error('[體驗營收]', e.message));
         // 試上確認收款 → 自動發 1 張當日體驗券（冪等：sync 依已發張數補差；入場當日豁免墜測）

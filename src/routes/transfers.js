@@ -235,7 +235,10 @@ router.put('/:id/confirm', authenticate, async (req, res) => {
                 const enRef = db.collection('courseEnrollments').doc(bk.trialEnrollmentId);
                 const enDoc = await enRef.get();
                 if (enDoc.exists && enDoc.data().status !== 'cancelled') {
+                  const _wasPaid = enDoc.data().paymentStatus === 'paid';
                   await enRef.update({ paymentStatus: 'paid', paymentDeadline: null, updatedAt: now });
+                  // 付款確認後才通知帶課教練（冪等：原本就已付款不重複通知）
+                  if (!_wasPaid) require('../services/courseService').notifyTrialPaidToCoaches({ id: enDoc.id, ...enDoc.data() });
                 }
               } catch (e) { console.error('[試上名單標已付/transfers]', e.message); }
             }

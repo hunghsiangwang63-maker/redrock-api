@@ -1929,6 +1929,11 @@ const sweepExpiredCoursePayments = async () => {
 };
 
 // ── 補課報名 ──────────────────────────────────────────────────────
+// 補課「目標梯次須首堂已正式開始」的限制，哪些場館**不適用**（有開課就開放補課）。
+// 2026-11-01 使用者要求：新竹館課程只要有開課（已建立且有場次）就開放補課，不用等第一堂正式上課；士林館維持原規定。
+const MAKEUP_OPEN_BEFORE_START_GYMS = ['gym-hsinchu'];
+const isMakeupOpenBeforeStart = (gymId) => MAKEUP_OPEN_BEFORE_START_GYMS.includes(gymId);
+
 const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
   const db = getDb();
   let makeupDoc = await db.collection(MAKEUP_COLLECTION).doc(makeupId).get();
@@ -2030,7 +2035,7 @@ const enrollMakeup = async ({ makeupId, memberId, targetSessionId }) => {
     // startDate，兩者皆無則不擋（放行，避免因資料缺漏誤傷合法申請）。同班別補課因來源梯次本身
     // 已開課過（否則不會有請假紀錄），天然不受此限。
     const targetFirstDate = targetCourse.unlimitedPracticeStart || targetCourse.startDate || null;
-    if (targetFirstDate && taiwanToday() < targetFirstDate) {
+    if (targetFirstDate && taiwanToday() < targetFirstDate && !isMakeupOpenBeforeStart(session.gymId || targetCourse.gymId)) {
       throw { code: 'TARGET_NOT_STARTED', message: `此梯次尚未開課（首堂 ${targetFirstDate}），須等第一堂課正式開始後才開放補課申請，避免佔用正式報名名額` };
     }
   }
@@ -2837,6 +2842,7 @@ const getMakeupCandidateSessions = async (db, { categoryId, gymId, excludeCourse
       courseName: c.name || '',
       categoryName: categoryNameById[c.categoryId] || '',
       courseFirstDate: c.unlimitedPracticeStart || c.startDate || null,
+      openBeforeStart: isMakeupOpenBeforeStart(s.gymId || c.gymId), // 前端依此決定要不要鎖「尚未開課」
     };
   }).sort((a, b) => a.date.localeCompare(b.date) || (a.startTime || '').localeCompare(b.startTime || ''));
 

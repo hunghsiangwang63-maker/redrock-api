@@ -693,6 +693,7 @@ router.get('/:id/registrations/download',
         '身高','臂展','組別','榮譽參賽','平常練習岩館','友館折扣','報名費',
         '付款狀態','匯款銀行','匯款/繳款日期','匯款末五碼',
         '簽署狀態','是否候補','備註','員工備註','報名時間',
+        ...((comp.customFields || []).map(f => f.label || f.key)), // 賽事自訂欄位（如隊友）接在最後，不影響前面欄位序號
       ];
       // 無保險賽事：不輸出「身分證/護照」欄（保險名冊專用資料）
       const dropIdCol = comp.hasInsurance === false;
@@ -712,6 +713,7 @@ router.get('/:id/registrations/download',
           signed, r.status === 'waitlist' ? '是' : '否',
           r.memberNote || r.customFieldValues?.notes || '', r.staffNote || '',
           r.registeredAt?._seconds ? new Date(r.registeredAt._seconds * 1000).toLocaleString('zh-TW') : '',
+          ...((comp.customFields || []).map(f => (r.customFieldValues || {})[f.key] || '')),
         ];
       };
 
@@ -1271,6 +1273,7 @@ router.post('/registrations/:regId/update-form', authenticateAny, async (req, re
       isHonorary: !!b.isHonorary,
       memberNote: b.memberNote || null,
       practiceGym: String(b.practiceGym || reg.practiceGym || '').trim() || null,
+      ...(b.customFieldValues && typeof b.customFieldValues === 'object' ? { customFieldValues: { ...(reg.customFieldValues || {}), ...b.customFieldValues } } : {}),
       registrationFee: reg.paidByMakeup ? 0 : registrationFee, isEarlyBird: !!isEarly, isTeamDiscount: feTeamDiscount,
       isPartnerGymDiscount: fePartner, partnerGym: fePartner ? fePartnerName : null,
       partnerGymPending: fePartner ? (reg.partnerGymPending !== false) : false,

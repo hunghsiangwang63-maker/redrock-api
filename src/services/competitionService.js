@@ -252,7 +252,7 @@ const createCompetition = async ({ name, description, gymId, registrationStart, 
     // 退費政策（多組截止日+退款計算）
     refundPolicies: refundPolicies || [],
     customFields: (customFields || []).map(f => ({
-      key: f.key, label: f.label, type: f.type || 'text', required: !!f.required, options: f.options || null,
+      key: f.key, label: f.label, type: f.type || 'text', required: !!f.required, options: f.options || null, placeholder: f.placeholder || null,
     })),
     waiverContent: waiverContent || { zh: '', en: '' },
     scoringSystem,

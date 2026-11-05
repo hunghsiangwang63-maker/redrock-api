@@ -10,7 +10,7 @@
 const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
-const { authenticate, requireManagerOrStation, requireManager } = require('../middleware/auth');
+const { authenticate, requireManagerOrStation, requireManager, auditLog } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const invoiceNumberService = require('../services/invoiceNumberService');
 const { notifyGymManagers } = require('../services/notificationService');
@@ -585,7 +585,7 @@ async function syncDirectInvoicePaymentMethod(db, sourceType, refId, paymentMeth
   } catch (e) { console.error('[付款方式修正] 發票同步失敗:', e.message); }
 }
 
-router.put('/source-payment-method', authenticate, requireManagerOrStation, async (req, res) => {
+router.put('/source-payment-method', authenticate, requireManagerOrStation, auditLog('invoice.source_payment_method'), async (req, res) => {
   try {
     const { sourceType, refId, paymentMethod } = req.body;
     if (!sourceType || !refId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '缺少 sourceType/refId' });

@@ -131,7 +131,7 @@ router.get('/', authenticate, async (req, res) => {
           createdAt: r.createdAt?._seconds || 0,
           gymId: r.gymId, memberName: r.memberName,
           link: '/staff/pending-tasks',   // 審核走本頁「審核」鈕開 CourseAdjustmentReviewModal，此連結僅比照 pass_adjustment 停留原頁（無「票券頁 courseRequests」分頁，舊連結為死連結）
-          record: { id: d.id, ...r },
+          record: (({ proofFiles, ...rest }) => ({ id: d.id, ...rest, proofCount: Array.isArray(proofFiles) ? proofFiles.length : 0, proofNames: Array.isArray(proofFiles) ? proofFiles.map(f => f.name) : [] }))(r), // 證明檔本體另由 GET /course-adjustments/requests/:id/proof 取
         });
       });
     } catch(e) {}

@@ -19,6 +19,34 @@ const COURSE_TRANSFER_FEE = 600;
 // ══════════════════════════════════════════════════════
 // GET /course-adjustments/reasons - 暫停/退費/轉讓申請理由清單（同定期票 REQUEST_REASONS 共用）
 // ══════════════════════════════════════════════════════
+// ── 證明附件（2026-11-05：申請暫停／退費須檢附證明，會員申請必填）──────────────────────
+// Firebase Storage 在 Railway 上傳不穩（見 memory firebase-storage-fails-on-railway）→ 比照簽名圖內嵌 base64 存 Firestore。
+// 前端已先壓縮圖片；後端再驗：最多 3 份、每份 ≤ 2MB、合計 ≤ 5MB，格式限 JPG/PNG/WebP/PDF。
+const PROOF_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+const PROOF_MAX_FILES = 3, PROOF_MAX_EACH = 2 * 1024 * 1024, PROOF_MAX_TOTAL = 5 * 1024 * 1024;
+const parseProofFiles = (raw, { required }) => {
+  const list = Array.isArray(raw) ? raw : [];
+  if (!list.length) return required ? { error: { error: 'PROOF_REQUIRED', message: '請上傳證明文件（必填）' } } : { files: [] };
+  if (list.length > PROOF_MAX_FILES) return { error: { error: 'PROOF_TOO_MANY', message: `證明文件最多 ${PROOF_MAX_FILES} 份` } };
+  let total = 0; const files = [];
+  for (const f of list) {
+    const m = /^data:([a-z/+.-]+);base64,([A-Za-z0-9+/=]+)$/.exec(String(f?.dataUrl || ''));
+    if (!m || !PROOF_MIMES.includes(m[1])) return { error: { error: 'PROOF_BAD_TYPE', message: '證明文件格式僅限圖片（JPG／PNG／WebP）或 PDF' } };
+    const bytes = Math.floor(m[2].length * 3 / 4);
+    if (bytes > PROOF_MAX_EACH) return { error: { error: 'PROOF_TOO_LARGE', message: '單一證明文件請小於 2MB' } };
+    total += bytes;
+    files.push({ name: String(f.name || '證明').slice(0, 80), mime: m[1], size: bytes, dataUrl: f.dataUrl });
+  }
+  if (total > PROOF_MAX_TOTAL) return { error: { error: 'PROOF_TOO_LARGE', message: '證明文件合計請小於 5MB' } };
+  return { files };
+};
+// 列表／待辦回傳時拿掉內嵌檔案本體（單筆可達數 MB），只留份數與檔名；員工審核時另打 GET /requests/:id/proof 取檔
+const stripProof = (r) => {
+  if (!r) return r;
+  const { proofFiles, ...rest } = r;
+  return { ...rest, proofCount: Array.isArray(proofFiles) ? proofFiles.length : 0, proofNames: Array.isArray(proofFiles) ? proofFiles.map(f => f.name) : [] };
+};
+
 router.get('/reasons', authenticateAny, (req, res) => {
   res.json({ reasons: REQUEST_REASONS });
 });
@@ -33,9 +61,18 @@ router.get('/requests', authenticate, requireManagerOrStation, async (req, res) 
     let ref = db.collection('courseAdjustmentRequests');
     if (status) ref = ref.where('status', '==', status);
     const snap = await ref.get();
-    const requests = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const requests = snap.docs.map(d => stripProof({ id: d.id, ...d.data() }))
       .sort((a, b) => (b.createdAt?._seconds || 0) - (a.createdAt?._seconds || 0));
     res.json({ requests });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// 員工審核時檢視證明附件（內嵌 base64）
+router.get('/requests/:id/proof', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const doc = await getDb().collection('courseAdjustmentRequests').doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到此申請' });
+    res.json({ files: doc.data().proofFiles || [] });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -55,6 +92,9 @@ router.post('/enrollments/:enrollmentId/refund-request',
       if (!reasonMeta) return res.status(400).json({ error: 'INVALID_REASON', message: '請選擇事由' });
       const reasonDetail = String(req.body.reasonDetail || '').trim();
       const reasonText = reasonMeta.label + (reasonDetail ? `：${reasonDetail}` : '');
+      // 證明文件：會員自己申請必填；員工代填（沒有會員身分）可略過
+      const proof = parseProofFiles(req.body.proofFiles, { required: !!req.member });
+      if (proof.error) return res.status(400).json(proof.error);
       // 支援家長代子女：優先用 body.memberId（前端傳報名對象），驗擁有權；否則用登入者本人
       const memberId = req.body.memberId || req.member?.id;
       const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
@@ -197,6 +237,7 @@ router.post('/enrollments/:enrollmentId/refund-request',
         perSessionDeduction,
         handlingFeeRate,
         reasonKey: req.body.reasonKey, reasonLabel: reasonMeta.label, reasonDetail,
+        proofFiles: proof.files,
         reason: reasonText,
         status: 'pending',
         createdAt: new Date(),
@@ -228,6 +269,9 @@ router.post('/enrollments/:enrollmentId/pause-request',
       if (!reasonMeta) return res.status(400).json({ error: 'INVALID_REASON', message: '請選擇事由' });
       const reasonDetail = String(req.body.reasonDetail || '').trim();
       const reasonText = reasonMeta.label + (reasonDetail ? `：${reasonDetail}` : '');
+      // 證明文件：會員自己申請必填；員工代填可略過
+      const proof = parseProofFiles(req.body.proofFiles, { required: !!req.member });
+      if (proof.error) return res.status(400).json(proof.error);
       // 支援家長代子女：優先 body.memberId + 驗擁有權
       const memberId = req.body.memberId || req.member?.id;
       const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403 });
@@ -279,6 +323,7 @@ router.post('/enrollments/:enrollmentId/pause-request',
         memberId: enrollment.memberId,
         memberName: enrollment.memberName || '',
         reasonKey: req.body.reasonKey, reasonLabel: reasonMeta.label, reasonDetail,
+        proofFiles: proof.files,
         reason: reasonText,
         status: 'pending',
         createdAt: new Date(),
@@ -748,7 +793,7 @@ router.get('/member/:memberId', authenticateAny, async (req, res) => {
     if (deny) return res.status(deny.status).json(deny.body);
     const snap = await db.collection(COLLECTIONS.COURSE_ADJUSTMENTS || 'courseAdjustmentRequests')
       .where('memberId', '==', memberId).get();
-    const requests = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const requests = snap.docs.map(d => stripProof({ id: d.id, ...d.data() }))
       .sort((a, b) => (b.createdAt?._seconds || 0) - (a.createdAt?._seconds || 0));
     res.json({ requests });
   } catch(err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }

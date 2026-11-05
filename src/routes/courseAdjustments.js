@@ -93,7 +93,9 @@ router.post('/enrollments/:enrollmentId/refund-request',
       const reasonDetail = String(req.body.reasonDetail || '').trim();
       const reasonText = reasonMeta.label + (reasonDetail ? `：${reasonDetail}` : '');
       // 證明文件：會員自己申請必填；員工代填（沒有會員身分）可略過
-      const proof = parseProofFiles(req.body.proofFiles, { required: !!req.member });
+      // preview:true＝只試算不建立申請（會員申請表顯示「系統試算」用），此時不要求證明文件／退款帳戶
+      const isPreview = req.body.preview === true;
+      const proof = parseProofFiles(req.body.proofFiles, { required: !!req.member && !isPreview });
       if (proof.error) return res.status(400).json(proof.error);
       // 支援家長代子女：優先用 body.memberId（前端傳報名對象），驗擁有權；否則用登入者本人
       const memberId = req.body.memberId || req.member?.id;
@@ -204,6 +206,16 @@ router.post('/enrollments/:enrollmentId/refund-request',
       // 建議退費佔已繳金額比例（供審核 modal 顯示「建議 NT$X，Y%」；週課/工作坊通用）
       const suggestedPercentage = paidAmount > 0 ? Math.round((suggestedRefund / paidAmount) * 100) : 0;
 
+      if (isPreview) {
+        return res.json({
+          preview: true, type: 'refund', courseType: course?.type || 'weekly',
+          paidAmount, actuallyPaid, hasInstallment: !!installmentPlanId,
+          suggestedRefund, suggestedPercentage, refundNote,
+          totalSessions, heldSessions, remainingSessions, remainingValue, feeRate, fee,
+          depositAmount, suggestedDepositRefund,
+        });
+      }
+
       // 退款指定帳戶（2026-08-24 新增，比照比賽退費）：已有實收金額才要求填寫，否則無款可退、不強制。
       // 帳戶可能與當初匯款付款的帳戶不同（會員可指定要退到哪個帳戶），故獨立收集、不沿用付款時的 bankLastFive/bankName。
       const refundBankCode = String(req.body.refundBankCode || '').trim();
@@ -270,7 +282,8 @@ router.post('/enrollments/:enrollmentId/pause-request',
       const reasonDetail = String(req.body.reasonDetail || '').trim();
       const reasonText = reasonMeta.label + (reasonDetail ? `：${reasonDetail}` : '');
       // 證明文件：會員自己申請必填；員工代填可略過
-      const proof = parseProofFiles(req.body.proofFiles, { required: !!req.member });
+      const isPreview = req.body.preview === true; // 只試算不建立申請
+      const proof = parseProofFiles(req.body.proofFiles, { required: !!req.member && !isPreview });
       if (proof.error) return res.status(400).json(proof.error);
       // 支援家長代子女：優先 body.memberId + 驗擁有權
       const memberId = req.body.memberId || req.member?.id;
@@ -313,11 +326,31 @@ router.post('/enrollments/:enrollmentId/pause-request',
       const course = courseDoc.exists ? courseDoc.data() : null;
       if (course && course.pauseAllowed === false) return res.status(400).json({ error: 'PAUSE_NOT_ALLOWED', message: '此課程不允許申請暫停' });
 
+      // 系統計算暫停堂數：與核准時完全同一套口徑——此會員此課程「今天（含）以後、尚未暫停」的有效報名堂次
+      const _upSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+        .where('courseId', '==', enrollment.courseId).where('memberId', '==', enrollment.memberId)
+        .where('status', '==', 'confirmed').get();
+      const _today = taiwanToday();
+      const pauseDates = _upSnap.docs.map(x => x.data())
+        .filter(e => (e.date || '') >= _today && e.pauseStatus !== 'paused')
+        .map(e => e.date).sort();
+      const _heldCount = _upSnap.docs.filter(x => (x.data().date || '') < _today).length;
+      const pauseCalc = {
+        pauseSessionCount: pauseDates.length,
+        pauseFirstDate: pauseDates[0] || null,
+        pauseLastDate: pauseDates[pauseDates.length - 1] || null,
+        pauseSessionDates: pauseDates.slice(0, 60),
+        heldSessionCount: _heldCount,
+      };
+      if (isPreview) return res.json({ preview: true, type: 'pause', ...pauseCalc });
+      if (pauseCalc.pauseSessionCount === 0) return res.status(400).json({ error: 'NO_UPCOMING_SESSIONS', message: '目前沒有尚未上課的堂次可暫停' });
+
       const reqId = `cpause_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
       await db.collection('courseAdjustmentRequests').doc(reqId).set({
         id: reqId,
         type: 'pause',
         enrollmentId: enrollment.id,
+        ...pauseCalc, // 系統試算的暫停堂數（核准時會依當下狀態重算，以核准結果 pausedCount 為準）
         courseId: enrollment.courseId,
         courseName: enrollment.courseName || course?.name || '',
         memberId: enrollment.memberId,

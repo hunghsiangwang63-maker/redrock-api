@@ -61,13 +61,16 @@ router.post('/login',
 
       // 裝置綁定檢查（可經 systemSettings/security.deviceBindingEnabled 暫時停用）
       const deviceAuthService = require('../services/deviceAuthService');
+      const deviceCookie = require('../utils/deviceCookie');
+      const deviceToken = deviceCookie.resolveDeviceToken(req); // cookie 優先（localStorage 被清掉仍認得同一台）
+      deviceCookie.setDeviceCookie(res, deviceToken);           // 密碼已驗證通過才寫入／續期
       if (await deviceAuthService.isDeviceBindingEnabled()) {
-        const trusted = await deviceAuthService.isDeviceTrusted('station', doc.id, req.body.deviceToken);
+        const trusted = await deviceAuthService.isDeviceTrusted('station', doc.id, deviceToken);
         if (!trusted) {
           const { verificationId } = await deviceAuthService.createDeviceVerification({
             accountType: 'station', accountId: doc.id,
             accountName: station.name, accountEmail: station.notificationEmail || station.email,
-            deviceToken: req.body.deviceToken,
+            deviceToken,
             deviceLabel: req.headers['user-agent'] || '',
           });
           return res.status(403).json({

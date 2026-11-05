@@ -75,15 +75,18 @@ router.post('/staff/login',
 
       // 裝置綁定檢查（super_admin 例外；並可經 systemSettings/security.deviceBindingEnabled 暫時停用）
       const deviceAuthService = require('../services/deviceAuthService');
+      const deviceCookie = require('../utils/deviceCookie');
+      const deviceToken = deviceCookie.resolveDeviceToken(req); // cookie 優先（localStorage 被清掉仍認得同一台）
+      deviceCookie.setDeviceCookie(res, deviceToken);           // 密碼已驗證通過才寫入／續期
       if (staff.role !== 'super_admin' && await deviceAuthService.isDeviceBindingEnabled()) {
-        const trusted = await deviceAuthService.isDeviceTrusted('staff', staffDoc.id, req.body.deviceToken);
+        const trusted = await deviceAuthService.isDeviceTrusted('staff', staffDoc.id, deviceToken);
         if (!trusted) {
           const { verificationId } = await deviceAuthService.createDeviceVerification({
             accountType: 'staff', accountId: staffDoc.id,
             accountName: staff.name,
             // notificationEmail 需為合法 email 才用（曾有員工被填 "see" 之類垃圾值 → 驗證碼寄丟）；否則退回主 email
             accountEmail: /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(staff.notificationEmail || '') ? staff.notificationEmail : staff.email,
-            deviceToken: req.body.deviceToken,
+            deviceToken,
             deviceLabel: req.headers['user-agent'] || '',
           });
           return res.status(403).json({
@@ -555,6 +558,7 @@ router.post('/device/verify-otp',
     try {
       const deviceAuthService = require('../services/deviceAuthService');
       const v = await deviceAuthService.verifyDeviceOtp(req.body.verificationId, req.body.code);
+      require('../utils/deviceCookie').setDeviceCookie(res, v.deviceToken); // 驗證成功：cookie 綁定這個已信任的識別碼
 
       const db = getDb();
       if (v.accountType === 'staff') {

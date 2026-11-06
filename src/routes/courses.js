@@ -1890,15 +1890,20 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
         const _leaveEns = ens.filter(e => e.status === 'leave' && e.date).sort((a, b) => a.date.localeCompare(b.date));
         const _leaveRights = rights.filter(r => !['closure', 'prev_leave', 'manual'].includes(r.source) && r.redemptionType !== 'cash_credit')
           .sort((a, b) => (a.createdAt?.toDate?.()?.getTime() || 0) - (b.createdAt?.toDate?.()?.getTime() || 0));
-        const realLeaves = realLeaveDates.map((d, i) => {
+        const _realItems = realLeaveDates.map((d, i) => {
           const r = cashCreditRights[i];
-          if (r) return `${d}（${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}）`;
+          if (r) return { text: `${d}（${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}）`, voucher: '' };
           const _en = _leaveEns[i];
           const _linked = _en ? _leaveRights.filter(r => r.originalEnrollmentId === _en.id) : []; // 以 originalEnrollmentId 精確對應該次請假；舊資料沒有連結才退回發券順序
           const rs = _linked.length ? _linked : _leaveRights.slice(i * _perLeave, (i + 1) * _perLeave);
-          return d + (rs.length ? rs.map(_voucherTag).join('') : (rules.allowMakeup === false ? '' : '（無補課券）'));
+          return { text: d, voucher: (rs.length ? rs.map(_voucherTag).join('') : (rules.allowMakeup === false ? '' : '（無補課券）')) };
         });
-        const leaves = [...realLeaves, ...rights.filter(r => r.source === 'closure' && r.closureDate).map(r => `${r.closureDate}（停課）${_voucherTag(r)}`), ...prevLeaveDays].sort();
+        const realLeaves = _realItems.map(x => x.text + x.voucher);
+        // 請假日與補課券到期日分欄顯示用（leaveItems）；leaves 仍保留「日期＋券狀態」合併字串供 CSV 與舊畫面
+        const leaveItems = [..._realItems,
+          ...rights.filter(r => r.source === 'closure' && r.closureDate).map(r => ({ text: `${r.closureDate}（停課）`, voucher: _voucherTag(r) })),
+          ...prevLeaveDays.map(t => ({ text: t, voucher: '' }))].sort((a, b) => a.text.localeCompare(b.text));
+        const leaves = leaveItems.map(x => x.text + x.voucher);
         const cap = ens.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rules.maxLeaves;
         // 現金折抵（redemptionType:'cash_credit'，如無可補課時段改折抵費用）不算補課次數，僅列在 leaves 供查核
         const avail = rights.filter(r => r.status === 'available' && r.redemptionType !== 'cash_credit' && (!r.expiresAt || require('dayjs')().isBefore(require('dayjs')(r.expiresAt.toDate()))));
@@ -1912,7 +1917,7 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
           memberId: mid,
           memberName: nameMap[mid]?.name || ens[0].memberName || '',
           memberPhone: nameMap[mid]?.phone || '',
-          leaves, leaveCount: realLeaves.length, leaveCap: cap,
+          leaves, leaveItems, leaveCount: realLeaves.length, leaveCap: cap,
           makeupAvailable: avail.length, makeupUsed: used.length, makeupTotal: avail.length + used.length,
           makeupExpiresAt: expiresAt ? new Date(expiresAt.getTime() + 8 * 3600000).toISOString().slice(0, 10) : null, // 台灣日期
           manualIssued: rights.filter(r => r.source === 'manual').length, // 政策上不發補課券的課程，館方已手動核發幾張（供判斷還要不要再核發）
@@ -2049,15 +2054,20 @@ router.get('/leave-makeup-summary/all',
           const _leaveEns = ens.filter(e => e.status === 'leave' && e.date).sort((a, b) => a.date.localeCompare(b.date));
           const _leaveRights = rights.filter(r => !['closure', 'prev_leave', 'manual'].includes(r.source) && r.redemptionType !== 'cash_credit')
             .sort((a, b) => (a.createdAt?.toDate?.()?.getTime() || 0) - (b.createdAt?.toDate?.()?.getTime() || 0));
-          const realLeaves = realLeaveDates.map((d, i) => {
+          const _realItems = realLeaveDates.map((d, i) => {
             const r = cashCreditRights[i];
-            if (r) return `${d}（${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}）`;
+            if (r) return { text: `${d}（${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}）`, voucher: '' };
             const _en = _leaveEns[i];
             const _linked = _en ? _leaveRights.filter(r => r.originalEnrollmentId === _en.id) : []; // 以 originalEnrollmentId 精確對應該次請假；舊資料沒有連結才退回發券順序
             const rs = _linked.length ? _linked : _leaveRights.slice(i * _perLeave, (i + 1) * _perLeave);
-            return d + (rs.length ? rs.map(_voucherTag).join('') : (rules.allowMakeup === false ? '' : '（無補課券）'));
+            return { text: d, voucher: (rs.length ? rs.map(_voucherTag).join('') : (rules.allowMakeup === false ? '' : '（無補課券）')) };
           });
-          const leaves = [...realLeaves, ...rights.filter(r => r.source === 'closure' && r.closureDate).map(r => `${r.closureDate}（停課）${_voucherTag(r)}`), ...prevLeaveDays].sort();
+          const realLeaves = _realItems.map(x => x.text + x.voucher);
+          // 請假日與補課券到期日分欄顯示用（leaveItems）；leaves 仍保留「日期＋券狀態」合併字串供 CSV 與舊畫面
+          const leaveItems = [..._realItems,
+            ...rights.filter(r => r.source === 'closure' && r.closureDate).map(r => ({ text: `${r.closureDate}（停課）`, voucher: _voucherTag(r) })),
+            ...prevLeaveDays.map(t => ({ text: t, voucher: '' }))].sort((a, b) => a.text.localeCompare(b.text));
+          const leaves = leaveItems.map(x => x.text + x.voucher);
           const cap = ens.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rules.maxLeaves;
           // 現金折抵（redemptionType:'cash_credit'，如無可補課時段改折抵費用）不算補課次數，僅列在 leaves 供查核
           const avail = rights.filter(r => r.status === 'available' && r.redemptionType !== 'cash_credit' && (!r.expiresAt || require('dayjs')().isBefore(require('dayjs')(r.expiresAt.toDate()))));
@@ -2071,7 +2081,7 @@ router.get('/leave-makeup-summary/all',
             memberId: mid,
             memberName: nameMap[mid]?.name || ens[0].memberName || '',
             memberPhone: nameMap[mid]?.phone || '',
-            leaves, leaveCount: realLeaves.length, leaveCap: cap,
+            leaves, leaveItems, leaveCount: realLeaves.length, leaveCap: cap,
             makeupAvailable: avail.length, makeupUsed: used.length, makeupTotal: avail.length + used.length,
             makeupExpiresAt: expiresAt ? new Date(expiresAt.getTime() + 8 * 3600000).toISOString().slice(0, 10) : null,
             manualIssued: rights.filter(r => r.source === 'manual').length,

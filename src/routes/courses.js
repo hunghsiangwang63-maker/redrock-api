@@ -1826,7 +1826,7 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
       enSnap.docs.forEach(d => {
         const e = d.data();
         if (e.isTrial || e.isMakeup) return; // 試上/補課(單堂)不算該班學員；只列原班級整期學員（補課者列在其原班級）
-        (byMember[e.memberId] = byMember[e.memberId] || []).push(e);
+        (byMember[e.memberId] = byMember[e.memberId] || []).push({ ...e, id: d.id });
       });
 
       const rightsSnap = await db.collection('courseMakeupRights').where('courseId', '==', courseId).get();
@@ -1883,11 +1883,22 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
         const cashCreditRights = rights
           .filter(r => r.redemptionType === 'cash_credit' && r.source !== 'prev_leave' && r.source !== 'closure')
           .sort((a, b) => (a.createdAt?.toDate?.()?.getTime() || 0) - (b.createdAt?.toDate?.()?.getTime() || 0));
+        // 請假日旁標示補課券到期日（2026-11-07）：本期請假依發券順序對應（每次請假發 makeupPerLeave 張，手動核發／現金折抵／停課券不參與對應）；停課日依 closureDate 精確對應
+        const _fmtExp = (r) => (r.expiresAt && r.expiresAt.toDate) ? new Date(r.expiresAt.toDate().getTime() + 8 * 3600000).toISOString().slice(0, 10) : null;
+        const _voucherTag = (r) => r.status === 'used' ? '（已補課）' : r.status === 'available' ? `（補課券至 ${_fmtExp(r) || '無期限'}）` : r.status === 'cancelled' ? '（券已作廢）' : '';
+        const _perLeave = Math.max(1, rules.makeupPerLeave || 1);
+        const _leaveEns = ens.filter(e => e.status === 'leave' && e.date).sort((a, b) => a.date.localeCompare(b.date));
+        const _leaveRights = rights.filter(r => !['closure', 'prev_leave', 'manual'].includes(r.source) && r.redemptionType !== 'cash_credit')
+          .sort((a, b) => (a.createdAt?.toDate?.()?.getTime() || 0) - (b.createdAt?.toDate?.()?.getTime() || 0));
         const realLeaves = realLeaveDates.map((d, i) => {
           const r = cashCreditRights[i];
-          return r ? `${d}（${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}）` : d;
+          if (r) return `${d}（${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}）`;
+          const _en = _leaveEns[i];
+          const _linked = _en ? _leaveRights.filter(r => r.originalEnrollmentId === _en.id) : []; // 以 originalEnrollmentId 精確對應該次請假；舊資料沒有連結才退回發券順序
+          const rs = _linked.length ? _linked : _leaveRights.slice(i * _perLeave, (i + 1) * _perLeave);
+          return d + (rs.length ? rs.map(_voucherTag).join('') : (rules.allowMakeup === false ? '' : '（無補課券）'));
         });
-        const leaves = [...realLeaves, ...closureDays.map(d => `${d}（停課）`), ...prevLeaveDays].sort();
+        const leaves = [...realLeaves, ...rights.filter(r => r.source === 'closure' && r.closureDate).map(r => `${r.closureDate}（停課）${_voucherTag(r)}`), ...prevLeaveDays].sort();
         const cap = ens.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rules.maxLeaves;
         // 現金折抵（redemptionType:'cash_credit'，如無可補課時段改折抵費用）不算補課次數，僅列在 leaves 供查核
         const avail = rights.filter(r => r.status === 'available' && r.redemptionType !== 'cash_credit' && (!r.expiresAt || require('dayjs')().isBefore(require('dayjs')(r.expiresAt.toDate()))));
@@ -1955,7 +1966,7 @@ router.get('/leave-makeup-summary/all',
         db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
           .select('courseId', 'memberId', 'isTrial', 'isMakeup', 'status', 'date', 'maxLeavesAllowed', 'memberName').get(),
         db.collection('courseMakeupRights')
-          .select('courseId', 'memberId', 'source', 'closureDate', 'prevLeaveDate', 'redemptionType', 'status', 'cashCreditAmount', 'expiresAt', 'usedSessionId', 'courseName', 'createdAt').get(),
+          .select('courseId', 'memberId', 'source', 'closureDate', 'prevLeaveDate', 'redemptionType', 'status', 'cashCreditAmount', 'expiresAt', 'usedSessionId', 'courseName', 'createdAt', 'originalEnrollmentId').get(),
         db.collection('pendingCourseClaims').get(),
         db.collection('courseCategories').get(),
       ]);
@@ -1970,7 +1981,7 @@ router.get('/leave-makeup-summary/all',
       const courseIds = new Set(courses.map(c => c.id));
 
       const enByCourse = {}, mkByCourse = {}, pcByCourse = {};
-      enSnap.docs.forEach(d => { const e = d.data(); if (e.isTrial || e.isMakeup || !courseIds.has(e.courseId)) return; ((enByCourse[e.courseId] = enByCourse[e.courseId] || {})[e.memberId] = (enByCourse[e.courseId][e.memberId] || [])).push(e); });
+      enSnap.docs.forEach(d => { const e = d.data(); if (e.isTrial || e.isMakeup || !courseIds.has(e.courseId)) return; ((enByCourse[e.courseId] = enByCourse[e.courseId] || {})[e.memberId] = (enByCourse[e.courseId][e.memberId] || [])).push({ ...e, id: d.id }); });
       mkSnap.docs.forEach(d => { const r = { id: d.id, ...d.data() }; if (!courseIds.has(r.courseId)) return; ((mkByCourse[r.courseId] = mkByCourse[r.courseId] || {})[r.memberId] = (mkByCourse[r.courseId][r.memberId] || [])).push(r); });
       pcSnap.docs.forEach(d => { const x = d.data(); if (x.claimed === true || !courseIds.has(x.courseId)) return; (pcByCourse[x.courseId] = pcByCourse[x.courseId] || []).push({ name: x.name, leaveDates: x.leaveDates || [] }); });
 
@@ -2031,11 +2042,22 @@ router.get('/leave-makeup-summary/all',
           const cashCreditRights = rights
             .filter(r => r.redemptionType === 'cash_credit' && r.source !== 'prev_leave' && r.source !== 'closure')
             .sort((a, b) => (a.createdAt?.toDate?.()?.getTime() || 0) - (b.createdAt?.toDate?.()?.getTime() || 0));
+          // 請假日旁標示補課券到期日（2026-11-07）：本期請假依發券順序對應（每次請假發 makeupPerLeave 張，手動核發／現金折抵／停課券不參與對應）；停課日依 closureDate 精確對應
+          const _fmtExp = (r) => (r.expiresAt && r.expiresAt.toDate) ? new Date(r.expiresAt.toDate().getTime() + 8 * 3600000).toISOString().slice(0, 10) : null;
+          const _voucherTag = (r) => r.status === 'used' ? '（已補課）' : r.status === 'available' ? `（補課券至 ${_fmtExp(r) || '無期限'}）` : r.status === 'cancelled' ? '（券已作廢）' : '';
+          const _perLeave = Math.max(1, rules.makeupPerLeave || 1);
+          const _leaveEns = ens.filter(e => e.status === 'leave' && e.date).sort((a, b) => a.date.localeCompare(b.date));
+          const _leaveRights = rights.filter(r => !['closure', 'prev_leave', 'manual'].includes(r.source) && r.redemptionType !== 'cash_credit')
+            .sort((a, b) => (a.createdAt?.toDate?.()?.getTime() || 0) - (b.createdAt?.toDate?.()?.getTime() || 0));
           const realLeaves = realLeaveDates.map((d, i) => {
             const r = cashCreditRights[i];
-            return r ? `${d}（${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}）` : d;
+            if (r) return `${d}（${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}）`;
+            const _en = _leaveEns[i];
+            const _linked = _en ? _leaveRights.filter(r => r.originalEnrollmentId === _en.id) : []; // 以 originalEnrollmentId 精確對應該次請假；舊資料沒有連結才退回發券順序
+            const rs = _linked.length ? _linked : _leaveRights.slice(i * _perLeave, (i + 1) * _perLeave);
+            return d + (rs.length ? rs.map(_voucherTag).join('') : (rules.allowMakeup === false ? '' : '（無補課券）'));
           });
-          const leaves = [...realLeaves, ...closureDays.map(d => `${d}（停課）`), ...prevLeaveDays].sort();
+          const leaves = [...realLeaves, ...rights.filter(r => r.source === 'closure' && r.closureDate).map(r => `${r.closureDate}（停課）${_voucherTag(r)}`), ...prevLeaveDays].sort();
           const cap = ens.find(e => e.maxLeavesAllowed != null)?.maxLeavesAllowed ?? rules.maxLeaves;
           // 現金折抵（redemptionType:'cash_credit'，如無可補課時段改折抵費用）不算補課次數，僅列在 leaves 供查核
           const avail = rights.filter(r => r.status === 'available' && r.redemptionType !== 'cash_credit' && (!r.expiresAt || require('dayjs')().isBefore(require('dayjs')(r.expiresAt.toDate()))));

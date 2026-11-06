@@ -473,7 +473,7 @@ const buildCourseMemberList = async (db, c) => {
     .select('memberId', 'memberName', 'status', 'cancelReason', 'pauseStatus', 'waitlistPosition', 'cancelledAt',
       'payEnrollmentId', 'fee', 'originalFee', 'feeCalcNote', 'paymentMethod', 'paymentStatus', 'paymentConfirmed', 'memberPaidAmount',
       'receivedAmountOverride', 'bankLastFive', 'paymentDate', 'enrolledAt', 'createdAt', 'enrollNote', 'healthNote',
-      'referralSource', 'staffNote', 'contactPhone', 'isGuest')
+      'referralSource', 'staffNote', 'contactPhone', 'isGuest', 'sessionCount', 'sourceEnrollmentIds')
     .get();
   const seen = new Map();
   const payMap = {};
@@ -506,6 +506,8 @@ const buildCourseMemberList = async (db, c) => {
       bankLastFive: h.bankLastFive || '',
       paymentDate: h.paymentDate || '',
       enrolledAt: h.enrolledAt || h.createdAt || null,
+      // 報名堂數（報名當下的場次數；header 沒存 sessionCount 的舊資料退回 sourceEnrollmentIds 長度）
+      sessionCount: h.sessionCount != null ? h.sessionCount : (Array.isArray(h.sourceEnrollmentIds) && h.sourceEnrollmentIds.length ? h.sourceEnrollmentIds.length : null),
       enrollNote: h.enrollNote || '',
       healthNote: h.healthNote || '',
       referralSource: h.referralSource || '',

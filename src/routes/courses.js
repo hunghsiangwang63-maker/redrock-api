@@ -1946,8 +1946,15 @@ router.get('/leave-makeup-summary/all',
         db.collection('courseCategories').get(),
       ]);
       const cats = {}; catSnap.docs.forEach(d => { cats[d.id] = { id: d.id, ...d.data() }; });
+      // 已停用（isActive:false）的課程原本整個被排除；但課程結束後常被停用，學員手上可能還有「未用、未過期」的補課券
+      // 要補（2026-11-07 陳怡安案例：技巧班 9-10月週日A班已停用，3 位學員的 5 張可用券在總表上看不到）→
+      // 停用課程只要還有未用且未過期的補課券就照樣列出（畫面標「已停用」）；沒有可用券的停用課程仍排除。
+      const _nowMs = Date.now();
+      const courseIdsWithAvailableRights = new Set(mkSnap.docs.map(d => d.data())
+        .filter(r => r.status === 'available' && (!r.expiresAt || !r.expiresAt.toDate || r.expiresAt.toDate().getTime() > _nowMs))
+        .map(r => r.courseId));
       const courses = csSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-        .filter(c => c.status !== 'cancelled' && c.isActive !== false && c.source !== 'experience')
+        .filter(c => c.status !== 'cancelled' && (c.isActive !== false || courseIdsWithAvailableRights.has(c.id)) && c.source !== 'experience')
         .filter(c => c.type !== 'workshop')   // 工作坊單堂、無請假補課概念 → 排除（體驗課 source:experience 已排除、試上 isTrial 已排除）
         .filter(c => !gymId || c.gymId === gymId);
       const courseIds = new Set(courses.map(c => c.id));
@@ -2041,6 +2048,7 @@ router.get('/leave-makeup-summary/all',
           groups.push({
             course: {
               id: c.id, name: c.name, gymId: c.gymId || null, categoryId: c.categoryId || null,
+              isActive: c.isActive !== false, // false＝已停用（只因仍有未用補課券才列出）
               maxLeaves: rules.maxLeaves, allowMakeup: rules.allowMakeup,
               makeupDeadline: c.makeupDeadlineDate || (c.endDate ? require('dayjs')(c.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null),
             },

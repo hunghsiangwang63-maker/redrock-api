@@ -670,26 +670,31 @@ const buildCourseStudentRows = (filtered) => {
 // （只計未作廢的）；兩邊都有的話以真實列印版為準。供列表 JSON（畫面按鍵即時反白＋號碼）與
 // XLSX 下載共用同一份結果，不必各自再查一次。
 // 各梯次場次統計（依 courseSessions）：已開堂數／待開堂數／停課堂數（2026-11-06）
-//  已開＝未取消且（日期早於今天，或今天且開始時間已過）；待開＝未取消且尚未開始；停課＝status:'cancelled' 的場次
-//  （含休館停課、場次取消、課程改期取消）。一次以 courseId in 分批查詢，只取 courseId/date/startTime/status 四欄。
+//  已開＝未取消且（日期早於今天，或今天且開始時間已過）；待開＝未取消且尚未開始；
+//  停課＝status:'cancelled' 且非休館停課（場次取消、課程改期取消等）；
+//  休館停課＝status:'cancelled' 且為休館停課（closureCancelledBy／cancelReason 為休館停課；已發補課券，這堂沒有欠學員，
+//  與「停課」分開計，2026-11-06 依管理員指示）。一次以 courseId in 分批查詢，只取必要欄位。
 const attachSessionStats = async (db, courses) => {
   const ids = (courses || []).map(c => c.courseId).filter(Boolean);
   if (!ids.length) return;
   const today = taiwanToday();
   const nowHM = dayjs().format('HH:mm');
   const stats = {};
-  ids.forEach(id => { stats[id] = { held: 0, upcoming: 0, cancelled: 0 }; });
+  ids.forEach(id => { stats[id] = { held: 0, upcoming: 0, cancelled: 0, closure: 0 }; });
   const chunks = [];
   for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30));
   const snaps = await Promise.all(chunks.map(ch => db.collection('courseSessions')
-    .where('courseId', 'in', ch).select('courseId', 'date', 'startTime', 'status').get()));
+    .where('courseId', 'in', ch).select('courseId', 'date', 'startTime', 'status', 'closureCancelledBy', 'cancelReason').get()));
   snaps.forEach(snap => snap.docs.forEach(d => {
     const x = d.data(); const st = stats[x.courseId]; if (!st) return;
-    if (x.status === 'cancelled') st.cancelled += 1;
+    if (x.status === 'cancelled') {
+      const isClosure = !!x.closureCancelledBy || String(x.cancelReason || '').startsWith('休館停課');
+      if (isClosure) st.closure += 1; else st.cancelled += 1;
+    }
     else if ((x.date || '') < today || ((x.date || '') === today && x.startTime && x.startTime <= nowHM)) st.held += 1;
     else st.upcoming += 1;
   }));
-  courses.forEach(c => { c.sessionStats = stats[c.courseId] || { held: 0, upcoming: 0, cancelled: 0 }; });
+  courses.forEach(c => { c.sessionStats = stats[c.courseId] || { held: 0, upcoming: 0, cancelled: 0, closure: 0 }; });
 };
 
 const attachInvoiceStatus = async (db, courses) => {

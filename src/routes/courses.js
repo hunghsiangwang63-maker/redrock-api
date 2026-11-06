@@ -1844,6 +1844,7 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
         const refs = usedSessionIds.slice(i, i + 20).map(id => db.collection('courseSessions').doc(id));
         (await db.getAll(...refs)).forEach(doc => { if (doc.exists) sessMap[doc.id] = doc.data(); });
       }
+      const attMap = await fetchAttendanceMap(db, usedSessionIds); // 補課出席（已上／未出席）
 
       // 姓名/電話以 members 集合權威補齊
       const memberIds = Object.keys(byMember);
@@ -1855,6 +1856,7 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
 
       // 前期補課（跨期，isMakeup+crossTermNote）→ 併入 bookedMakeups 標「上期」；不佔當期補課額度
       const crossTermByMember = {};
+      const makeupByRightId = {}; // 以補課券 id 對應「實際的補課報名」（補課券上的 usedSessionId 可能過期/場次被重建，以報名為準）
       for (let i = 0; i < memberIds.length; i += 10) {
         const chunk = memberIds.slice(i, i + 10);
         if (!chunk.length) break;
@@ -1862,10 +1864,11 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
         // 「跨全系統所有課程」的完整報名歷史；courseEnrollments 每筆內嵌簽名圖(base64 PNG，平均
         // ~77KB)，全系統會員規模下未投影會傳輸大量資料（單次呼叫可能上百MB）。只投影用到的 6 欄。
         const q = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).where('memberId', 'in', chunk)
-          .select('memberId', 'isMakeup', 'crossTermNote', 'status', 'date', 'startTime', 'courseName').get();
-        q.docs.forEach(d => { const e = d.data(); if (e.isMakeup && e.crossTermNote && e.status !== 'cancelled') (crossTermByMember[e.memberId] = crossTermByMember[e.memberId] || []).push({ date: e.date, startTime: e.startTime || '', courseName: e.courseName || '', taken: !!e.date && e.date < today, note: e.crossTermNote }); });
+          .select('memberId', 'isMakeup', 'crossTermNote', 'status', 'date', 'startTime', 'courseName', 'sessionId', 'makeupId').get();
+        q.docs.forEach(d => { const e = d.data(); if (e.isMakeup && e.makeupId && e.status !== 'cancelled') makeupByRightId[e.makeupId] = { date: e.date, startTime: e.startTime || '', courseName: e.courseName || '', sessionId: e.sessionId || null }; if (e.isMakeup && e.crossTermNote && e.status !== 'cancelled') (crossTermByMember[e.memberId] = crossTermByMember[e.memberId] || []).push({ date: e.date, startTime: e.startTime || '', courseName: e.courseName || '', taken: !!e.date && e.date < today, sessionId: e.sessionId || null, note: e.crossTermNote }); });
       }
 
+      Object.assign(attMap, await fetchAttendanceMap(db, [...Object.values(crossTermByMember).flat().map(b => b.sessionId), ...Object.values(makeupByRightId).map(b => b.sessionId)])); // 前期補課與實際補課報名的出席
       const rows = memberIds.map(mid => {
         const ens = byMember[mid];
         const active = ens.filter(e => ['confirmed', 'leave', 'waitlist'].includes(e.status));
@@ -1891,9 +1894,9 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
         const used = rights.filter(r => r.status === 'used' && r.redemptionType !== 'cash_credit');
         const expiresAt = avail[0]?.expiresAt?.toDate?.() || null;
         const bookedMakeups = [...used.map(r => {
-          const sx = sessMap[r.usedSessionId];
-          return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today, note: (r.source === 'closure' && r.closureDate) ? '補' + String(r.closureDate).slice(5).replace('-', '/') + '停課' : ((r.source === 'prev_leave' && r.prevLeaveDate) ? '補' + String(r.prevLeaveDate).slice(5).replace('-', '/') + '上期請假' : undefined) } : null;
-        }).filter(Boolean), ...(crossTermByMember[mid] || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+          const sx = makeupByRightId[r.id] || sessMap[r.usedSessionId]; const usedSid = (makeupByRightId[r.id] && makeupByRightId[r.id].sessionId) || r.usedSessionId;
+          return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today, sessionId: usedSid, attended: attMap[`${usedSid}|${mid}`] === 'present', note: (r.source === 'closure' && r.closureDate) ? '補' + String(r.closureDate).slice(5).replace('-', '/') + '停課' : ((r.source === 'prev_leave' && r.prevLeaveDate) ? '補' + String(r.prevLeaveDate).slice(5).replace('-', '/') + '上期請假' : undefined) } : null;
+        }).filter(Boolean), ...(crossTermByMember[mid] || []).map(b => ({ ...b, attended: attMap[`${b.sessionId}|${mid}`] === 'present' }))].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
         return {
           memberId: mid,
           memberName: nameMap[mid]?.name || ens[0].memberName || '',
@@ -1920,6 +1923,17 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
         rows, pendingClaims,
       };
 }
+
+// 補課出席查詢（courseAttendance 以 sessionId+memberId 為鍵；status:'present' 才算已出席）：回傳 { 'sessionId|memberId': status }
+const fetchAttendanceMap = async (db, sessionIds) => {
+  const map = {};
+  const ids = [...new Set((sessionIds || []).filter(Boolean))];
+  for (let i = 0; i < ids.length; i += 30) {
+    const snap = await db.collection('courseAttendance').where('sessionId', 'in', ids.slice(i, i + 30)).select('sessionId', 'memberId', 'status').get();
+    snap.docs.forEach(d => { const x = d.data(); map[`${x.sessionId}|${x.memberId}`] = x.status; });
+  }
+  return map;
+};
 
 // GET /courses/leave-makeup-summary/all - 全部課程假補總表（可帶 gymId；只回有資料的課程）
 // 效能：整批一次撈（courses/enrollments/rights/claims/categories 各一查詢＋members/sessions getAll），
@@ -1973,6 +1987,7 @@ router.get('/leave-makeup-summary/all',
         const refs = usedSessionIds.slice(i, i + 20).map(id => db.collection('courseSessions').doc(id));
         (await db.getAll(...refs)).forEach(doc => { if (doc.exists) sessMap[doc.id] = doc.data(); });
       }
+      const attMap = await fetchAttendanceMap(db, usedSessionIds); // 補課出席（已上／未出席）
 
       // 跨期補課（獨立一區）：含已結案(done)者一併顯示（供查核已完成補課），解析 booked 的 target session 課名（供顯示補課班級）
       const xmAllSnap = await db.collection('crossCohortMakeups').get();
@@ -1987,6 +2002,7 @@ router.get('/leave-makeup-summary/all',
 
       // 前期補課（跨期，isMakeup+crossTermNote）→ 併入 bookedMakeups 標「上期」
       const crossTermByMember = {};
+      const makeupByRightId = {}; // 以補課券 id 對應「實際的補課報名」（補課券上的 usedSessionId 可能過期/場次被重建，以報名為準）
       for (let i = 0; i < allMemberIds.length; i += 10) {
         const chunk = allMemberIds.slice(i, i + 10);
         if (!chunk.length) break;
@@ -1994,10 +2010,11 @@ router.get('/leave-makeup-summary/all',
         // 「跨全系統所有課程」的完整報名歷史；courseEnrollments 每筆內嵌簽名圖(base64 PNG，平均
         // ~77KB)，全系統會員規模下未投影會傳輸大量資料（單次呼叫可能上百MB）。只投影用到的 6 欄。
         const q = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS).where('memberId', 'in', chunk)
-          .select('memberId', 'isMakeup', 'crossTermNote', 'status', 'date', 'startTime', 'courseName').get();
-        q.docs.forEach(d => { const e = d.data(); if (e.isMakeup && e.crossTermNote && e.status !== 'cancelled') (crossTermByMember[e.memberId] = crossTermByMember[e.memberId] || []).push({ date: e.date, startTime: e.startTime || '', courseName: e.courseName || '', taken: !!e.date && e.date < today, note: e.crossTermNote }); });
+          .select('memberId', 'isMakeup', 'crossTermNote', 'status', 'date', 'startTime', 'courseName', 'sessionId', 'makeupId').get();
+        q.docs.forEach(d => { const e = d.data(); if (e.isMakeup && e.makeupId && e.status !== 'cancelled') makeupByRightId[e.makeupId] = { date: e.date, startTime: e.startTime || '', courseName: e.courseName || '', sessionId: e.sessionId || null }; if (e.isMakeup && e.crossTermNote && e.status !== 'cancelled') (crossTermByMember[e.memberId] = crossTermByMember[e.memberId] || []).push({ date: e.date, startTime: e.startTime || '', courseName: e.courseName || '', taken: !!e.date && e.date < today, sessionId: e.sessionId || null, note: e.crossTermNote }); });
       }
 
+      Object.assign(attMap, await fetchAttendanceMap(db, [...Object.values(crossTermByMember).flat().map(b => b.sessionId), ...Object.values(makeupByRightId).map(b => b.sessionId)])); // 前期補課與實際補課報名的出席
       const groups = [];
       for (const c of courses) {
         const rules = courseService.resolveRules(c, cats[c.categoryId] || null);
@@ -2025,9 +2042,9 @@ router.get('/leave-makeup-summary/all',
           const used = rights.filter(r => r.status === 'used' && r.redemptionType !== 'cash_credit');
           const expiresAt = avail[0]?.expiresAt?.toDate?.() || null;
           const bookedMakeups = [...used.map(r => {
-            const sx = sessMap[r.usedSessionId];
-            return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today, note: (r.source === 'closure' && r.closureDate) ? '補' + String(r.closureDate).slice(5).replace('-', '/') + '停課' : ((r.source === 'prev_leave' && r.prevLeaveDate) ? '補' + String(r.prevLeaveDate).slice(5).replace('-', '/') + '上期請假' : undefined) } : null;
-          }).filter(Boolean), ...(crossTermByMember[mid] || [])].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+            const sx = makeupByRightId[r.id] || sessMap[r.usedSessionId]; const usedSid = (makeupByRightId[r.id] && makeupByRightId[r.id].sessionId) || r.usedSessionId;
+            return sx ? { date: sx.date, startTime: sx.startTime || '', courseName: sx.courseName || '', taken: !!sx.date && sx.date < today, sessionId: usedSid, attended: attMap[`${usedSid}|${mid}`] === 'present', note: (r.source === 'closure' && r.closureDate) ? '補' + String(r.closureDate).slice(5).replace('-', '/') + '停課' : ((r.source === 'prev_leave' && r.prevLeaveDate) ? '補' + String(r.prevLeaveDate).slice(5).replace('-', '/') + '上期請假' : undefined) } : null;
+          }).filter(Boolean), ...(crossTermByMember[mid] || []).map(b => ({ ...b, attended: attMap[`${b.sessionId}|${mid}`] === 'present' }))].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
           return {
             memberId: mid,
             memberName: nameMap[mid]?.name || ens[0].memberName || '',
@@ -2045,6 +2062,9 @@ router.get('/leave-makeup-summary/all',
             course: {
               id: c.id, name: c.name, gymId: c.gymId || null, categoryId: c.categoryId || null,
               isActive: c.isActive !== false, // false＝已停用（仍列出，畫面標「已停用」）
+              startDate: c.startDate || null, endDate: c.endDate || null,
+              // 梯次階段（假補總表分頁用）：尚未開課（開課日在今天之後）／已結束（結束日在今天之前）／進行中
+              phase: (c.startDate && c.startDate > today) ? 'upcoming' : ((c.endDate && c.endDate < today) ? 'ended' : 'ongoing'),
               maxLeaves: rules.maxLeaves, allowMakeup: rules.allowMakeup,
               makeupDeadline: c.makeupDeadlineDate || (c.endDate ? require('dayjs')(c.endDate).add(rules.makeupDeadlineDays, 'day').format('YYYY-MM-DD') : null),
             },

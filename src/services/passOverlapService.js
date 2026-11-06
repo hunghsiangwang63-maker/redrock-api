@@ -30,10 +30,13 @@ async function applyCourseOverlapPassExtension({ memberId, courseId }) {
     if (!freeStart || !freeEnd) return null;
 
     // 個別入館起始覆寫（插班 courseAccessStart）：取較晚者（與 getCourseAccess 一致）
-    const enSnap = await db.collection('courseEnrollments')
+    const enSnapAll = await db.collection('courseEnrollments')
       .where('courseId', '==', courseId).where('memberId', '==', memberId)
-      .select('courseAccessStart').get();
-    if (enSnap.empty) return null; // 非此課學員不套
+      .select('courseAccessStart', 'isMakeup', 'isTrial', 'status').get();
+    // 補課／試上＝「當天行為」，只有上課當天的入場資格、沒有免費入館期間（政策 2026-07-17，見 eligibility.getCourseAccess），
+    // 不可拿來補償定期票；已取消的報名也不算（2026-11-06 修：林祺堂只補過 2 堂就被補 +52 天）
+    const enSnap = { docs: enSnapAll.docs.filter(d => { const e = d.data(); return !e.isMakeup && !e.isTrial && e.status !== 'cancelled'; }) };
+    if (enSnap.docs.length === 0) return null; // 非此課正式學員不套
     const overrides = enSnap.docs.map(d => d.data().courseAccessStart).filter(Boolean).sort();
     if (overrides.length && overrides[overrides.length - 1] > freeStart) freeStart = overrides[overrides.length - 1];
     if (freeStart > freeEnd) return null;

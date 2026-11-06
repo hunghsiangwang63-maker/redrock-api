@@ -24,6 +24,8 @@ async function applyCourseOverlapPassExtension({ memberId, courseId }) {
     const cdoc = await db.collection('courses').doc(courseId).get();
     if (!cdoc.exists) return null;
     const c = cdoc.data();
+    // 運動按摩課程不補償定期票（2026-11-06 管理員指示：運動按摩都要扣掉免費入場）——這類工作坊本來就不含課程免費入館資格
+    if (/運動按摩/.test(c.name || '')) return null;
     let freeStart = c.unlimitedPracticeStart || c.startDate;
     const freeEnd = c.unlimitedPracticeEnd ||
       (c.endDate ? dayjs(c.endDate).add(c.gymAccessDaysAfter || 1, 'day').format('YYYY-MM-DD') : null);

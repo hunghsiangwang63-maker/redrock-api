@@ -590,6 +590,7 @@ const buildActiveCourseStudents = async (gymId) => {
   out.sort((a, b) => b.count - a.count);
   await attachReceivedAmounts(db, out);
   await attachInvoiceStatus(db, out);
+  await attachSessionStats(db, out);
   return { courses: out, total: out.reduce((s, c) => s + c.count, 0) };
 };
 
@@ -622,6 +623,7 @@ const buildFutureCourseStudents = async (gymId) => {
   out.sort((a, b) => (a.practiceStart || '').localeCompare(b.practiceStart || '')); // 最快開課的排前面
   await attachReceivedAmounts(db, out);
   await attachInvoiceStatus(db, out);
+  await attachSessionStats(db, out);
   return { courses: out, total: out.reduce((s, c) => s + c.count, 0) };
 };
 
@@ -667,6 +669,29 @@ const buildCourseStudentRows = (filtered) => {
 // 優先讀真實列印版 invoices（status:'issued'），缺才退回過渡期 §9 手動記帳版 invoiceRecords
 // （只計未作廢的）；兩邊都有的話以真實列印版為準。供列表 JSON（畫面按鍵即時反白＋號碼）與
 // XLSX 下載共用同一份結果，不必各自再查一次。
+// 各梯次場次統計（依 courseSessions）：已開堂數／待開堂數／停課堂數（2026-11-06）
+//  已開＝未取消且（日期早於今天，或今天且開始時間已過）；待開＝未取消且尚未開始；停課＝status:'cancelled' 的場次
+//  （含休館停課、場次取消、課程改期取消）。一次以 courseId in 分批查詢，只取 courseId/date/startTime/status 四欄。
+const attachSessionStats = async (db, courses) => {
+  const ids = (courses || []).map(c => c.courseId).filter(Boolean);
+  if (!ids.length) return;
+  const today = taiwanToday();
+  const nowHM = dayjs().format('HH:mm');
+  const stats = {};
+  ids.forEach(id => { stats[id] = { held: 0, upcoming: 0, cancelled: 0 }; });
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30));
+  const snaps = await Promise.all(chunks.map(ch => db.collection('courseSessions')
+    .where('courseId', 'in', ch).select('courseId', 'date', 'startTime', 'status').get()));
+  snaps.forEach(snap => snap.docs.forEach(d => {
+    const x = d.data(); const st = stats[x.courseId]; if (!st) return;
+    if (x.status === 'cancelled') st.cancelled += 1;
+    else if ((x.date || '') < today || ((x.date || '') === today && x.startTime && x.startTime <= nowHM)) st.held += 1;
+    else st.upcoming += 1;
+  }));
+  courses.forEach(c => { c.sessionStats = stats[c.courseId] || { held: 0, upcoming: 0, cancelled: 0 }; });
+};
+
 const attachInvoiceStatus = async (db, courses) => {
   const enrollIds = [...new Set(courses.flatMap(c => c.members.map(m => m.enrollmentId).filter(Boolean)))];
   const chunks = [];
@@ -750,6 +775,7 @@ const buildHistoricalCourseDetail = async (gymId, courseId) => {
   }];
   await attachReceivedAmounts(db, out);
   await attachInvoiceStatus(db, out);
+  await attachSessionStats(db, out);
   return out[0];
 };
 

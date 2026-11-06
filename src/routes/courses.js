@@ -2179,7 +2179,7 @@ router.get('/:courseId/enrollments',
             // header 內嵌簽名圖，只取名單顯示欄位（2026-08-27 補投影，與下方 headerMap 取用欄位一一對應）
             .select('memberId', 'paymentStatus', 'receivedAmountOverride', 'payEnrollmentId', 'fee', 'originalFee', 'feeCalcNote', 'paymentMethod',
               'bankLastFive', 'paymentDate', 'memberPaidAmount', 'enrolledAt', 'enrollNote', 'healthNote', 'referralSource', 'staffNote',
-              'contactPhone', 'isGuest')
+              'contactPhone', 'isGuest', 'sessionCount', 'sourceEnrollmentIds')
             .get();
           hSnap.forEach(hd => {
             const h = hd.data();
@@ -2192,6 +2192,8 @@ router.get('/:courseId/enrollments',
               // 免登入公開報名（guest_ 開頭假 memberId，members 集合查無此人）：電話存在報名當下填的
               // contactPhone——供下方電話補齊 fallback 用（2026-09-03 查獲：公開報名學員名單缺電話）。
               contactPhone: h.contactPhone || '', isGuest: h.isGuest === true,
+              // 報名堂數＝報名當下的場次數（不因後來停課／場次取消而扣除；與會員報表一致，2026-11-06）
+              sessionCount: h.sessionCount != null ? h.sessionCount : (Array.isArray(h.sourceEnrollmentIds) && h.sourceEnrollmentIds.length ? h.sourceEnrollmentIds.length : null),
             };
           });
         }
@@ -2261,6 +2263,7 @@ router.get('/:courseId/enrollments',
           isWaitlist: m.isWaitlist,
           waitlistPosition: m.waitlistPosition,
           count: m.count,           // 此人這門課有幾筆場次報名（含請假），供前端顯示「N 堂」
+          sessionCount: header.sessionCount ?? null, // 報名堂數（報名當下，不扣被取消堂數）；前端優先顯示此欄、無才退回 count
           leaveUsed: m.leaveUsed,   // 已請假堂數
           maxLeavesAllowed: m.maxLeavesAllowed,  // 插班個別可請假次數（null=用課程整期預設）
           paymentMethod,

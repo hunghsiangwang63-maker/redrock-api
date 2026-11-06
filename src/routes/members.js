@@ -641,6 +641,7 @@ const buildCourseStudentRows = (filtered) => {
         '狀態': m.isWaitlist ? `候補・第${m.waitlistPosition ?? '?'}位` : m.refunded ? '已退費' : '正取',
         '姓名': m.memberName || '',
         '電話': m.memberPhone || '',
+        '報名堂數': m.sessionCount ?? '',
         '費用': m.fee ?? '',
         '付款方式': m.paymentMethod || '',
         '付款狀態': payLabel(m.paymentStatus),
@@ -658,7 +659,7 @@ const buildCourseStudentRows = (filtered) => {
       });
     });
   });
-  if (rows.length === 0) rows.push({ '場館': '無資料', '課程名稱': '', '效期起': '', '效期迄': '', '狀態': '', '姓名': '', '電話': '', '費用': '', '付款方式': '', '付款狀態': '', '會員自報匯款金額': '', '店員核對收款金額': '', '實收金額（管理員可編修）': '', '匯款末五碼': '', '匯款日期': '', '員工備註': '', '健康備註': '', '如何得知': '', '自訂備註': '', '已開立發票金額': '', '已開立發票號碼': '' });
+  if (rows.length === 0) rows.push({ '場館': '無資料', '課程名稱': '', '效期起': '', '效期迄': '', '狀態': '', '姓名': '', '電話': '', '報名堂數': '', '費用': '', '付款方式': '', '付款狀態': '', '會員自報匯款金額': '', '店員核對收款金額': '', '實收金額（管理員可編修）': '', '匯款末五碼': '', '匯款日期': '', '員工備註': '', '健康備註': '', '如何得知': '', '自訂備註': '', '已開立發票金額': '', '已開立發票號碼': '' });
   return rows;
 };
 
@@ -780,7 +781,7 @@ router.get('/reports/future-course-students/download', authenticate, requireMana
     const rows = buildCourseStudentRows(filtered);
 
     const ws = sanitizeSheet(XLSX.utils.json_to_sheet(rows));
-    ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 12, 12, 16, 10, 10, 20, 20, 14, 20, 12, 14].map(w => ({ wch: w }));
+    ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 10, 12, 12, 16, 10, 10, 20, 20, 14, 20, 12, 14].map(w => ({ wch: w }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '未開課學員名單');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -865,7 +866,7 @@ router.get('/reports/active-course-students/download', authenticate, requireMana
     const rows = buildCourseStudentRows(filtered);
 
     const ws = sanitizeSheet(XLSX.utils.json_to_sheet(rows));
-    ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 12, 12, 16, 10, 10, 20, 20, 14, 20, 12, 14].map(w => ({ wch: w }));
+    ws['!cols'] = [8, 24, 10, 10, 10, 12, 8, 10, 10, 10, 12, 12, 16, 10, 10, 20, 20, 14, 20, 12, 14].map(w => ({ wch: w }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '課程學員名單');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });

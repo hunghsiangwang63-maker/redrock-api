@@ -59,7 +59,7 @@ const getBuyablePassTypes = async (gymId) => {
 };
 
 // ── 定期票續約（會員端，到期前 14 天開放）─────────────────────────
-const RENEWAL_WINDOW_DAYS = 14;
+const RENEWAL_WINDOW_DAYS = 14; // 已不再用於限制續約（2026-11-06 起期限內隨時可續約），僅保留匯出相容
 
 // 續約後端權威價：票種 renewalDiscount（percent=打折 / amount=折抵）套用於原價後，
 // 攀岩隊員（效期內）再疊乘 9 折（2026-09-22 拍板方案A：兩者相乘，非互斥/非取代——
@@ -93,7 +93,8 @@ const getRenewalInfo = async (memberPass) => {
   const db = getDb();
   const currentEndDate = memberPass.effectiveEndDate || memberPass.endDate;
   const daysLeft = dayjs(currentEndDate).diff(taiwanToday(), 'day');
-  if (daysLeft > RENEWAL_WINDOW_DAYS) return null;
+  // 2026-11-06 政策：定期票「期限內任何時候」續約都有優惠，新期限接在現到期日後延續計算（不再限制到期前 14 天）。
+  // （computeRenewedEndDate：未到期以現到期日為基準；已過期才以今日為基準）
   if (!memberPass.passTypeId) return null;
   const ptDoc = await db.collection(COLLECTIONS.PASS_TYPES).doc(memberPass.passTypeId).get();
   if (!ptDoc.exists) return null;

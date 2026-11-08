@@ -871,3 +871,8 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **請假日旁標示補課券狀態與到期日**（3.628～3.629）：每次請假對應的券顯示「（補課券至 YYYY-MM-DD）」／「（已補課）」／「（券已作廢）」／「（無補課券）」；休館停課日依 `closureDate` 對應。**對應方式＝券上的 `originalEnrollmentId` 精確對應該次請假**（需 `courseMakeupRights` 查詢含此欄位），舊資料沒有連結才退回「依發券順序」。一次請假發多張（青少年進階班 `makeupPerLeave:2`）會連續標多個。API 每位學員多回 `leaveItems:[{text, voucher}]`（日期與券狀態分開），`leaves` 仍是合併字串（CSV 與舊畫面沿用）；畫面「請假日期」與「補課券」分兩欄（藍＝可用、綠＝已補課、紅＝作廢／無券），**CSV 仍把兩者合在同一格**（尚未拆欄，使用者未決定）。
 - 📌 **查「某人請假幾次」看 `status:'leave'` 的報名，不看 `leaveAt`**；停課券為豁免券、不佔請假額度（見 10/23）。
 - ✅ **優惠卡 D21-0966、D19-0821 標記已使用完畢**（2026-11-08，純資料）：`physicalCardRegistry` 文件 id 為**去掉連字號的正規化卡號**（`D210966`、`D190821`），兩張原為「已售出、未綁定」、無任何會員綁過；各加 `usedUp:true`、`usedUpAt`、`usedUpNote`，並設 `bound:true`。之後轉入會被擋 `CARD_USED_UP`（同 10/27 的 D24-0235、AT21-1133）。**查／改清冊要用正規化卡號當 doc id，用帶連字號的原卡號會查不到**；擋下畫面未實測。
+
+## 目前進度（2026-11-08 續）— 王文道黑卡剩餘格數補 2 格（純資料，無程式異動）
+- ✅ 王文道（新竹常客，名下僅一張黑卡 AT21-0464，`legacyBlackCards/46c58048…`，當天 15:07 綁定）綁定時格數給錯，依管理員指示由剩 **2 格補為 4 格（+2）**；只改 `remainingCredits`，另寫 `creditsAdjustNote`，`originalCredits` 維持 12、`transferHistory` 空。改前備份 `~/Documents/Codex/2026-10-23/3-4-app-app-redrocktaiwan-com/work/backup-wang-wendao-card.json`（非 repo 內）。
+- ⚠️ 他當天有 1 筆入場紀錄，**沒查是否已扣過一格**；4 格是在當時的 2 格上直接 +2。若本意是「綁定就該 4 格、已扣一格剩 3」需再調整。
+- 📌 **日後「黑卡格數給錯」**：綁定端點 `bindBlackCard` 的 `remainingCredits` 由櫃檯輸入（上限 `BLACK_CARD_CREDITS`＝12）；更正直接改該卡 `remainingCredits`（員工端沒有修改格數的畫面），並留 `creditsAdjustNote`；先確認該會員的入場紀錄是否已扣過格。

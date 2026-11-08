@@ -876,3 +876,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ 王文道（新竹常客，名下僅一張黑卡 AT21-0464，`legacyBlackCards/46c58048…`，當天 15:07 綁定）綁定時格數給錯，依管理員指示由剩 **2 格補為 4 格（+2）**；只改 `remainingCredits`，另寫 `creditsAdjustNote`，`originalCredits` 維持 12、`transferHistory` 空。改前備份 `~/Documents/Codex/2026-10-23/3-4-app-app-redrocktaiwan-com/work/backup-wang-wendao-card.json`（非 repo 內）。
 - ⚠️ 他當天有 1 筆入場紀錄，**沒查是否已扣過一格**；4 格是在當時的 2 格上直接 +2。若本意是「綁定就該 4 格、已扣一格剩 3」需再調整。
 - 📌 **日後「黑卡格數給錯」**：綁定端點 `bindBlackCard` 的 `remainingCredits` 由櫃檯輸入（上限 `BLACK_CARD_CREDITS`＝12）；更正直接改該卡 `remainingCredits`（員工端沒有修改格數的畫面），並留 `creditsAdjustNote`；先確認該會員的入場紀錄是否已扣過格。
+
+## 目前進度（2026-11-08 續2）— 會員端／公開頁課程名稱英日文翻譯（純前端 `redrock-web`，buildId `member-f54f0489b4746cbb`／`staff-f54f0489b4746cbb`）
+> 需求：「課程名稱也幫忙加英日文翻譯」。不改資料庫、不加欄位，顯示時翻譯。畫面僅 build＋部署，未實際切語言點過；翻譯函式用真實課程名稱在 Node 驗過。
+- ✅ **新 `src/utils/courseNameI18n.js`**：`tc(name)`（依 `getMemberLang()`，中文原樣）與 `translateCourseName(name, lang)`。課程名稱＝班別名稱＋梯次名稱（員工自由輸入）→ 做法＝①**班別字典 `CATEGORY`**（20 個班別各一組 EN/JA，長的優先比對，先換成佔位符避免被後面規則誤改）②**梯次樣式改寫**：`9-1月`→`Sep–Jan`／`9〜1月`、單獨`11月`→`Nov`、`週三A班`／`周二班`→`Wed Class A`／`水曜Aクラス`、`優惠試上`、`專班`、`運動按摩`、`(一小時)`③**對不上的字原樣保留**（人名如「宥昕」、自訂文字、`11/15` 日期不動）。
+- ✅ **套用範圍**：會員端 `MemberCoursesPage`（報名、我的課程、補課／試上、候補／取消確認文字、課程規則、暫停／退費視窗等約 21 處）、`MemberRecordsPage`、`MemberHomePage`（課程學員卡、預約提醒）、`MemberExperiencePage`；公開頁 `PublicCoursesPage`／`PublicCourseCategoryPage`／`PublicCourseEnrollPage`／`PublicWorkshopEnrollPage`／`PublicTrialBookingPage`。**未動**：員工端（中文）、Email 通知信（課程名稱仍中文）、`gymPrefix`（館別前綴另有翻譯）。
+- ⚠️ **班別英日文名稱是我自行翻譯，未經確認**（小蜘蛛人＝Little Spiderman／リトルスパイダーマン；虹瑩為教練名，EN `Hongying`、JA 保留漢字；矯正班＝Corrective Class 等）。**新增班別時要到 `CATEGORY` 補一筆**，否則英日文版該班別顯示中文（梯次部分仍會翻）。
+- 📌 **新增會員端課程名稱顯示處**：記得用 `tc(...)` 包起來（import 自 `utils/courseNameI18n`）；API 回傳的 `courseName`／`name` 是中文原文。

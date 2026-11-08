@@ -883,3 +883,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **套用範圍**：會員端 `MemberCoursesPage`（報名、我的課程、補課／試上、候補／取消確認文字、課程規則、暫停／退費視窗等約 21 處）、`MemberRecordsPage`、`MemberHomePage`（課程學員卡、預約提醒）、`MemberExperiencePage`；公開頁 `PublicCoursesPage`／`PublicCourseCategoryPage`／`PublicCourseEnrollPage`／`PublicWorkshopEnrollPage`／`PublicTrialBookingPage`。**未動**：員工端（中文）、Email 通知信（課程名稱仍中文）、`gymPrefix`（館別前綴另有翻譯）。
 - ⚠️ **班別英日文名稱是我自行翻譯，未經確認**（小蜘蛛人＝Little Spiderman／リトルスパイダーマン；虹瑩為教練名，EN `Hongying`、JA 保留漢字；矯正班＝Corrective Class 等）。**新增班別時要到 `CATEGORY` 補一筆**，否則英日文版該班別顯示中文（梯次部分仍會翻）。
 - 📌 **新增會員端課程名稱顯示處**：記得用 `tc(...)` 包起來（import 自 `utils/courseNameI18n`）；API 回傳的 `courseName`／`name` 是中文原文。
+
+## 目前進度（2026-11-08 續3）— 鄭力溦（Kris）技巧班 11-12月週日A班：分期誤記現金→更正為全額轉帳已付清＋補寄確認信（純資料，無程式異動）
+> 士林。11/8 13:57 她在會員端報名並上傳全額轉帳（6,480，兆豐，末五碼 54072，狀態待確認）；報名同時帶了一份 2 期分期計畫（各 3,240），14:26 櫃檯把第 1 期標記為「現金」→ 營收記現金 3,240，且今日結帳自動多一筆「＋現金補入 3,240」。實際是**一筆轉帳付清**。
+- ✅ **更正做法（比照她 9-10 月班「兩期都轉帳、計畫完成」的資料形狀）**：①分期計畫第 1 期付款方式→轉帳（加備註）②該期營收 `transactions` 付款方式→轉帳（附 `correctionNote`）③移除 11/8 士林結帳草稿裡 `refId` 為該分期計畫的自動「現金補入」④第 2 期用 `installmentService.markInstallmentPaid`（轉帳）繳清→產生第 2 期轉帳營收、計畫狀態 `completed`（兩期合計 6,480，認列日＝課程最後一堂 12/27）⑤`transferRecords` 走真實路由 `PUT /transfers/:id/confirm` 確認收款 → 報名總表與 8 筆報名皆 `confirmed`/transfer。改前備份 `~/Documents/Codex/2026-10-23/3-4-app-app-redrocktaiwan-com/work/backup-zheng-kris.json`（非 repo 內，已略過簽名圖與截圖）。
+- ✅ **補寄「課程報名確認」信**：本機跑確認路由時沒有 `RESEND_API_KEY`，信被跳過；改用 `railway run --service redrock-api node <腳本>` 帶正式金鑰，呼叫 `registrationNotify.notifyRegConfirmed`（參數照路由：課程名、場次清單 8 堂、副本該館信箱）補寄成功（Resend id `01a1ba2a…`，只確認寄出，沒確認對方收到）。**日後在本機呼叫會寄信的路由／service，記得用 `railway run` 或先確認信不會被跳過。**
+- ⚠️ 沒有開發票。她是續報（九折 6,480）。
+- 📌 **同型排查**：會員「付款方式被記成現金、其實是轉帳」且有分期計畫時，三處要一起對：計畫各期 `paymentMethod`、該期 `transactions`、當日結帳的自動「現金補入」（`auto:true`、`refId`＝計畫 id）；另查 `transferRecords` 是否仍待確認。

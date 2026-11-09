@@ -638,15 +638,21 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
     for (let i = 0; i < sessionIds.length; i += 30) chunks.push(sessionIds.slice(i, i + 30));
     const todayStr0 = taiwanToday();
     const todayStart = new Date(todayStr0 + 'T00:00:00+08:00');
-    const [enrollSnaps, checkedInSnap, xmSnap] = await Promise.all([
+    const [enrollSnaps, checkedInSnap, xmSnap, leaveSnaps, attSnaps] = await Promise.all([
       Promise.all(chunks.map(chunk => db.collection('courseEnrollments')
         .where('sessionId', 'in', chunk).where('status', '==', 'confirmed')
-        .select('sessionId', 'memberId', 'memberName', 'isMakeup', 'isTrial', 'paymentStatus', 'courseName', 'pauseStatus').get())),
+        .select('sessionId', 'memberId', 'memberName', 'isMakeup', 'isTrial', 'paymentStatus', 'courseName', 'pauseStatus', 'makeupId', 'pauseResume').get())),
       db.collection('checkIns')
         .where('gymId', '==', gymId).where('isCancelled', '==', false)
         .where('checkedInAt', '>=', todayStart).get(),
       db.collection('crossCohortMakeups')
         .where('targetDate', '==', today).where('status', '==', 'booked').get(),
+      // 請假學員（供參考）與已登記的出席紀錄——「今日課程學員」改依場次分組顯示（2026-11-09）
+      Promise.all(chunks.map(chunk => db.collection('courseEnrollments')
+        .where('sessionId', 'in', chunk).where('status', '==', 'leave')
+        .select('sessionId', 'memberId', 'memberName', 'isMakeup').get())),
+      Promise.all(chunks.map(chunk => db.collection('courseAttendance')
+        .where('sessionId', 'in', chunk).select('sessionId', 'memberId', 'status').get())),
     ]);
     const enrollments = [];
     enrollSnaps.forEach(snap => snap.docs.forEach(d => { if (d.data().pauseStatus !== 'paused') enrollments.push({ id: d.id, ...d.data() }); })); // 暫停中的學員不列入今日名單
@@ -731,7 +737,93 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
       students.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
     } catch (e) {}
 
-    res.json({ students });
+    // ── 依場次分組（2026-11-09）：課程資訊（班別／時間／教練）→ 下列正取＋補課學員（可登記出席）→ 請假學員供參考 ──
+    // 與上面扁平 students 並存（前端入場頁標籤的人數、舊用戶端仍讀 students）；任何失敗只回 sessions:[]，不影響名單。
+    let sessionGroups = [];
+    try {
+      const attMap = {};
+      attSnaps.forEach(snap => snap.docs.forEach(d => { const x = d.data(); attMap[`${x.sessionId}|${x.memberId}`] = x.status; }));
+      const courseIds = [...new Set(sessions.map(x => x.courseId).filter(Boolean))];
+      const courseDocs = courseIds.length ? await db.getAll(...courseIds.map(id => db.collection('courses').doc(id)), { fieldMask: ['instructor', 'categoryId', 'name'] }) : [];
+      const courseMap = {}; courseDocs.forEach(d => { if (d.exists) courseMap[d.id] = d.data(); });
+      const catIds = [...new Set(Object.values(courseMap).map(c => c.categoryId).filter(Boolean))];
+      const catDocs = catIds.length ? await db.getAll(...catIds.map(id => db.collection('courseCategories').doc(id)), { fieldMask: ['name'] }) : [];
+      const catMap = {}; catDocs.forEach(d => { if (d.exists) catMap[d.id] = d.data().name || ''; });
+      // 補課學員備註：來源（休館停課／請假／上期請假／人工補課）＋原班別
+      const makeupIds = [...new Set(enrollments.filter(e => e.isMakeup && e.makeupId).map(e => e.makeupId))];
+      const rightDocs = makeupIds.length ? await db.getAll(...makeupIds.map(id => db.collection('courseMakeupRights').doc(id)), { fieldMask: ['source', 'courseName', 'closureDate', 'prevLeaveDate'] }) : [];
+      const rightMap = {}; rightDocs.forEach(d => { if (d.exists) rightMap[d.id] = d.data(); });
+      const mmdd = (d) => d ? String(d).slice(5).replace('-', '/') : '';
+      const makeupNote = (e) => {
+        const r = e.makeupId ? rightMap[e.makeupId] : null;
+        if (!r) return e.pauseResume ? '暫停回課' : '';
+        const src = r.source === 'closure' ? `休館停課補課${r.closureDate ? '（' + mmdd(r.closureDate) + '）' : ''}`
+          : r.source === 'prev_leave' ? `上期請假補課${r.prevLeaveDate ? '（' + mmdd(r.prevLeaveDate) + '）' : ''}`
+          : r.source === 'manual' ? '人工補課' : '請假補課';
+        return r.courseName ? `${src}・原班：${r.courseName}` : src;
+      };
+      const bySession = {};
+      sessions.forEach(x => {
+        const c = courseMap[x.courseId] || {};
+        bySession[x.id] = {
+          sessionId: x.id, courseId: x.courseId, courseName: x.courseName || c.name || '',
+          categoryName: catMap[c.categoryId] || '',
+          startTime: x.startTime || '', endTime: x.endTime || '',
+          instructor: x.instructor || c.instructor || '',
+          students: [], leaves: [],
+        };
+      });
+      enrollments.forEach(e => {
+        const g = bySession[e.sessionId]; if (!g) return;
+        const st = students.find(t => t.memberId === e.memberId && t.courseId === g.courseId && t.isMakeup === (e.isMakeup === true));
+        if (!st) return;
+        g.students.push({
+          ...st, sessionId: e.sessionId,
+          attendance: attMap[`${e.sessionId}|${e.memberId}`] || null,
+          note: e.isMakeup ? makeupNote(e) : '',
+        });
+      });
+      students.filter(t => t.isCrossMakeup).forEach(t => {
+        const g = Object.values(bySession).find(x => x.courseId === t.courseId && x.startTime === t.startTime);
+        if (g) g.students.push({ ...t, sessionId: g.sessionId, attendance: null, note: t.crossNote || '' });
+      });
+      leaveSnaps.forEach(snap => snap.docs.forEach(d => {
+        const x = d.data(); const g = bySession[x.sessionId];
+        if (g && !x.isMakeup) g.leaves.push({ memberId: x.memberId, memberName: x.memberName || '' });
+      }));
+      sessionGroups = Object.values(bySession)
+        .filter(g => g.students.length || g.leaves.length)
+        .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || '') || (a.courseName || '').localeCompare(b.courseName || '', 'zh-Hant'));
+      sessionGroups.forEach(g => {
+        g.students.sort((a, b) => (a.isMakeup === b.isMakeup ? 0 : a.isMakeup ? 1 : -1) || (a.memberName || '').localeCompare(b.memberName || '', 'zh-Hant'));
+        g.leaves.sort((a, b) => (a.memberName || '').localeCompare(b.memberName || '', 'zh-Hant'));
+      });
+    } catch (e) { console.error('[今日課程學員] 依場次分組失敗（不影響名單）:', e.message); sessionGroups = []; }
+
+    res.json({ students, sessions: sessionGroups });
+  } catch (err) {
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
+// ── POST /checkin/course-attendance - 今日課程學員登記出席（入場頁「今日課程學員」用；值班站台／管理層）──
+// 只允許登記「本館今日、該場次的正取或補課學員」（避免任意寫入出席紀錄）；沿用 courseService.markAttendance。
+router.post('/course-attendance', authenticate, requireManagerOrStation, async (req, res) => {
+  try {
+    const { sessionId, memberId, status } = req.body || {};
+    if (!sessionId || !memberId) return res.status(400).json({ error: 'MISSING_FIELDS', message: '缺少場次或學員' });
+    if (!['present', 'absent', 'late'].includes(status)) return res.status(400).json({ error: 'INVALID_STATUS', message: '出席狀態不正確' });
+    const db = getDb();
+    const sDoc = await db.collection('courseSessions').doc(sessionId).get();
+    if (!sDoc.exists) return res.status(404).json({ error: 'SESSION_NOT_FOUND', message: '找不到此場次' });
+    const sess = sDoc.data();
+    if (sess.date !== taiwanToday()) return res.status(400).json({ error: 'NOT_TODAY', message: '只能登記今天場次的出席' });
+    if (req.staff.gymId && sess.gymId !== req.staff.gymId && req.staff.role !== 'super_admin') return res.status(403).json({ error: 'FORBIDDEN', message: '不能登記其他館別的場次' });
+    const en = await db.collection('courseEnrollments').where('sessionId', '==', sessionId).where('memberId', '==', memberId)
+      .where('status', '==', 'confirmed').select('memberId').limit(1).get();
+    if (en.empty) return res.status(400).json({ error: 'NOT_ENROLLED', message: '此學員不在這個場次的名單內' });
+    const result = await require('../services/courseService').markAttendance({ sessionId, memberId, staffId: req.staff.id, status });
+    res.json({ success: true, ...result });
   } catch (err) {
     res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
   }

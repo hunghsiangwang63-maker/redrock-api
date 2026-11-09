@@ -640,7 +640,7 @@ router.post('/sessions/:sessionId/enroll',
       // 現金待收款（比照 enroll-all 的「現金也走待收款」，2026-07-09 段；此路徑原本完全沒有這段邏輯——
       // 是本次「保證金沒有待收款確認」回報的根因：不只保證金，工作坊現金報名本身也從未進過待收款）。
       // 轉帳付款由前端 handleEnroll 呼叫 /transfers/upload 建立（同一原則，金額已併入保證金）。
-      if (!result.isWaitlist && dueThisTime > 0 && req.body.paymentMethod === 'cash') {
+      if (!result.isWaitlist && dueThisTime > 0 && req.body.paymentMethod === 'cash' && result.enrollment?.paymentStatus !== 'direct_pay') {
         try {
           const trId = uuidv4();
           await getDb().collection('transferRecords').doc(trId).set({
@@ -667,6 +667,14 @@ router.post('/sessions/:sessionId/enroll',
             const mDoc = await db3.collection(COLLECTIONS.MEMBERS).doc(req.body.memberId).get();
             // 分期時通知信「應繳金額」改顯示第一期（簽約當下實收），避免誤導成要一次繳全期總額
             const _instInfo = installmentPlan ? { firstAmount: installmentPlan.installments[0].amount, totalAmount: installmentPlan.totalAmount, totalPeriods: installmentPlan.installments.length } : null;
+            if (result.enrollment?.paymentStatus === 'direct_pay') {
+              _rn.notifyMassageRegistered({
+                memberId: req.body.memberId, memberName: mDoc.exists ? (mDoc.data().name || '') : '',
+                itemName: c.name, gymId: c.gymId || req.staff?.gymId || req.body.gymId,
+                fee: result.enrollment?.enrollmentFee ?? 0,
+                sessions: sd ? [{ date: sd.date, startTime: sd.startTime, endTime: sd.endTime }] : null,
+              });
+            } else
             _rn.notifyRegReceived({
               memberId: req.body.memberId,
               memberName: mDoc.exists ? (mDoc.data().name || '') : '',
@@ -703,14 +711,16 @@ router.post('/public/sessions/:sessionId/enroll', async (req, res) => {
     if (isUnder4(guestBirthday)) return res.status(400).json({ code:'AGE_UNDER_5', message:'未滿 4 歲無法報名課程' });
     if (!portraitSignature) return res.status(400).json({ code:'CONSENT_REQUIRED', message:'請先完成簽名' });
     if (isMinor(guestBirthday) && !guardianSignature) return res.status(400).json({ code:'GUARDIAN_SIGNATURE_REQUIRED', message:'未滿 18 歲需法定代理人簽名' });
-    if (!bankName || !String(bankName).trim()) return res.status(400).json({ code:'MISSING_BANK_NAME', message:'請填寫匯款銀行名稱' });
-    if (!paymentDate || !String(paymentDate).trim()) return res.status(400).json({ code:'MISSING_PAYMENT_DATE', message:'請填寫轉帳日期' });
-    if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code:'MISSING_TRANSFER', message:'請填寫匯款帳號末五碼' });
-    if (!(Number(paidAmount) > 0)) return res.status(400).json({ code:'MISSING_PAID_AMOUNT', message:'請填寫實際匯款金額' });
-
     const sessionDoc = await getDb().collection('courseSessions').doc(req.params.sessionId).get();
     if (!sessionDoc.exists) return res.status(404).json({ code:'SESSION_NOT_FOUND', message:'找不到此場次' });
     const session = sessionDoc.data();
+    const _massageGuest = /運動按摩/.test(String(session.courseName || '')); // 運動按摩費用直接付按摩師，不需匯款資料
+    if (!_massageGuest) {
+      if (!bankName || !String(bankName).trim()) return res.status(400).json({ code:'MISSING_BANK_NAME', message:'請填寫匯款銀行名稱' });
+      if (!paymentDate || !String(paymentDate).trim()) return res.status(400).json({ code:'MISSING_PAYMENT_DATE', message:'請填寫轉帳日期' });
+      if (!bankLastFive || !String(bankLastFive).trim()) return res.status(400).json({ code:'MISSING_TRANSFER', message:'請填寫匯款帳號末五碼' });
+      if (!(Number(paidAmount) > 0)) return res.status(400).json({ code:'MISSING_PAID_AMOUNT', message:'請填寫實際匯款金額' });
+    }
 
     const { memberId, isGuestBooking } = await memberService.resolveGuestOrMemberId(getDb(), guestPhone);
     const result = await courseService.enrollCourse({
@@ -734,7 +744,7 @@ router.post('/public/sessions/:sessionId/enroll', async (req, res) => {
     // 保證金（免費工作坊也可收）一律併入這次應收金額，理由同會員路徑（見上方 dueThisTime 註解）。
     const guestDepositAmt = Number(result.enrollment?.depositAmount) || 0;
     const guestDueThisTime = (Number(result.enrollment?.enrollmentFee) || 0) + guestDepositAmt;
-    if (!result.isWaitlist && guestDueThisTime > 0) {
+    if (!result.isWaitlist && guestDueThisTime > 0 && result.enrollment?.paymentStatus !== 'direct_pay') {
       try {
         const trId = uuidv4();
         await getDb().collection('transferRecords').doc(trId).set({
@@ -759,6 +769,13 @@ router.post('/public/sessions/:sessionId/enroll', async (req, res) => {
         const c = courseDoc.exists ? courseDoc.data() : null;
         if (c) {
           const _rn = require('../services/registrationNotify');
+          if (result.enrollment?.paymentStatus === 'direct_pay') {
+            _rn.notifyMassageRegistered({
+              to: (guestEmail||'').trim(), memberId, memberName: String(guestName).trim(),
+              itemName: c.name, gymId: c.gymId || session.gymId, fee: result.enrollment?.enrollmentFee ?? 0,
+              sessions: [{ date: session.date, startTime: session.startTime, endTime: session.endTime }],
+            });
+          } else
           _rn.notifyRegReceived({
             to: (guestEmail||'').trim(), memberId, memberName: String(guestName).trim(),
             typeLabel: c.type === 'workshop' ? '工作坊' : '課程',

@@ -850,6 +850,7 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     _needsEntryTicket = course.type === 'workshop' && course.generalIncludesEntry === true;
   }
 
+  const _isMassageEnroll = /運動按摩/.test(String(session.courseName || course.name || ''));
   const enrollment = {
     id: enrollmentId,
     memberId,
@@ -864,7 +865,9 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     status: isFull ? 'waitlist' : 'confirmed',
     waitlistPosition: isFull ? session.waitlistCount + 1 : null,
     paymentId: paymentId || null,
-    paymentMethod: paymentId ? null : 'pending',
+    // 運動按摩（2026-11-09）：費用由學員直接交給按摩師，館方只登記報名、告知金額——不走待收款／確認收款，
+    // 也不記營收與結帳；一律 pay_therapist / direct_pay，不接受轉帳與現金待收款。
+    paymentMethod: _isMassageEnroll ? 'pay_therapist' : (paymentId ? null : 'pending'),
     // 費用資訊
     originalPrice: course.price,
     enrollmentFee: _fee,
@@ -878,7 +881,7 @@ const enrollCourse = async ({ memberId, sessionId, gymId, staffId, byStaff, paym
     partnerGym: _partnerGymApplied ? _partnerGymName : null,
     partnerGymId: _partnerGymApplied ? partnerGymId : null,
     partnerGymPending: _partnerGymPending,   // 核對通過後由員工清除
-    paymentStatus: 'pending',
+    paymentStatus: _isMassageEnroll ? 'direct_pay' : 'pending',
     // 保證金（僅隊員價適用，見 course.teamDepositAmount；2026-09-08 起一般價/友館價不收保證金）。
     // 實際收取（settlement 加減項）在收款確認當下才記，見 transfers.js course 分支；退還/沒收為
     // 店員獨立動作，見 refund-deposit/forfeit-deposit 端點。

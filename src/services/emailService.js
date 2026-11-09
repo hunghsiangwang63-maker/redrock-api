@@ -493,6 +493,31 @@ const sendRegistrationConfirmed = async (to, { cc, typeLabel, memberName, itemNa
   });
 };
 
+// 運動按摩預約成功（2026-11-09）：費用直接交給按摩師，館方不收款；報名當下一次寄出場次、金額、付款說明與注意事項
+const sendMassageRegistered = async (to, { cc, memberName, itemName, gymId, fee, sessions, extraNoticeHtml } = {}) => {
+  const gymName = REG_GYM_LABEL[gymId] || '';
+  const money = (n) => `NT$${Number(n || 0).toLocaleString()}`;
+  return sendEmail({
+    to, cc: (cc && cc.length) ? cc : undefined,
+    subject: '【紅石攀岩】運動按摩預約成功',
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">運動按摩預約成功</h2>
+        <p>親愛的 ${esc(memberName)}，</p>
+        <p>已收到您的運動按摩預約：<strong>「${esc(itemName)}」</strong>${gymName ? `（${gymName}）` : ''}。</p>
+        ${regSessionsBlock(sessions)}
+        ${Number(fee) > 0 ? `<div style="background:#FFF6E9;border:1px solid #E0C08A;border-radius:8px;padding:16px;margin:12px 0">
+          <div style="font-size:16px;color:#8B1A1A"><strong>費用：${money(fee)}</strong></div>
+          <div style="font-size:13px;color:#666;margin-top:4px">請於按摩當天<strong>直接將費用交給按摩師</strong>（現金），紅石僅協助預約登記，不代收費用。</div>
+        </div>` : ''}
+        ${extraNoticeHtml || ''}
+        <p>期待與您見面！如有疑問請聯繫館方。</p>
+        <p style="color:#999;font-size:12px">紅石攀岩 RedRock | redrocktaiwan.com</p>
+      </div>
+    `,
+  });
+};
+
 // 課程服務同意書（合約）PDF——報名完成後（僅週課，非工作坊/體驗）自動寄送，附件為簽署後的合約 PDF
 const sendCourseContractPdf = async ({ to, cc, memberName, courseName, pdfBuffer }) => {
   return sendEmail({
@@ -803,6 +828,7 @@ module.exports = {
   sendExperienceBookingReceived,
   sendRegistrationReceived,
   sendRegistrationConfirmed,
+  sendMassageRegistered,
   sendInstallmentReminders,
   sendParentWaiverLink,
   sendParentCompetitionWaiverLink,

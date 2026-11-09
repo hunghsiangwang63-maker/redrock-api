@@ -75,6 +75,17 @@ async function notifyRegConfirmed({ memberId, to, memberName, typeLabel, itemNam
   } catch (e) { console.error('[Email] 報名確認通知', e.message); }
 }
 
+// 運動按摩預約成功信（報名當下一封：場次＋金額＋費用直接交給按摩師＋7 點注意事項；副本場館＋MASSAGE_CC）
+async function notifyMassageRegistered({ memberId, to, memberName, itemName, gymId, fee, sessions }) {
+  try {
+    const db = getDb();
+    const emails = to ? (Array.isArray(to) ? to : [to]) : await resolveMemberEmails(db, memberId);
+    if (!emails.length) return;
+    const cc = [await resolveGymEmail(db, gymId), MASSAGE_CC].filter(Boolean);
+    await emailService.sendMassageRegistered(emails, { cc, memberName, itemName, gymId, fee, sessions, extraNoticeHtml: MASSAGE_NOTICE_HTML });
+  } catch (e) { console.error('[Email] 運動按摩預約通知', e.message); }
+}
+
 // 保證金繳交提醒（工作坊隊員價專屬）；sessionDate/sessionTime 選填，供信中顯示活動時間
 async function notifyDepositReminder({ memberId, to, memberName, itemName, gymId, sessionDate, sessionTime, amount }) {
   try {
@@ -108,4 +119,4 @@ async function notifyMassageChange({ itemName, memberName, action, detail }) {
   } catch (e) { console.error('[Email] 運動按摩異動通知', e.message); }
 }
 
-module.exports = { notifyRegReceived, notifyRegConfirmed, notifyDepositReminder, notifyMassageChange, isMassage };
+module.exports = { notifyRegReceived, notifyRegConfirmed, notifyDepositReminder, notifyMassageChange, notifyMassageRegistered, isMassage };

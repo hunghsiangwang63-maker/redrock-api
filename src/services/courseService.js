@@ -618,6 +618,24 @@ const updateSession = async ({ sessionId, staffId, data }) => {
 
   await ref.update(updates);
 
+  // 運動按摩場次異動通知（改日期／時間／取消）
+  if (data.status || data.date || data.startTime || data.endTime) {
+    (async () => {
+      const cur0 = doc.data();
+      const cd = await db.collection(COURSE_COLLECTION).doc(cur0.courseId).get();
+      if (!cd.exists || !/運動按摩/.test(cd.data().name || '')) return;
+      const es = await db.collection(ENROLLMENT_COLLECTION).where('sessionId', '==', sessionId).where('status', '==', 'confirmed').select('memberName').get();
+      const names = es.docs.map(x => x.data().memberName).filter(Boolean).join('、');
+      const from = `${cur0.date} ${cur0.startTime}~${cur0.endTime}`;
+      const to = `${updates.date || cur0.date} ${updates.startTime || cur0.startTime}~${updates.endTime || cur0.endTime}`;
+      require('./registrationNotify').notifyMassageChange({
+        itemName: cd.data().name, memberName: names,
+        action: data.status === 'cancelled' ? '場次取消' : '場次改期／改時間',
+        detail: data.status === 'cancelled' ? `原時段 ${from}` : `${from} → ${to}`,
+      });
+    })().catch(() => {});
+  }
+
   // 場次取消/復原 → 同步課程總堂數快取（與新增場次對稱；真正收費不受影響，見 syncCourseSessionCount 註解）
   const prevStatus = doc.data().status;
   if (data.status === 'cancelled' && prevStatus !== 'cancelled') {
@@ -1558,6 +1576,7 @@ const closureCancelSession = async ({ sessionId, staffId, staffName, reason }) =
       .then(() => sDoc.ref.update({ closureNoticeSentAt: new Date() }))
       .catch(err => console.error('[休館停課-學員通知]', err.message));
   }
+  require('./registrationNotify').notifyMassageChange({ itemName: course.name, action: '休館停課', detail: `${session.date || ''} ${session.startTime || ''}~${session.endTime || ''}` });
   return { issued, makeupRestored, trialAffected, notified: notifyMap.size, sessionDate: session.date, courseName: course.name || '' };
 };
 
@@ -1639,6 +1658,10 @@ const cancelWorkshopEnrollment = async ({ enrollmentId, memberId, reason }) => {
   // 遞補候補（單一場次，非整門課；工作坊每個場次各自獨立候補）
   try { await promoteWaitlist(enrollment.sessionId); } catch (e) { console.error('promoteWaitlist 失敗（工作坊取消報名）:', e.message); }
 
+  require('./registrationNotify').notifyMassageChange({
+    itemName: courseDoc.data().name, memberName: enrollment.memberName, action: '會員取消報名',
+    detail: `${enrollment.date || ''} ${enrollment.startTime || ''}~${enrollment.endTime || ''}`.trim(),
+  });
   return { message: '已取消報名，名額已釋出' };
 };
 
@@ -1677,6 +1700,7 @@ const promoteWaitlist = async (sessionId) => {
 
   // TODO: 發 Email 通知遞補成功
   console.log(`✅ 候補遞補：${promoted.memberName} → confirmed`);
+  require('./registrationNotify').notifyMassageChange({ itemName: sessionDoc.data().courseName, memberName: promoted.memberName, action: '候補遞補成功', detail: `${sessionDoc.data().date || ''} ${sessionDoc.data().startTime || ''}`.trim() });
   return promoted;
 };
 
@@ -1824,9 +1848,10 @@ const cancelCourseEnrollments = async ({ courseId, memberId, reason, onlyFutureS
     .where('courseId', '==', courseId)
     .where('memberId', '==', memberId)
     .where('status', 'in', ['confirmed', 'leave', 'waitlist'])
-    .select('date', 'status', 'sessionId')
+    .select('date', 'status', 'sessionId', 'memberName')
     .get();
   let cancelled = 0;
+  const _cancelledDates = [];
   let freedAnyFutureSeat = false;
   for (const d of snap.docs) {
     const e = d.data();
@@ -1846,6 +1871,12 @@ const cancelCourseEnrollments = async ({ courseId, memberId, reason, onlyFutureS
       // leave：請假時已釋放名額，這裡不重複扣
     }
     cancelled++;
+    if (e.date) _cancelledDates.push(e.date);
+  }
+  if (cancelled > 0) {
+    db.collection(COURSE_COLLECTION).doc(courseId).get().then(cd => {
+      if (cd.exists) require('./registrationNotify').notifyMassageChange({ itemName: cd.data().name, memberName: snap.docs[0]?.data().memberName, action: `取消報名／退費（${reason || '退費取消'}）`, detail: `取消 ${cancelled} 筆：${_cancelledDates.sort().join('、')}` });
+    }).catch(() => {});
   }
   // 雙寫（Phase 1）：連動更新對應 header 狀態（查無 header 屬正常，雙寫剛起步時舊報名尚無對應 header）
   try {

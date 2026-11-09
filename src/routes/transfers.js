@@ -470,6 +470,7 @@ router.put('/:id/reject', authenticate, async (req, res) => {
         } catch (e) { console.error('轉帳退回通知信失敗', e.message); }
       }
     } catch (e) { console.error('transfer reject side-effect:', e.message); }
+    if (t.orderType === 'course') require('../services/registrationNotify').notifyMassageChange({ itemName: t.orderName || t.courseName, memberName: t.memberName, action: '轉帳退回（待會員補正）', detail: reason || '' });
     res.json({ message: '已退回，會員可重新上傳轉帳' });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });

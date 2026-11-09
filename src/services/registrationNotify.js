@@ -86,4 +86,26 @@ async function notifyDepositReminder({ memberId, to, memberName, itemName, gymId
   } catch (e) { console.error('[Email] 保證金繳交提醒', e.message); return { error: e.message }; }
 }
 
-module.exports = { notifyRegReceived, notifyRegConfirmed, notifyDepositReminder, isMassage };
+
+// 運動按摩報名後的任何異動（取消／退費取消／場次改期或停課／轉帳退回／候補遞補）一律通知 MASSAGE_CC（2026-11-09）。
+// 非運動按摩課程直接略過；背景呼叫、失敗只記 log，不影響主流程。
+async function notifyMassageChange({ itemName, memberName, action, detail }) {
+  try {
+    if (!isMassage(itemName)) return;
+    const { esc } = emailService;
+    await emailService.sendEmail({
+      to: MASSAGE_CC,
+      subject: `【紅石攀岩】運動按摩異動通知：${action}`,
+      html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+        <h2 style="color:#8B1A1A">運動按摩異動通知</h2>
+        <p><strong>${esc(action)}</strong></p>
+        <p>課程：${esc(itemName)}</p>
+        ${memberName ? `<p>學員：${esc(memberName)}</p>` : ''}
+        ${detail ? `<p>內容：${esc(detail)}</p>` : ''}
+        <p style="color:#999;font-size:12px">紅石攀岩 RedRock 系統通知信，請勿直接回覆。</p>
+      </div>`,
+    });
+  } catch (e) { console.error('[Email] 運動按摩異動通知', e.message); }
+}
+
+module.exports = { notifyRegReceived, notifyRegConfirmed, notifyDepositReminder, notifyMassageChange, isMassage };

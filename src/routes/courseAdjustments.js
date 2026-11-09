@@ -362,6 +362,16 @@ router.post('/enrollments/:enrollmentId/pause-request',
         createdAt: new Date(),
         updatedAt: new Date(),
       });
+      // 凍結該課程所有有效報名（pausePending，2026-11-09）：審核中即取消課程學員免費入場資格，並擋 請假／申請轉讓；
+      // 退回（reject）時清旗標恢復；核准後改由 pauseStatus:'paused' 接手（旗標一併清除）。與退費申請的 refundPending 同型。
+      const pfz = db.batch();
+      const pnow = new Date();
+      _upSnap.docs.forEach(d => pfz.update(d.ref, { pausePending: true, pauseRequestId: reqId, updatedAt: pnow }));
+      const _leaveSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+        .where('courseId', '==', enrollment.courseId).where('memberId', '==', enrollment.memberId).where('status', '==', 'leave').get();
+      _leaveSnap.docs.forEach(d => pfz.update(d.ref, { pausePending: true, pauseRequestId: reqId, updatedAt: pnow }));
+      await pfz.commit();
+
       res.status(201).json({ success: true, requestId: reqId });
     } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
   }
@@ -410,6 +420,7 @@ router.post('/enrollments/:enrollmentId/transfer-request',
       const rep = all[0];
       if (rep.pauseStatus === 'paused') return res.status(400).json({ error: 'IS_PAUSED', message: '暫停中的課程請先恢復再申請轉讓' });
       if (rep.refundPending) return res.status(400).json({ error: 'REFUND_PENDING', message: '此課程退費申請審核中，暫不可申請轉讓' });
+      if (all.some(e => e.pausePending)) return res.status(400).json({ error: 'PAUSE_PENDING', message: '此課程暫停申請審核中，暫不可申請轉讓' });
 
       const dupSnap = await db.collection('courseAdjustmentRequests')
         .where('courseId', '==', courseId).where('memberId', '==', memberId).get();
@@ -607,6 +618,14 @@ router.post('/requests/:id/approve',
           }
           paused++;
         }
+        // 暫停核准：清除審核中旗標（未來堂已改 pauseStatus:'paused'；已上過的堂次旗標一併解除）
+        try {
+          const _pf = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+            .where('courseId', '==', request.courseId).where('memberId', '==', request.memberId).get();
+          const _pb = db.batch();
+          _pf.docs.filter(x => x.data().pausePending === true).forEach(x => _pb.update(x.ref, { pausePending: false, updatedAt: now }));
+          await _pb.commit();
+        } catch (e) { console.error('[暫停核准] 清除 pausePending 失敗', e.message); }
         // 建立暫停餘額（剩餘堂數＝這次被暫停的堂數；供下期回課安排，見 coursePauseService）
         if (paused > 0) {
           try {
@@ -718,6 +737,16 @@ router.post('/requests/:id/reject',
         const now = new Date();
         snap.docs.filter(d => d.data().refundPending === true)
           .forEach(d => batch.update(d.ref, { refundPending: false, refundRequestId: null, updatedAt: now }));
+        await batch.commit();
+      }
+      // 暫停申請被退回 → 解除凍結（pausePending），恢復課程學員資格與請假等操作
+      if (request.type === 'pause') {
+        const snap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
+          .where('courseId', '==', request.courseId).where('memberId', '==', request.memberId).get();
+        const batch = db.batch();
+        const now = new Date();
+        snap.docs.filter(d => d.data().pausePending === true)
+          .forEach(d => batch.update(d.ref, { pausePending: false, pauseRequestId: null, updatedAt: now }));
         await batch.commit();
       }
       res.json({ success: true });

@@ -159,12 +159,13 @@ const getCourseAccess = async (memberId) => {
   const enrollSnap = await db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
     .where('memberId', '==', memberId)
     .where('status', '==', 'confirmed')
-    .select('courseId', 'pauseStatus', 'refundPending', 'isMakeup', 'isTrial', 'date', 'sessionId', 'courseAccessStart', 'courseName', 'pauseResume', 'resumeAccessStart', 'resumeAccessEnd')
+    .select('courseId', 'pauseStatus', 'refundPending', 'pausePending', 'isMakeup', 'isTrial', 'date', 'sessionId', 'courseAccessStart', 'courseName', 'pauseResume', 'resumeAccessStart', 'resumeAccessEnd')
     .get();
   const allEnrollments = enrollSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
     .filter(e => e.pauseStatus !== 'paused')   // 暫停中不計入課程學員資格
-    .filter(e => e.refundPending !== true);    // 退費審核中：即時取消課程學員入場資格（退回時恢復）
+    .filter(e => e.refundPending !== true)     // 退費審核中：即時取消課程學員入場資格（退回時恢復）
+    .filter(e => e.pausePending !== true);     // 暫停審核中（2026-11-09）：同退費審核，即時取消課程學員入場資格（退回時恢復）
   // 補課/試上＝「當天行為」：不繼承該課程的免費入場期間，只在上課當天給入場資格（政策 2026-07-17）
   const enrollments = allEnrollments.filter(e => !e.isMakeup && !e.isTrial);
   // 暫停回課（補課方式排定）：回課期間（開始日～最後一堂補課日）享有課程學員免費入場，不限上課當天

@@ -641,7 +641,7 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
     const [enrollSnaps, checkedInSnap, xmSnap, leaveSnaps, attSnaps] = await Promise.all([
       Promise.all(chunks.map(chunk => db.collection('courseEnrollments')
         .where('sessionId', 'in', chunk).where('status', '==', 'confirmed')
-        .select('sessionId', 'memberId', 'memberName', 'isMakeup', 'isTrial', 'paymentStatus', 'courseName', 'pauseStatus', 'makeupId', 'pauseResume').get())),
+        .select('sessionId', 'memberId', 'memberName', 'isMakeup', 'isTrial', 'paymentStatus', 'courseName', 'pauseStatus', 'makeupId', 'pauseResume', 'refundPending', 'pausePending').get())),
       db.collection('checkIns')
         .where('gymId', '==', gymId).where('isCancelled', '==', false)
         .where('checkedInAt', '>=', todayStart).get(),
@@ -715,6 +715,7 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
           isMakeup: e.isMakeup === true,                                  // 補課學員標籤
           isTrial: e.isTrial === true,                                    // 試上學員標籤
           trialUnpaid: e.isTrial === true && e.paymentStatus !== 'paid',  // 試上費未收提醒
+          adjustPending: e.refundPending === true ? 'refund' : (e.pausePending === true ? 'pause' : null), // 退費／暫停申請審核中（已凍結入場資格）
           isLastSession: !!inv,                                           // 今日為此梯次最後一堂（courses.endDate）
           newStudentPrep: spiderPrepByMember.has(e.memberId),             // 小蜘蛛人新生：請準備制服跟集點卡
           ...(inv ? { enrollmentId: inv.enrollmentId, paymentMethod: inv.paymentMethod, receivedAmount: inv.receivedAmount } : {}),

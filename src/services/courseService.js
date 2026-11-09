@@ -1131,6 +1131,7 @@ const requestLeave = async ({ enrollmentId, memberId, reason }) => {
   if (enrollment.status !== 'confirmed') throw { code: 'INVALID_STATUS', message: '此報名狀態無法請假' };
   if (enrollment.isMakeup) throw { code: 'MAKEUP_NO_LEAVE', message: '補課場次不可請假；如無法出席請於上課一天前取消補課' };
   if (enrollment.refundPending) throw { code: 'REFUND_PENDING', message: '此課程退費申請審核中，暫不可請假' };
+  if (enrollment.pausePending) throw { code: 'PAUSE_PENDING', message: '此課程暫停申請審核中，暫不可請假' };
 
   const courseDoc = await db.collection(COURSE_COLLECTION).doc(enrollment.courseId).get();
   const course = courseDoc.exists ? courseDoc.data() : {};

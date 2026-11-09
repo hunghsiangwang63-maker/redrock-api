@@ -514,7 +514,13 @@ const buildCourseMemberList = async (db, c) => {
       staffNote: h.staffNote || '',
     };
   });
-  let members = [...seen.values()].map(m => ({ ...m, ...(payMap[m.memberId] || {}) }));
+  // 申請審核中（退費／暫停）：報名資格已凍結（不可入場／請假），但報名未取消仍列在名單——加註記讓櫃檯辨識（2026-11-09）
+  const pendingReqByMember = {};
+  try {
+    const rq = await db.collection('courseAdjustmentRequests').where('courseId', '==', c.id).select('memberId', 'type', 'status').get();
+    rq.docs.forEach(d => { const x = d.data(); if (x.status === 'pending' && ['refund', 'pause'].includes(x.type)) pendingReqByMember[x.memberId] = x.type; });
+  } catch (e) { /* 註記失敗不影響名單 */ }
+  let members = [...seen.values()].map(m => ({ ...m, ...(payMap[m.memberId] || {}), adjustPending: pendingReqByMember[m.memberId] || null }));
   // 電話以 members 集合權威補齊；guest_ 開頭的訪客報名查無會員文件，退回報名當下填的 contactPhone
   if (members.length) {
     const mdocs = await db.getAll(...members.map(m => db.collection('members').doc(m.memberId)));

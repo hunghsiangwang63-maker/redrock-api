@@ -890,3 +890,11 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **補寄「課程報名確認」信**：本機跑確認路由時沒有 `RESEND_API_KEY`，信被跳過；改用 `railway run --service redrock-api node <腳本>` 帶正式金鑰，呼叫 `registrationNotify.notifyRegConfirmed`（參數照路由：課程名、場次清單 8 堂、副本該館信箱）補寄成功（Resend id `01a1ba2a…`，只確認寄出，沒確認對方收到）。**日後在本機呼叫會寄信的路由／service，記得用 `railway run` 或先確認信不會被跳過。**
 - ⚠️ 沒有開發票。她是續報（九折 6,480）。
 - 📌 **同型排查**：會員「付款方式被記成現金、其實是轉帳」且有分期計畫時，三處要一起對：計畫各期 `paymentMethod`、該期 `transactions`、當日結帳的自動「現金補入」（`auto:true`、`refId`＝計畫 id）；另查 `transferRecords` 是否仍待確認。
+
+## 目前進度（2026-11-09）— 運動按摩報名後的任何異動通知 seven2170923@gmail.com（後端 `/health` `3.630.0-massage-change-notify`）＋11/15 士林按摩報名查詢＋D24-0235／D24-0253 卡況查證
+- ✅ **新 `registrationNotify.notifyMassageChange({itemName, memberName, action, detail})`**：課程名稱含「運動按摩」才寄，收件人固定 `MASSAGE_CC`（seven2170923@gmail.com，**只寄這個信箱，不 cc 場館**）；背景呼叫、失敗只 log。**本來就會寄給該信箱的「報名收到」「確認收款」兩封信維持原樣**（`notifyRegReceived`／`notifyRegConfirmed` 的 cc），本函式負責其後的異動。
+- **觸發點（`courseService.js`／`transfers.js`）**：①`cancelWorkshopEnrollment`（會員自行取消）②`cancelCourseEnrollments`（館方取消報名／退費核准，列出取消日期與筆數）③`updateSession`（場次改日期／時間／取消，信中帶「原→新」並列出該場次已確認學員）④`closureCancelSession`（休館停課）⑤`PUT /transfers/:id/reject`（課程轉帳退回待補正）⑥`promoteWaitlist`（候補遞補成功）。
+- 🧪 **驗證**：假場館的測試按摩工作坊（測後全刪）跑 會員取消／改時間／退費取消 三條，皆寄到該信箱（`sendEmail` 以 stub 攔截，**沒有真的寄信**）；非按摩課程不寄。**停課、轉帳退回、候補遞補、真實 Resend 送達沒有個別跑過。**
+- ⚠️ **未涵蓋**：刪除整門按摩課程（`DELETE /courses/:id`）、員工直接改學員報名資料／換時段、按摩的請假（工作坊本來就不可請假）。要補再加。
+- 🔎 **11/15 士林運動按摩（課程 `0e6aac…`，workshop，每時段限 1 人）**：5 個時段，12:00 空（劉家玉取消）、13:00 黃培倫、14:00 空、15:00 莊奇凡、16:00 賴芷均；3 位報名狀態皆 confirmed、付款狀態 pending（報名費欄 900，歷次按摩活動結束後仍 pending，應屬此類預約常態，未查是否有收款）。
+- 🃏 **實體卡查證（無資料異動）**：D24-0235 早於 10/27 已標已使用完畢；**D24-0253**：清冊為已售出、未綁定，**使用者說「等待轉入」→ 維持原狀不標記**。D21-0966、D19-0821 已於 11/8 標記（見前段）。

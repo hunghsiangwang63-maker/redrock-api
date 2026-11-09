@@ -898,3 +898,14 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ⚠️ **未涵蓋**：刪除整門按摩課程（`DELETE /courses/:id`）、員工直接改學員報名資料／換時段、按摩的請假（工作坊本來就不可請假）。要補再加。
 - 🔎 **11/15 士林運動按摩（課程 `0e6aac…`，workshop，每時段限 1 人）**：5 個時段，12:00 空（劉家玉取消）、13:00 黃培倫、14:00 空、15:00 莊奇凡、16:00 賴芷均；3 位報名狀態皆 confirmed、付款狀態 pending（報名費欄 900，歷次按摩活動結束後仍 pending，應屬此類預約常態，未查是否有收款）。
 - 🃏 **實體卡查證（無資料異動）**：D24-0235 早於 10/27 已標已使用完畢；**D24-0253**：清冊為已售出、未綁定，**使用者說「等待轉入」→ 維持原狀不標記**。D21-0966、D19-0821 已於 11/8 標記（見前段）。
+
+## 目前進度（2026-11-09 續）— 運動按摩改為「費用直接付按摩師」：不走待收款／確認收款、關閉轉帳（後端 `/health` `3.631.0-massage-pay-therapist`；前端 buildId `member-104affc8aa38b2b5`／`staff-104affc8aa38b2b5`）
+> 起因：檢查運動按摩收費發現 47 筆已過期預約只有 4 筆確認收款（43 筆、24,300 元「待處理」）。使用者說明**按摩現金是直接交給按摩師，紅石只協助報名登記、告知金額，收銀機不會收到錢**；若櫃檯在待收款頁按「確認收款」，系統會在當日結帳自動加「現金補入」（抽屜其實沒這筆錢→結帳差異）。決策（使用者 2026-11-09 拍板）：**一律現金給按摩師、轉帳關掉**；報名當下只寄一封信（場次＋金額＋付給按摩師＋7 點注意事項）。
+- ✅ **資料模型**：運動按摩（課程名稱含「運動按摩」）報名 `paymentMethod:'pay_therapist'`、`paymentStatus:'direct_pay'`。判斷點在 `courseService.enrollCourse`（`_isMassageEnrollment` 依場次／課程名稱），所以會員報名、員工代報、訪客報名都一致。**不是 `confirmed`**（保留「可自行取消」：`cancelWorkshopEnrollment` 對 confirmed 會擋「已付款請申請退費」）。不建 `transferRecords`、不記 `transactions`、不影響結帳。候補報名同樣標 direct_pay，遞補後不需再選付款方式。
+- ✅ **後端把關**：`POST /courses/sessions/:id/enroll` 對 direct_pay 報名跳過現金待收款單與「報名收到」信；訪客 `POST /courses/public/sessions/:id/enroll` 對按摩不再要求匯款銀行／日期／末五碼／金額，也不建轉帳單；`POST /transfers/upload` 對按摩課程報名一律 400 `MASSAGE_PAY_THERAPIST`（原本靠課程 `paymentMethods` 限制，現加名稱把關）。
+- ✅ **信件**：`emailService.sendMassageRegistered`＋`registrationNotify.notifyMassageRegistered`——報名當下一封「【紅石攀岩】運動按摩預約成功」：場次、費用 NT$X、「請於按摩當天直接將費用交給按摩師（現金），紅石僅協助預約登記，不代收費用」＋7 點注意事項（`MASSAGE_NOTICE_HTML`）；副本＝該館信箱＋seven2170923。**原「確認收款信」（`notifyRegConfirmed`）對按摩不會再觸發**（沒有確認收款動作）。後續異動通知 `notifyMassageChange` 不變（見前段）。
+- ✅ **前端**：`MemberCoursesPage` 報名第一步（原付款區）對按摩改顯示橘色說明框（費用＋直接付按摩師，中英日），不顯示 `PaymentSection`、不要求轉帳資訊、不上傳截圖；`handleEnroll` 對按摩送 `paymentMethod:'pay_therapist'`、跳過 `/transfers/upload`；候補遞補提示文字對按摩改「請於按摩當天直接交給按摩師」；`CourseRegDetailModal` 付款狀態對照加「直接付按摩師」。
+- ✅ **既有資料更正（備份 `~/Documents/Codex/2026-10-23/3-4-app-app-redrocktaiwan-com/work/backup-massage-pay-therapist.json`，非 repo 內）**：51 筆「confirmed／waitlist 且未確認收款」的按摩報名（含已過期 43 筆、即將到來 8 筆）→ `pay_therapist`/`direct_pay`；24 張 pending 待收款單 → `cancelled`（備註 `2026-11-09 運動按摩改為費用直接交給按摩師，不走待收款`）；報名總表 `courseRegistrations`（非取消且未確認）同步。**未動**：9/20 士林已確認的轉帳 5 筆、洪文正 8/21 被退回的轉帳單（rejected，未處理）。
+- 🧪 **驗證**：假場館測試課程＋測試帳號打真實 `POST /courses/sessions/:id/enroll`——按摩（送 cash）回 `pay_therapist/direct_pay`、0 張待收款單；一般工作坊（cash）仍 `pending` 並產生待收款單；信件內容用假金鑰擷取 Resend 請求確認（標題、副本、金額、按摩師說明、注意事項）；測試資料全清。**會員端報名畫面沒有實際登入點過**（僅 build＋部署）；訪客路徑、候補遞補、員工代報沒有個別實測。
+- ⚠️ **注意／限制**：①按摩的付款狀態不再有「已收款」概念，營收報表不會有按摩收入（原本也沒有）②員工端名單對 direct_pay 不顯示「待付款」標籤（原本 pending 才顯示）③若日後某場按摩要改回館方收款，需改 `courseService.enrollCourse` 的判斷與前端 `isMassageName`④`transfers.js` 的課程確認收款流程（含「現金補入」）對 direct_pay 報名不會被觸發，因為不再有待收款單。
+- 📊 部署後速度：單筆讀取約 50ms、監測中位數 54ms，非慢實例（部署當下第一次量到 289ms 為冷連線，再量即恢復）。

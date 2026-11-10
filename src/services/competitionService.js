@@ -592,7 +592,12 @@ const registerForCompetition = async ({
   if (isMinor && guardianSignature) {
     try {
       guardianSignatureUrl = await uploadSignature(`competition_${registrationId}`, 'guardian', guardianSignature);
-    } catch (sigErr) { /* 同上，不阻斷 */ }
+    } catch (sigErr) {
+      // 家長簽名存檔失敗＝整筆報名失敗（2026-11-10）：原本吞掉錯誤、報名照常成立卻停在「待法定代理人簽」且使用者看不到，
+      // 現在改成明確失敗讓使用者重送（此時尚未寫入報名／未佔名額／未用補課券）。
+      console.error('[比賽報名] 家長簽名存檔失敗:', sigErr.message);
+      throw { code: 'GUARDIAN_SIGNATURE_SAVE_FAILED', message: '法定代理人簽名儲存失敗，請稍後重新送出' };
+    }
   }
 
   const registration = {
@@ -663,6 +668,9 @@ const registerForCompetition = async ({
     webhookStatus: 'pending', webhookSentAt: null, webhookError: null,
     registeredAt: now,
   };
+
+  // 備用遠端簽署連結的收件信箱：沒填家長 Email 時用報名帳號的 Email（會員 App 表單沒有家長 Email 欄位）
+  if (isMinor && !guardianSignatureUrl && !parentEmail && email) parentEmail = email;
 
   if (isMinor && !guardianSignatureUrl) {
     const token = uuidv4();

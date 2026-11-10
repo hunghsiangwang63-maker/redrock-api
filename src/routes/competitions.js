@@ -543,6 +543,14 @@ router.post('/:id/register',
         if (!String(req.body.bankLastFive || '').trim()) return res.status(400).json({ error: 'MISSING_BANK_LAST_FIVE', message: '請填寫匯款帳號末五碼' });
         if (!String(req.body.paymentDate || '').trim()) return res.status(400).json({ error: 'MISSING_PAYMENT_DATE', message: '請填寫轉帳日期' });
       }
+      // 未成年（依生日、比賽當天為基準）後端也要求法定代理人簽名（與公開頁一致；原本只有前端擋，2026-11-10 補）
+      try {
+        const _comp = await competitionService.getCompetition(req.params.id);
+        const _age = competitionService.computeCompetitionAgeInfo(regBirthday, _comp);
+        if (_age.isMinor && !req.body.guardianSignature) {
+          return res.status(400).json({ error: 'GUARDIAN_SIGNATURE_REQUIRED', message: '未滿 18 歲需法定代理人簽名' });
+        }
+      } catch (e) { if (e && e.code && e.code !== 'COMPETITION_NOT_FOUND') throw e; /* 查不到賽事交給後面流程回報 */ }
       const registration = await competitionService.registerForCompetition({
         competitionId: req.params.id,
         memberId,

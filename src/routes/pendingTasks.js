@@ -170,7 +170,7 @@ router.get('/', authenticate, async (req, res) => {
         tasks.push({
           id: `compReg_${d.id}`, type: 'competition_payment', targetId: d.id,
           title: '比賽報名待收款',
-          desc: `${r.memberName} — ${r.competitionName || ''} NT$${r.registrationFee || ''}`,
+          desc: `${r.memberName} — ${r.competitionName || ''} NT$${r.registrationFee || ''}${(r.paymentMethod === 'transfer' && r.bankLastFive) ? `（末五碼 ${r.bankLastFive}）` : ''}`,
           date: r.registeredAt?._seconds ? new Date(r.registeredAt._seconds*1000).toISOString().slice(0,10) : today,
           createdAt: r.registeredAt?._seconds || 0,
           gymId: null, memberName: r.memberName,

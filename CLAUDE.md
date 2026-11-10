@@ -957,3 +957,12 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🧪 **驗證**：用已報名者（林映杉）資料打真實路由：不帶家長簽名→400 `GUARDIAN_SIGNATURE_REQUIRED`；帶簽名→通過新檢查（後面因缺練習岩館被擋，過程無寫入）。**簽名存檔失敗的丟錯路徑只做程式推演、沒有實際製造失敗測試**；會員端畫面未實際操作。
 - ✅ **重寄簽署連結（使用者確認後）**：對上述 3 筆待簽報名各產生新 token（`parentSignToken`、效期 72 小時至 11/13 晚間），寫入 `parentEmail`（取報名／會員 Email）與 `parentSignLinkResentAt`，用 `railway run … node <腳本>` 帶正式 `RESEND_API_KEY` 呼叫 `emailService.sendParentCompetitionWaiverLink` 寄出，3 封皆回傳成功；只確認寄出、未確認收到；不副本場館。頁面為 `/competitions/waiver/parent/:token`（家長免登入，簽完報名生效並推計分系統）。72 小時後仍未簽要再重寄。
 - 📌 **家長補簽的兩種方式**：①會員 App「比賽報名」我的報名紅色提示 →「✍️ 補簽法定代理人同意書」（`POST /competitions/registrations/:regId/guardian-sign`，須報名者本人／家長登入）②Email 遠端簽署連結。**員工端沒有代簽功能。**簽署前報名不算完成，比賽日報到（只驗簽署完成）會被擋，需在 12/13 前處理。
+
+## 目前進度（2026-11-10 續3）— 會員端轉帳收款帳號寫死新竹：比賽／攀岩隊年費／器材租借改依館別顯示（純前端 `redrock-web`，會員端 `member-3a6b2c3945479fd9`，後端無異動）
+> 問題：「簡伶妃 — 20261219 攀岩隊模擬賽（末五碼 17166）為什麼士林館的比賽，費用匯到新竹的帳號？」
+- 🐞 **根因**：`MemberCompetitionsPage`（比賽報名步驟與「補填轉帳資訊」視窗兩處）、`MemberRentalPage`、`MemberTeamPage`（說明區、已申請待匯款提示、補填視窗）把收款帳號**寫死成新竹台新銀行（812）關東橋分行帳號**，不看賽事／租借／隊員所屬館。士林館的比賽（20261219 攀岩隊模擬賽 `gymId:'gym-shilin'`）會員也被引導匯到新竹帳號；**待收款單 `gymId` 本身是對的（gym-shilin），所以士林櫃檯會在待收款頁看到、但錢可能進了新竹帳戶**。公開頁（免註冊）與課程報名早就依館別讀 `/settings/bank-accounts/member`，沒這問題。
+- 🔍 **受影響資料**：20261219 攀岩隊模擬賽轉帳報名 2 筆——簡伶妃（400 元，11/9 23:38，匯款銀行欄填「台新」，末五碼 17166）**推測匯到新竹台新帳號**（未能查證款項實際去向，已請使用者到新竹台新帳戶查 11/9 的 400 元／末五碼 17166）；另一位 Kris（100 元）填富邦，應是士林帳號；兩筆皆 `pending_confirm`。新竹兒童抱石賽（`gym-hsinchu`）帳號本來就對。**簡伶妃的資料未動。**
+- ✅ **修正**：新增 `hooks/useGymBankAccounts.js`（`bankInfoForGym(gymId)`，讀 `/settings/bank-accounts/member`，沒給館別或查不到回 null＝不顯示帳號、不誤導）。比賽用賽事的 `gymId`（沒有則 gym-hsinchu；補填視窗用 `repayTarget.competitionId` 反查賽事）；器材租借用頁面選的 `gymId`；攀岩隊用**主要岩館**（`新竹紅石`→gym-hsinchu、`士林紅石`→gym-shilin）：申請前的說明區兩館帳號都列出，已申請的提示與補填視窗顯示該隊員主要岩館的帳號（中英日提示文字改成帶入實際銀行與帳號）。全專案已沒有寫死的 `21000100211430`。**帳號改在設定頁（`systemSettings/bankAccounts`）即可，不用改程式。**
+- 🐞 **順修**：攀岩隊年費申請建立轉帳單時 `gymId` 傳的是主要岩館的**中文標籤**（`新竹紅石`），不是系統館別代碼 → 館別待收款頁依 `gymId` 篩不到。改為 `gym-hsinchu`／`gym-shilin`。目前只有 1 筆歷史資料有此問題（`gymId:'新竹紅石'`，狀態 rejected），未處理。
+- ⚠️ **未驗證**：三個頁面的實際畫面（士林館賽事是否顯示富邦帳號、攀岩隊兩館帳號列表）**沒有登入點過**，只驗 build、ESLint、版本碼；`MemberExperiencePage` 的體驗預約帳號是另一套（讀 `courseSettings.bankInfo`、預設富邦），這次沒查。
+- 📌 **日後會員端新增任何「請匯款至…」的畫面**：一律用 `useGymBankAccounts().bankInfoForGym(gymId)`，不要寫死帳號。

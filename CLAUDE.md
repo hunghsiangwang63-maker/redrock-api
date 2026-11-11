@@ -966,3 +966,10 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - 🐞 **順修**：攀岩隊年費申請建立轉帳單時 `gymId` 傳的是主要岩館的**中文標籤**（`新竹紅石`），不是系統館別代碼 → 館別待收款頁依 `gymId` 篩不到。改為 `gym-hsinchu`／`gym-shilin`。目前只有 1 筆歷史資料有此問題（`gymId:'新竹紅石'`，狀態 rejected），未處理。
 - ⚠️ **未驗證**：三個頁面的實際畫面（士林館賽事是否顯示富邦帳號、攀岩隊兩館帳號列表）**沒有登入點過**，只驗 build、ESLint、版本碼；`MemberExperiencePage` 的體驗預約帳號是另一套（讀 `courseSettings.bankInfo`、預設富邦），這次沒查。
 - 📌 **日後會員端新增任何「請匯款至…」的畫面**：一律用 `useGymBankAccounts().bankInfoForGym(gymId)`，不要寫死帳號。
+
+## 目前進度（2026-11-11）— 待辦頁：轉帳類項目一律在外面顯示匯款末五碼（後端 `/health` `3.635.0-pending-task-comp-last5`；員工端 `staff-8321d3e7f2e3ebf1`）
+> 使用者：「待辦事項頁面，若是轉帳，都要在外面可以看到匯款後5碼，目前比賽看不到。」
+- 🔍 **原因**：`PendingTasksPage` 的藍色「末五碼」標籤原本寫死 `task.type === 'transfer_confirm'` 才顯示（轉帳待確認收款，資料來自 `transferRecords`）。**「比賽報名待收款」是另一種待辦 `competition_payment`**（`pendingTasks.js`：比賽報名 `paymentStatus:'pending'`、`status:'confirmed'` 且**沒有**待確認轉帳單時才出現），`desc` 與標籤都沒帶末五碼；體驗預約（`experience`）等的 `record.bankLastFive` 有資料，也被同一個限制擋住。
+- ✅ **修正**：①後端 `competition_payment` 的 `desc` 在 `paymentMethod==='transfer'` 且有 `bankLastFive` 時加「（末五碼 XXXXX）」②前端標籤改成「有末五碼（`task.record.bankLastFive` 或 `task.bankLastFive`）且付款方式不是現金（`task.method || task.record.paymentMethod`）」就顯示——涵蓋比賽、體驗預約、攀岩隊年費、器材租借等所有轉帳類；現金一律不顯示 ③`competition_payment` 另顯示報名費徽章（`record.registrationFee`）。
+- 🧪 **驗證**：暫時建立一筆假的比賽報名（`paymentStatus:'pending'`、轉帳、末五碼 12345，測完刪除）打真實 `GET /pending-tasks`：出現 `competition_payment`、`desc` 帶「（末五碼 12345）」、`record` 含末五碼與報名費。**員工端畫面沒有實際登入看過**（僅 build＋部署）；上線當下待辦裡沒有任何比賽報名待收款（簡伶妃、Kris 的轉帳都已確認），無真實資料可看。
+- 📌 **兩種比賽待辦的差別**：有轉帳單（會員／公開頁報名時填了末五碼，`transferRecords` pending）→ 走 `transfer_confirm`（本來就有末五碼）；報名時沒填轉帳資訊、之後才補（方案 B）或沒有轉帳單 → 走 `competition_payment`。

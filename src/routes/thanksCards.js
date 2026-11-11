@@ -92,7 +92,13 @@ router.post('/', authenticateMember, async (req, res) => {
   try {
     const st = await state();
     if (!st.sendOpen) return res.status(400).json({ error: 'NOT_OPEN', message: '感謝卡片目前未開放' });
-    const { toType, toMemberId, toStaffId, stickerId, phraseId, displayAs } = req.body || {};
+    let { toType, toMemberId, toStaffId, stickerId, phraseId, displayAs } = req.body || {};
+    // 回送：以收到的卡片 id 指定收件人（不把寄件人的帳號資料給前端）
+    if (req.body && req.body.replyToCardId) {
+      const orig = await getDb().collection('thanksCards').doc(String(req.body.replyToCardId)).get();
+      if (!orig.exists || orig.data().toKey !== `m_${req.member.id}` || !orig.data().fromMemberId) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到這張卡片' });
+      toType = 'member'; toMemberId = orig.data().fromMemberId; toStaffId = null;
+    }
     if (!cfg.PHRASES[phraseId]) return res.status(400).json({ error: 'INVALID_PHRASE', message: '請選擇卡片句子' });
     if (!cfg.STICKERS.includes(stickerId)) return res.status(400).json({ error: 'INVALID_STICKER', message: '請選擇貼紙' });
     if (!['member', 'staff'].includes(toType)) return res.status(400).json({ error: 'INVALID_TYPE' });

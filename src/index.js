@@ -203,6 +203,7 @@ app.use('/payments',      require('./routes/payments'));
 app.use('/invoices',      require('./routes/invoices'));
 app.use('/payouts',       require('./routes/payouts'));
 app.use('/member-reminders', require('./routes/memberReminders'));
+app.use('/thanks-cards', require('./routes/thanksCards')); // 感恩節感謝卡片（2026-11-22～11-29）
 
 // Phase 2 以後的路由（預留）
 // app.use('/courses',   require('./routes/courses'));
@@ -226,7 +227,7 @@ app.get('/health', (req, res) => {
     tz: process.env.TZ,
     serverTime: new Date().toString(),   // 應顯示 GMT+0800（台灣）
     env: process.env.NODE_ENV,
-    version: '3.635.0-pending-task-comp-last5',
+    version: '3.636.0-thanks-cards',
     // 邊緣密鑰驗證輔助（供啟用 EDGE_ENFORCE 前確認 Transform Rule 有正確注入 header；不外洩密鑰值）
     edge: {
       header: (process.env.EDGE_HEADER || 'x-edge-auth').toLowerCase(),

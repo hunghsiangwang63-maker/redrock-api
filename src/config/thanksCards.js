@@ -27,7 +27,7 @@ const PHRASES = {
   p17: '慢慢爬也沒關係，風景都一樣好！',
   p18: '掉下來只是重來一次，再來！',
 };
-const STICKERS = ['pumpkin', 'maple', 'ginkgo', 'acorn', 'wheat', 'pie'];
+const STICKERS = ['pumpkin', 'maple', 'ginkgo', 'acorn', 'wheat', 'pumpkin2', 'star', 'cranberry', 'maple2'];
 
 const tpDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 

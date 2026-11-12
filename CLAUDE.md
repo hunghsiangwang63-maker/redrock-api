@@ -1015,3 +1015,9 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **補發補課券**：`courseMakeupRights/abe79154…`（`source:'manual'`、`exempt:true`、`makeupForDate:'2026-11-02'`、備註「11/2 缺席」、掛原班），**效期 2027-02-19**（沿用同班另一張 reconcile 券的到期日＝課程結束後約 60 天；該課程沒設 `makeupDeadlineDate`）。她 11/2 出席紀錄為 `absent`、沒有請假紀錄，所以系統沒自動發券；補發前她名下 0 張券。`issueManualMakeupCredit` **只能用在 `allowMakeup:false` 的課程**（會擲 `NOT_NO_MAKEUP_COURSE`），入門班是自動發券的班，所以改為手動建立同欄位的券。建立的 id 在 `~/Documents/Codex/2026-10-23/3-4-app-app-redrocktaiwan-com/work/backup-yin-makeup-created.json`（非 repo 內）。**未通知她。**
 - ⚠️ **未確認**：她的退費申請仍待審、報名凍結中，**這張券在退費核准前是否真的能預約補課**我沒有實測（`enrollMakeup` 對 `refundPending` 的處理沒查）；若核准退費，未使用的券也沒有自動作廢機制，需人工處理。
 - 📌 **日後「缺席要補發補課券」**：先確認請假／出席紀錄（缺席不會自動發券）→ 自動發券的班手動建 `source:'manual'` 券（欄位比照 `issueManualMakeupCredit`，`originalEnrollmentId:null`、`makeupForDate`）→ 效期沿用同班既有券或詢問使用者。
+
+## 目前進度（2026-11-12 續2）— 殷愛媛 11/2 改記為請假、補課券改依請假發放（取代上一段的手動補發）（純資料，無程式異動）
+> 使用者：「記錄成 11/2 請假，依請假發放補課券。核准退費也沒有要作廢」。**上一段「手動補發 `source:'manual'` 券 `abe79154…`」已被取代並刪除。**
+- ✅ **做法（腳本，改前備份 `~/Documents/Codex/2026-10-23/3-4-app-app-redrocktaiwan-com/work/backup-yin-leave.json`，非 repo 內）**：11/2 報名 `status:'confirmed'`→`'leave'`（`leaveReason:'管理員補登請假（原記缺席）'`、`leaveRecordedBy:'staff-super'`）；刪除該堂 `courseAttendance` 的 `absent` 紀錄（避免請假與缺席並存）；場次 `enrolledCount` 2→1；刪除手動補發的券；再呼叫 `courseService.reconcileMakeupEntitlement(db, memberId, courseId, null, enrollment)` 讓系統依請假算額度 → 產生 `source:'reconcile'` 券 1 張（連 `originalEnrollmentId`＝11/2 報名），效期 **2027-02-19**，請假上限 2 次、已用 1。同一個 batch 內完成前四項。**繞過 `requestLeave` 的原因**：她的報名處於退費審核凍結（`refundPending`），正常請假會被 `REFUND_PENDING` 擋，且 11/2 已過請假截止；腳本沒有發任何通知（不通知管理員／帶課教練／學員）。
+- 📌 **退費核准後這張券不作廢（使用者確認）**：系統本來就沒有「退費核准自動作廢未使用補課券」的機制，不需處理；她的退費申請 `crefund_1794116483…` 仍待審核（核准當下才釋出名額，見上一段）。
+- 📌 **日後「事後補登請假」**：缺席未請假不會自動發券，要發就走「改成請假＋reconcile」讓券有 `originalEnrollmentId` 對應（假補總表的請假日期才對得上），比手動建 manual 券好；改之前記得刪除衝突的 `absent` 出席紀錄與調整場次人數。

@@ -1847,6 +1847,10 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
       });
 
       const rightsSnap = await db.collection('courseMakeupRights').where('courseId', '==', courseId).get();
+      // 被改掛到別的課程的券（movedFromCourseId）：只用於請假旁的券標示，不計入本課程補課額度
+      const movedSnap = await db.collection('courseMakeupRights').where('movedFromCourseId', '==', courseId).get();
+      const movedByMember = {};
+      movedSnap.docs.forEach(d => { const r = { id: d.id, ...d.data() }; if (r.courseId !== courseId) (movedByMember[r.memberId] = movedByMember[r.memberId] || []).push(r); });
       const rightsByMember = {};
       rightsSnap.docs.forEach(d => {
         const r = { id: d.id, ...d.data() };
@@ -1912,7 +1916,9 @@ async function buildLeaveMakeupSummary(db, courseId, courseDataOpt) {
           if (r) return { text: `${d}（${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}）`, voucher: '' };
           const _en = _leaveEns[i];
           const _linked = _en ? _leaveRights.filter(r => r.originalEnrollmentId === _en.id) : []; // 以 originalEnrollmentId 精確對應該次請假；舊資料沒有連結才退回發券順序
+          const _movedLinked = _en ? (movedByMember[mid] || []).filter(r => r.originalEnrollmentId === _en.id) : []; // 券已改掛到別的課程（見 movedFromCourseId）
           const rs = _linked.length ? _linked : _leaveRights.slice(i * _perLeave, (i + 1) * _perLeave);
+          if (!_linked.length && _movedLinked.length) return { text: d, voucher: _movedLinked.map(r => _voucherTag(r) + `（已改掛「${r.courseName || '其他課程'}」）`).join('') };
           return { text: d, voucher: (rs.length ? rs.map(_voucherTag).join('') : (rules.allowMakeup === false ? '' : '（無補課券）')) };
         });
         const realLeaves = _realItems.map(x => x.text + x.voucher);
@@ -1988,7 +1994,7 @@ router.get('/leave-makeup-summary/all',
         db.collection(COLLECTIONS.COURSE_ENROLLMENTS)
           .select('courseId', 'memberId', 'isTrial', 'isMakeup', 'status', 'date', 'maxLeavesAllowed', 'memberName').get(),
         db.collection('courseMakeupRights')
-          .select('courseId', 'memberId', 'source', 'closureDate', 'prevLeaveDate', 'redemptionType', 'status', 'cashCreditAmount', 'expiresAt', 'usedSessionId', 'courseName', 'createdAt', 'originalEnrollmentId').get(),
+          .select('courseId', 'memberId', 'source', 'closureDate', 'prevLeaveDate', 'redemptionType', 'status', 'cashCreditAmount', 'expiresAt', 'usedSessionId', 'courseName', 'createdAt', 'originalEnrollmentId', 'movedFromCourseId').get(),
         db.collection('pendingCourseClaims').get(),
         db.collection('courseCategories').get(),
       ]);
@@ -2004,6 +2010,8 @@ router.get('/leave-makeup-summary/all',
 
       const enByCourse = {}, mkByCourse = {}, pcByCourse = {};
       enSnap.docs.forEach(d => { const e = d.data(); if (e.isTrial || e.isMakeup || !courseIds.has(e.courseId)) return; ((enByCourse[e.courseId] = enByCourse[e.courseId] || {})[e.memberId] = (enByCourse[e.courseId][e.memberId] || [])).push({ ...e, id: d.id }); });
+      const movedByCourse = {}; // 券被改掛到別的課程後，舊課程的請假列仍要能對應到它（只用於請假旁的券標示，不計入該課程的補課額度）
+      mkSnap.docs.forEach(d => { const r0 = d.data(); if (r0.movedFromCourseId && r0.courseId !== r0.movedFromCourseId && courseIds.has(r0.movedFromCourseId)) { ((movedByCourse[r0.movedFromCourseId] = movedByCourse[r0.movedFromCourseId] || {})[r0.memberId] = (movedByCourse[r0.movedFromCourseId][r0.memberId] || [])).push({ id: d.id, ...r0 }); } });
       mkSnap.docs.forEach(d => { const r = { id: d.id, ...d.data() }; if (!courseIds.has(r.courseId)) return; ((mkByCourse[r.courseId] = mkByCourse[r.courseId] || {})[r.memberId] = (mkByCourse[r.courseId][r.memberId] || [])).push(r); });
       pcSnap.docs.forEach(d => { const x = d.data(); if (x.claimed === true || !courseIds.has(x.courseId)) return; (pcByCourse[x.courseId] = pcByCourse[x.courseId] || []).push({ name: x.name, leaveDates: x.leaveDates || [] }); });
 
@@ -2076,7 +2084,9 @@ router.get('/leave-makeup-summary/all',
             if (r) return { text: `${d}（${r.status === 'used' ? '已折抵' : '待折抵'}NT$${r.cashCreditAmount || ''}）`, voucher: '' };
             const _en = _leaveEns[i];
             const _linked = _en ? _leaveRights.filter(r => r.originalEnrollmentId === _en.id) : []; // 以 originalEnrollmentId 精確對應該次請假；舊資料沒有連結才退回發券順序
+            const _movedLinked = _en ? (((movedByCourse[c.id] || {})[mid]) || []).filter(r => r.originalEnrollmentId === _en.id) : []; // 券已改掛到別的課程（見 movedFromCourseId）
             const rs = _linked.length ? _linked : _leaveRights.slice(i * _perLeave, (i + 1) * _perLeave);
+            if (!_linked.length && _movedLinked.length) return { text: d, voucher: _movedLinked.map(r => _voucherTag(r) + `（已改掛「${r.courseName || '其他課程'}」）`).join('') };
             return { text: d, voucher: (rs.length ? rs.map(_voucherTag).join('') : (rules.allowMakeup === false ? '' : '（無補課券）')) };
           });
           const realLeaves = _realItems.map(x => x.text + x.voucher);

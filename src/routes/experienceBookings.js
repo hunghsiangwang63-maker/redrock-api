@@ -68,7 +68,7 @@ async function handleTrialBooking(req, res, db, memberId) {
     // 電話比對既有會員命中即直接歸戶（避免忘記登入的已註冊會員被永久卡在無主的訪客佔位 id 上，
     // 詳見 memberService.resolveGuestOrMemberId 註解）；isGuestTrial 維持 true——此旗標控制的是
     // 「這是免登入表單送出」這件事本身（決定要不要伺服器端代建待收款單等），與有沒有找到真實身分無關。
-    trialMemberId = (await memberService.resolveGuestOrMemberId(db, guestPhone)).memberId;
+    trialMemberId = (await memberService.resolveGuestOrMemberId(db, guestPhone, 'guest_', guestName)).memberId;
     trialName = String(guestName).trim();
     trialEmail = (guestEmail || '').trim();
     trialPhone = String(guestPhone).trim();

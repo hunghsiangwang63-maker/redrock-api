@@ -722,7 +722,7 @@ router.post('/public/sessions/:sessionId/enroll', async (req, res) => {
       if (!(Number(paidAmount) > 0)) return res.status(400).json({ code:'MISSING_PAID_AMOUNT', message:'請填寫實際匯款金額' });
     }
 
-    const { memberId, isGuestBooking } = await memberService.resolveGuestOrMemberId(getDb(), guestPhone);
+    const { memberId, isGuestBooking } = await memberService.resolveGuestOrMemberId(getDb(), guestPhone, 'guest_', guestName);
     const result = await courseService.enrollCourse({
       memberId,
       isGuestBooking, guestName: String(guestName).trim(), guestPhone: String(guestPhone).trim(), guestEmail: (guestEmail||'').trim(),
@@ -2905,7 +2905,7 @@ router.post('/:courseId/enroll-all', authenticateAny, handleEnrollAll);
 
 // ── POST /courses/public/:courseId/enroll-all - 訪客整期報名（免登入，先轉帳）───────────
 // 不建帳號（memberId 用不會碰撞的 guest_<uuid> 佔位字串，避免與其他訪客誤判重複報名/名額計算漂移）；
-// 一律轉帳、無分期、無舊生/隊員折扣（訪客沒有既有會員關係，這些折扣天生就不會命中，見上方 handleEnrollAll 共用邏輯）；
+// 一律轉帳、無分期；電話（正規化後）比對到既有會員時沿用該會員身分，舊生/續報/隊員折扣依該會員紀錄套用（2026-09-08 起；之前訪客報名一律原價，如 2026-08-24 林耿民案）；
 // 未成年一律要求本人+法定代理人皆線上完成簽名。把 guest 欄位塞進 req.body 後直接委派給共用核心邏輯。
 router.post('/public/:courseId/enroll-all', async (req, res) => {
   const { guestName, guestPhone, guestEmail, guestBirthday, bankLastFive, bankName, paymentDate, paidAmount } = req.body;
@@ -2920,7 +2920,7 @@ router.post('/public/:courseId/enroll-all', async (req, res) => {
   // ⚠️ 此路由無登入 session（req.member 不存在），handleEnrollAll 靠 _isGuestEnroll 決定是否走
   // checkMemberOwnership（需要 req.member）——即使電話比對命中既有會員，仍必須維持 _isGuestEnroll:true，
   // 只替換 memberId 本身，否則會誤觸 ownership 檢查、對公開路由必定回 403。詳見 resolveGuestOrMemberId 註解。
-  const { memberId } = await memberService.resolveGuestOrMemberId(getDb(), guestPhone);
+  const { memberId } = await memberService.resolveGuestOrMemberId(getDb(), guestPhone, 'guest_', guestName);
   req.body.memberId = memberId;
   req.body.memberName = String(guestName).trim();
   req.body.paymentMethod = 'transfer';

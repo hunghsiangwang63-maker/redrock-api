@@ -302,13 +302,33 @@ const claimPendingExperienceTickets = async (db, memberId, member) => {
 // 真實會員（沿用會員身分＝隊員價/黑名單擋等權威判斷皆自動生效，比維持訪客身分更正確），查無才退回訪客
 // 流程（fallbackPrefix 由呼叫端決定佔位格式：課程/試上用 'guest_<uuid>' 字串、一般體驗預約用 null）。
 // 比對邏輯（僅比電話）與既有 claimGuestXxx 系列一致，不額外要求姓名相符。
-const resolveGuestOrMemberId = async (db, phone, fallbackPrefix = 'guest_') => {
+// 電話比對的候選寫法：原樣、純數字、國碼 886（+886／886 開頭）與本地 0 開頭互換——訪客可能填 0928-274-519、
+// 0928 274 519、+886928274519，而會員資料多為 0928274519（也有 67 位是 +國碼 格式）；原本只做字串全等會漏判。
+const phoneVariants = (phone) => {
+  const raw = String(phone || '').trim();
+  const digits = raw.replace(/\D/g, '');
+  const set = new Set([raw]);
+  if (digits) {
+    set.add(digits); set.add('+' + digits);
+    if (digits.startsWith('886') && digits.length >= 11) { set.add('0' + digits.slice(3)); set.add('+' + digits); }
+    if (digits.startsWith('0') && digits.length === 10) { set.add('+886' + digits.slice(1)); set.add('886' + digits.slice(1)); }
+  }
+  return [...set].filter(Boolean).slice(0, 10);
+};
+// name（選填）：同電話有多位會員（家長與子女共用電話）時，優先取姓名相同者；沒有姓名相符且超過一位時不歸戶（避免套用到別人的優惠）。
+const resolveGuestOrMemberId = async (db, phone, fallbackPrefix = 'guest_', name = null) => {
   const trimmed = String(phone || '').trim();
   const fallback = fallbackPrefix === null ? null : `${fallbackPrefix}${uuidv4()}`;
   if (!trimmed) return { memberId: fallback, isGuestBooking: true };
   try {
-    const snap = await db.collection(COLLECTIONS.MEMBERS).where('phone', '==', trimmed).limit(1).get();
-    if (!snap.empty) return { memberId: snap.docs[0].id, isGuestBooking: false };
+    const snap = await db.collection(COLLECTIONS.MEMBERS).where('phone', 'in', phoneVariants(trimmed)).limit(10).get();
+    if (!snap.empty) {
+      const docs = snap.docs;
+      const nm = String(name || '').trim().toLowerCase();
+      const byName = nm ? docs.find(d => String(d.data().name || '').trim().toLowerCase() === nm) : null;
+      if (byName) return { memberId: byName.id, isGuestBooking: false, matchedBy: 'phone+name' };
+      if (docs.length === 1) return { memberId: docs[0].id, isGuestBooking: false, matchedBy: 'phone' };
+    }
   } catch (e) { console.error('[公開報名] 電話比對既有會員失敗（改走訪客流程）:', e.message); }
   return { memberId: fallback, isGuestBooking: true };
 };
@@ -785,6 +805,7 @@ module.exports = {
   createMember,
   claimLegacyFallTest,
   resolveGuestOrMemberId,
+  phoneVariants,
   searchMembers,
   invalidateMemberSearchCache,
   getMember,

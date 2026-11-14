@@ -160,11 +160,13 @@ router.delete('/:id', authenticate, checkPermission('products.manage'), async (r
 });
 
 // ── POST /products/:id/restock - 入庫（指定館別）────────────────
-router.post('/:id/restock', authenticate, checkPermission('products.manage'), async (req, res) => {
+router.post('/:id/restock', authenticate, checkPermission('products.restock'), async (req, res) => {
   try {
     const db = getDb();
     const { variantId, quantity, note } = req.body;
-    const gymId = req.body.gymId || req.staff?.gymId;
+    // 值班 operator（含兼職值班）只能入庫到自己值班的館別，不能指定別館
+    const gymId = req.staff?.type === 'operator' ? req.staff.gymId : (req.body.gymId || req.staff?.gymId);
+    if (!gymId) return res.status(400).json({ error: 'GYM_REQUIRED', message: '請指定入庫場館' });
     const qty = parseInt(quantity) || 0;
     const ref = db.collection('products').doc(req.params.id);
     const doc = await ref.get();

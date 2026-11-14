@@ -40,6 +40,8 @@ const DEFAULT_PERMISSIONS = {
   'competitions.sync':     { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
   'products.manage':       { super_admin: true, gym_manager: true, full_time: true,  part_time: false }, // 完整商品/庫存（含清點/進貨/CRUD）
   'inventory.manage':      { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
+  // 商品入庫（只加庫存、不能改商品資料／清點／倉庫）：值班 operator（含兼職值班，見 COUNTER_PERMS）可做，2026-11-15 使用者要求；個人帳號 part_time 仍不可
+  'products.restock':      { super_admin: true, gym_manager: true, full_time: true,  part_time: false },
   'products.warehouse':    { super_admin: true, gym_manager: false, full_time: false, part_time: false },
   // 器材租借管理（查詢名單/確認取件/確認歸還/員工備註）：正職個人不可（見 COUNTER_PERMS，值班才開）
   'rentals.manage':        { super_admin: true, gym_manager: true, full_time: false, part_time: false },
@@ -72,7 +74,7 @@ const COUNTER_PERMS = new Set([
   'waiver.sign', 'waiver.send_parent',
   'checkin.create', 'checkin.read',
   'passes.create', 'passes.update', 'installments.manage',
-  'courses.attendance', 'products.sell', 'revenue.record', 'competitions.entries',
+  'courses.attendance', 'products.sell', 'products.restock', 'revenue.record', 'competitions.entries',
   'schedule.events', 'rentals.manage', 'vip.view',
 ]);
 

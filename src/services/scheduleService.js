@@ -391,8 +391,20 @@ const copyPreviousMonthShifts = async (gymId, targetMonth, createdBy) => {
 // gymId: null＝全館皆顯示；allDay=true 為全天資訊，false 則需 startTime/endTime。
 const EVENT_CATEGORIES = ['closure', 'competition', 'maintenance', 'routesetting', 'other', 'group_experience'];
 
-const createScheduleEvent = async ({ gymId, date, allDay, startTime, endTime, category, title, note, createdBy }) => {
+// 多天活動（連休／連續休館／多日比賽）：同一筆事項用 date（起）＋endDate（迄，含當天）表示，不拆成每天一筆；
+// endDate 為空或等於 date＝單天。跨天上限 MAX_EVENT_SPAN_DAYS 天；非全天事項的時間區段每天都套用。
+const MAX_EVENT_SPAN_DAYS = 92;
+const normalizeEventEndDate = (date, endDate) => {
+  if (!endDate || endDate === date) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(endDate))) throw { code: 'INVALID_END_DATE', message: '結束日期格式不正確' };
+  if (endDate < date) throw { code: 'INVALID_END_DATE', message: '結束日期不能早於開始日期' };
+  if (dayjs(endDate).diff(dayjs(date), 'day') + 1 > MAX_EVENT_SPAN_DAYS) throw { code: 'SPAN_TOO_LONG', message: `多天活動最長 ${MAX_EVENT_SPAN_DAYS} 天` };
+  return endDate;
+};
+
+const createScheduleEvent = async ({ gymId, date, endDate, allDay, startTime, endTime, category, title, note, createdBy }) => {
   if (!date) throw { code: 'MISSING_DATE', message: '請選擇日期' };
+  const finalEndDate = normalizeEventEndDate(date, endDate);
   if (!EVENT_CATEGORIES.includes(category)) throw { code: 'INVALID_CATEGORY', message: '類別不正確' };
   if (!allDay) {
     if (!startTime || !endTime) throw { code: 'MISSING_TIME', message: '非全天事項需填寫開始與結束時間' };
@@ -402,7 +414,7 @@ const createScheduleEvent = async ({ gymId, date, allDay, startTime, endTime, ca
   const id = uuidv4();
   const now = new Date();
   const event = {
-    id, gymId: gymId || null, date,
+    id, gymId: gymId || null, date, endDate: finalEndDate,
     allDay: !!allDay,
     startTime: allDay ? null : startTime,
     endTime: allDay ? null : endTime,
@@ -497,7 +509,7 @@ const resolveSeriesEventIds = async (db, eventId, scope) => {
   return { ids, anchor };
 };
 
-const updateScheduleEvent = async (id, { gymId, date, allDay, startTime, endTime, category, title, note }, scope = 'single') => {
+const updateScheduleEvent = async (id, { gymId, date, endDate, allDay, startTime, endTime, category, title, note }, scope = 'single') => {
   const db = getDb();
   const { ids, anchor } = await resolveSeriesEventIds(db, id, scope);
 
@@ -514,6 +526,12 @@ const updateScheduleEvent = async (id, { gymId, date, allDay, startTime, endTime
   if (gymId !== undefined) updates.gymId = gymId || null;
   // 日期只在單筆編輯時才能改——套用到「這筆及之後」或「整個系列」時，各筆維持各自原本的日期
   if (date !== undefined && ids.length === 1) updates.date = date;
+  // 多天活動的結束日期：只在單筆編輯時可改（循環系列各筆維持單天）；傳空字串／null＝改回單天
+  if (ids.length === 1 && (endDate !== undefined || date !== undefined)) {
+    const finalDate = date !== undefined ? date : anchor.date;
+    const finalEnd = endDate !== undefined ? (endDate || null) : (anchor.endDate || null);
+    updates.endDate = normalizeEventEndDate(finalDate, finalEnd);
+  }
   if (allDay !== undefined) updates.allDay = !!allDay;
   updates.startTime = finalAllDay ? null : finalStart;
   updates.endTime = finalAllDay ? null : finalEnd;
@@ -548,7 +566,7 @@ const getMonthlyScheduleEvents = async (gymId, yearMonth) => {
   ]);
   const all = [...ownSnap.docs, ...allGymSnap.docs].map(d => ({ id: d.id, ...d.data() }));
   return all
-    .filter(e => e.date >= start && e.date <= end)
+    .filter(e => e.date <= end && (e.endDate || e.date) >= start) // 多天活動：與該月有重疊就回傳（可能從上個月開始、延到下個月）
     .sort((a, b) => a.date.localeCompare(b.date) || (a.allDay === b.allDay ? 0 : a.allDay ? -1 : 1));
 };
 

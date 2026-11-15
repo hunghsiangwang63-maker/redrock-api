@@ -302,6 +302,7 @@ router.post('/events',
   authenticate, checkPermission('schedule.events'),
   [
     body('date').isDate().withMessage('請輸入有效日期'),
+    body('endDate').optional({ checkFalsy: true }).isDate().withMessage('結束日期格式不正確'),
     body('category').isIn(['closure', 'competition', 'maintenance', 'routesetting', 'group_experience', 'other']).withMessage('類別不正確'),
   ],
   validate,
@@ -310,7 +311,7 @@ router.post('/events',
       // gymId 未帶（或 super_admin 明確帶 null/空字串）＝全館皆顯示；一般帳號一律鎖自己館
       const gymId = req.staff.role === 'super_admin' ? (req.body.gymId || null) : req.staff.gymId;
       const event = await scheduleService.createScheduleEvent({
-        gymId, date: req.body.date, allDay: req.body.allDay,
+        gymId, date: req.body.date, endDate: req.body.endDate || null, allDay: req.body.allDay,
         startTime: req.body.startTime, endTime: req.body.endTime,
         category: req.body.category, title: req.body.title, note: req.body.note,
         createdBy: req.staff.id,

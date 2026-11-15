@@ -24,23 +24,31 @@ const maskName = (n) => {
   return s[0] + '○'.repeat(s.length - 2) + s[s.length - 1];
 };
 
-// systemSettings/thanksCards { forceOpen:true } 可在活動期間外提前開放（上線前測試用；測試期間寄出的卡片標 isTest，上線前清除）
-let _forceCache = { v: false, at: 0 };
-const forceOpen = async () => {
+// systemSettings/thanksCards 可在活動期間外提前開放（上線前測試用；測試期間寄出的卡片標 isTest，上線前清除）：
+//   { forceSeason:'christmas' } 開放指定季節；{ forceOpen:true } 沿用舊寫法＝感恩節。看完要刪除此文件。
+let _forceCache = { v: null, at: 0 };
+const forceSeasonKey = async () => {
   if (Date.now() - _forceCache.at < 30000) return _forceCache.v;
+  let v = null;
   try {
     const d = await getDb().collection('systemSettings').doc('thanksCards').get();
-    _forceCache = { v: !!(d.exists && d.data().forceOpen === true), at: Date.now() };
-  } catch (e) { _forceCache = { v: false, at: Date.now() }; }
-  return _forceCache.v;
+    if (d.exists) { const x = d.data(); v = (x.forceSeason && cfg.getSeason(x.forceSeason)) ? x.forceSeason : (x.forceOpen === true ? 'thanksgiving' : null); }
+  } catch (e) { v = null; }
+  _forceCache = { v, at: Date.now() };
+  return v;
 };
+// season：目前生效的季節 key（自然開放的優先，沒有才用強制開放的）
 const state = async () => {
   const today = cfg.tpDate();
-  const force = await forceOpen();
+  const forced = await forceSeasonKey();
+  const natSend = cfg.activeSendSeason(today);
+  const natInbox = cfg.inboxSeason(today);
+  const sendSeason = natSend ? natSend.key : forced;
+  const inboxSeasonKey = natInbox ? natInbox.key : forced;
   return {
-    sendOpen: force || (today >= cfg.SEND_START && today <= cfg.SEND_END),
-    inboxOpen: force || (today >= cfg.SEND_START && today <= cfg.INBOX_UNTIL),
-    force,
+    sendOpen: !!sendSeason, inboxOpen: !!inboxSeasonKey,
+    season: sendSeason || inboxSeasonKey || null, inboxSeason: inboxSeasonKey || null,
+    force: !!forced, forcedOnly: !!forced && !natSend,
   };
 };
 
@@ -54,7 +62,8 @@ const lookupAllowed = (memberId) => {
 
 router.get('/config', authenticateMember, async (req, res) => {
   const st = await state();
-  res.json({ ...st, phrases: Object.keys(cfg.PHRASES), stickers: cfg.STICKERS, maxPerPair: cfg.MAX_PER_PAIR });
+  const season = cfg.getSeason(st.season);
+  res.json({ ...st, phrases: season ? Object.keys(season.phrases) : [], stickers: season ? season.stickers : [], maxPerPair: cfg.MAX_PER_PAIR });
 });
 
 router.post('/lookup', authenticateMember, async (req, res) => {
@@ -99,8 +108,9 @@ router.post('/', authenticateMember, async (req, res) => {
       if (!orig.exists || orig.data().toKey !== `m_${req.member.id}` || !orig.data().fromMemberId) return res.status(404).json({ error: 'NOT_FOUND', message: '找不到這張卡片' });
       toType = 'member'; toMemberId = orig.data().fromMemberId; toStaffId = null;
     }
-    if (!cfg.PHRASES[phraseId]) return res.status(400).json({ error: 'INVALID_PHRASE', message: '請選擇卡片句子' });
-    if (!cfg.STICKERS.includes(stickerId)) return res.status(400).json({ error: 'INVALID_STICKER', message: '請選擇貼紙' });
+    const season = cfg.getSeason(st.season);
+    if (!season.phrases[phraseId]) return res.status(400).json({ error: 'INVALID_PHRASE', message: '請選擇卡片句子' });
+    if (!season.stickers.includes(stickerId)) return res.status(400).json({ error: 'INVALID_STICKER', message: '請選擇貼紙' });
     if (!['member', 'staff'].includes(toType)) return res.status(400).json({ error: 'INVALID_TYPE' });
     const db = getDb(); const me = req.member;
     let toKey, toName = '', staffDoc = null;
@@ -115,9 +125,10 @@ router.post('/', authenticateMember, async (req, res) => {
       if (!s.exists || s.data().isActive === false) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此人員' });
       staffDoc = { id: s.id, ...s.data() }; toKey = `s_${toStaffId}`; toName = staffDoc.name || '';
     }
-    // 同一人對同一收件人最多 3 張（含已被隱藏的）
+    // 同一人對同一收件人「每一季」最多 3 張（含已被隱藏的；舊資料沒有 season 欄位＝感恩節）
     const mine = await db.collection('thanksCards').where('fromMemberId', '==', me.id).get();
-    if (mine.docs.filter(d => d.data().toKey === toKey).length >= cfg.MAX_PER_PAIR) {
+    const mineThisPair = mine.docs.filter(d => d.data().toKey === toKey && (d.data().season || 'thanksgiving') === season.key);
+    if (mineThisPair.length >= cfg.MAX_PER_PAIR) {
       return res.status(409).json({ error: 'PAIR_LIMIT', message: `對同一個人最多可以送 ${cfg.MAX_PER_PAIR} 張感謝卡片` });
     }
     const fromDisplay = (displayAs === 'name' || !me.nickname) ? (me.name || '') : me.nickname;
@@ -130,16 +141,16 @@ router.post('/', authenticateMember, async (req, res) => {
     const id = uuidv4(); const now = new Date();
     await db.collection('thanksCards').doc(id).set({
       id, fromMemberId: me.id, fromDisplay, toType, toKey, toMemberId: toType === 'member' ? toMemberId : null, toStaffId: toType === 'staff' ? toStaffId : null,
-      toName, stickerId, phraseId, status: blocked ? 'blocked' : 'active', isTest: !!(st.force && !(cfg.tpDate() >= cfg.SEND_START && cfg.tpDate() <= cfg.SEND_END)),
+      toName, stickerId, phraseId, season: season.key, status: blocked ? 'blocked' : 'active', isTest: !!st.forcedOnly,
       createdAt: now, readAt: null,
     });
     if (toType === 'staff') {
       try {
         await createNotification({ gymId: staffDoc.gymId || null, targetStaffId: staffDoc.id, type: 'thanks_card', title: '💌 收到一張感謝卡片',
-          body: `${fromDisplay}：「${cfg.PHRASES[phraseId]}」`, referenceId: id, referenceType: 'thanksCard', link: null });
+          body: `${fromDisplay}：「${season.phrases[phraseId]}」`, referenceId: id, referenceType: 'thanksCard', link: null });
       } catch (e) { console.error('[感謝卡片] 員工通知失敗', e.message); }
     }
-    res.status(201).json({ success: true, id, remaining: Math.max(0, cfg.MAX_PER_PAIR - mine.docs.filter(d => d.data().toKey === toKey).length - 1) });
+    res.status(201).json({ success: true, id, remaining: Math.max(0, cfg.MAX_PER_PAIR - mineThisPair.length - 1), season: season.key });
   } catch (e) { res.status(500).json({ error: 'SERVER_ERROR', message: e.message }); }
 });
 
@@ -148,7 +159,7 @@ router.get('/inbox', authenticateMember, async (req, res) => {
     const st = await state();
     if (!st.inboxOpen) return res.json({ cards: [], inboxOpen: false });
     const snap = await getDb().collection('thanksCards').where('toKey', '==', `m_${req.member.id}`).get();
-    const cards = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.status === 'active')
+    const cards = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => c.status === 'active' && (c.season || 'thanksgiving') === st.inboxSeason)
       .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0)).slice(0, 30)
       .map(c => ({ id: c.id, fromDisplay: c.fromDisplay, stickerId: c.stickerId, phraseId: c.phraseId, createdAt: c.createdAt?.toDate?.()?.toISOString() || null }));
     res.json({ cards, inboxOpen: true });

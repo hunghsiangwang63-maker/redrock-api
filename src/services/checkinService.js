@@ -21,6 +21,8 @@ module.exports = {
   getCourseAccess: eligibility.getCourseAccess,
   checkFallTest: gates.checkFallTest,
   tryExtendFallTest: gates.tryExtendFallTest,
+  extendFallTestIfDue: gates.extendFallTestIfDue,
+  sweepFallTestExtensions: gates.sweepFallTestExtensions,
   checkVip: eligibility.checkVip,
   getValidSingleEntryTickets: eligibility.getValidSingleEntryTickets,
   hasFallTestSignature: gates.hasFallTestSignature,

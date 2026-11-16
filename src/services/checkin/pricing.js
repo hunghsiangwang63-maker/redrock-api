@@ -51,7 +51,7 @@ const getOriginalEntryPrice = async (memberType) => {
   return getEntryTypePrice(id, fallback);
 };
 
-// ── 墜落測驗：有效期 1 年；到期前2個月~前1天入場時，回看過去1年若≥2次入場則自動延長1年（見 checkin/gates.js tryExtendFallTest）──
+// ── 墜落測驗：有效期 1 年；到期時若有效期內（非取消）入場 ≥2 次則自動延長 1 年（2026-11-17 起；見 checkin/gates.js extendFallTestIfDue／sweepFallTestExtensions）──
 const getMemberType = (member) => {
   // 兒童（<13）以出生日期一律優先於 VIP/隊員標記——避免小孩掛 VIP/隊員時 memberType
   // 蓋掉 'child' 而繞過兒童限制（如「兒童不適用優惠折扣券」，見 utils/age.js 設計說明；

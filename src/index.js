@@ -360,6 +360,11 @@ if (require.main === module) {
     // （會員已在期限內填妥匯款資訊，只是館方沒點確認）在比賽這邊雖有「已填匯款資料不剔除」的
     // 安全閥，使用者仍決定與課程政策看齊、全面改人工，不倚賴任何自動取消。sweepExpiredCompetitionPayments
     // 函式本體保留，只是不再排程呼叫（如需手動清可另補觸發端點，比照課程 sweep-expired-payments）。
+    // 墜落測驗到期時自動延長（2026-11-17 規則）：有效期內入場滿 2 次者，到期後補延長 1 年並重算封鎖狀態（每日 09:00 掃描；入場閘門遇過期也會即時處理）
+    try {
+      const r = await require('./services/checkinService').sweepFallTestExtensions();
+      if (r.extendedMembers > 0) console.log(`[墜測延長] 掃描 ${r.scanned}、延長 ${r.extendedMembers} 位：${r.detail.map(d => d.memberId.slice(0, 8) + '→' + d.newExpiresAt).join('、')}`);
+    } catch (e) { console.error('[墜測延長] 失敗', e.message); }
     // 結帳暫存檔（draft）清理：只保留今天與最近三天，刪更舊的未結帳暫存（settled 永不刪）
     try {
       await require('./services/settlementService').sweepStaleSettlementDrafts();

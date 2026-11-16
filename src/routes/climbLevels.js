@@ -17,6 +17,7 @@ const { authenticate, authenticateAny } = require('../middleware/auth');
 const { getDb } = require('../config/firebase');
 const { taiwanToday } = require('../utils/taiwanDate');
 const { isManagerRole } = require('../utils/roles');
+const { uniformAge } = require('../utils/uniformAge');
 
 const DEFS = 'climbLevelDefs';
 const RECORDS = 'climbLevelRecords';
@@ -91,16 +92,16 @@ router.get('/course/:courseId/students', authenticate, async (req, res) => {
     const names = {};
     enSnap.docs.forEach(d => { const e = d.data(); if (e.memberId && !e.isMakeup && !e.isTrial) names[e.memberId] = e.memberName || ''; });
     // 制服領取筆數（未作廢）：名單標示「已領／未領」用
-    const uniformCount = {};
+    const uniformCount = {}; const uniformDocs = {};
     const ids = Object.keys(names);
     for (let i = 0; i < ids.length; i += 10) {
       const us = await db.collection('uniformIssues').where('memberId', 'in', ids.slice(i, i + 10)).get();
-      us.docs.forEach(d => { const u = d.data(); if (!u.voided) uniformCount[u.memberId] = (uniformCount[u.memberId] || 0) + 1; });
+      us.docs.forEach(d => { const u = d.data(); if (!u.voided) { uniformCount[u.memberId] = (uniformCount[u.memberId] || 0) + 1; (uniformDocs[u.memberId] = uniformDocs[u.memberId] || []).push(u); } });
     }
     const students = [];
     for (const memberId of ids) {
       const sum = await memberSummary(db, memberId, prog.key);
-      students.push({ memberId, name: names[memberId], currentLevel: sum.currentLevel, lastRecord: sum.records.find(r => !r.voided) || null, uniformCount: uniformCount[memberId] || 0 });
+      students.push({ memberId, name: names[memberId], currentLevel: sum.currentLevel, lastRecord: sum.records.find(r => !r.voided) || null, uniformCount: uniformCount[memberId] || 0, ...(() => { const a = uniformAge(uniformDocs[memberId]); return { uniformLastDate: a.lastDate, uniformOver2y: a.over2y }; })() });
     }
     students.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
     res.json({ enabled: true, program: { key: prog.key, name: prog.name }, course: { id: course.id, name: course.name, instructor: course.instructor || '', gymId: course.gymId }, students });

@@ -714,13 +714,13 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
         const targets = enrollments.filter(e => !e.isMakeup && !e.isTrial && sessionMap[e.sessionId] && spiderIds.has(sessionMap[e.sessionId].courseId));
         if (targets.length) {
           const mids = [...new Set(targets.map(e => e.memberId))];
-          const have = new Set();
+          const have = new Set(); const haveDocs = {};
           for (let i = 0; i < mids.length; i += 10) {
             const us = await db.collection('uniformIssues').where('memberId', 'in', mids.slice(i, i + 10)).get();
-            us.docs.forEach(d => { const u = d.data(); if (!u.voided) have.add(u.memberId); });
+            us.docs.forEach(d => { const u = d.data(); if (!u.voided) { have.add(u.memberId); (haveDocs[u.memberId] = haveDocs[u.memberId] || []).push(u); } });
           }
           await Promise.all(targets.map(async (e) => {
-            if (have.has(e.memberId)) { uniformInfo.set(e.memberId, { due: false, first: false }); return; }
+            if (have.has(e.memberId)) { uniformInfo.set(e.memberId, { due: false, first: false, over2y: require('../utils/uniformAge').uniformAge(haveDocs[e.memberId]).over2y }); return; }
             const cid = sessionMap[e.sessionId].courseId;
             const q = await db.collection('courseEnrollments').where('memberId', '==', e.memberId).where('courseId', '==', cid).where('status', '==', 'confirmed').select('date', 'isMakeup', 'isTrial').get();
             const dates = q.docs.map(d => d.data()).filter(x => !x.isMakeup && !x.isTrial && x.date).map(x => x.date).sort();
@@ -750,6 +750,7 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
           newStudentPrep: spiderPrepByMember.has(e.memberId),             // 小蜘蛛人新生：請準備制服跟集點卡
           uniformDue: !!(uniformInfo.get(e.memberId) || {}).due,           // 小蜘蛛人：尚未領取制服（櫃檯應發）
           uniformFirstClass: !!(uniformInfo.get(e.memberId) || {}).first,  // 且今天是該學員在這門課的第一堂
+          uniformOver2y: !!(uniformInfo.get(e.memberId) || {}).over2y,     // 制服最近一次領取已滿兩年（可再次發放）
           ...(inv ? { enrollmentId: inv.enrollmentId, paymentMethod: inv.paymentMethod, receivedAmount: inv.receivedAmount } : {}),
         };
       })

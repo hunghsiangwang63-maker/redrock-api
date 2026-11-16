@@ -181,6 +181,61 @@ router.get('/entry-types', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /settings/entry-pricing（公開；會員 App「入場收費資訊」頁用，2026-11-17）──────────
+// 把票價相關設定一次整理成會員頁要的格式，價格與收銀台同一份設定（systemSettings/entryTypes、shoeRental、chalkRental、
+// partnerVendor、partnerGymMember、passTypes、paymentMethods）。兩館共用、不依登入身分。回應快取 600 秒（改價後最多 10 分鐘才反映）。
+// 優惠折扣券購買價（PRICES.discount_card）與使用折數（DISCOUNT_CARD_RATE）、隊員折扣率為程式常數，原樣讀取。
+let _pricingCache = { at: 0, data: null };
+const PRICING_TTL_MS = 600 * 1000;
+router.get('/entry-pricing', async (req, res) => {
+  try {
+    if (_pricingCache.data && Date.now() - _pricingCache.at < PRICING_TTL_MS) {
+      res.set('Cache-Control', 'public, max-age=60');
+      return res.json(_pricingCache.data);
+    }
+    const db = getDb();
+    const pricing = require('../services/checkin/pricing');
+    const { TEAM_DISCOUNT_RATE, TEAM_DISCOUNT_MIN_AMOUNT } = require('../services/teamMemberService');
+    const { CARD_CREDITS } = require('../services/discountCardService');
+    const sysDoc = async (id) => { const d = await db.collection('systemSettings').doc(id).get(); return d.exists ? d.data() : null; };
+    const [entryTypesDoc, shoe, chalk, bonus, payment, vendor, gymMember, passSnap] = await Promise.all([
+      sysDoc('entryTypes'), sysDoc('shoeRental'), sysDoc('chalkRental'), sysDoc('bonus'), sysDoc('paymentMethods'),
+      pricing.getPartnerVendorConfig(), pricing.getPartnerGymMemberConfig(),
+      db.collection('passTypes').where('isActive', '==', true).get(),
+    ]);
+    const types = (entryTypesDoc && entryTypesDoc.types) || getDefaultEntryTypes();
+    const single = types.filter(t => t.active !== false && t.id !== 'course_access')
+      .map(t => ({ id: t.id, name: t.name, price: t.price, memberTypes: t.memberTypes || [] }));
+    const passes = passSnap.docs.map(d => d.data())
+      .filter(p => p.credits == null)   // 回數票不列（目前也已停用）
+      .map(p => ({
+        id: p.id, name: p.name, price: p.price, scope: p.scope === 'single' ? 'single' : 'shared',
+        targetGymId: p.targetGymId || null, durationDays: p.durationDays || null, durationMonths: p.durationMonths || null,
+        renewalDiscount: p.renewalDiscount && p.renewalDiscount.value > 0 ? { mode: p.renewalDiscount.mode, value: p.renewalDiscount.value } : null,
+      }))
+      .sort((a, b) => ((a.durationMonths || 0) * 30 + (a.durationDays || 0)) - ((b.durationMonths || 0) * 30 + (b.durationDays || 0)) || a.price - b.price);
+    const payEnabled = { transfer: true, cash: true, taiwanpay: true, linepay: true, jkopay: true, ...((payment && payment.enabled) || {}) };
+    const data = {
+      single,
+      discountCard: { price: pricing.PRICES.discount_card, rate: pricing.DISCOUNT_CARD_RATE, credits: CARD_CREDITS },
+      teamDiscount: { rate: TEAM_DISCOUNT_RATE, minAmount: TEAM_DISCOUNT_MIN_AMOUNT },
+      partnerGymMember: { enabled: gymMember.enabled, rate: gymMember.rate },
+      partnerVendor: { enabled: vendor.enabled, discount: vendor.discount },
+      rentals: {
+        shoe: { price: shoe && Number.isFinite(shoe.price) ? shoe.price : 100, active: !shoe || shoe.active !== false },
+        chalk: { price: chalk && Number.isFinite(chalk.price) ? chalk.price : 50, active: !chalk || chalk.active !== false },
+      },
+      passes,
+      bonus: { validityMonths: (bonus && bonus.validityMonths) || 6 },
+      payments: Object.keys(payEnabled).filter(k => payEnabled[k]),
+      cachedAt: new Date().toISOString(),
+    };
+    _pricingCache = { at: Date.now(), data };
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── POST /settings/entry-types ───────────────────────────────────
 router.post('/entry-types', authenticate, async (req, res) => {
   if (!['super_admin', 'admin'].includes(req.staff?.role))

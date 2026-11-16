@@ -335,4 +335,5 @@ module.exports = {
   incrementUsedCredits,
   EXPIRY_WARNING_DAYS,
   getDiscountCardValidityMonths,
+  CARD_CREDITS,
 };

@@ -141,7 +141,7 @@ const createPendingCheckIn = async ({
   // 定價邏輯抽至 pricing.js computeBuyDiscountCardAmount，與 paymentService.js
   // orderResolvers.entry（線上付款）共用同一份，避免各自維護。
   if (entryType === 'buy_discount_card') {
-    const r = computeBuyDiscountCardAmount(member);
+    const r = await computeBuyDiscountCardAmount(member);
     finalOriginal = r.originalAmount;
     finalAmount = r.amount;
     finalTeam = r.isTeamDiscount;

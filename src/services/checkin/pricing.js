@@ -148,11 +148,27 @@ const computePaidEntryAmount = async (entryType, member, opts = {}) => {
   };
 };
 
+// ── 優惠折扣券購買價：systemSettings/discountCardPrice.price（員工端「系統設定 → 入場規則」可改）；讀不到用預設 PRICES.discount_card（600）。
+// 記憶體快取 60 秒；PUT /settings/discount-card-price 會呼叫 clearDiscountCardPriceCache。
+let _dcPriceCache = { at: 0, price: null };
+const getDiscountCardPrice = async () => {
+  if (_dcPriceCache.price != null && Date.now() - _dcPriceCache.at < 60 * 1000) return _dcPriceCache.price;
+  let price = PRICES.discount_card;
+  try {
+    const doc = await getDb().collection('systemSettings').doc('discountCardPrice').get();
+    const n = doc.exists ? Number(doc.data().price) : NaN;
+    if (Number.isFinite(n) && n >= 1 && n <= 100000) price = Math.round(n);
+  } catch (e) { /* 讀不到用預設 */ }
+  _dcPriceCache = { at: Date.now(), price };
+  return price;
+};
+const clearDiscountCardPriceCache = () => { _dcPriceCache = { at: 0, price: null }; };
+
 // ── 購買優惠折扣券入場：固定券價 + 有效隊員 9 折（不信前端傳值）───────────────
 // 抽出供 checkin/flow.js createPendingCheckIn（現金/櫃檯）與 paymentService.js
 // orderResolvers.entry（線上付款）共用，避免同段定價邏輯各自維護一份、日後改動漏同步。
-const computeBuyDiscountCardAmount = (member) => {
-  const originalAmount = PRICES.discount_card;
+const computeBuyDiscountCardAmount = async (member) => {
+  const originalAmount = await getDiscountCardPrice();
   const isTeam = isActiveTeamMember(member);
   const teamEligible = isTeam && originalAmount >= TEAM_DISCOUNT_MIN_AMOUNT;
   return {
@@ -204,4 +220,4 @@ const computeBuyPassAmount = async (db, buyPassTypeId, gymId, member) => {
 // ── 取得有效定期票 ───────────────────────────────────────────────
 // endDate 改用「補償後到期日」（臨時休館延長票期，公休不補）→ 不在 Firestore 端以 endDate 預篩，
 // 改抓全部 active 後在程式碼用 effectiveEndDate 判斷（會員 active 票很少，成本可忽略）。
-module.exports = { PRICES, DISCOUNT_CARD_RATE, PARTNER_VENDOR_DISCOUNT, PARTNER_GYM_MEMBER_RATE, getPartnerVendorConfig, getPartnerGymMemberConfig, getOriginalEntryPrice, getMemberType, isFreeEntry, getEntryTypePrice, getRentalPrice, computePaidEntryAmount, computeBuyDiscountCardAmount, computeUseDiscountCardAmount, computeBuyPassAmount };
+module.exports = { PRICES, getDiscountCardPrice, clearDiscountCardPriceCache, DISCOUNT_CARD_RATE, PARTNER_VENDOR_DISCOUNT, PARTNER_GYM_MEMBER_RATE, getPartnerVendorConfig, getPartnerGymMemberConfig, getOriginalEntryPrice, getMemberType, isFreeEntry, getEntryTypePrice, getRentalPrice, computePaidEntryAmount, computeBuyDiscountCardAmount, computeUseDiscountCardAmount, computeBuyPassAmount };

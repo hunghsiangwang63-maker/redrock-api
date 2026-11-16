@@ -354,7 +354,7 @@ const orderResolvers = {
       // 兒童不適用折扣券（後端權威，與現金流程 createPendingCheckIn 同一擋）
       const { isChild } = require('../utils/age');
       if (isChild(member)) throw { code: 'CHILD_NO_DISCOUNT_CARD', message: '兒童不適用折扣券，無法購買' };
-      amount = computeBuyDiscountCardAmount(member).amount;
+      amount = (await computeBuyDiscountCardAmount(member)).amount;
     } else if (entryType === 'buy_pass') {
       const { isChild } = require('../utils/age');
       if (isChild(member)) throw { code: 'CHILD_NO_PASS', message: '未滿 13 歲無法購買定期票' };

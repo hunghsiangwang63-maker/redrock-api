@@ -184,7 +184,7 @@ router.get('/entry-types', async (req, res) => {
 // ── GET /settings/entry-pricing（公開；會員 App「入場收費資訊」頁用，2026-11-17）──────────
 // 把票價相關設定一次整理成會員頁要的格式，價格與收銀台同一份設定（systemSettings/entryTypes、shoeRental、chalkRental、
 // partnerVendor、partnerGymMember、passTypes、paymentMethods）。兩館共用、不依登入身分。回應快取 600 秒（改價後最多 10 分鐘才反映）。
-// 優惠折扣券購買價（PRICES.discount_card）與使用折數（DISCOUNT_CARD_RATE）、隊員折扣率為程式常數，原樣讀取。
+// 優惠折扣券購買價讀 systemSettings/discountCardPrice（預設 600）；使用折數（DISCOUNT_CARD_RATE）、隊員折扣率為程式常數，原樣讀取。
 let _pricingCache = { at: 0, data: null };
 const PRICING_TTL_MS = 600 * 1000;
 router.get('/entry-pricing', async (req, res) => {
@@ -217,7 +217,7 @@ router.get('/entry-pricing', async (req, res) => {
     const payEnabled = { transfer: true, cash: true, taiwanpay: true, linepay: true, jkopay: true, ...((payment && payment.enabled) || {}) };
     const data = {
       single,
-      discountCard: { price: pricing.PRICES.discount_card, rate: pricing.DISCOUNT_CARD_RATE, credits: CARD_CREDITS },
+      discountCard: { price: await pricing.getDiscountCardPrice(), rate: pricing.DISCOUNT_CARD_RATE, credits: CARD_CREDITS },
       teamDiscount: { rate: TEAM_DISCOUNT_RATE, minAmount: TEAM_DISCOUNT_MIN_AMOUNT },
       partnerGymMember: { enabled: gymMember.enabled, rate: gymMember.rate },
       partnerVendor: { enabled: vendor.enabled, discount: vendor.discount },
@@ -439,6 +439,27 @@ router.get('/partner-vendor', async (req, res) => {
     const doc = await db.collection('systemSettings').doc('partnerVendor').get();
     const d = doc.exists ? doc.data() : {};
     res.json({ enabled: d.enabled !== false, discount: Number.isFinite(d.discount) ? d.discount : 20 });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── GET /settings/discount-card-price - 優惠折扣券購買價（公開）────────
+router.get('/discount-card-price', async (req, res) => {
+  try { res.json({ price: await require('../services/checkin/pricing').getDiscountCardPrice() }); }
+  catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
+// ── PUT /settings/discount-card-price（僅 super_admin/admin）─────────────
+router.put('/discount-card-price', authenticate, async (req, res) => {
+  if (!['super_admin', 'admin'].includes(req.staff?.role))
+    return res.status(403).json({ error: '權限不足' });
+  try {
+    const n = Math.round(Number(req.body.price));
+    if (!Number.isFinite(n) || n < 1 || n > 100000)
+      return res.status(400).json({ error: 'INVALID_PRICE', message: '優惠折扣券價格請填 1~100000 元' });
+    await getDb().collection('systemSettings').doc('discountCardPrice').set({ price: n, updatedAt: new Date(), updatedBy: req.staff.id }, { merge: true });
+    require('../services/checkin/pricing').clearDiscountCardPriceCache();
+    _pricingCache = { at: 0, data: null };   // 會員「入場收費資訊」頁的快取也一併清掉
+    res.json({ success: true, price: n });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 

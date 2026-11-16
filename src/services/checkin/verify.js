@@ -7,7 +7,7 @@ const { getValidDiscountCards } = require('../discountCardService');
 const { getMemberBlackCards } = require('../legacyCardService');
 const { isActiveTeamMember, TEAM_DISCOUNT_MIN_AMOUNT } = require('../teamMemberService');
 const dayjs = require('dayjs');
-const { DISCOUNT_CARD_RATE, PRICES, getEntryTypePrice, getOriginalEntryPrice, getPartnerVendorConfig, getPartnerGymMemberConfig } = require('./pricing');
+const { DISCOUNT_CARD_RATE, PRICES, getEntryTypePrice, getOriginalEntryPrice, getPartnerVendorConfig, getPartnerGymMemberConfig, getDiscountCardPrice } = require('./pricing');
 const { checkVip, getBuyablePassTypes, getCourseAccess, getRenewalInfo, getValidPasses, getValidSingleEntryTickets } = require('./eligibility');
 const { runEntryGates } = require('./gates');
 
@@ -100,7 +100,7 @@ const verifyEntry = async (memberId, gymId) => {
   // 8. 無免費資格 → 需要選擇付費方式
   // 以下九項讀取（卡/票/紅利/可購票種/原價/兩個優惠設定/入場類型設定）彼此獨立 → 同時發出（原逐項 await＝9 個先後往返）。
   // 讀取內容與數量與原本完全相同。
-  const [discountCards, blackCards, singleEntryTickets, bonuses, buyablePassTypes, discountOriginalPrice, pvConfig, pgmConfig, etDoc] = await Promise.all([
+  const [discountCards, blackCards, singleEntryTickets, bonuses, buyablePassTypes, discountOriginalPrice, pvConfig, pgmConfig, etDoc, buyCardPrice] = await Promise.all([
     getValidDiscountCards(memberId),
     getMemberBlackCards(memberId),
     getValidSingleEntryTickets(memberId),
@@ -110,6 +110,7 @@ const verifyEntry = async (memberId, gymId) => {
     getPartnerVendorConfig(),                   // 特約廠商優惠設定
     getPartnerGymMemberConfig(),                // 友館隊員折扣設定
     db.collection('systemSettings').doc('entryTypes').get(),
+    getDiscountCardPrice(),                     // 優惠折扣券購買價（可於系統設定修改）
   ]);
 
   // 折扣券入場 8 折基準（原價依會員身份）；有效隊員再疊加 9 折；兒童不適用折扣券
@@ -216,7 +217,7 @@ const verifyEntry = async (memberId, gymId) => {
         tickets: singleEntryTickets.map(t => ({ id: t.id, expiresAt: t.expiresAt, rentShoes: !!t.rentShoes, rentChalk: !!t.rentChalk, partnerVendor: !!t.partnerVendor, partnerGymMember: !!t.partnerGymMember, source: t.source || null, createdAt: t.createdAt || null })),
       },
       // 兒童不適用折扣券 → 不提供「購買」選項
-      buyDiscountCard: { available: memberType !== 'child', price: withTeam(PRICES.discount_card), originalPrice: PRICES.discount_card },
+      buyDiscountCard: { available: memberType !== 'child', price: withTeam(buyCardPrice), originalPrice: buyCardPrice },
       // 入場當下購買新定期票（比照購買折扣券）；單館票僅該館可買，QR 綁該館
       buyPass: { available: buyablePassTypes.length > 0,
         passTypes: buyablePassTypes.map(pt => ({ ...pt, originalPrice: pt.price, price: withTeam(pt.price) })) },
@@ -228,7 +229,7 @@ const verifyEntry = async (memberId, gymId) => {
       ...(memberType !== 'child' ? [{
         type: 'buy_discount_card',
         label: '購買優惠折扣券入場',
-        price: PRICES.discount_card,
+        price: buyCardPrice,
         note: '含本次入場＋10次八折＋紅利',
         available: true,
         requiresPayment: true,

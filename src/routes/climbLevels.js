@@ -109,10 +109,17 @@ router.get('/course/:courseId/students', authenticate, async (req, res) => {
     const enSnap = await db.collection('courseEnrollments').where('courseId', '==', course.id).where('status', '==', 'confirmed').select('memberId', 'memberName', 'isMakeup', 'isTrial').get();
     const names = {};
     enSnap.docs.forEach(d => { const e = d.data(); if (e.memberId && !e.isMakeup) names[e.memberId] = e.memberName || ''; });
+    // 制服領取筆數（未作廢）：名單標示「已領／未領」用
+    const uniformCount = {};
+    const ids = Object.keys(names);
+    for (let i = 0; i < ids.length; i += 10) {
+      const us = await db.collection('uniformIssues').where('memberId', 'in', ids.slice(i, i + 10)).get();
+      us.docs.forEach(d => { const u = d.data(); if (!u.voided) uniformCount[u.memberId] = (uniformCount[u.memberId] || 0) + 1; });
+    }
     const students = [];
-    for (const memberId of Object.keys(names)) {
+    for (const memberId of ids) {
       const sum = await memberSummary(db, memberId, 'spider');
-      students.push({ memberId, name: names[memberId], currentLevel: sum.currentLevel, lastRecord: sum.records.find(r => !r.voided) || null });
+      students.push({ memberId, name: names[memberId], currentLevel: sum.currentLevel, lastRecord: sum.records.find(r => !r.voided) || null, uniformCount: uniformCount[memberId] || 0 });
     }
     students.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
     res.json({ enabled: true, course: { id: course.id, name: course.name, instructor: course.instructor || '', gymId: course.gymId }, students });

@@ -547,6 +547,14 @@ const createMember = async (memberData, staffId, options = {}) => {
     claimGuestCompetitionRegistrations(db, memberId, member),
     // Climbio VIP 名單自動認領（無期限；全家 VIP 含子帳號繼承）
     claimLegacyVip(db, memberId, member),
+    // 小蜘蛛人舊學員資料（等級通過紀錄＋制服領取）自動認領：以本人／家長電話＋姓名比對（見 spiderImportService）
+    (async () => {
+      let parentPhone = null;
+      if (member.parentMemberId) {
+        try { const pd = await db.collection(COLLECTIONS.MEMBERS).doc(member.parentMemberId).get(); parentPhone = pd.exists ? pd.data().phone : null; } catch (e) { /* 讀不到就只用本人電話 */ }
+      }
+      await require('./spiderImportService').claimPendingStudent(db, memberId, member, parentPhone);
+    })(),
     (async () => {
       await claimGuestExperienceBookings(db, memberId, member);
       // 待指派體驗單日券自動認領（逐參加者發券時比對不到、之後本人註冊 → 姓名+生日命中綁本人）

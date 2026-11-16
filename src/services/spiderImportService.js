@@ -122,6 +122,22 @@ async function readWorkbook(file) {
     s.uniforms = parseClothing(c(3)).map((u) => ({ ...u }));
     students.push(s);
   });
+  // 同一位學員在表上出現多列（重複登打；有的列缺生日）→ 合併成一位：同姓名＋同電話＋生日相同或其中一邊沒填
+  const merged = [];
+  for (const s of students) {
+    const dup = merged.find((m) => normName(m.name) === normName(s.name)
+      && (m.phones.some((p) => s.phones.includes(p)) || (!m.phones.length && !s.phones.length))
+      && (!m.birthday || !s.birthday || m.birthday === s.birthday));
+    if (!dup) { merged.push(s); continue; }
+    dup.mergedRows = [...(dup.mergedRows || [dup.row]), s.row];
+    if (!dup.birthday) dup.birthday = s.birthday;
+    for (const [lv, d] of Object.entries(s.levels)) if (!dup.levels[lv]) dup.levels[lv] = d;
+    for (const u of s.uniforms) {
+      if (!dup.uniforms.some((x) => x.kind === u.kind && x.issuedAt === u.issuedAt && (x.rawText || '') === (u.rawText || ''))) dup.uniforms.push(u);
+    }
+  }
+  students.length = 0; students.push(...merged);
+
   // 滿 2 年衣服再次發放
   const ws2 = wb.getWorksheet('滿2年衣服再次發放');
   const reissues = [];
@@ -165,7 +181,8 @@ function buildMatcher(members) {
   };
   return (s) => {
     const cand = byName.get(normName(s.name)) || [];
-    const strong = cand.filter((m) => phoneOf(m).some((p) => s.phones.includes(p)) || (s.birthday && m.birthday && String(m.birthday).slice(0, 10) === s.birthday));
+    const bdiff = (m) => !!(s.birthday && m.birthday && String(m.birthday).slice(0, 10) !== s.birthday);   // 生日兩邊都有且不同 → 不同人
+    const strong = cand.filter((m) => !bdiff(m) && (phoneOf(m).some((p) => s.phones.includes(p)) || (s.birthday && m.birthday && String(m.birthday).slice(0, 10) === s.birthday)));
     if (strong.length === 1) return { tier: 'A', member: strong[0] };
     if (strong.length > 1) return { tier: 'multi', candidates: strong };
     // 生日兩邊都有、而且不一樣 → 一定是不同人（例如同名的成人會員），視為尚未註冊

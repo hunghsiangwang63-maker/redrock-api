@@ -176,6 +176,7 @@ app.use('/schedule',     require('./routes/schedule'));
 app.use('/competitions', require('./routes/competitions'));
 app.use('/staff',        require('./routes/staff'));
 app.use('/pass-adjustments', require('./routes/passAdjustments'));
+app.use('/paper-tickets', require('./routes/paperTickets'));
 app.use('/course-adjustments', require('./routes/courseAdjustments'));
 app.use('/team', require('./routes/teamMembers'));
 app.use('/rentals', require('./routes/rentals'));

@@ -2,7 +2,7 @@
  * 匯入「小蜘蛛人基本資料 2026年」：等級通過紀錄＋衣服領取紀錄（見 services/spiderImportService.js 說明）。
  *
  * 比對規則：A 級＝姓名相符＋（本人／家長電話相符或生日相符）→ 直接匯入；B 級＝只有姓名且唯一相符 → 預設不匯入，
- * 列清單給管理員確認（確認後用 --confirm-b=姓名1,姓名2 或 --all-b 匯入）；同名多筆 → 不匯入；查無（未註冊）→ 存待認領。
+ * 列清單給管理員確認（確認後用 --confirm-b=姓名1,姓名2 或 --all-b 匯入）；C 級＝姓名＋電話吻合但生日不同 → 不自動匯入，列清單確認（確認後直接用 applyStudentToMember 套用到指定會員）；同名多筆 → 不匯入；查無（未註冊）→ 存待認領。
  * 冪等：等級紀錄 id＝imp_<memberId>_<級數>、衣服 id＝imp_<memberId>_u<序號>、待認領 id＝依姓名＋電話，可重複執行。
  *
  * 用法（redrock-api 目錄下）：
@@ -28,13 +28,20 @@ const file = args.find((a) => !a.startsWith('--')) || DEFAULT_FILE;
   const db = getDb();
   const members = (await db.collection('members').select('name', 'phone', 'birthday', 'parentMemberId', 'isChildAccount').get()).docs.map((d) => ({ id: d.id, ...d.data() }));
   const match = svc.buildMatcher(members);
-  const res = { A: [], B: [], multi: [], none: [] };
+  const res = { A: [], B: [], C: [], multi: [], none: [] };
   for (const s of students) {
     const m = match(s);
-    (m.tier === 'A' ? res.A : m.tier === 'B' ? res.B : m.tier === 'multi' ? res.multi : res.none).push({ s, m });
+    (m.tier === 'A' ? res.A : m.tier === 'B' ? res.B : m.tier === 'C' ? res.C : m.tier === 'multi' ? res.multi : res.none).push({ s, m });
   }
   const lvCount = (arr) => arr.reduce((n, x) => n + Object.keys(x.s.levels).length, 0);
   const unCount = (arr) => arr.reduce((n, x) => n + x.s.uniforms.length, 0);
+  // C 級：若候選會員已經套用過這位學員的資料（管理員確認後處理過）就視為已完成，不再列出
+  const done = [];
+  for (const x of [...res.C]) {
+    const hit = (await Promise.all(x.m.candidates.map((c) => db.collection(svc.RECORDS).where('memberId', '==', c.id).where('source', '==', 'xlsx-import').limit(1).get()))).some((q) => !q.empty);
+    if (hit) { res.C.splice(res.C.indexOf(x), 1); done.push(x); }
+  }
+  console.log(`C 級（姓名＋電話吻合、生日不同）待確認 ${res.C.length} 人；已確認處理過 ${done.length} 人`);
   console.log(`學員 ${students.length} 人｜A 吻合 ${res.A.length}（等級 ${lvCount(res.A)} 筆、衣服 ${unCount(res.A)} 筆）｜B 僅姓名 ${res.B.length}｜同名多筆 ${res.multi.length}｜未註冊 ${res.none.length}（等級 ${lvCount(res.none)} 筆、衣服 ${unCount(res.none)} 筆）`);
   console.log(`日期欄異常 ${flags.length} 筆（已自動修正 ${flags.filter((f) => f.kind === 'fixed').length}、無法解析 ${flags.filter((f) => f.kind === 'unparsed').length}）；再次發放工作表找不到學員 ${unmatchedReissues.length} 筆`);
 
@@ -43,7 +50,7 @@ const file = args.find((a) => !a.startsWith('--')) || DEFAULT_FILE;
     tier, 姓名: s.name, 班別: s.cls, 家長電話: s.phones.join('/'), 生日: s.birthday, 等級數: Object.keys(s.levels).length, 衣服筆數: s.uniforms.length,
     系統會員: m.member ? `${m.member.name}（${m.member.id}，電話 ${m.member.phone}，生日 ${m.member.birthday ? String(m.member.birthday).slice(0, 10) : '—'}）` : (m.candidates || []).map((c) => `${c.name}(${c.id.slice(0, 8)})`).join('；'),
   }));
-  fs.writeFileSync(path.join(OUT_DIR, 'B_僅姓名吻合_請確認.json'), JSON.stringify(rows(res.B, 'B').concat(rows(res.multi, 'multi')), null, 2));
+  fs.writeFileSync(path.join(OUT_DIR, 'B_僅姓名吻合_請確認.json'), JSON.stringify(rows(res.B, 'B').concat(rows(res.C, 'C')).concat(rows(res.multi, 'multi')), null, 2));
   fs.writeFileSync(path.join(OUT_DIR, '日期異常.json'), JSON.stringify({ flags, unmatchedReissues }, null, 2));
   fs.writeFileSync(path.join(OUT_DIR, 'A_已吻合.json'), JSON.stringify(rows(res.A, 'A'), null, 2));
   fs.writeFileSync(path.join(OUT_DIR, '衣服解析結果.json'), JSON.stringify(students.map((s) => ({ 姓名: s.name, uniforms: s.uniforms })), null, 2));

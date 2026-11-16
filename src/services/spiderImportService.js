@@ -185,6 +185,9 @@ function buildMatcher(members) {
     const strong = cand.filter((m) => !bdiff(m) && (phoneOf(m).some((p) => s.phones.includes(p)) || (s.birthday && m.birthday && String(m.birthday).slice(0, 10) === s.birthday)));
     if (strong.length === 1) return { tier: 'A', member: strong[0] };
     if (strong.length > 1) return { tier: 'multi', candidates: strong };
+    // C 級＝姓名＋電話吻合、但生日兩邊都有而且不同（可能是系統或表上生日打錯，也可能是同名手足）→ 不自動匯入，列清單給管理員確認
+    const near = cand.filter((m) => bdiff(m) && phoneOf(m).some((p) => s.phones.includes(p)));
+    if (near.length) return { tier: 'C', candidates: near };
     // 生日兩邊都有、而且不一樣 → 一定是不同人（例如同名的成人會員），視為尚未註冊
     const plausible = cand.filter((m) => !(s.birthday && m.birthday && String(m.birthday).slice(0, 10) !== s.birthday));
     if (plausible.length === 1) return { tier: 'B', member: plausible[0] };

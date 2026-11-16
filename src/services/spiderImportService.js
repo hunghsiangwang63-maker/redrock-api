@@ -247,18 +247,30 @@ async function claimPendingStudent(db, memberId, member, parentPhone) {
 }
 
 
-// ── 目前是否為小蜘蛛人週課的正式學員（未結束的課、非補課／試上）──
-async function hasActiveSpiderEnrollment(db, memberId) {
+// ── 目前是否為等級制週課（小蜘蛛人／青少年）的正式學員（未結束的課、非補課／試上）──
+// programKey 不給＝任一等級制；給了（'spider'／'teen'）＝只看該等級制。回傳 true／false。
+// activeProgramKeys 回傳目前所屬的等級制 key 陣列。
+async function activeProgramKeys(db, memberId) {
   try {
-    const { getProgram, isProgramCourse } = require('../config/spiderProgram');
-    const prog = await getProgram(db, 'spider');
+    const { getPrograms, programForCourse } = require('../config/spiderProgram');
+    const programs = await getPrograms(db);
     const snap = await db.collection('courseEnrollments').where('memberId', '==', memberId).where('status', '==', 'confirmed').select('courseId', 'isMakeup', 'isTrial').get();
     const ids = [...new Set(snap.docs.map((d) => d.data()).filter((e) => !e.isMakeup && !e.isTrial && e.courseId).map((e) => e.courseId))];
-    if (!ids.length) return false;
+    if (!ids.length) return [];
     const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
     const docs = await db.getAll(...ids.map((id) => db.collection('courses').doc(id)));
-    return docs.some((d) => d.exists && isProgramCourse(prog, d.data()) && d.data().status !== 'cancelled' && d.data().isActive !== false && (d.data().endDate || '9999') >= today);
-  } catch (e) { return false; }
+    const keys = new Set();
+    docs.forEach((d) => {
+      if (!d.exists) return; const c = d.data();
+      if (c.status === 'cancelled' || c.isActive === false || (c.endDate || '9999') < today) return;
+      const p = programForCourse(programs, c); if (p) keys.add(p.key);
+    });
+    return [...keys];
+  } catch (e) { return []; }
+}
+async function hasActiveSpiderEnrollment(db, memberId, programKey) {
+  const keys = await activeProgramKeys(db, memberId);
+  return programKey ? keys.includes(programKey) : keys.length > 0;
 }
 
 // ── 報名小蜘蛛人週課時：補做一次「待認領」比對（會員在 Excel 匯入之前就註冊、或註冊時資料對不上的）──
@@ -277,7 +289,7 @@ async function claimOnEnroll(db, memberId, course) {
 }
 
 module.exports = {
-  hasActiveSpiderEnrollment, claimOnEnroll,
+  hasActiveSpiderEnrollment, activeProgramKeys, claimOnEnroll,
   PENDING, RECORDS, UNIFORMS, GYM, normPhone, normName, parseLevelDate, parseClothing,
   readWorkbook, buildMatcher, applyStudentToMember, claimPendingStudent,
 };

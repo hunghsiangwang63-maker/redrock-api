@@ -1,5 +1,5 @@
 /**
- * 攀岩等級考核（目前只有「小蜘蛛人」program=spider，1~16 級，16 最入門、1 最高）
+ * 攀岩等級考核（program=spider 小蜘蛛人、program=teen 青少年，各 1~16 級，16 最入門、1 最高；畫面名稱統一叫「攀岩等級」）
  *
  * 資料：
  *  - climbLevelDefs/{program}_{level}：每級定義（練習項目 / 標準 / 體能 / 說明），管理員可編修
@@ -22,7 +22,7 @@ const DEFS = 'climbLevelDefs';
 const RECORDS = 'climbLevelRecords';
 const PROGRESS_VALUES = [50, 75, 90, 100];
 
-const { getProgram } = require('../config/spiderProgram');
+const { getProgram, getPrograms, programForCourse } = require('../config/spiderProgram');
 
 const isAdmin = (staff) => staff && isManagerRole(staff.role);
 const requireAdmin = (req, res, next) => (isAdmin(req.staff)
@@ -85,12 +85,11 @@ router.get('/course/:courseId/students', authenticate, async (req, res) => {
     const cDoc = await db.collection('courses').doc(req.params.courseId).get();
     if (!cDoc.exists) return res.status(404).json({ error: 'COURSE_NOT_FOUND' });
     const course = cDoc.data();
-    const prog = await getProgram(db, 'spider');
-    const enabled = course.type !== 'workshop' && prog.categoryIds.includes(course.categoryId) && (!prog.gymIds?.length || prog.gymIds.includes(course.gymId));
-    if (!enabled) return res.json({ enabled: false, course: { id: course.id, name: course.name }, students: [] });
+    const prog = programForCourse(await getPrograms(db), course);
+    if (!prog) return res.json({ enabled: false, course: { id: course.id, name: course.name }, students: [] });
     const enSnap = await db.collection('courseEnrollments').where('courseId', '==', course.id).where('status', '==', 'confirmed').select('memberId', 'memberName', 'isMakeup', 'isTrial').get();
     const names = {};
-    enSnap.docs.forEach(d => { const e = d.data(); if (e.memberId && !e.isMakeup) names[e.memberId] = e.memberName || ''; });
+    enSnap.docs.forEach(d => { const e = d.data(); if (e.memberId && !e.isMakeup && !e.isTrial) names[e.memberId] = e.memberName || ''; });
     // 制服領取筆數（未作廢）：名單標示「已領／未領」用
     const uniformCount = {};
     const ids = Object.keys(names);
@@ -100,11 +99,11 @@ router.get('/course/:courseId/students', authenticate, async (req, res) => {
     }
     const students = [];
     for (const memberId of ids) {
-      const sum = await memberSummary(db, memberId, 'spider');
+      const sum = await memberSummary(db, memberId, prog.key);
       students.push({ memberId, name: names[memberId], currentLevel: sum.currentLevel, lastRecord: sum.records.find(r => !r.voided) || null, uniformCount: uniformCount[memberId] || 0 });
     }
     students.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
-    res.json({ enabled: true, course: { id: course.id, name: course.name, instructor: course.instructor || '', gymId: course.gymId }, students });
+    res.json({ enabled: true, program: { key: prog.key, name: prog.name }, course: { id: course.id, name: course.name, instructor: course.instructor || '', gymId: course.gymId }, students });
   } catch (e) { console.error(e); res.status(500).json({ error: 'SERVER_ERROR', message: e.message }); }
 });
 
@@ -119,13 +118,15 @@ router.post('/records', authenticate, async (req, res) => {
     if (!items.length) return res.status(400).json({ error: 'NO_RECORDS', message: '沒有要登記的資料' });
     if (items.length > 100) return res.status(400).json({ error: 'TOO_MANY', message: '一次最多 100 筆' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > taiwanToday()) return res.status(400).json({ error: 'INVALID_DATE', message: '考核日期不可晚於今天' });
-    const prog = await getProgram(db, 'spider');
     let course = null;
     if (courseId) {
       const cDoc = await db.collection('courses').doc(courseId).get();
       if (!cDoc.exists) return res.status(404).json({ error: 'COURSE_NOT_FOUND' });
       course = cDoc.data();
     }
+    // 依班級所屬等級制（小蜘蛛人／青少年）登記；沒帶班級時用 body.program，預設小蜘蛛人
+    const prog = course ? programForCourse(await getPrograms(db), course) : await getProgram(db, req.body.program || 'spider');
+    if (!prog) return res.status(400).json({ error: 'NOT_ENABLED', message: '此班級未啟用等級制' });
     const coach = String(coachName ?? course?.instructor ?? '').trim().slice(0, 100);
     if (!coach) return res.status(400).json({ error: 'COACH_REQUIRED', message: '請填寫考核教練' });
 
@@ -177,11 +178,23 @@ router.get('/member/:memberId', authenticateAny, async (req, res) => {
       const t = await db.collection('members').doc(memberId).get();
       if (!t.exists || t.data().parentMemberId !== req.member.id) return res.status(403).json({ error: 'FORBIDDEN', message: '無權限查看' });
     }
-    const prog = await getProgram(db, 'spider');
+    // 決定顯示哪一個等級制：query.program 指定 → 目前正式學員所屬的 → 有考核紀錄的（最近一筆）→ 小蜘蛛人
+    const spiderSvc = require('../services/spiderImportService');
+    let progKey = req.query.program;
+    if (!progKey) {
+      const keys = await spiderSvc.activeProgramKeys(db, memberId);
+      if (keys.length) progKey = keys[0];
+      else {
+        const rs = await db.collection(RECORDS).where('memberId', '==', memberId).get();
+        const last = rs.docs.map(d => d.data()).filter(r => !r.voided).sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+        progKey = last?.program || 'spider';
+      }
+    }
+    const prog = await getProgram(db, progKey) || await getProgram(db, 'spider');
     const [sum, defs] = await Promise.all([memberSummary(db, memberId, prog.key), listDefs(db, prog.key)]);
     // 會員端不顯示作廢紀錄與內部欄位
     const records = req.member ? sum.records.filter(r => !r.voided).map(({ createdBy, createdByName, voided, ...r }) => r) : sum.records;
-    const enrolled = await require('../services/spiderImportService').hasActiveSpiderEnrollment(db, memberId);   // 目前是否為小蜘蛛人週課的正式學員（沒有任何紀錄時也要顯示等級／制服狀態）
+    const enrolled = await spiderSvc.hasActiveSpiderEnrollment(db, memberId, prog.key);   // 目前是否為小蜘蛛人週課的正式學員（沒有任何紀錄時也要顯示等級／制服狀態）
     res.json({ ...sum, records, defs, program: { key: prog.key, name: prog.name }, enrolled });
   } catch (e) { console.error(e); res.status(500).json({ error: 'SERVER_ERROR', message: e.message }); }
 });

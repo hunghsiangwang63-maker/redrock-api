@@ -706,11 +706,11 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
     const uniformInfo = new Map(); // memberId -> { due, first }
     if (gymId === 'gym-hsinchu') {
       try {
-        const { getProgram, isProgramCourse } = require('../config/spiderProgram');
-        const prog = await getProgram(db, 'spider');
+        const { getPrograms, programForCourse } = require('../config/spiderProgram');
+        const progs = await getPrograms(db);
         const cids = [...new Set(sessions.map(x => x.courseId).filter(Boolean))];
         const cdocs = cids.length ? await db.getAll(...cids.map(id => db.collection('courses').doc(id)), { fieldMask: ['categoryId', 'type', 'gymId'] }) : [];
-        const spiderIds = new Set(cdocs.filter(d => d.exists && isProgramCourse(prog, d.data())).map(d => d.id));
+        const spiderIds = new Set(cdocs.filter(d => d.exists && programForCourse(progs, d.data())).map(d => d.id));
         const targets = enrollments.filter(e => !e.isMakeup && !e.isTrial && sessionMap[e.sessionId] && spiderIds.has(sessionMap[e.sessionId].courseId));
         if (targets.length) {
           const mids = [...new Set(targets.map(e => e.memberId))];

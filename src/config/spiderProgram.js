@@ -3,12 +3,18 @@ const DEFAULT_PROGRAMS = {
   spider: {
     name: '小蜘蛛人',
     gymIds: ['gym-hsinchu'],
-    // 小蜘蛛人初級班、進階班；2026-11-16 起加入青少年初級班、青少年進階班（沿用同一套 1~16 級，內容日後由管理員修改）
-    categoryIds: ['ebf83b51-ae84-4aa5-975a-7c3050afa7ff', '48151e8e-884b-42aa-b368-bed118a48f14',
-      '5c425d99-442d-4619-9df8-858f131a5fca', '6a26014f-6f12-4b3a-9dc5-847181e14050'],
+    categoryIds: ['ebf83b51-ae84-4aa5-975a-7c3050afa7ff', '48151e8e-884b-42aa-b368-bed118a48f14'], // 小蜘蛛人初級班、進階班
+    minLevel: 1, maxLevel: 16,
+  },
+  // 2026-11-16 新增：青少年初級班、青少年進階班（新竹）。級數同為 1~16，但考核內容獨立一套（climbLevelDefs/teen_N，初始複製自 spider，由管理員修改）
+  teen: {
+    name: '青少年',
+    gymIds: ['gym-hsinchu'],
+    categoryIds: ['5c425d99-442d-4619-9df8-858f131a5fca', '6a26014f-6f12-4b3a-9dc5-847181e14050'],
     minLevel: 1, maxLevel: 16,
   },
 };
+const PROGRAM_KEYS = Object.keys(DEFAULT_PROGRAMS);
 
 const getProgram = async (db, key) => {
   const base = DEFAULT_PROGRAMS[key];
@@ -24,4 +30,8 @@ const getProgram = async (db, key) => {
 const isProgramCourse = (prog, course) => !!course && course.type !== 'workshop'
   && (prog.categoryIds || []).includes(course.categoryId) && (!prog.gymIds || !prog.gymIds.length || prog.gymIds.includes(course.gymId));
 
-module.exports = { DEFAULT_PROGRAMS, getProgram, isProgramCourse };
+// 全部等級制（小蜘蛛人＋青少年）與「這門課屬於哪一個」
+const getPrograms = (db) => Promise.all(PROGRAM_KEYS.map((k) => getProgram(db, k)));
+const programForCourse = (programs, course) => programs.find((p) => isProgramCourse(p, course)) || null;
+
+module.exports = { DEFAULT_PROGRAMS, PROGRAM_KEYS, getProgram, getPrograms, programForCourse, isProgramCourse };

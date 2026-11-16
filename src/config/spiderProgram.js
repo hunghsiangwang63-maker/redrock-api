@@ -3,7 +3,9 @@ const DEFAULT_PROGRAMS = {
   spider: {
     name: '小蜘蛛人',
     gymIds: ['gym-hsinchu'],
-    categoryIds: ['ebf83b51-ae84-4aa5-975a-7c3050afa7ff', '48151e8e-884b-42aa-b368-bed118a48f14'], // 初級班、進階班
+    // 小蜘蛛人初級班、進階班；2026-11-16 起加入青少年初級班、青少年進階班（沿用同一套 1~16 級，內容日後由管理員修改）
+    categoryIds: ['ebf83b51-ae84-4aa5-975a-7c3050afa7ff', '48151e8e-884b-42aa-b368-bed118a48f14',
+      '5c425d99-442d-4619-9df8-858f131a5fca', '6a26014f-6f12-4b3a-9dc5-847181e14050'],
     minLevel: 1, maxLevel: 16,
   },
 };

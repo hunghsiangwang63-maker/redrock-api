@@ -22,7 +22,7 @@ const PRICES = {
 
 // 使用優惠折扣券入場：原價 8 折（兒童不適用）。原價依會員身份取 entryTypes 價格。
 const DISCOUNT_CARD_RATE = 0.8;
-// 特約廠商入場優惠：全票/學生票在「無其他折扣」時定額 −N（兒童不適用；與隊員9折/舊折扣卡8折互斥）。
+// 特約廠商入場優惠：成人單次票（single_ticket，不含學生票）在「無其他折扣」時定額 −N（兒童不適用；與隊員9折/舊折扣卡8折互斥）。
 // 金額與啟用開關可於員工端「系統設定 → 入場規則」設定（systemSettings/partnerVendor）；讀不到 fallback 啟用+20。
 const PARTNER_VENDOR_DISCOUNT = 20;   // fallback 預設
 const getPartnerVendorConfig = async () => {

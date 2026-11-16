@@ -2875,6 +2875,9 @@ async function handleEnrollAll(req, res) {
         })();
       }
 
+      // 小蜘蛛人週課：補做一次舊學員資料（等級＋制服）認領比對（背景執行、不阻斷報名）
+      if (!isGuestEnroll) require('../services/spiderImportService').claimOnEnroll(db, memberId, course);
+
       // 通知帶課教練（員工端通知頁＋Email；背景執行、不阻斷報名）
       require('../services/coachCourseService').notifyCoaches({
         gymId: futureSessions[0]?.gymId || gymId, courseId, type: 'course_enroll',

@@ -246,7 +246,38 @@ async function claimPendingStudent(db, memberId, member, parentPhone) {
   }
 }
 
+
+// ── 目前是否為小蜘蛛人週課的正式學員（未結束的課、非補課／試上）──
+async function hasActiveSpiderEnrollment(db, memberId) {
+  try {
+    const { getProgram, isProgramCourse } = require('../config/spiderProgram');
+    const prog = await getProgram(db, 'spider');
+    const snap = await db.collection('courseEnrollments').where('memberId', '==', memberId).where('status', '==', 'confirmed').select('courseId', 'isMakeup', 'isTrial').get();
+    const ids = [...new Set(snap.docs.map((d) => d.data()).filter((e) => !e.isMakeup && !e.isTrial && e.courseId).map((e) => e.courseId))];
+    if (!ids.length) return false;
+    const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    const docs = await db.getAll(...ids.map((id) => db.collection('courses').doc(id)));
+    return docs.some((d) => d.exists && isProgramCourse(prog, d.data()) && d.data().status !== 'cancelled' && d.data().isActive !== false && (d.data().endDate || '9999') >= today);
+  } catch (e) { return false; }
+}
+
+// ── 報名小蜘蛛人週課時：補做一次「待認領」比對（會員在 Excel 匯入之前就註冊、或註冊時資料對不上的）──
+async function claimOnEnroll(db, memberId, course) {
+  try {
+    const { getProgram, isProgramCourse } = require('../config/spiderProgram');
+    const prog = await getProgram(db, 'spider');
+    if (!isProgramCourse(prog, course)) return null;
+    const mDoc = await db.collection('members').doc(memberId).get();
+    if (!mDoc.exists) return null;
+    const m = { id: mDoc.id, ...mDoc.data() };
+    let parentPhone = null;
+    if (m.parentMemberId) { const p = await db.collection('members').doc(m.parentMemberId).get(); parentPhone = p.exists ? p.data().phone : null; }
+    return await claimPendingStudent(db, memberId, m, parentPhone);
+  } catch (e) { console.error('claimOnEnroll 失敗（不阻斷報名）:', e.message); return null; }
+}
+
 module.exports = {
+  hasActiveSpiderEnrollment, claimOnEnroll,
   PENDING, RECORDS, UNIFORMS, GYM, normPhone, normName, parseLevelDate, parseClothing,
   readWorkbook, buildMatcher, applyStudentToMember, claimPendingStudent,
 };

@@ -22,30 +22,12 @@ const DEFS = 'climbLevelDefs';
 const RECORDS = 'climbLevelRecords';
 const PROGRESS_VALUES = [50, 75, 90, 100];
 
-// 初階班 16~9、進階班 8~1（來源：小蜘蛛人上課紀錄表 V4）
-const DEFAULT_PROGRAMS = {
-  spider: {
-    name: '小蜘蛛人',
-    gymIds: ['gym-hsinchu'],
-    categoryIds: ['ebf83b51-ae84-4aa5-975a-7c3050afa7ff', '48151e8e-884b-42aa-b368-bed118a48f14'], // 初級班、進階班
-    minLevel: 1, maxLevel: 16,
-  },
-};
+const { getProgram } = require('../config/spiderProgram');
 
 const isAdmin = (staff) => staff && isManagerRole(staff.role);
 const requireAdmin = (req, res, next) => (isAdmin(req.staff)
   ? next()
   : res.status(403).json({ error: 'FORBIDDEN', message: '僅管理員可操作' }));
-
-const getProgram = async (db, key) => {
-  const base = DEFAULT_PROGRAMS[key];
-  if (!base) return null;
-  try {
-    const s = await db.collection('systemSettings').doc('climbLevels').get();
-    const o = s.exists ? (s.data()[key] || {}) : {};
-    return { key, ...base, ...o };
-  } catch (e) { return { key, ...base }; }
-};
 
 const defId = (program, level) => `${program}_${level}`;
 
@@ -199,7 +181,8 @@ router.get('/member/:memberId', authenticateAny, async (req, res) => {
     const [sum, defs] = await Promise.all([memberSummary(db, memberId, prog.key), listDefs(db, prog.key)]);
     // 會員端不顯示作廢紀錄與內部欄位
     const records = req.member ? sum.records.filter(r => !r.voided).map(({ createdBy, createdByName, voided, ...r }) => r) : sum.records;
-    res.json({ ...sum, records, defs, program: { key: prog.key, name: prog.name } });
+    const enrolled = await require('../services/spiderImportService').hasActiveSpiderEnrollment(db, memberId);   // 目前是否為小蜘蛛人週課的正式學員（沒有任何紀錄時也要顯示等級／制服狀態）
+    res.json({ ...sum, records, defs, program: { key: prog.key, name: prog.name }, enrolled });
   } catch (e) { console.error(e); res.status(500).json({ error: 'SERVER_ERROR', message: e.message }); }
 });
 

@@ -700,6 +700,36 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
       } catch (e) { console.error('[今日課程學員] 小蜘蛛人新生提醒計算失敗（不阻斷）:', e.message); }
     }
 
+    // 小蜘蛛人（新竹）制服：正式學員（排除補課／試上）若「還沒有任何制服領取紀錄」→ 櫃檯應發制服（uniformDue）；
+    // 今天是該學員在這門課的第一堂（含中途插班，依該學員自己最早的正式報名堂次）→ uniformFirstClass（標示「首堂」）。
+    // 全程 try/catch、不阻斷名單；非新竹館、非小蜘蛛人週課零額外查詢。
+    const uniformInfo = new Map(); // memberId -> { due, first }
+    if (gymId === 'gym-hsinchu') {
+      try {
+        const { getProgram, isProgramCourse } = require('../config/spiderProgram');
+        const prog = await getProgram(db, 'spider');
+        const cids = [...new Set(sessions.map(x => x.courseId).filter(Boolean))];
+        const cdocs = cids.length ? await db.getAll(...cids.map(id => db.collection('courses').doc(id)), { fieldMask: ['categoryId', 'type', 'gymId'] }) : [];
+        const spiderIds = new Set(cdocs.filter(d => d.exists && isProgramCourse(prog, d.data())).map(d => d.id));
+        const targets = enrollments.filter(e => !e.isMakeup && !e.isTrial && sessionMap[e.sessionId] && spiderIds.has(sessionMap[e.sessionId].courseId));
+        if (targets.length) {
+          const mids = [...new Set(targets.map(e => e.memberId))];
+          const have = new Set();
+          for (let i = 0; i < mids.length; i += 10) {
+            const us = await db.collection('uniformIssues').where('memberId', 'in', mids.slice(i, i + 10)).get();
+            us.docs.forEach(d => { const u = d.data(); if (!u.voided) have.add(u.memberId); });
+          }
+          await Promise.all(targets.map(async (e) => {
+            if (have.has(e.memberId)) { uniformInfo.set(e.memberId, { due: false, first: false }); return; }
+            const cid = sessionMap[e.sessionId].courseId;
+            const q = await db.collection('courseEnrollments').where('memberId', '==', e.memberId).where('courseId', '==', cid).where('status', '==', 'confirmed').select('date', 'isMakeup', 'isTrial').get();
+            const dates = q.docs.map(d => d.data()).filter(x => !x.isMakeup && !x.isTrial && x.date).map(x => x.date).sort();
+            uniformInfo.set(e.memberId, { due: true, first: dates[0] === todayStr0 });
+          }));
+        }
+      } catch (e) { console.error('[今日課程學員] 小蜘蛛人制服狀態計算失敗（不阻斷）:', e.message); }
+    }
+
     const students = enrollments
       .filter(e => sessionMap[e.sessionId])
       .map(e => {
@@ -718,6 +748,8 @@ router.get('/today-course-students', authenticate, requireManagerOrStation, asyn
           adjustPending: e.refundPending === true ? 'refund' : (e.pausePending === true ? 'pause' : null), // 退費／暫停申請審核中（已凍結入場資格）
           isLastSession: !!inv,                                           // 今日為此梯次最後一堂（courses.endDate）
           newStudentPrep: spiderPrepByMember.has(e.memberId),             // 小蜘蛛人新生：請準備制服跟集點卡
+          uniformDue: !!(uniformInfo.get(e.memberId) || {}).due,           // 小蜘蛛人：尚未領取制服（櫃檯應發）
+          uniformFirstClass: !!(uniformInfo.get(e.memberId) || {}).first,  // 且今天是該學員在這門課的第一堂
           ...(inv ? { enrollmentId: inv.enrollmentId, paymentMethod: inv.paymentMethod, receivedAmount: inv.receivedAmount } : {}),
         };
       })

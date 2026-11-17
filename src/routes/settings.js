@@ -207,7 +207,7 @@ router.get('/entry-pricing', async (req, res) => {
     const single = types.filter(t => t.active !== false && t.id !== 'course_access')
       .map(t => ({ id: t.id, name: t.name, price: t.price, memberTypes: t.memberTypes || [] }));
     const passes = passSnap.docs.map(d => d.data())
-      .filter(p => p.credits == null)   // 回數票不列（目前也已停用）
+      .filter(p => p.credits == null && p.showInPricing !== false)   // 回數票不列（目前也已停用）；票種文件 showInPricing:false 者不列於會員收費資訊頁（2026-11-17 起，半年票）
       .map(p => ({
         id: p.id, name: p.name, price: p.price, scope: p.scope === 'single' ? 'single' : 'shared',
         targetGymId: p.targetGymId || null, durationDays: p.durationDays || null, durationMonths: p.durationMonths || null,

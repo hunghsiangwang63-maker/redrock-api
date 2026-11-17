@@ -19,6 +19,11 @@ const dateWithWeekday = (dateStr) => {
 // 只看「今日提醒／預約」+ 我的近7日班表，墜落測驗待安排／需審核／待收款／近7天報名動態一律不回傳（非僅前端隱藏，後端直接不給資料）。
 // 值班中（operator）與管理員（super_admin/gym_manager）不受此限——仍走既有 COUNTER_PERMS / 管理權限。
 const REMIND_TYPES = ['rental_pickup', 'rental_return', 'experience', 'member_inquiry'];
+// 器材租借的借出日／歸還日（待辦「今日提醒／預約」的取件、歸還兩種提醒都寫完整期間；月租置物櫃為起租／到期）
+const rentalPeriodText = (r) => {
+  const md = (d) => (d ? String(d).slice(5).replace('-', '/') : '—');   // YYYY-MM-DD → MM/DD（待辦列桌機版單行省略顯示，縮短避免日期被截掉）
+  return r.rentalType === 'monthly' ? `起租 ${md(r.pickupDate)} ～ 到期 ${md(r.returnDate)}` : `借出 ${md(r.pickupDate)} ～ 歸還 ${md(r.returnDate)}`;
+};
 const isRestrictedPersonalStaff = (staff) => staff?.type === 'staff' && ['part_time', 'full_time'].includes(staff?.role);
 
 // ── GET /pending-tasks - 彙整所有待處理事項 ──────────────────────────
@@ -227,7 +232,7 @@ router.get('/', authenticate, async (req, res) => {
           tasks.push({
             id: `rental_pickup_${d.id}`, type: 'rental_pickup', targetId: d.id,
             title: r.pickupDate === today ? '器材今日取件' : '器材待取件',
-            desc: `${r.memberName} — ${r.items?.map(i=>`${i.name}×${i.quantity}`).join('、')} · 取件 ${r.pickupDate}`,
+            desc: `${r.memberName} — ${r.items?.map(i=>`${i.name}×${i.quantity}`).join('、')} · ${rentalPeriodText(r)}`,
             date: r.pickupDate, createdAt: Date.now()/1000,
             gymId: r.gymId, memberName: r.memberName,
             link: '/staff/rentals',
@@ -245,7 +250,7 @@ router.get('/', authenticate, async (req, res) => {
           tasks.push({
             id: `rental_return_${d.id}`, type: 'rental_return', targetId: d.id,
             title: r.returnDate === today ? '器材今日歸還' : '器材待歸還',
-            desc: `${r.memberName} — ${r.items?.map(i=>`${i.name}×${i.quantity}`).join('、')} · 歸還 ${r.returnDate}`,
+            desc: `${r.memberName} — ${r.items?.map(i=>`${i.name}×${i.quantity}`).join('、')} · ${rentalPeriodText(r)}`,
             date: r.returnDate, createdAt: Date.now()/1000,
             gymId: r.gymId, memberName: r.memberName,
             link: '/staff/rentals',

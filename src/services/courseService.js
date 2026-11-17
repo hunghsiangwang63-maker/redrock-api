@@ -2419,16 +2419,22 @@ const computeWeeklyCourseFee = (course, { completedCount, totalCount, alumni, is
   const teamCand = applyTeamDiscount(baseFee, isTeam && !isSpecial);
   const teamCandFee = teamCand.applied ? teamCand.discounted : null;
 
-  // 擇優：兩者皆符合資格時取較低價（平手取續報）；只有一種符合就用那個；皆不符合則原價
-  let winner = null;
-  if (renewalCandFee != null && teamCandFee != null) winner = renewalCandFee <= teamCandFee ? 'renewal' : 'team';
-  else if (renewalCandFee != null) winner = 'renewal';
-  else if (teamCandFee != null) winner = 'team';
-  const fee = winner === 'renewal' ? renewalCandFee : (winner === 'team' ? teamCandFee : baseFee);
+  // 候選三：早鳥優惠（課程自訂 earlyBirdDeadline＋earlyBirdRate；報名日 ≤ 截止日〔含當天〕才適用；同樣從 baseFee 算、與其他折扣擇優不疊加；
+  // 結果歸入 renewalDiscount* 欄位並以 renewalDiscountType:'early_bird' 區分，下游（報名/報名總表/畫面）免新增欄位）
+  const earlyRate = Number(course.earlyBirdRate);
+  const earlyOpen = !!course.earlyBirdDeadline && today <= course.earlyBirdDeadline && earlyRate > 0 && earlyRate < 1;
+  const earlyCandFee = earlyOpen ? Math.round(baseFee * earlyRate) : null;
 
-  const renewalDiscountType = winner === 'renewal' ? renewalCandType : null;
-  const renewalRate = winner === 'renewal' ? renewalCandRate : null;
-  const renewalDiscount = winner === 'renewal' ? (baseFee - fee) : 0;
+  // 擇優：各候選（續報/舊生、隊員9折、早鳥）取最低價；平手依 續報 > 早鳥 > 隊員；只有一種符合就用那個；皆不符合則原價
+  let winner = null, bestFee = Infinity;
+  [['renewal', renewalCandFee], ['early', earlyCandFee], ['team', teamCandFee]].forEach(([k, f]) => {
+    if (f != null && f < bestFee) { bestFee = f; winner = k; }
+  });
+  const fee = winner === 'renewal' ? renewalCandFee : (winner === 'early' ? earlyCandFee : (winner === 'team' ? teamCandFee : baseFee));
+
+  const renewalDiscountType = winner === 'renewal' ? renewalCandType : (winner === 'early' ? 'early_bird' : null);
+  const renewalRate = winner === 'renewal' ? renewalCandRate : (winner === 'early' ? earlyRate : null);
+  const renewalDiscount = (winner === 'renewal' || winner === 'early') ? (baseFee - fee) : 0;
   const teamApplied = winner === 'team';
   const teamDiscount = teamApplied ? (baseFee - fee) : 0;
 
@@ -2437,12 +2443,16 @@ const computeWeeklyCourseFee = (course, { completedCount, totalCount, alumni, is
   if (winner === 'renewal') {
     const label = renewalCandType === 'full_term_renewal' ? '續報優惠' : '舊生優惠';
     feeCalcNote = `NT$${baseFee.toLocaleString()} × ${Math.round(renewalCandRate * 100)}%（${label}）= NT$${fee.toLocaleString()}`;
+  } else if (winner === 'early') {
+    feeCalcNote = `NT$${baseFee.toLocaleString()} × ${Math.round(earlyRate * 100)}%（早鳥優惠，${course.earlyBirdDeadline} 前）= NT$${fee.toLocaleString()}`;
   } else if (winner === 'team') {
     feeCalcNote = `NT$${baseFee.toLocaleString()} × ${Math.round(teamCand.rate * 100)}%（攀岩隊員優惠）= NT$${fee.toLocaleString()}`;
   }
-  if (renewalCandFee != null && teamCandFee != null) {
+  if (renewalCandFee != null && teamCandFee != null && earlyCandFee == null) {
     const otherLabel = winner === 'renewal' ? '攀岩隊員9折' : (renewalCandType === 'full_term_renewal' ? '續報優惠' : '舊生優惠');
     feeCalcNote = (feeCalcNote || `NT$${baseFee.toLocaleString()}`) + `（同時符合${otherLabel}資格，依規定擇優、不疊加使用）`;
+  } else if ([renewalCandFee, teamCandFee, earlyCandFee].filter(x => x != null).length > 1) {
+    feeCalcNote = (feeCalcNote || `NT$${baseFee.toLocaleString()}`) + '（同時符合多項優惠資格，依規定擇優、不疊加使用）';
   }
 
   return {

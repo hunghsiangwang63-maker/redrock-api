@@ -1202,3 +1202,13 @@ RedRock 紅石攀岩館管理系統，服務兩個場館：新竹館（`gym-hsin
 - ✅ **資料**：「半年定期票」（`aacfd328-ed8c-4912-a6fe-98cd90b6add1`，仍啟用）已設 `showInPricing:false`＋`showInPricingNote`（附日期與原因）。要再顯示：把該欄位改 `true` 或刪除（資訊頁有 600 秒快取，後端重啟會立即重算）。
 - 🧪 **驗證**：本機打 `entry-pricing`：定期票為「新竹單館月票、學生30日、士林單館月票、成人30日、90日」；**線上**部署完成後同樣 5 種、無半年票。（我第一次檢查時抓到舊部署的回應仍有半年票——Railway 部署清單最上面一筆是上一次的 SUCCESS，要等新部署出現再查。）
 - 📌 **查部署是否完成的做法**：推送後 `railway deployment list` 第一筆若 SUCCESS 的時間早於這次推送，是舊的；等出現新一筆（舊的會變 REMOVED）再驗證。
+
+## 目前進度（2026-11-17 續5）— 電話入場新增「友館隊員／特約廠商」優惠選項（後端 `4cf2981`、前端 `f77184c`，已推送部署，員工端 `staff-4962df94cff2f180`）
+> 使用者詢問「友館隊員優惠系統中實際怎麼給」→ 查出**電話入場原本沒有這兩個優惠**（`POST /checkin/phone` 計價只傳 `legacyDiscountCard`，從不傳 `partnerGymMember`／`partnerVendor`；員工端畫面也沒選項）→ 使用者要求「直接做電話入場的友館與特約選項」。
+- 📌 **友館隊員優惠在系統中怎麼給（現況總整理）**：資格＝**會員自己勾選＋櫃檯人工查證明，系統不比對任何友館名單**。計價在 `pricing.js computePaidEntryAmount`：僅**成人單次票 `single_ticket`**、且「未套舊折扣卡 8 折、非有效隊員（`isActiveTeamMember`）」才成立，金額＝原價×`systemSettings/partnerGymMember.rate`（預設 0.9，成人 300→270）；特約廠商＝原價−`systemSettings/partnerVendor.discount`（預設 20，成人 300→280）；**兩者互斥，友館優先**；皆不與其他折扣併用。QR 入場由 `verify.js` 的 `partnerGymMemberEligible`／`partnerVendorEligible` 決定顯示勾選，入場紀錄帶 `partnerGymMember`／`partnerVendor` 旗標，掃碼時員工端跳警示「請會員出示…證明確認後再放行」。
+- ✅ **電話入場（本次新增）**：
+  - **後端**：`POST /checkin/phone` 接 `partnerGymMember`／`partnerVendor`（布林），交給同一份 `computePaidEntryAmount`（資格不符時不套用，金額維持原價）；入場紀錄 `checkIns` 新增 `partnerVendor`、`partnerGymMember`（與 QR 入場同欄位，供報表）。`GET /checkin/eligibility/:memberId` 新回傳 `isTeam`（有效隊員）、`partnerVendor:{enabled, discount}`、`partnerGymMember:{enabled, rate}`（與驗票同一份設定）。
+  - **員工端（`CheckinPage.jsx` 電話入場）**：選成人單次票＋一般付款（未選票券）、且非有效隊員／VIP／有定期票／課程學員時，付款方式上方出現「入場優惠（僅成人單次票，不含學生票；不與其他折扣併用）」兩顆按鈕——「友館隊員 9折 NT$270」「特約廠商 −NT$20 → NT$280」，二擇一、可再點取消；選了顯示提醒「請會員出示友館隊員證明／特約廠商證件確認後再入場；不符請改回原價」；合計金額同步。派生值 `phoneDiscountEligible`／`phoneDiscountActive`，狀態 `phoneDiscountKind`（換會員、入場成功後重置）。
+  - 🧪 **驗證**：本機假會員（測後全清、殘留 0）：成人＋友館→270（友館 true）、成人＋特約→280、兩個都勾→友館優先 270、學生票＋友館→250（不套用）、不勾→300、**有效隊員＋友館＋特約→270（隊員 9 折，`isTeamDiscount:true`，友館與特約都不套用）**；線上 `eligibility` 回傳新欄位（友館啟用 0.9、特約啟用 20）。**沒驗證**：員工端畫面實際操作（只驗打包）、`/checkin/direct`（使用票券的兩段流程）不支援這兩項優惠（本來就不適用，票券入場價格另算）。
+- ⚠️ **電話入場「已付費放行」`handlePhoneAlreadyPaid` 與子會員（無獨立 id）入場**未特別處理友館／特約——前者入場費視為已付、後者沿用同一個計價（可勾選，但未實測）。
+- 📌 **日後**：①友館隊員仍無名單比對，櫃檯把關靠人工；若要加名單／證件號登記，是新功能②折扣規則的「誰適用」有三處要同步：計價（`pricing.js`）、驗票可選項（`verify.js`）、電話入場畫面（`CheckinPage.jsx` 的 `phoneDiscountEligible`）。

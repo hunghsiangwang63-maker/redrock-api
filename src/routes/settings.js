@@ -198,10 +198,11 @@ router.get('/entry-pricing', async (req, res) => {
     const { TEAM_DISCOUNT_RATE, TEAM_DISCOUNT_MIN_AMOUNT } = require('../services/teamMemberService');
     const { CARD_CREDITS } = require('../services/discountCardService');
     const sysDoc = async (id) => { const d = await db.collection('systemSettings').doc(id).get(); return d.exists ? d.data() : null; };
-    const [entryTypesDoc, shoe, chalk, bonus, payment, vendor, gymMember, passSnap] = await Promise.all([
+    const [entryTypesDoc, shoe, chalk, bonus, payment, vendor, gymMember, passSnap, rentalCfg] = await Promise.all([
       sysDoc('entryTypes'), sysDoc('shoeRental'), sysDoc('chalkRental'), sysDoc('bonus'), sysDoc('paymentMethods'),
       pricing.getPartnerVendorConfig(), pricing.getPartnerGymMemberConfig(),
       db.collection('passTypes').where('isActive', '==', true).get(),
+      sysDoc('rentalItems'),
     ]);
     const types = (entryTypesDoc && entryTypesDoc.types) || getDefaultEntryTypes();
     const single = types.filter(t => t.active !== false && t.id !== 'course_access')
@@ -222,6 +223,9 @@ router.get('/entry-pricing', async (req, res) => {
       partnerGymMember: { enabled: gymMember.enabled, rate: gymMember.rate },
       partnerVendor: { enabled: vendor.enabled, discount: vendor.discount },
       rentals: {
+        // 外借器材（抱石墊、岩盔、攀岩吊帶；systemSettings/rentalItems，與會員「器材租借」申請同一份設定）
+        items: ['crashPad', 'helmet', 'harness'].filter(k => rentalCfg && rentalCfg[k] && rentalCfg[k].active !== false)
+          .map(k => ({ key: k, name: rentalCfg[k].name || k, description: rentalCfg[k].description || '', weekendFee: rentalCfg[k].weekendFee ?? null, sevenDayFee: rentalCfg[k].sevenDayFee ?? null, deposit: rentalCfg[k].deposit ?? 0 })),
         shoe: { price: shoe && Number.isFinite(shoe.price) ? shoe.price : 100, active: !shoe || shoe.active !== false },
         chalk: { price: chalk && Number.isFinite(chalk.price) ? chalk.price : 50, active: !chalk || chalk.active !== false },
       },

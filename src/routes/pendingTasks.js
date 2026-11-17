@@ -245,11 +245,14 @@ router.get('/', authenticate, async (req, res) => {
       const snap3 = await rentalReturnPromise;
       snap3.forEach(d => {
         const r = d.data();
-        // 從取件後一直顯示到歸還日（含當日）
-        if (r.returnDate && r.returnDate >= today) {
+        // 從取件後一直顯示到歸還日（含當日）；歸還日已過仍未歸還（status 仍為 active）＝逾期，持續顯示直到確認歸還（2026-11-17 起）
+        if (r.returnDate) {
+          const overdue = r.returnDate < today;
+          const overdueDays = overdue ? Math.max(1, Math.round((new Date(today) - new Date(r.returnDate)) / 86400000)) : 0;
           tasks.push({
             id: `rental_return_${d.id}`, type: 'rental_return', targetId: d.id,
-            title: r.returnDate === today ? '器材今日歸還' : '器材待歸還',
+            overdue, overdueDays,
+            title: overdue ? `器材逾期未歸還（逾期 ${overdueDays} 天）` : (r.returnDate === today ? '器材今日歸還' : '器材待歸還'),
             desc: `${r.memberName} — ${r.items?.map(i=>`${i.name}×${i.quantity}`).join('、')} · ${rentalPeriodText(r)}`,
             date: r.returnDate, createdAt: Date.now()/1000,
             gymId: r.gymId, memberName: r.memberName,

@@ -472,9 +472,16 @@ router.get('/eligibility/:memberId', authenticate, requireManagerOrStation, asyn
     // 否則子帳號 memberType=undefined→'general'，兒童入場(memberTypes:['child']) 被前端過濾掉不顯示
     const { getMemberType } = require('../services/checkin/pricing');
     const memberType = getMemberType(member);
+    // 電話入場「友館隊員／特約廠商」勾選用：是否有效隊員（隊員已有 9 折，不再適用）＋兩項優惠的啟用狀態與折扣（與 verifyEntry 同一份設定）
+    const _pricing = require('../services/checkin/pricing');
+    const [_pv, _pgm] = await Promise.all([_pricing.getPartnerVendorConfig(), _pricing.getPartnerGymMemberConfig()]);
+    const _isTeam = require('../services/teamMemberService').isActiveTeamMember(member);
 
     res.json({
       memberType,
+      isTeam: _isTeam,
+      partnerVendor: { enabled: _pv.enabled && _pv.discount > 0, discount: _pv.discount },
+      partnerGymMember: { enabled: _pgm.enabled && _pgm.rate > 0 && _pgm.rate < 1, rate: _pgm.rate },
       hasCourseAccess,
       waiverSigned,
       hasValidPass,
@@ -1184,6 +1191,8 @@ router.get('/history',
 router.post('/phone', authenticate, requireManagerOrStation, async (req, res) => {
   try {
     let { memberId, gymId, entryType, paymentMethod, childName, parentMemberId } = req.body;
+    const wantPartnerVendor = req.body.partnerVendor === true;          // 特約廠商 −N（僅成人單次票；後端 computePaidEntryAmount 權威判斷是否成立）
+    const wantPartnerGymMember = req.body.partnerGymMember === true;    // 友館隊員 ×rate（同上；與特約廠商互斥，友館優先）
     const db = getDb();
 
     // 子會員入場：無獨立 id，用 parentId+childName 當識別
@@ -1245,13 +1254,17 @@ router.post('/phone', authenticate, requireManagerOrStation, async (req, res) =>
     let entryOriginal = 0;
     let isTeamDiscount = false;
     let legacyDiscount = false;
+    let appliedPartnerVendor = false;
+    let appliedPartnerGymMember = false;
     if (!alreadyPaid) try {
-      const computed = await checkinService.computePaidEntryAmount(entryType, member, { legacyDiscountCard: useLegacyDiscount });
+      const computed = await checkinService.computePaidEntryAmount(entryType, member, { legacyDiscountCard: useLegacyDiscount, partnerVendor: wantPartnerVendor, partnerGymMember: wantPartnerGymMember });
       if (computed) {
         amountPaid = computed.amount;
         entryOriginal = computed.originalAmount;
         isTeamDiscount = computed.isTeamDiscount;
         legacyDiscount = computed.legacyDiscount;
+        appliedPartnerVendor = !!computed.partnerVendor;
+        appliedPartnerGymMember = !!computed.partnerGymMember;
       } else {
         amountPaid = entryType === 'single_ticket' ? 200 : 0;
         entryOriginal = amountPaid;
@@ -1284,6 +1297,8 @@ router.post('/phone', authenticate, requireManagerOrStation, async (req, res) =>
       entryOriginalFee: entryOriginal,
       isTeamDiscount,
       legacyDiscount,
+      partnerVendor: appliedPartnerVendor,          // 特約廠商優惠（櫃檯已確認證件；與 QR 入場同欄位，供報表）
+      partnerGymMember: appliedPartnerGymMember,    // 友館隊員優惠
       fallTestWarning: gate.fallTestWarning || null, // 小蜘蛛人正式學員未過墜測/未簽同意書仍放行入場（稽核留痕）
       rentShoes: !!rentShoes,
       shoesPrice: rentShoes ? shoesPrice : 0,

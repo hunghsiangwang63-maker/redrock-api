@@ -133,6 +133,8 @@ const extendFallTestIfDue = async (db, memberId, testDoc, { dryRun = false } = {
   }
   if (extended > 0 && !dryRun) {
     await ref.update({ extensionCount: (data.extensionCount || 0) + extended, currentExpiresAt: finalExpiry, extensionLog: log, updatedAt: new Date() });
+    // 同步會員文件上的墜測到期日（員工端會員列表的「已過期」標籤是拿這欄比對今天；只更新墜測紀錄會讓列表誤標已過期）
+    try { await db.collection(COLLECTIONS.MEMBERS).doc(memberId).update({ fallTestExpiresAt: new Date(finalExpiry + 'T00:00:00+08:00'), updatedAt: new Date() }); } catch (e) { /* 列表標籤下次延長或手動修正時會更新 */ }
     try { await require('../memberService').refreshBlockStatus(memberId); } catch (e) { /* 封鎖狀態下次入場／查詢會重算 */ }
   }
   return { extended, newExpiresAt: finalExpiry };

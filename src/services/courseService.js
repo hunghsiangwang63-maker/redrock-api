@@ -156,6 +156,9 @@ const createCourse = async ({ gymId, staffId, data }) => {
     // 舊：NT$ 折抵欄位（停止讀取，留供稽核；遷移前既有課程可能仍有值）
     fullTermRenewalDiscount: data.fullTermRenewalDiscount != null ? Number(data.fullTermRenewalDiscount) || 0 : null,
     alumniDiscount: data.alumniDiscount != null ? Number(data.alumniDiscount) || 0 : null,
+    // 早鳥優惠（週課；截止日含當天，與續報/舊生/隊員擇優不疊加）：兩欄皆有才啟用
+    earlyBirdDeadline: /^\d{4}-\d{2}-\d{2}$/.test(data.earlyBirdDeadline || '') ? data.earlyBirdDeadline : null,
+    earlyBirdRate: (Number(data.earlyBirdRate) > 0 && Number(data.earlyBirdRate) < 1) ? Number(data.earlyBirdRate) : null,
     renewalDeadline: data.renewalDeadline || null, // 續報截止日：兩種續報優惠皆只到此日（含當日）；空＝不限
     // 退費設定（null＝繼承班別）
     perSessionDeduction: data.perSessionDeduction ?? null,

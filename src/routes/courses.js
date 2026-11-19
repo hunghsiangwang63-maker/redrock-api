@@ -1728,7 +1728,7 @@ router.put('/:courseId',
         'startDate', 'endDate', 'startTime', 'endTime', 'weekdays',
         'leaveDeadlineHours', 'maxLeaves', 'allowMakeup', 'makeupDeadlineDays', 'makeupDeadlineDate', 'handlingFeeRate', 'preStartFeeRate',
         'enrollOpenDate', 'alumniOpenDate', 'fullTermRenewalDiscount', 'alumniDiscount', 'renewalDeadline',
-        'fullTermRenewalDiscountEnabled', 'fullTermRenewalDiscountRate', 'alumniDiscountEnabled', 'alumniDiscountRate',
+        'fullTermRenewalDiscountEnabled', 'fullTermRenewalDiscountRate', 'alumniDiscountEnabled', 'alumniDiscountRate', 'earlyBirdDeadline', 'earlyBirdRate',
         'teamOpenDate', 'generalOpenDate', 'teamPrice', 'partnerGymPrice',
         'teamIncludesEntry', 'generalIncludesEntry', 'partnerGymIncludesEntry',
         'skipSignature', 'collectGenderAge', 'enrollNoteLabel', 'enrollNoteRequired', 'refundTiers', 'teamDepositAmount',
@@ -1738,6 +1738,15 @@ router.put('/:courseId',
       ];
       const updates = { updatedAt: new Date() };
       allowedFields.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+      // 早鳥優惠驗證：截止日須為 YYYY-MM-DD（或清空）、費率須 0~1 之間（或清空）
+      if (updates.earlyBirdDeadline !== undefined && updates.earlyBirdDeadline !== null && updates.earlyBirdDeadline !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(updates.earlyBirdDeadline)) {
+        return res.status(400).json({ error: 'INVALID_EARLY_BIRD', message: '早鳥截止日格式不正確' });
+      }
+      if (updates.earlyBirdRate !== undefined && updates.earlyBirdRate !== null && updates.earlyBirdRate !== '' && !(Number(updates.earlyBirdRate) > 0 && Number(updates.earlyBirdRate) < 1)) {
+        return res.status(400).json({ error: 'INVALID_EARLY_BIRD', message: '早鳥折扣必須在 1～99% 之間' });
+      }
+      if (updates.earlyBirdDeadline === '') updates.earlyBirdDeadline = null;
+      if (updates.earlyBirdRate === '') updates.earlyBirdRate = null;
       // 梯次名稱/班別變更、週課調整單堂價、或上課時段變更（需比對是否真的改變才決定是否連動場次/報名）→ 讀一次現有文件
       let _curDoc = null;
       if (updates.cohortName !== undefined || updates.categoryId !== undefined || updates.pricePerSession !== undefined

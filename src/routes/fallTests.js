@@ -240,6 +240,33 @@ router.get('/signature/:memberId', authenticateAny, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /fall-tests/signature/:memberId/pdf - 下載墜落測驗同意書副本 PDF（最新一筆簽署）──
+router.get('/signature/:memberId/pdf', authenticateAny, async (req, res) => {
+  try {
+    const db = getDb();
+    if (req.member && req.member.id !== req.params.memberId) {
+      const deny = await checkMemberOwnership(req.member, req.params.memberId, { onMissing: 403, message: '只能查看自己或子會員的同意書' });
+      if (deny) return res.status(deny.status).json(deny.body);
+    }
+    const snap = await db.collection('fallTestSignatures').where('memberId', '==', req.params.memberId).select('signedAt').get();
+    if (snap.empty) return res.status(404).json({ error: 'NOT_FOUND', message: '尚未簽署墜落測驗同意書' });
+    const newest = snap.docs.slice().sort((a, b) => (b.data().signedAt?.toDate?.() || 0) - (a.data().signedAt?.toDate?.() || 0))[0];
+    const sg = (await newest.ref.get()).data();
+    const member = await require('../services/memberService').getMember(req.params.memberId);
+    const fmt = (t) => (t && (t._seconds || t.seconds || t.toDate)) ? dayjs(t.toDate ? t.toDate() : (t._seconds || t.seconds) * 1000).format('YYYY/MM/DD HH:mm') : '-';
+    const { buildSignedDocPdfBuffer } = require('../utils/signedDocPdf');
+    const buf = await buildSignedDocPdfBuffer({
+      title: '紅石攀岩 — 墜落測驗同意書', memberName: member?.name || '', signedAtText: fmt(sg.signedAt), body: sg.contentSnapshot?.zh || '',
+      signerLabel: member?.isChildAccount ? '法定代理人簽名' : '本人簽名', signatureImg: sg.signatureData,
+      guardian: sg.guardianSignatureData ? { name: sg.guardianName, relation: '', signedAtText: fmt(sg.guardianSignedAt), signatureImg: sg.guardianSignatureData } : null,
+    });
+    const fileName = `墜落測驗同意書_${member?.name || req.params.memberId}_${dayjs().format('YYYYMMDD')}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="fall-test.pdf"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    res.send(buf);
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── POST /fall-tests/signature/:memberId/reset - 員工退回同意書重簽 ──
 router.post('/signature/:memberId/reset', authenticate, requireManagerOrStation, async (req, res) => {
   try {

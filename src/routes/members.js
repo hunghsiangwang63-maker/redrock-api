@@ -1192,6 +1192,42 @@ router.get('/:id/waiver', authenticateAny, async (req, res) => {
   }
 });
 
+// ── GET /members/:id/waiver/pdf - 下載風險安全聲明書副本 PDF（簽署當下文字快照＋簽名圖）──
+router.get('/:id/waiver/pdf', authenticateAny, async (req, res) => {
+  try {
+    const memberId = req.params.id;
+    const db = getDb();
+    if (req.member && req.member.id !== memberId) {
+      const deny = await checkMemberOwnership(req.member, memberId, { onMissing: 403, message: '只能查看自己或子會員的聲明書' });
+      if (deny) return res.status(deny.status).json(deny.body);
+    }
+    const waiverDoc = await db.collection(COLLECTIONS.WAIVERS).doc(memberId).get();
+    if (!waiverDoc.exists) return res.status(404).json({ error: 'NOT_FOUND', message: '尚未簽署聲明書' });
+    const w = waiverDoc.data();
+    let body = w.contentSnapshot?.zh || '';
+    let notice = null;
+    if (!w.contentSnapshot) {
+      const contentDoc = await db.collection('systemSettings').doc('waiver').get();
+      body = contentDoc.exists ? (contentDoc.data().zh || '') : '';
+      notice = '此為舊紀錄，內容為現行版本，非簽署當時的逐字內容';
+    }
+    const member = await memberService.getMember(memberId);
+    const fmt = (t) => (t && (t._seconds || t.seconds || t.toDate)) ? dayjs(t.toDate ? t.toDate() : (t._seconds || t.seconds) * 1000).format('YYYY/MM/DD HH:mm') : '-';
+    const { buildSignedDocPdfBuffer } = require('../utils/signedDocPdf');
+    const buf = await buildSignedDocPdfBuffer({
+      title: '紅石攀岩 風險安全聲明書', memberName: member?.name || '', signedAtText: fmt(w.memberSignedAt), body, notice,
+      signerLabel: member?.isChildAccount ? '法定代理人簽名' : '本人簽名', signatureImg: w.memberSignatureUrl,
+      guardian: w.parentSignatureUrl ? { name: w.parentName, relation: w.parentRelation || '法定代理人', signedAtText: fmt(w.parentSignedAt), signatureImg: w.parentSignatureUrl } : null,
+    });
+    const fileName = `風險安全聲明書_${member?.name || memberId}_${dayjs().format('YYYYMMDD')}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="waiver.pdf"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    res.send(buf);
+  } catch (err) {
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 // ── POST /members/:id/waiver/sign - 簽署風險安全聲明書 ───────────────
 // 會員本人自助簽署，或工作人員於毱台協助操作（authenticateAny）
 router.post('/:id/waiver/sign',

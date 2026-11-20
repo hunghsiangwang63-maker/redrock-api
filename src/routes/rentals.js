@@ -14,6 +14,17 @@ router.get('/settings', authenticateAny, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── GET /rentals/availability - 抱石墊剩餘數量（會員申請畫面用；只讀）──
+router.get('/availability', authenticateAny, async (req, res) => {
+  try {
+    const { gymId, pickupDate, returnDate } = req.query;
+    if (!gymId || !pickupDate) return res.status(400).json({ code: 'MISSING_PARAMS', message: '缺少館別或借出日期' });
+    const qty = Math.max(0, parseInt(req.query.quantity, 10) || 0);
+    const a = await computeCrashPadAvailability(getDb(), { gymId, pickupDate, returnDate: returnDate || null, qty });
+    res.json({ crashPad: a });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── PUT /rentals/settings - 更新器材設定 ──
 router.put('/settings', authenticate, requireManagerOrStation, async (req, res) => {
   try {
@@ -65,6 +76,14 @@ router.post('/apply', authenticateAny, async (req, res) => {
     // 計算費用（共用 helper，與修改端點同一份）
     const { itemsWithFee, totalRentalFee, totalDeposit } = computeRentalItems(settings, items, effRentalType);
 
+    // 抱石墊數量管制（館員代申請可帶 overrideStock 略過）
+    const padQty = itemsWithFee.filter(i => i.type === 'crashPad').reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
+    let stockInfo = null;
+    if (padQty > 0) {
+      stockInfo = await computeCrashPadAvailability(db, { gymId, pickupDate, returnDate: effReturnDate, qty: padQty });
+      if (stockInfo.controlled && stockInfo.blocked && !(req.staff && req.body.overrideStock === true)) throw stockBlockedError(gymId, stockInfo);
+    }
+
     const id = `rental_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
     await db.collection('equipmentRentals').doc(id).set({
       id, memberId,
@@ -74,6 +93,7 @@ router.post('/apply', authenticateAny, async (req, res) => {
       gymId, pickupDate, returnDate: effReturnDate, rentalType: effRentalType,
       items: itemsWithFee,
       totalRentalFee, totalDeposit,
+      crashPadOverStock: !!(stockInfo && stockInfo.controlled && stockInfo.over),   // 超過常態數量（兩週前預約）→ 櫃檯需調度
       paymentMethod: paymentMethod || 'transfer',
       paymentDate: paymentDate || null,
       bankLastFive: bankLastFive || null,
@@ -306,6 +326,61 @@ router.post('/invoices/:id/void', authenticate, requireManagerOrStation, async (
   }
 });
 
+// ── 抱石墊數量管制（2026-11-20）──
+// 只管制抱石墊（岩盔、吊帶不管制）。各館常態數量（新竹 3、士林 4）；預約（待付款／已確認／已借出）就算占用數量，
+// 已歸還、已取消不算；歸還當天即可再借出（占用區間為「借出日當天起、到歸還日前一天」）。
+// 同一期間占用張數（逐日取最高）加上本次要借的若超過常態數量：借出日須距今天至少 advanceDays（預設 14）天，
+// 否則 400 RENTAL_STOCK_EXCEEDED；兩週以上預約者允許，但標記 crashPadOverStock 供櫃檯調度。
+// 設定放獨立文件 systemSettings/rentalStock（器材設定頁儲存時整份覆蓋 rentalItems，放那裡會被洗掉）；讀不到用預設值。
+const STOCK_CONTROLLED_TYPES = ['crashPad'];
+const DEFAULT_RENTAL_STOCK = { crashPad: { stockByGym: { 'gym-hsinchu': 3, 'gym-shilin': 4 }, advanceDays: 14 } };
+const GYM_NAME = { 'gym-hsinchu': '新竹館', 'gym-shilin': '士林館' };
+async function getRentalStockConfig(db) {
+  try {
+    const d = await db.collection('systemSettings').doc('rentalStock').get();
+    const c = d.exists ? d.data() : {};
+    return { crashPad: { ...DEFAULT_RENTAL_STOCK.crashPad, ...(c.crashPad || {}), stockByGym: { ...DEFAULT_RENTAL_STOCK.crashPad.stockByGym, ...((c.crashPad || {}).stockByGym || {}) } } };
+  } catch (e) { return DEFAULT_RENTAL_STOCK; }
+}
+// 占用區間 [借出日, 結束日)：歸還日當天已可再借；同日借還佔當天；已借出但逾期未還者至少佔到今天
+function occupiedRange(r, today) {
+  const start = r.pickupDate;
+  let end = (r.returnDate && r.returnDate > start) ? r.returnDate : dayjs(start).add(1, 'day').format('YYYY-MM-DD');
+  if (r.status === 'active' && end <= today) end = dayjs(today).add(1, 'day').format('YYYY-MM-DD');
+  return { start, end };
+}
+async function computeCrashPadAvailability(db, { gymId, pickupDate, returnDate, qty = 0, excludeId = null }) {
+  const cfg = (await getRentalStockConfig(db)).crashPad;
+  const stock = Number(cfg.stockByGym[gymId]);
+  const advanceDays = Number(cfg.advanceDays) || 14;
+  const today = dayjs().format('YYYY-MM-DD');
+  if (!Number.isFinite(stock) || !pickupDate) return { controlled: false };
+  const reqRange = occupiedRange({ pickupDate, returnDate, status: 'pending' }, today);
+  const snap = await db.collection('equipmentRentals').where('status', 'in', ['pending', 'confirmed', 'active']).get();
+  const booked = {};
+  snap.forEach(d => {
+    if (d.id === excludeId) return;
+    const r = d.data();
+    if (r.gymId !== gymId || !r.pickupDate) return;
+    const n = (r.items || []).filter(i => i.type === 'crashPad').reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
+    if (!n) return;
+    const { start, end } = occupiedRange(r, today);
+    for (let d2 = dayjs(start > reqRange.start ? start : reqRange.start); d2.format('YYYY-MM-DD') < (end < reqRange.end ? end : reqRange.end); d2 = d2.add(1, 'day')) {
+      const k = d2.format('YYYY-MM-DD'); booked[k] = (booked[k] || 0) + n;
+    }
+  });
+  const peak = Math.max(0, ...Object.values(booked));
+  const remaining = Math.max(0, stock - peak);
+  const daysAhead = dayjs(pickupDate).diff(dayjs(today), 'day');
+  const over = peak + qty > stock;
+  return { controlled: true, stock, peak, remaining, qty, over, advanceDays, daysAhead, blocked: over && daysAhead < advanceDays,
+    earliestOverDate: dayjs(today).add(advanceDays, 'day').format('YYYY-MM-DD') };
+}
+function stockBlockedError(gymId, a) {
+  return { code: 'RENTAL_STOCK_EXCEEDED', availability: a,
+    message: `${GYM_NAME[gymId] || gymId}抱石墊常態 ${a.stock} 張，該期間已預約 ${a.peak} 張（剩 ${a.remaining} 張），本次需 ${a.qty} 張已超過可立即借用的數量。需更多請於 ${a.advanceDays} 天前預約（借出日最早 ${a.earliestOverDate}），或減少數量／改選其他日期。` };
+}
+
 // ── 共用：依設定重算品項費用（金額後端權威，供 apply/修改共用） ──
 function computeRentalItems(settings, items, rentalType) {
   let totalRentalFee = 0, totalDeposit = 0;
@@ -444,9 +519,16 @@ router.put('/:id', authenticateAny, async (req, res) => {
       return res.status(400).json({ code: 'MISSING_DATE', message: '請選擇歸還日期' });
     }
     const { itemsWithFee, totalRentalFee, totalDeposit } = computeRentalItems(settings, items, rentalType);
+    const padQty = itemsWithFee.filter(i => i.type === 'crashPad').reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
+    let stockInfo = null;
+    if (padQty > 0) {
+      stockInfo = await computeCrashPadAvailability(db, { gymId: r.gymId, pickupDate, returnDate, qty: padQty, excludeId: doc.id });
+      if (stockInfo.controlled && stockInfo.blocked && !(isStaff && req.body.overrideStock === true)) throw stockBlockedError(r.gymId, stockInfo);
+    }
     await doc.ref.update({
       pickupDate, returnDate, rentalType,
       items: itemsWithFee, totalRentalFee, totalDeposit,
+      crashPadOverStock: !!(stockInfo && stockInfo.controlled && stockInfo.over),
       editedAt: new Date(), editedBy: isStaff ? (req.staff.name || req.staff.id) : 'member',
       updatedAt: new Date(),
     });

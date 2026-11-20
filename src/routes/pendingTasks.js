@@ -112,7 +112,7 @@ router.get('/', authenticate, async (req, res) => {
         tasks.push({
           id: `rental_${d.id}`, type: 'rental', targetId: d.id,
           title: `器材租借申請`,
-          desc: `${r.memberName} — ${r.items?.map(i=>`${i.name}×${i.quantity}`).join('、')} (${r.rentalType==='weekend'?'週末':'七天'})`,
+          desc: `${r.memberName} — ${r.items?.map(i=>`${i.name}×${i.quantity}`).join('、')} (${r.rentalType==='weekend'?'週末':'七天'})${r.crashPadOverStock ? ' ⚠ 抱石墊超過常態數量，需調度' : ''}`,
           date: r.createdAt?._seconds ? new Date(r.createdAt._seconds*1000).toISOString().slice(0,10) : today,
           createdAt: r.createdAt?._seconds || 0,
           gymId: r.gymId, memberName: r.memberName,
@@ -232,7 +232,7 @@ router.get('/', authenticate, async (req, res) => {
           tasks.push({
             id: `rental_pickup_${d.id}`, type: 'rental_pickup', targetId: d.id,
             title: r.pickupDate === today ? '器材今日取件' : '器材待取件',
-            desc: `${r.memberName} — ${r.items?.map(i=>`${i.name}×${i.quantity}`).join('、')} · ${rentalPeriodText(r)}`,
+            desc: `${r.memberName} — ${r.items?.map(i=>`${i.name}×${i.quantity}`).join('、')} · ${rentalPeriodText(r)}${r.crashPadOverStock ? ' ⚠ 抱石墊需調度' : ''}`,
             date: r.pickupDate, createdAt: Date.now()/1000,
             gymId: r.gymId, memberName: r.memberName,
             link: '/staff/rentals',

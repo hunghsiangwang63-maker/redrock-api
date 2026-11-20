@@ -81,6 +81,7 @@ router.post('/apply', authenticateAny, async (req, res) => {
     let stockInfo = null;
     if (padQty > 0) {
       stockInfo = await computeCrashPadAvailability(db, { gymId, pickupDate, returnDate: effReturnDate, qty: padQty });
+      if (stockInfo.controlled && stockInfo.hardBlocked) throw stockMaxError(stockInfo);   // 兩館合計硬上限：員工也不可略過
       if (stockInfo.controlled && stockInfo.blocked && !(req.staff && req.body.overrideStock === true)) throw stockBlockedError(gymId, stockInfo);
     }
 
@@ -333,7 +334,8 @@ router.post('/invoices/:id/void', authenticate, requireManagerOrStation, async (
 // 否則 400 RENTAL_STOCK_EXCEEDED；兩週以上預約者允許，但標記 crashPadOverStock 供櫃檯調度。
 // 設定放獨立文件 systemSettings/rentalStock（器材設定頁儲存時整份覆蓋 rentalItems，放那裡會被洗掉）；讀不到用預設值。
 const STOCK_CONTROLLED_TYPES = ['crashPad'];
-const DEFAULT_RENTAL_STOCK = { crashPad: { stockByGym: { 'gym-hsinchu': 3, 'gym-shilin': 4 }, advanceDays: 14 } };
+// maxTotal：兩館抱石墊實體總數（硬上限 7 張）；任何一天兩館預約合計不可超過，員工也不可略過
+const DEFAULT_RENTAL_STOCK = { crashPad: { stockByGym: { 'gym-hsinchu': 3, 'gym-shilin': 4 }, advanceDays: 14, maxTotal: 7 } };
 const GYM_NAME = { 'gym-hsinchu': '新竹館', 'gym-shilin': '士林館' };
 async function getRentalStockConfig(db) {
   try {
@@ -353,28 +355,37 @@ async function computeCrashPadAvailability(db, { gymId, pickupDate, returnDate, 
   const cfg = (await getRentalStockConfig(db)).crashPad;
   const stock = Number(cfg.stockByGym[gymId]);
   const advanceDays = Number(cfg.advanceDays) || 14;
+  const maxTotal = Number(cfg.maxTotal) || 7;
   const today = dayjs().format('YYYY-MM-DD');
   if (!Number.isFinite(stock) || !pickupDate) return { controlled: false };
   const reqRange = occupiedRange({ pickupDate, returnDate, status: 'pending' }, today);
   const snap = await db.collection('equipmentRentals').where('status', 'in', ['pending', 'confirmed', 'active']).get();
-  const booked = {};
+  const booked = {}, bookedAll = {};   // booked：本館每日占用；bookedAll：兩館合計每日占用（硬上限用）
   snap.forEach(d => {
     if (d.id === excludeId) return;
     const r = d.data();
-    if (r.gymId !== gymId || !r.pickupDate) return;
+    if (!r.pickupDate) return;
     const n = (r.items || []).filter(i => i.type === 'crashPad').reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
     if (!n) return;
     const { start, end } = occupiedRange(r, today);
     for (let d2 = dayjs(start > reqRange.start ? start : reqRange.start); d2.format('YYYY-MM-DD') < (end < reqRange.end ? end : reqRange.end); d2 = d2.add(1, 'day')) {
-      const k = d2.format('YYYY-MM-DD'); booked[k] = (booked[k] || 0) + n;
+      const k = d2.format('YYYY-MM-DD'); bookedAll[k] = (bookedAll[k] || 0) + n;
+      if (r.gymId === gymId) booked[k] = (booked[k] || 0) + n;
     }
   });
   const peak = Math.max(0, ...Object.values(booked));
+  const peakAll = Math.max(0, ...Object.values(bookedAll));
   const remaining = Math.max(0, stock - peak);
   const daysAhead = dayjs(pickupDate).diff(dayjs(today), 'day');
   const over = peak + qty > stock;
+  const hardBlocked = peakAll + qty > maxTotal;
   return { controlled: true, stock, peak, remaining, qty, over, advanceDays, daysAhead, blocked: over && daysAhead < advanceDays,
+    maxTotal, peakAll, remainingTotal: Math.max(0, maxTotal - peakAll), hardBlocked,
     earliestOverDate: dayjs(today).add(advanceDays, 'day').format('YYYY-MM-DD') };
+}
+function stockMaxError(a) {
+  return { code: 'RENTAL_STOCK_MAX', availability: a,
+    message: `兩館抱石墊合計僅 ${a.maxTotal} 張，該期間已被預約 ${a.peakAll} 張，最多還能再借 ${a.remainingTotal} 張（本次需 ${a.qty} 張），請減少數量或改選其他日期。` };
 }
 function stockBlockedError(gymId, a) {
   return { code: 'RENTAL_STOCK_EXCEEDED', availability: a,
@@ -523,6 +534,7 @@ router.put('/:id', authenticateAny, async (req, res) => {
     let stockInfo = null;
     if (padQty > 0) {
       stockInfo = await computeCrashPadAvailability(db, { gymId: r.gymId, pickupDate, returnDate, qty: padQty, excludeId: doc.id });
+      if (stockInfo.controlled && stockInfo.hardBlocked) throw stockMaxError(stockInfo);
       if (stockInfo.controlled && stockInfo.blocked && !(isStaff && req.body.overrideStock === true)) throw stockBlockedError(r.gymId, stockInfo);
     }
     await doc.ref.update({

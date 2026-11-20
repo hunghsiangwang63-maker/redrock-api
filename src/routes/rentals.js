@@ -20,8 +20,10 @@ router.get('/availability', authenticateAny, async (req, res) => {
     const { gymId, pickupDate, returnDate } = req.query;
     if (!gymId || !pickupDate) return res.status(400).json({ code: 'MISSING_PARAMS', message: '缺少館別或借出日期' });
     const qty = Math.max(0, parseInt(req.query.quantity, 10) || 0);
-    const a = await computeCrashPadAvailability(getDb(), { gymId, pickupDate, returnDate: returnDate || null, qty });
-    res.json({ crashPad: a });
+    const a = qty > 0 ? await computeCrashPadAvailability(getDb(), { gymId, pickupDate, returnDate: returnDate || null, qty }) : { controlled: false };
+    // 日期規則檢查（有帶 rentalType 才檢查；供會員端即時提示）
+    const dateError = req.query.rentalType ? await validateRentalPeriod(gymId, req.query.rentalType, pickupDate, returnDate || null) : null;
+    res.json({ crashPad: a, dateOk: !dateError, dateError });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -75,6 +77,12 @@ router.post('/apply', authenticateAny, async (req, res) => {
 
     // 計算費用（共用 helper，與修改端點同一份）
     const { itemsWithFee, totalRentalFee, totalDeposit } = computeRentalItems(settings, items, effRentalType);
+
+    // 日期規則（員工代申請可帶 overrideDates 略過）
+    if (!(req.staff && req.body.overrideDates === true)) {
+      const dateErr = await validateRentalPeriod(gymId, effRentalType, pickupDate, effReturnDate);
+      if (dateErr) throw { code: 'RENTAL_DATE_INVALID', message: dateErr };
+    }
 
     // 抱石墊數量管制（館員代申請可帶 overrideStock 略過）
     const padQty = itemsWithFee.filter(i => i.type === 'crashPad').reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
@@ -392,6 +400,40 @@ function stockBlockedError(gymId, a) {
     message: `${GYM_NAME[gymId] || gymId}抱石墊常態 ${a.stock} 張，該期間已預約 ${a.peak} 張（剩 ${a.remaining} 張），本次需 ${a.qty} 張已超過可立即借用的數量。需更多請於 ${a.advanceDays} 天前預約（借出日最早 ${a.earliestOverDate}），或減少數量／改選其他日期。` };
 }
 
+// ── 租借日期規則（2026-11-20，使用者定）──
+// 週末方案：借出、歸還都須是「營業日」，且落在同一個週末區間內——借出日為週五／週六／週日，歸還日不晚於該週末後的
+//   第一個週一（士林館週一不營業，順延到週二）；區間內可中途取件、中途歸還（例：週六借、週日還）。
+// 七天方案：借出、歸還都須是營業日，借出到歸還最多 9 天。
+// 營業日＝場館當天有營業（含每週固定休息日、臨時休館公告；與會員端「今日狀態」同一個 getGymStatusForDate）。
+// 置物櫃（月租）不套用。員工代申請／修改可帶 overrideDates:true 略過（特殊情況）。
+const WD_ZH = ['日', '一', '二', '三', '四', '五', '六'];
+async function validateRentalPeriod(gymId, rentalType, pickupDate, returnDate) {
+  if (rentalType === 'monthly') return null;
+  const fmt = (d) => `${d}（週${WD_ZH[dayjs(d).day()]}）`;
+  if (!pickupDate || !returnDate) return '請選擇借出日期與歸還日期';
+  const pu = dayjs(pickupDate), re = dayjs(returnDate);
+  if (!pu.isValid() || !re.isValid()) return '日期格式不正確';
+  if (re.isBefore(pu, 'day')) return '歸還日不可早於借出日';
+  let limitErr = null;
+  if (rentalType === 'weekend') {
+    const wd = pu.day();
+    if (![5, 6, 0].includes(wd)) return `週末方案的借出日須為週五、週六或週日（您選的是 ${fmt(pickupDate)}），平日借用請改選七天方案`;
+    const returnWd = gymId === 'gym-shilin' ? 2 : 1;                  // 士林週一不營業→週二
+    let end = pu; while (end.day() !== returnWd || !end.isAfter(pu, 'day')) end = end.add(1, 'day');
+    if (re.isAfter(end, 'day')) limitErr = `週末方案最晚須於 ${fmt(end.format('YYYY-MM-DD'))} 歸還（您選的是 ${fmt(returnDate)}），超過請改選七天方案`;
+  } else {
+    if (re.diff(pu, 'day') > 9) limitErr = `七天方案借出到歸還最多 9 天（您選的是 ${re.diff(pu, 'day')} 天）`;
+  }
+  if (limitErr) return limitErr;
+  const { getGymStatusForDate } = require('./gyms');
+  for (const [label, d] of [['借出日', pickupDate], ['歸還日', returnDate]]) {
+    let st = null;
+    try { st = await getGymStatusForDate(gymId, d); } catch (e) { st = null; }
+    if (st && st.isOpen === false) return `${label} ${fmt(d)} ${GYM_NAME[gymId] || '該館'}不營業，無法取件／歸還，請改選營業日`;
+  }
+  return null;
+}
+
 // ── 共用：依設定重算品項費用（金額後端權威，供 apply/修改共用） ──
 function computeRentalItems(settings, items, rentalType) {
   let totalRentalFee = 0, totalDeposit = 0;
@@ -530,6 +572,10 @@ router.put('/:id', authenticateAny, async (req, res) => {
       return res.status(400).json({ code: 'MISSING_DATE', message: '請選擇歸還日期' });
     }
     const { itemsWithFee, totalRentalFee, totalDeposit } = computeRentalItems(settings, items, rentalType);
+    if (!(isStaff && req.body.overrideDates === true)) {
+      const dateErr = await validateRentalPeriod(r.gymId, rentalType, pickupDate, returnDate);
+      if (dateErr) throw { code: 'RENTAL_DATE_INVALID', message: dateErr };
+    }
     const padQty = itemsWithFee.filter(i => i.type === 'crashPad').reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
     let stockInfo = null;
     if (padQty > 0) {

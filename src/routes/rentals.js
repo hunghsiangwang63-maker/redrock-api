@@ -178,14 +178,33 @@ router.get('/stats', authenticate, async (req, res) => {
       r.pickupDate <= toDate && r.returnDate >= fromDate
     );
 
-    // 統計每種器材最大需求
+    // 統計每種器材「期間內逐日最高同時占用張數」（2026-11-20 修正：原本是把重疊預約的張數直接加總，
+    // 不是同時出借數）。占用區間同數量管制：[借出日當天, 歸還日前一天]，歸還當天即可再借；逾期未還的至少占到今天。
+    const todayStr = dayjs().format('YYYY-MM-DD');
+    const winEnd = dayjs(toDate).add(1, 'day').format('YYYY-MM-DD');   // 查詢區間 [fromDate, toDate] 的結束（不含）
     const stats = {};
     overlapping.forEach(r => {
+      const { start, end } = occupiedRange(r, todayStr);
+      const lo = start > fromDate ? start : fromDate, hi = end < winEnd ? end : winEnd;
       r.items?.forEach(item => {
-        if (!stats[item.type]) stats[item.type] = { name: item.name, type: item.type, total: 0, records: [] };
-        stats[item.type].total += item.quantity;
-        stats[item.type].records.push({ memberName: r.memberName, quantity: item.quantity, pickupDate: r.pickupDate, returnDate: r.returnDate, status: r.status });
+        if (!stats[item.type]) stats[item.type] = { name: item.name, type: item.type, total: 0, sumQuantity: 0, records: [], _all: {}, _gym: {} };
+        const st = stats[item.type];
+        const n = Number(item.quantity) || 0;
+        st.sumQuantity += n;
+        st.records.push({ memberName: r.memberName, quantity: n, pickupDate: r.pickupDate, returnDate: r.returnDate, status: r.status, gymId: r.gymId, crashPadOverStock: !!r.crashPadOverStock });
+        for (let d = dayjs(lo); d.format('YYYY-MM-DD') < hi; d = d.add(1, 'day')) {
+          const k = d.format('YYYY-MM-DD');
+          st._all[k] = (st._all[k] || 0) + n;
+          (st._gym[r.gymId] = st._gym[r.gymId] || {})[k] = ((st._gym[r.gymId] || {})[k] || 0) + n;
+        }
       });
+    });
+    const stockCfg = (await getRentalStockConfig(db)).crashPad;
+    Object.values(stats).forEach(st => {
+      st.total = Math.max(0, ...Object.values(st._all));                 // 兩館（或所選館別）逐日最高同時占用
+      st.peakByGym = Object.fromEntries(Object.entries(st._gym).map(([g, m]) => [g, Math.max(0, ...Object.values(m))]));
+      if (st.type === 'crashPad') st.stock = { byGym: stockCfg.stockByGym, maxTotal: stockCfg.maxTotal };
+      delete st._all; delete st._gym;
     });
 
     // 待取件（今天要取的）

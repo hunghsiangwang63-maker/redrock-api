@@ -6,6 +6,40 @@ const dayjs = require('dayjs');
 const XLSX = require('xlsx');
 const teamMemberService = require('../services/teamMemberService');
 
+// ── 隊伍介紹文字（會員端「隊伍介紹」頁；員工端「設定 → 攀岩隊介紹」編輯；2026-11-25）──
+// systemSettings/teamIntro：{ intro:{zh,en,ja}（一段文字）, benefits:{zh,en,ja}（字串陣列，一條一項）}
+// 欄位空白＝會員端使用程式內建預設文字；只填中文時，英日文版也顯示中文（避免英日版仍是舊翻譯）
+const TEAM_INTRO_LANGS = ['zh', 'en', 'ja'];
+const normalizeTeamIntro = (body = {}) => {
+  const out = { intro: {}, benefits: {} };
+  for (const l of TEAM_INTRO_LANGS) {
+    const t = String((body.intro || {})[l] || '').trim();
+    if (t.length > 2000) { const e = new Error('介紹文字最多 2000 字'); e.status = 400; throw e; }
+    out.intro[l] = t;
+    const raw = (body.benefits || {})[l];
+    const list = (Array.isArray(raw) ? raw : []).map(x => String(x || '').trim()).filter(Boolean);
+    if (list.length > 30) { const e = new Error('隊員福利最多 30 條'); e.status = 400; throw e; }
+    if (list.some(x => x.length > 200)) { const e = new Error('每條福利最多 200 字'); e.status = 400; throw e; }
+    out.benefits[l] = list;
+  }
+  return out;
+};
+router.get('/intro', authenticateAny, async (req, res) => {
+  try {
+    const doc = await getDb().collection('systemSettings').doc('teamIntro').get();
+    const d = doc.exists ? doc.data() : {};
+    res.json({ intro: d.intro || { zh: '', en: '', ja: '' }, benefits: d.benefits || { zh: [], en: [], ja: [] }, updatedAt: d.updatedAt || null });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+router.put('/intro', authenticate, requireManager, async (req, res) => {
+  try {
+    let data;
+    try { data = normalizeTeamIntro(req.body); } catch (e) { return res.status(e.status || 400).json({ error: 'INVALID_INTRO', message: e.message }); }
+    await getDb().collection('systemSettings').doc('teamIntro').set({ ...data, updatedAt: new Date().toISOString(), updatedBy: req.staff.id, updatedByName: req.staff.name || '' });
+    res.json({ message: '隊伍介紹已儲存', ...data });
+  } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /team/fees - 取得目前年費設定（會員可讀） ──
 router.get('/fees', authenticateAny, async (req, res) => {
   try {

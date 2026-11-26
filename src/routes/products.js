@@ -580,6 +580,63 @@ router.get('/export', authenticate, requireManager, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── 入庫紀錄查詢（2026-11-26）：stockLogs type=restock；GET /products/restock-logs、/restock-logs/download ──
+// 單一欄位時間範圍查詢（createdAt）＋記憶體過濾 type/館別/商品關鍵字（本專案慣例，避免複合索引）
+// 權限：products.restock（含值班）；值班與非超級管理員只看自己館，超級管理員可指定館別或看全部
+async function queryRestockLogs(req) {
+  const db = getDb();
+  const today = dayjs().format('YYYY-MM-DD');
+  let from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || '') ? req.query.from : dayjs().subtract(30, 'day').format('YYYY-MM-DD');
+  let to = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || '') ? req.query.to : today;
+  if (to < from) { const e = new Error('結束日期不可早於開始日期'); e.status = 400; e.code = 'INVALID_RANGE'; throw e; }
+  if (dayjs(to).diff(dayjs(from), 'day') > 366) { const e = new Error('查詢範圍最多 366 天'); e.status = 400; e.code = 'RANGE_TOO_LARGE'; throw e; }
+  const isSuper = ['super_admin', 'admin'].includes(req.staff?.role) && req.staff?.type !== 'operator';
+  const gymFilter = isSuper ? (req.query.gymId || '') : (req.staff?.gymId || '');
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const snap = await db.collection('stockLogs')
+    .where('createdAt', '>=', dayjs(from).startOf('day').toDate())
+    .where('createdAt', '<', dayjs(to).add(1, 'day').startOf('day').toDate()).get();
+  let logs = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(l => l.type === 'restock');
+  if (gymFilter) logs = logs.filter(l => l.gymId === gymFilter);
+  if (q) logs = logs.filter(l => String(l.productName || '').toLowerCase().includes(q));
+  logs.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+  // 補規格名稱與經手人姓名
+  const pids = [...new Set(logs.map(l => l.productId).filter(Boolean))];
+  const sids = [...new Set(logs.map(l => l.staffId).filter(Boolean))];
+  const getAll = async (col, ids) => { const m = {}; for (let i = 0; i < ids.length; i += 30) { const docs = await db.getAll(...ids.slice(i, i + 30).map(id => db.collection(col).doc(id))); docs.forEach(d => { if (d.exists) m[d.id] = d.data(); }); } return m; };
+  const [prods, staffs] = await Promise.all([getAll('products', pids), getAll('staff', sids)]);
+  const rows = logs.map(l => {
+    const v = (prods[l.productId]?.variants || []).find(x => x.id === l.variantId);
+    const variantName = v ? ([v.size, v.color].filter(Boolean).join(' / ') || '標準') : '';
+    const t = l.createdAt?.toDate ? l.createdAt.toDate() : null;
+    return {
+      id: l.id, createdAt: t ? t.toISOString() : null, date: t ? dayjs(t).format('YYYY-MM-DD HH:mm') : '',
+      productId: l.productId || '', productName: l.productName || '', variantName, gymId: l.gymId || '',
+      quantity: l.quantity || 0, note: l.note || '', staffName: staffs[l.staffId]?.name || '',
+    };
+  });
+  return { rows, from, to, gymId: gymFilter, total: rows.reduce((a, r) => a + (r.quantity || 0), 0) };
+}
+router.get('/restock-logs', authenticate, checkPermission('products.restock'), async (req, res) => {
+  try { res.json(await queryRestockLogs(req)); }
+  catch (err) { res.status(err.status || 500).json({ error: err.code || 'SERVER_ERROR', message: err.message }); }
+});
+router.get('/restock-logs/download', authenticate, checkPermission('products.restock'), async (req, res) => {
+  try {
+    const XLSX = require('xlsx');
+    const r = await queryRestockLogs(req);
+    const GYM = { 'gym-hsinchu': '新竹館', 'gym-shilin': '士林館' };
+    const rows = r.rows.map(x => ({ '日期時間': x.date, '館別': GYM[x.gymId] || x.gymId || '倉庫', '商品': x.productName, '規格': x.variantName, '入庫數量': x.quantity, '備註': x.note, '經手人': x.staffName }));
+    const ws = require('../utils/xlsxSafe').sanitizeSheet(XLSX.utils.json_to_sheet(rows));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '入庫紀錄');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Disposition', `attachment; filename=restock-${r.from}_${r.to}.xlsx`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
+  } catch (err) { res.status(err.status || 500).json({ error: err.code || 'SERVER_ERROR', message: err.message }); }
+});
+
 // ── GET /products/stocktake/history - 歷史盤點紀錄（按館別，依時間分組每次盤點的逐項明細）──
 // ⚠ 單一等值查詢（type=='stocktake'）+ 記憶體過濾/分組/排序，避免複合索引（本專案慣例）
 router.get('/stocktake/history', authenticate, checkPermission('products.manage'), async (req, res) => {

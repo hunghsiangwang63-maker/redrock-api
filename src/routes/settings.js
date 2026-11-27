@@ -702,7 +702,9 @@ router.put('/team-fees', authenticate, async (req, res) => {
     return res.status(403).json({ error: '權限不足' });
   try {
     const db = getDb();
-    const { fullYearFee, midYearFee, lateYearFee, midYearCutoff, lateYearCutoff, jerseyDiscount } = req.body;
+    const { fullYearFee, midYearFee, lateYearFee, midYearCutoff, lateYearCutoff, jerseyDiscount, applyYear } = req.body;
+    const ay = parseInt(applyYear);
+    const prev = (await db.collection('systemSettings').doc('teamFees').get()).data() || {};
     await db.collection('systemSettings').doc('teamFees').set({
       fullYearFee: Number(fullYearFee) || 3000,
       midYearFee: Number(midYearFee) || 2000,
@@ -710,6 +712,8 @@ router.put('/team-fees', authenticate, async (req, res) => {
       midYearCutoff: midYearCutoff || '03-15',
       lateYearCutoff: lateYearCutoff || '09-15',
       jerseyDiscount: Number(jerseyDiscount) || 300,
+      // 開放申請年度：有帶就用（2000～2100），沒帶沿用原值（避免儲存費率時把它洗掉）；空字串＝清除（回今年）
+      ...(applyYear === '' || applyYear === null ? {} : (ay >= 2000 && ay <= 2100 ? { applyYear: ay } : (prev.applyYear ? { applyYear: prev.applyYear } : {}))),
       updatedAt: new Date(),
     });
     res.json({ success: true });

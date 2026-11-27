@@ -40,6 +40,22 @@ router.put('/intro', authenticate, requireManager, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
+// ── 申請年度（2026-11-27）：teamFees.applyYear＝目前開放申請的年度（例：年底前先開放下一年度）──
+// 只接受「今年」或「明年」；設定已過期（早於今年）或亂填就回今年。申請明年度＝全年隊費（不套中途／晚加入折扣）。
+const resolveApplyYear = (fees) => {
+  const cy = dayjs().year();
+  const y = parseInt(fees && fees.applyYear);
+  return (y === cy || y === cy + 1) ? y : cy;
+};
+const feeForYear = (fees, applyYear) => {
+  const cy = dayjs().year();
+  const todayMMDD = dayjs().format('MM-DD');
+  if (applyYear > cy) return { currentFee: fees.fullYearFee, feeLabel: `全年隊費（NT$${fees.fullYearFee}）` };
+  if (todayMMDD >= fees.lateYearCutoff) return { currentFee: fees.lateYearFee, feeLabel: `${fees.lateYearCutoff.replace('-','/')} 後加入（NT$${fees.lateYearFee}）` };
+  if (todayMMDD >= fees.midYearCutoff) return { currentFee: fees.midYearFee, feeLabel: `${fees.midYearCutoff.replace('-','/')} 後加入（NT$${fees.midYearFee}）` };
+  return { currentFee: fees.fullYearFee, feeLabel: `全年隊費（NT$${fees.fullYearFee}）` };
+};
+
 // ── GET /team/fees - 取得目前年費設定（會員可讀） ──
 router.get('/fees', authenticateAny, async (req, res) => {
   try {
@@ -49,17 +65,9 @@ router.get('/fees', authenticateAny, async (req, res) => {
       fullYearFee: 3000, midYearFee: 2000, lateYearFee: 1000,
       midYearCutoff: '03-15', lateYearCutoff: '09-15', jerseyDiscount: 300,
     };
-    const todayMMDD = dayjs().format('MM-DD');
-    let currentFee = fees.fullYearFee;
-    let feeLabel = `全年隊費（NT$${fees.fullYearFee}）`;
-    if (todayMMDD >= fees.lateYearCutoff) {
-      currentFee = fees.lateYearFee;
-      feeLabel = `${fees.lateYearCutoff.replace('-','/')} 後加入（NT$${fees.lateYearFee}）`;
-    } else if (todayMMDD >= fees.midYearCutoff) {
-      currentFee = fees.midYearFee;
-      feeLabel = `${fees.midYearCutoff.replace('-','/')} 後加入（NT$${fees.midYearFee}）`;
-    }
-    res.json({ ...fees, currentFee, feeLabel });
+    const applyYear = resolveApplyYear(fees);
+    const { currentFee, feeLabel } = feeForYear(fees, applyYear);
+    res.json({ ...fees, applyYear, currentFee, feeLabel });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
 });
 
@@ -70,23 +78,20 @@ router.post('/apply', authenticateAny, async (req, res) => {
     const memberId = req.member?.id || req.body.memberId;
     if (!memberId) return res.status(401).json({ error: 'UNAUTHORIZED' });
 
-    const year = dayjs().year();
+    // 從設定取費用規則（含開放申請年度）
+    const feesDoc = await db.collection('systemSettings').doc('teamFees').get();
+    const fees = feesDoc.exists ? feesDoc.data() : {
+      fullYearFee: 3000, midYearFee: 2000, lateYearFee: 1000,
+      midYearCutoff: '03-15', lateYearCutoff: '09-15', jerseyDiscount: 300,
+    };
+    const year = resolveApplyYear(fees);
 
     // 檢查同年度是否已申請
     const existing = await db.collection('teamApplications')
       .where('memberId', '==', memberId).where('year', '==', year).limit(1).get();
     if (!existing.empty) return res.status(400).json({ code: 'ALREADY_APPLIED', message: `${year} 年度已申請過` });
 
-    // 從設定取費用規則
-    const feesDoc = await db.collection('systemSettings').doc('teamFees').get();
-    const fees = feesDoc.exists ? feesDoc.data() : {
-      fullYearFee: 3000, midYearFee: 2000, lateYearFee: 1000,
-      midYearCutoff: '03-15', lateYearCutoff: '09-15', jerseyDiscount: 300,
-    };
-    const todayMMDD = dayjs().format('MM-DD');
-    let expectedFee = fees.fullYearFee;
-    if (todayMMDD >= fees.lateYearCutoff) expectedFee = fees.lateYearFee;
-    else if (todayMMDD >= fees.midYearCutoff) expectedFee = fees.midYearFee;
+    let expectedFee = feeForYear(fees, year).currentFee;
     if (req.body.noJersey) expectedFee -= fees.jerseyDiscount;
 
     const {

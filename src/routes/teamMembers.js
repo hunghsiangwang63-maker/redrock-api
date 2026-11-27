@@ -106,6 +106,13 @@ router.post('/apply', authenticateAny, async (req, res) => {
     if (!idNumber) return res.status(400).json({ code: 'MISSING_ID', message: '請填寫身分證字號' });
     if (!String(bankLastFive || '').trim()) return res.status(400).json({ code: 'MISSING_BANK_LAST_FIVE', message: '請填寫匯款帳號末五碼' });
     if (!String(paymentDate || '').trim()) return res.status(400).json({ code: 'MISSING_PAYMENT_DATE', message: '請填寫轉帳日期' });
+    // 與會員端申請頁的必填一致（2026-11-27 補後端，避免舊版畫面／直接呼叫 API 存進空白欄位）
+    // 匯款銀行名稱、實際匯款金額不在這支 API（會員端另外送轉帳紀錄 /transfers/upload），所以這裡不檢查
+    if (!String(address || '').trim()) return res.status(400).json({ code: 'MISSING_ADDRESS', message: '請填寫地址' });
+    if (!String(lineId || '').trim()) return res.status(400).json({ code: 'MISSING_LINE_ID', message: '請填寫 Line ID' });
+    if (!Array.isArray(joinReasons) || !joinReasons.length) return res.status(400).json({ code: 'MISSING_JOIN_REASONS', message: '請選擇至少一項加入原因' });
+    if (!String(currentGrade || '').trim()) return res.status(400).json({ code: 'MISSING_GRADE', message: '請選擇目前抱石最高級數' });
+    if (!String(weeklyFrequency || '').trim()) return res.status(400).json({ code: 'MISSING_FREQUENCY', message: '請選擇每週抱石頻率' });
 
     const id = `team_${memberId}_${year}`;
     await db.collection('teamApplications').doc(id).set({

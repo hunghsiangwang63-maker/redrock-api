@@ -61,11 +61,42 @@ router.post('/lookup', authenticateMember, async (req, res) => {
   try {
     if (!(await state()).sendOpen) return res.status(400).json({ error: 'NOT_OPEN', message: '感謝卡片目前未開放' });
     if (!lookupAllowed(req.member.id)) return res.status(429).json({ error: 'TOO_MANY', message: '查詢太頻繁，請稍後再試' });
-    const phone = digits(req.body.phone);
-    if (phone.length < 8) return res.status(400).json({ error: 'INVALID_PHONE', message: '請輸入完整手機號碼' });
     const db = getDb();
+    // 單一輸入框：純手機號碼（8 碼以上數字）→ 手機查詢；否則 → 姓名／暱稱「完整比對」（2026-11-27 開放）
+    const rawQ = String(req.body.q ?? req.body.phone ?? '').trim();
+    const phone = digits(rawQ);
+    const looksPhone = phone.length >= 8 && /^[+\d\s-]+$/.test(rawQ);
+    if (!looksPhone) {
+      if (Array.from(rawQ).length < 2) return res.status(400).json({ error: 'INVALID_QUERY', message: '請輸入完整手機號碼，或對方的完整姓名／暱稱（至少 2 個字）' });
+      if (rawQ.length > 30) return res.status(400).json({ error: 'INVALID_QUERY', message: '輸入太長' });
+      // 完整比對（不支援片段，避免被用來猜／列出會員）；兩個單一欄位查詢，不需複合索引
+      const [byName, byNick] = await Promise.all([
+        db.collection('members').where('name', '==', rawQ).limit(10).get(),
+        db.collection('members').where('nickname', '==', rawQ).limit(10).get(),
+      ]);
+      const seen = new Map();
+      for (const [snap, via] of [[byName, 'name'], [byNick, 'nickname']]) {
+        for (const d of snap.docs) {
+          const m = d.data();
+          if (d.id === req.member.id || m.isChildAccount || m.isSimulation) continue;
+          if (!seen.has(d.id)) seen.set(d.id, { id: d.id, m, via });
+        }
+      }
+      const list = [...seen.values()].slice(0, 5).map(({ id, m, via }) => ({
+        toMemberId: id, maskedName: maskName(m.name),
+        // 暱稱只在「用暱稱找到」時帶回（搜尋者本來就知道），不洩漏他人暱稱
+        nickname: via === 'nickname' ? (m.nickname || '') : '',
+        _tail: digits(m.phone).slice(-3),
+      }));
+      if (!list.length) return res.status(404).json({ error: 'NOT_FOUND', message: '查無此會員，姓名／暱稱需輸入完整；也可改用手機號碼' });
+      // 遮罩姓名＋暱稱都相同的候選才加手機末 3 碼讓寄件人分辨
+      const keyOf = (c) => `${c.maskedName}|${c.nickname}`;
+      const cnt = list.reduce((a, c) => (a[keyOf(c)] = (a[keyOf(c)] || 0) + 1, a), {});
+      const candidates = list.map(c => ({ toMemberId: c.toMemberId, maskedName: c.maskedName, nickname: c.nickname, ...(cnt[keyOf(c)] > 1 ? { phoneTail: c._tail } : {}) }));
+      return res.json({ candidates });
+    }
     // 手機欄位格式可能不一（0912… 或國際碼），逐一試；只取本人帳號（非家庭子帳號）
-    const tries = [...new Set([phone, req.body.phone ? String(req.body.phone).trim() : phone])];
+    const tries = [...new Set([phone, rawQ])];
     let hit = null;
     for (const p of tries) {
       const snap = await db.collection('members').where('phone', '==', p).limit(5).get();

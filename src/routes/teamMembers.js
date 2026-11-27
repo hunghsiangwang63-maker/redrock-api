@@ -197,10 +197,12 @@ router.post('/applications/:id/confirm-payment', authenticate, requireManagerOrS
     // 開通會員實際折扣資格（依年度）
     const app = (await ref.get()).data();
     if (app?.memberId) {
+      const _m = (await db.collection(COLLECTIONS.MEMBERS).doc(app.memberId).get()).data();
+      const _p = teamMemberService.teamPeriodFor(_m, app.year);
       await teamMemberService.setTeamMember({
         memberId: app.memberId,
-        since: `${app.year}-01-01`,
-        until: `${app.year}-12-31`,
+        since: _p.since,
+        until: _p.until,
         staffId: req.staff.id,
       });
     }
@@ -241,7 +243,8 @@ router.post('/members', authenticate, requireManagerOrStation, async (req, res) 
       createdAt: new Date(), updatedAt: new Date(),
     });
     if (paid) {
-      await teamMemberService.setTeamMember({ memberId, since: `${year}-01-01`, until: `${year}-12-31`, staffId: req.staff.id });
+      const _p = teamMemberService.teamPeriodFor((await db.collection(COLLECTIONS.MEMBERS).doc(memberId).get()).data(), year);
+      await teamMemberService.setTeamMember({ memberId, since: _p.since, until: _p.until, staffId: req.staff.id });
     }
     res.status(201).json({ success: true, message: `${m.name} 已加入 ${year} 年度隊員名單` });
   } catch (err) { res.status(500).json({ error: 'SERVER_ERROR', message: err.message }); }
@@ -267,7 +270,8 @@ router.put('/applications/:id', authenticate, requireManagerOrStation, async (re
     const finalStatus = updates.status || cur.status;
     if (cur.memberId) {
       if (finalStatus === 'active') {
-        await teamMemberService.setTeamMember({ memberId: cur.memberId, since: `${cur.year}-01-01`, until: `${cur.year}-12-31`, staffId: req.staff.id });
+        const _p = teamMemberService.teamPeriodFor((await db.collection(COLLECTIONS.MEMBERS).doc(cur.memberId).get()).data(), cur.year);
+        await teamMemberService.setTeamMember({ memberId: cur.memberId, since: _p.since, until: _p.until, staffId: req.staff.id });
       } else if (finalStatus === 'cancelled') {
         await teamMemberService.removeTeamMember({ memberId: cur.memberId, staffId: req.staff.id });
       }

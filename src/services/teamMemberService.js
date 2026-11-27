@@ -14,6 +14,21 @@ const TEAM_DISCOUNT_MIN_AMOUNT = 100; // 最低適用金額
 const { EXPIRY_WARNING_DAYS } = require('../config/constants'); // 到期前幾天提醒（共用常數）
 
 // ── 設定隊員身份（管理員）────────────────────────────────────────
+// 依「申請年度」算隊員資格期間（2026-11-27）：新申請者從 {年}-01-01 起；
+// 目前仍有效（或已設定未來期間）的舊隊員，保留原起日、迄日不縮短，所以先申請下一年度不會中斷現有資格。
+const teamPeriodFor = (member, year) => {
+  const newSince = `${year}-01-01`, newUntil = `${year}-12-31`;
+  const today = dayjs().format('YYYY-MM-DD');
+  const m = member || {};
+  if (m.isTeamMember && m.teamMemberUntil && m.teamMemberUntil >= today) {
+    return {
+      since: (m.teamMemberSince && m.teamMemberSince < newSince) ? m.teamMemberSince : newSince,
+      until: m.teamMemberUntil > newUntil ? m.teamMemberUntil : newUntil,
+    };
+  }
+  return { since: newSince, until: newUntil };
+};
+
 const setTeamMember = async ({ memberId, since, until, staffId }) => {
   const db = getDb();
   const now = new Date();
@@ -157,6 +172,7 @@ const getActiveTeamMembers = async () => {
 
 module.exports = {
   setTeamMember,
+  teamPeriodFor,
   removeTeamMember,
   isActiveTeamMember,
   applyTeamDiscount,

@@ -389,7 +389,7 @@ const copyPreviousMonthShifts = async (gymId, targetMonth, createdBy) => {
 
 // ── 排班行事曆重要事項標籤（休館/比賽/維修等；獨立於員工排班，不綁 staffId）──
 // gymId: null＝全館皆顯示；allDay=true 為全天資訊，false 則需 startTime/endTime。
-const EVENT_CATEGORIES = ['closure', 'competition', 'maintenance', 'routesetting', 'other', 'group_experience'];
+const EVENT_CATEGORIES = ['closure', 'competition', 'maintenance', 'routesetting', 'other', 'group_experience', 'holiday'];
 
 // 多天活動（連休／連續休館／多日比賽）：同一筆事項用 date（起）＋endDate（迄，含當天）表示，不拆成每天一筆；
 // endDate 為空或等於 date＝單天。跨天上限 MAX_EVENT_SPAN_DAYS 天；非全天事項的時間區段每天都套用。

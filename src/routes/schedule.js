@@ -38,6 +38,7 @@ router.post('/',
         endTime: req.body.endTime,
         note: req.body.note,
         createdBy: req.staff.id,
+        actor: { id: req.staff.id, name: req.staff.name },
       });
       res.status(201).json({ shift, message: '排班已新增' });
     } catch (err) {
@@ -73,6 +74,7 @@ router.post('/recurring',
         rangeStart: req.body.rangeStart,
         rangeEnd: req.body.rangeEnd,
         createdBy: req.staff.id,
+        actor: { id: req.staff.id, name: req.staff.name },
       });
       res.status(201).json({
         ...result,
@@ -93,7 +95,7 @@ router.put('/:shiftId',
   authenticate, checkPermission('schedule.manage'),
   async (req, res) => {
     try {
-      const shift = await scheduleService.updateShift(req.params.shiftId, req.body);
+      const shift = await scheduleService.updateShift(req.params.shiftId, req.body, { id: req.staff.id, name: req.staff.name });
       res.json({ shift, message: '排班已更新' });
     } catch (err) {
       if (err.code) return res.status(400).json(err);
@@ -107,7 +109,7 @@ router.delete('/:shiftId',
   authenticate, checkPermission('schedule.manage'),
   async (req, res) => {
     try {
-      await scheduleService.deleteShift(req.params.shiftId);
+      await scheduleService.deleteShift(req.params.shiftId, { id: req.staff.id, name: req.staff.name });
       res.json({ message: '排班已刪除' });
     } catch (err) {
       if (err.code) return res.status(400).json(err);
@@ -124,7 +126,7 @@ router.post('/clear-month',
       const gymId = resolveGymId(req, req.body.gymId);
       const month = req.body.month;
       if (!gymId || !month) return res.status(400).json({ error: 'MISSING_PARAM', message: '請指定場館與月份' });
-      const deleted = await scheduleService.clearMonthShifts(gymId, month);
+      const deleted = await scheduleService.clearMonthShifts(gymId, month, { id: req.staff.id, name: req.staff.name });
       res.json({ deleted, message: `已清空 ${month} 共 ${deleted} 筆排班` });
     } catch (err) {
       if (err.code) return res.status(400).json(err);
@@ -141,7 +143,7 @@ router.post('/copy-previous',
       const gymId = resolveGymId(req, req.body.gymId);
       const month = req.body.month;
       if (!gymId || !month) return res.status(400).json({ error: 'MISSING_PARAM', message: '請指定場館與月份' });
-      const result = await scheduleService.copyPreviousMonthShifts(gymId, month, req.staff.id);
+      const result = await scheduleService.copyPreviousMonthShifts(gymId, month, req.staff.id, { id: req.staff.id, name: req.staff.name });
       res.json({ ...result, message: `已從 ${result.prevMonth} 複製 ${result.created} 筆排班（原 ${result.prevCount} 筆，以星期對應）` });
     } catch (err) {
       if (err.code) return res.status(400).json(err);
@@ -283,6 +285,22 @@ router.put('/settings/:gymId',
 
 // ── 排班行事曆重要事項標籤（休館/比賽/維修等；獨立於員工排班，不綁 staffId）──
 // GET 查詢範圍：gymId 指定館 + 全館（gymId:null）事項皆回傳；權限比照排班（read=查看、manage=新增/改/刪）。
+// ── GET /schedule/history?date=YYYY-MM-DD&gymId= - 某館某天的排班／重要事項異動歷程（新→舊，最多 50 筆）──
+// 所有員工帳號皆可查（排班內容視窗小字用）；一般帳號鎖自己館，super_admin 可指定館別。
+router.get('/history', authenticate, async (req, res) => {
+  try {
+    const date = String(req.query.date || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'INVALID_DATE', message: '請提供日期（YYYY-MM-DD）' });
+    // gymId=__all__＝「全館」重要事項（gymId 為 null）的歷程，任何員工可查
+    const gymId = req.query.gymId === '__all__' ? null
+      : (req.staff.role === 'super_admin' ? (req.query.gymId || req.staff.gymId || null) : req.staff.gymId);
+    const history = await scheduleService.getScheduleHistory({ gymId, date });
+    res.json({ history });
+  } catch (err) {
+    res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+  }
+});
+
 router.get('/events',
   authenticate, checkPermission('schedule.read'),
   async (req, res) => {
@@ -314,7 +332,7 @@ router.post('/events',
         gymId, date: req.body.date, endDate: req.body.endDate || null, allDay: req.body.allDay,
         startTime: req.body.startTime, endTime: req.body.endTime,
         category: req.body.category, title: req.body.title, note: req.body.note,
-        createdBy: req.staff.id,
+        createdBy: req.staff.id, actor: { id: req.staff.id, name: req.staff.name },
       });
       res.status(201).json({ event, message: '重要事項已新增' });
     } catch (err) {
@@ -342,7 +360,7 @@ router.post('/events/recurring',
         gymId, startDate: req.body.startDate, endDate: req.body.endDate || null, recurType: req.body.recurType,
         allDay: req.body.allDay, startTime: req.body.startTime, endTime: req.body.endTime,
         category: req.body.category, title: req.body.title, note: req.body.note,
-        createdBy: req.staff.id,
+        createdBy: req.staff.id, actor: { id: req.staff.id, name: req.staff.name },
       });
       res.status(201).json({ ...result, message: `已建立 ${result.count} 筆循環重要事項` });
     } catch (err) {
@@ -360,7 +378,7 @@ router.put('/events/:eventId',
   async (req, res) => {
     try {
       const scope = ['single', 'following', 'all'].includes(req.body.scope) ? req.body.scope : 'single';
-      const result = await scheduleService.updateScheduleEvent(req.params.eventId, req.body, scope);
+      const result = await scheduleService.updateScheduleEvent(req.params.eventId, req.body, scope, { id: req.staff.id, name: req.staff.name });
       const message = result.count > 1 ? `已更新 ${result.count} 筆重要事項` : '重要事項已更新';
       res.json({ ...result, message });
     } catch (err) {
@@ -375,7 +393,7 @@ router.delete('/events/:eventId',
   async (req, res) => {
     try {
       const scope = ['single', 'following', 'all'].includes(req.query.scope) ? req.query.scope : 'single';
-      const result = await scheduleService.deleteScheduleEvent(req.params.eventId, scope);
+      const result = await scheduleService.deleteScheduleEvent(req.params.eventId, scope, { id: req.staff.id, name: req.staff.name });
       const message = result.count > 1 ? `已刪除 ${result.count} 筆重要事項` : '重要事項已刪除';
       res.json({ ...result, message });
     } catch (err) {

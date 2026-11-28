@@ -30,11 +30,52 @@ const notifyShiftStaff = async ({ targetStaffId, gymId, type, title, body, refer
   } catch (e) { console.error('[排班通知] 失敗（不影響排班）:', e.message); }
 };
 
+// ── 異動歷程（2026-11-28）：scheduleHistory（誰、何時、改了什麼），員工端排班／重要事項內容視窗用小字顯示 ──
+// 只有「有帶 actor（操作者）」的人工操作才記；全程 try/catch，寫入失敗不影響排班主流程。
+// date＝受影響的日期（個人班＝班的日期；重要事項＝起始日期），視窗以 gymId＋date 查詢。
+const HISTORY_COLLECTION = 'scheduleHistory';
+const EVENT_CAT_LABEL = { closure: '休館', competition: '比賽', maintenance: '維修/保養', routesetting: '定線', group_experience: '團體體驗', holiday: '國定假日', other: '其他' };
+const histEntry = ({ gymId, date, targetType, targetId, action, summary, actor }) => ({
+  id: uuidv4(), gymId: gymId || null, date, targetType, targetId: targetId || null, action, summary,
+  byId: (actor && actor.id) || null, byName: (actor && actor.name) || null, at: new Date(),
+});
+const writeHistory = async (entries) => {
+  if (!entries || !entries.length) return;
+  try {
+    const db = getDb();
+    for (let i = 0; i < entries.length; i += 400) {
+      const batch = db.batch();
+      entries.slice(i, i + 400).forEach(e => batch.set(db.collection(HISTORY_COLLECTION).doc(e.id), e));
+      await batch.commit();
+    }
+  } catch (e) { console.error('[排班歷程] 寫入失敗（不影響排班）:', e.message); }
+};
+const shiftLabel = (s) => `${s.staffName || ''} ${s.date} ${shiftTimeLabel(s.type, s.startTime, s.endTime)}`.trim();
+const eventLabel = (e) => `${EVENT_CAT_LABEL[e.category] || e.category || ''}${e.title ? `「${e.title}」` : ''} ${e.date}${e.endDate ? `～${e.endDate}` : ''}${e.allDay === false ? ` ${e.startTime}~${e.endTime}` : ''}`.trim();
+// 兩份班的差異（只列有變的欄位）
+const diffShift = (a, b) => {
+  const out = [];
+  if ((a.staffName || '') !== (b.staffName || '') || a.staffId !== b.staffId) out.push(`人員 ${a.staffName || ''}→${b.staffName || ''}`);
+  if (a.date !== b.date) out.push(`日期 ${a.date}→${b.date}`);
+  const ta = shiftTimeLabel(a.type, a.startTime, a.endTime), tb = shiftTimeLabel(b.type, b.startTime, b.endTime);
+  if (ta !== tb) out.push(`時段 ${ta}→${tb}`);
+  if ((a.note || '') !== (b.note || '')) out.push('備註');
+  return out;
+};
+// 查某館某天的異動歷程（新→舊）
+const getScheduleHistory = async ({ gymId, date, limit = 50 }) => {
+  const snap = await getDb().collection(HISTORY_COLLECTION).where('gymId', '==', gymId || null).where('date', '==', date).get();
+  return snap.docs.map(d => d.data())
+    .sort((a, b) => (b.at.toDate ? b.at.toDate() : new Date(b.at)) - (a.at.toDate ? a.at.toDate() : new Date(a.at)))
+    .slice(0, limit)
+    .map(x => ({ id: x.id, date: x.date, targetType: x.targetType, targetId: x.targetId, action: x.action, summary: x.summary, byName: x.byName, at: x.at.toDate ? x.at.toDate().toISOString() : x.at }));
+};
+
 // ── 批次建立固定週班 ──────────────────────────────────────────────
 // weekdays: [0-6]（0=日）；遇休館公告該天直接跳過；遇特殊營業時間公告，
 // 若該筆排班為整天班(full_day)則自動改用當天公告的特殊時段，自由時段班(custom)維持原樣不調整。
 // 與既有排班共存，不檢查/阻擋衝突。
-const createRecurringShifts = async ({ gymId, staffId, staffName, weekdays, type, startTime, endTime, note, rangeStart, rangeEnd, createdBy }) => {
+const createRecurringShifts = async ({ gymId, staffId, staffName, weekdays, type, startTime, endTime, note, rangeStart, rangeEnd, createdBy, actor }) => {
   if (!Array.isArray(weekdays) || weekdays.length === 0) {
     throw { code: 'MISSING_WEEKDAYS', message: '請至少選擇一個星期幾' };
   }
@@ -60,6 +101,7 @@ const createRecurringShifts = async ({ gymId, staffId, staffName, weekdays, type
   const batch = db.batch();
 
   let createdCount = 0, skippedClosed = 0, adjustedSpecial = 0, skippedDuplicate = 0;
+  const histEntries = [];
 
   // ── 效能優化：一次性抓取場館資料、公告清單、既有整天班，迴圈內純記憶體運算 ──
   // （原本每一天都重新查一次DB，35-40天會循序執行70-80次查詢，導致請求耗時近10秒逼近timeout）
@@ -131,12 +173,15 @@ const createRecurringShifts = async ({ gymId, staffId, staffName, weekdays, type
         });
         if (type === 'full_day') fullDayDatesInThisBatch.add(dateStr);
         createdCount++;
+        if (actor) histEntries.push(histEntry({ gymId, date: dateStr, targetType: 'shift', targetId: shiftId, action: 'create', actor,
+          summary: `新增（固定週班） ${shiftLabel({ staffName, date: dateStr, type, startTime: type === 'custom' ? startTime : (shiftStartTime || null), endTime: type === 'custom' ? endTime : (shiftEndTime || null) })}` }));
       }
     }
     cur = cur.add(1, 'day');
   }
 
   await batch.commit();
+  await writeHistory(histEntries);
 
   // 批次建立 → 只發「一則彙總」通知（避免一班一則洗版）；沒建成任何班就不發
   if (createdCount > 0) {
@@ -164,7 +209,7 @@ const hasExistingFullDayShift = async (gymId, staffId, date, excludeShiftId) => 
 };
 
 // ── 建立排班 ──────────────────────────────────────────────────────
-const createShift = async ({ gymId, staffId, staffName, date, type, startTime, endTime, note, createdBy, source, courseId, courseName }) => {
+const createShift = async ({ gymId, staffId, staffName, date, type, startTime, endTime, note, createdBy, source, courseId, courseName, actor }) => {
   if (!['full_day', 'custom'].includes(type)) {
     throw { code: 'INVALID_TYPE', message: 'type 必須為 full_day 或 custom' };
   }
@@ -193,6 +238,7 @@ const createShift = async ({ gymId, staffId, staffName, date, type, startTime, e
     createdBy, createdAt: now, updatedAt: now,
   };
   await db.collection(COLLECTIONS.SCHEDULE_SHIFTS).doc(shiftId).set(shift);
+  if (actor) await writeHistory([histEntry({ gymId, date, targetType: 'shift', targetId: shiftId, action: 'create', actor, summary: `新增 ${shiftLabel(shift)}` })]);
 
   // 即時通知被排班員工（不阻斷）
   await notifyShiftStaff({
@@ -205,7 +251,7 @@ const createShift = async ({ gymId, staffId, staffName, date, type, startTime, e
 };
 
 // ── 更新排班 ──────────────────────────────────────────────────────
-const updateShift = async (shiftId, { staffId, staffName, date, type, startTime, endTime, note }) => {
+const updateShift = async (shiftId, { staffId, staffName, date, type, startTime, endTime, note }, actor) => {
   const db = getDb();
   const ref = db.collection(COLLECTIONS.SCHEDULE_SHIFTS).doc(shiftId);
   const doc = await ref.get();
@@ -238,6 +284,15 @@ const updateShift = async (shiftId, { staffId, staffName, date, type, startTime,
 
   await ref.update(updates);
 
+  if (actor) {
+    const before = doc.data(); const after = { ...before, ...updates };
+    const changes = diffShift(before, after);
+    const entries = [histEntry({ gymId: before.gymId, date: after.date, targetType: 'shift', targetId: shiftId, action: 'update', actor,
+      summary: `修改 ${shiftLabel(after)}${changes.length ? '（' + changes.join('、') + '）' : '（未變更內容）'}` })];
+    if (before.date !== after.date) entries.push(histEntry({ gymId: before.gymId, date: before.date, targetType: 'shift', targetId: shiftId, action: 'update', actor, summary: `移出 ${before.staffName || ''} ${before.date} 的班，改到 ${after.date}` }));
+    await writeHistory(entries);
+  }
+
   // 通知（不阻斷）：對「目前 staffId」發異動通知；若換人，另通知「原 staffId」班已被移除
   const orig = doc.data();
   const gymId = orig.gymId;
@@ -260,12 +315,13 @@ const updateShift = async (shiftId, { staffId, staffName, date, type, startTime,
 };
 
 // ── 刪除排班 ──────────────────────────────────────────────────────
-const deleteShift = async (shiftId) => {
+const deleteShift = async (shiftId, actor) => {
   const db = getDb();
   const ref = db.collection(COLLECTIONS.SCHEDULE_SHIFTS).doc(shiftId);
   const doc = await ref.get();
   if (!doc.exists) throw { code: 'NOT_FOUND', message: '找不到此排班' };
   await ref.delete();
+  if (actor) await writeHistory([histEntry({ gymId: doc.data().gymId, date: doc.data().date, targetType: 'shift', targetId: shiftId, action: 'delete', actor, summary: `刪除 ${shiftLabel(doc.data())}` })]);
 };
 
 // ── 查詢某館某月份的所有排班（月曆檢視用）───────────────────────────
@@ -333,7 +389,7 @@ const getMonthlyHoursSummary = async (gymId, yearMonth) => {
 };
 
 // ── 清空某館某月所有排班 ─────────────────────────────────────────
-const clearMonthShifts = async (gymId, yearMonth) => {
+const clearMonthShifts = async (gymId, yearMonth, actor) => {
   const shifts = await getMonthlyShifts(gymId, yearMonth);
   const db = getDb();
   for (let i = 0; i < shifts.length; i += 400) {
@@ -341,11 +397,12 @@ const clearMonthShifts = async (gymId, yearMonth) => {
     shifts.slice(i, i + 400).forEach(s => batch.delete(db.collection(COLLECTIONS.SCHEDULE_SHIFTS).doc(s.id)));
     await batch.commit();
   }
+  if (actor) await writeHistory(shifts.map(s => histEntry({ gymId, date: s.date, targetType: 'shift', targetId: s.id, action: 'delete', actor, summary: `刪除（整月清空 ${yearMonth}） ${shiftLabel(s)}` })));
   return shifts.length;
 };
 
 // ── 複製上月排班到本月（以星期為主：第 N 個某星期 → 本月第 N 個同星期）──
-const copyPreviousMonthShifts = async (gymId, targetMonth, createdBy) => {
+const copyPreviousMonthShifts = async (gymId, targetMonth, createdBy, actor) => {
   const prevMonth = dayjs(`${targetMonth}-01`).subtract(1, 'month').format('YYYY-MM');
   const prevShifts = await getMonthlyShifts(gymId, prevMonth);
   const db = getDb();
@@ -384,6 +441,7 @@ const copyPreviousMonthShifts = async (gymId, targetMonth, createdBy) => {
     toCreate.slice(i, i + 400).forEach(doc => batch.set(db.collection(COLLECTIONS.SCHEDULE_SHIFTS).doc(doc.id), doc));
     await batch.commit();
   }
+  if (actor) await writeHistory(toCreate.map(d => histEntry({ gymId, date: d.date, targetType: 'shift', targetId: d.id, action: 'create', actor, summary: `新增（複製 ${prevMonth}） ${shiftLabel(d)}` })));
   return { created: toCreate.length, prevMonth, prevCount: prevShifts.length };
 };
 
@@ -402,7 +460,7 @@ const normalizeEventEndDate = (date, endDate) => {
   return endDate;
 };
 
-const createScheduleEvent = async ({ gymId, date, endDate, allDay, startTime, endTime, category, title, note, createdBy }) => {
+const createScheduleEvent = async ({ gymId, date, endDate, allDay, startTime, endTime, category, title, note, createdBy, actor }) => {
   if (!date) throw { code: 'MISSING_DATE', message: '請選擇日期' };
   const finalEndDate = normalizeEventEndDate(date, endDate);
   if (!EVENT_CATEGORIES.includes(category)) throw { code: 'INVALID_CATEGORY', message: '類別不正確' };
@@ -423,6 +481,7 @@ const createScheduleEvent = async ({ gymId, date, endDate, allDay, startTime, en
     createdBy, createdAt: now, updatedAt: now,
   };
   await db.collection(COLLECTIONS.SCHEDULE_EVENTS).doc(id).set(event);
+  if (actor) await writeHistory([histEntry({ gymId: event.gymId, date, targetType: 'event', targetId: id, action: 'create', actor, summary: `新增重要事項 ${eventLabel(event)}` })]);
   return event;
 };
 
@@ -430,7 +489,7 @@ const createScheduleEvent = async ({ gymId, date, endDate, allDay, startTime, en
 const EVENT_RECUR_TYPES = ['weekly', 'biweekly', 'monthly'];
 const MAX_EVENT_RECURRING_MONTHS = 6;
 
-const createRecurringScheduleEvents = async ({ gymId, startDate, endDate, recurType, allDay, startTime, endTime, category, title, note, createdBy }) => {
+const createRecurringScheduleEvents = async ({ gymId, startDate, endDate, recurType, allDay, startTime, endTime, category, title, note, createdBy, actor }) => {
   if (!startDate) throw { code: 'MISSING_DATE', message: '請選擇起始日期' };
   if (!EVENT_RECUR_TYPES.includes(recurType)) throw { code: 'INVALID_RECUR_TYPE', message: '循環類型須為每週/每兩週/每月固定日期' };
   if (!EVENT_CATEGORIES.includes(category)) throw { code: 'INVALID_CATEGORY', message: '類別不正確' };
@@ -489,6 +548,7 @@ const createRecurringScheduleEvents = async ({ gymId, startDate, endDate, recurT
     return event;
   });
   await batch.commit();
+  if (actor) await writeHistory(events.map(e => histEntry({ gymId: e.gymId, date: e.date, targetType: 'event', targetId: e.id, action: 'create', actor, summary: `新增重要事項（循環） ${eventLabel(e)}` })));
   return { events, count: events.length, recurrenceGroupId };
 };
 
@@ -509,7 +569,7 @@ const resolveSeriesEventIds = async (db, eventId, scope) => {
   return { ids, anchor };
 };
 
-const updateScheduleEvent = async (id, { gymId, date, endDate, allDay, startTime, endTime, category, title, note }, scope = 'single') => {
+const updateScheduleEvent = async (id, { gymId, date, endDate, allDay, startTime, endTime, category, title, note }, scope = 'single', actor) => {
   const db = getDb();
   const { ids, anchor } = await resolveSeriesEventIds(db, id, scope);
 
@@ -542,15 +602,34 @@ const updateScheduleEvent = async (id, { gymId, date, endDate, allDay, startTime
   const batch = db.batch();
   ids.forEach(eid => batch.update(db.collection(COLLECTIONS.SCHEDULE_EVENTS).doc(eid), updates));
   await batch.commit();
+  if (actor) {
+    const after = { ...anchor, ...updates };
+    const ch = [];
+    if (updates.category !== undefined && updates.category !== anchor.category) ch.push(`類別 ${EVENT_CAT_LABEL[anchor.category] || anchor.category}→${EVENT_CAT_LABEL[updates.category] || updates.category}`);
+    if (updates.title !== undefined && updates.title !== (anchor.title || '')) ch.push(`標題 ${anchor.title || '—'}→${updates.title || '—'}`);
+    if (updates.date !== undefined && updates.date !== anchor.date) ch.push(`日期 ${anchor.date}→${updates.date}`);
+    if (updates.endDate !== undefined && (updates.endDate || null) !== (anchor.endDate || null)) ch.push(`結束日 ${anchor.endDate || '—'}→${updates.endDate || '—'}`);
+    if (updates.allDay !== undefined || updates.startTime !== anchor.startTime || updates.endTime !== anchor.endTime) {
+      const tl = (e) => e.allDay === false ? `${e.startTime}~${e.endTime}` : '全天';
+      if (tl(after) !== tl(anchor)) ch.push(`時間 ${tl(anchor)}→${tl(after)}`);
+    }
+    if (updates.note !== undefined && updates.note !== (anchor.note || '')) ch.push('備註');
+    if (updates.gymId !== undefined && (updates.gymId || null) !== (anchor.gymId || null)) ch.push('適用館別');
+    const sc = ids.length > 1 ? `（套用 ${ids.length} 筆）` : '';
+    await writeHistory([histEntry({ gymId: after.gymId, date: after.date, targetType: 'event', targetId: id, action: 'update', actor,
+      summary: `修改重要事項 ${eventLabel(after)}${sc}${ch.length ? '（' + ch.join('、') + '）' : '（未變更內容）'}` })]);
+  }
   return ids.length === 1 ? { id: ids[0], count: 1, ...anchor, ...updates } : { count: ids.length };
 };
 
-const deleteScheduleEvent = async (id, scope = 'single') => {
+const deleteScheduleEvent = async (id, scope = 'single', actor) => {
   const db = getDb();
   const { ids } = await resolveSeriesEventIds(db, id, scope);
+  const docs = actor ? await Promise.all(ids.map(eid => db.collection(COLLECTIONS.SCHEDULE_EVENTS).doc(eid).get())) : [];
   const batch = db.batch();
   ids.forEach(eid => batch.delete(db.collection(COLLECTIONS.SCHEDULE_EVENTS).doc(eid)));
   await batch.commit();
+  if (actor) await writeHistory(docs.filter(d => d.exists).map(d => histEntry({ gymId: d.data().gymId, date: d.data().date, targetType: 'event', targetId: d.id, action: 'delete', actor, summary: `刪除重要事項 ${eventLabel(d.data())}${ids.length > 1 ? `（一次刪除 ${ids.length} 筆）` : ''}` })));
   return { count: ids.length };
 };
 
@@ -606,6 +685,7 @@ module.exports = {
   copyPreviousMonthShifts,
   EVENT_CATEGORIES,
   createScheduleEvent,
+  getScheduleHistory,
   createRecurringScheduleEvents,
   EVENT_RECUR_TYPES,
   MAX_EVENT_RECURRING_MONTHS,
